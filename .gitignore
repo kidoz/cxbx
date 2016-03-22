@@ -1,0 +1,23 @@
+/.idea/
+
+# Meson build directory
+/build/
+
+# Build artifacts
+__pycache__/
+bin/
+*.obj
+*.o
+*.exe
+*.lib
+*.d
+*.trace
+
+# Results
+out/
+
+# Local tool configuration
+config.toml
+
+# Logs
+*.log
