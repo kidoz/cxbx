@@ -54,7 +54,7 @@ END
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_CXBX                ICON    DISCARDABLE     "Cxbx.ico"
+IDI_CXBX                ICON    DISCARDABLE     "cxbx.ico"
 #endif    // English (U.S.) resources
 /////////////////////////////////////////////////////////////////////////////
 
