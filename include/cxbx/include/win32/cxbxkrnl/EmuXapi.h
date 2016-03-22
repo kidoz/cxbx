@@ -56,7 +56,7 @@ typedef unsigned long       SIZE_T, *PSIZE_T;
 typedef unsigned long       ACCESS_MASK, *PACCESS_MASK;
 typedef unsigned long       PHYSICAL_ADDRESS;
 typedef long                INT_PTR;
-typedef unsigned __int64    ULONGLONG;
+typedef unsigned long long  ULONGLONG;
 
 // xapi
 typedef int                 BOOL;
