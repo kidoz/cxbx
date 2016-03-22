@@ -28,7 +28,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_CXBX                ICON    DISCARDABLE     "Cxbx.ico"
+IDI_CXBX                ICON    DISCARDABLE     "cxbx.ico"
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -174,7 +174,7 @@ BEGIN
     END
     POPUP "&Help"
     BEGIN
-        MENUITEM "&Goto Cxbx Home Page...",     ID_HELP_HOMEPAGE
+        MENUITEM "&Goto cxbx Home Page...",     ID_HELP_HOMEPAGE
         MENUITEM SEPARATOR
         MENUITEM "&About",                      ID_HELP_ABOUT
     END
@@ -215,7 +215,7 @@ END
 
 IDD_CONTROLLER_CFG DIALOGEX 0, 0, 343, 137
 STYLE DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Cxbx : Controller Configuration"
+CAPTION "cxbx : Controller Configuration"
 FONT 8, "Verdana", 0, 0, 0x1
 BEGIN
     PUSHBUTTON      "X",IDC_SET_X,7,11,50,14,BS_FLAT
@@ -259,7 +259,7 @@ END
 
 IDD_VIDEO_CFG DIALOGEX 0, 0, 258, 110
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Cxbx : Video Configuration"
+CAPTION "cxbx : Video Configuration"
 FONT 8, "Verdana", 0, 0, 0x1
 BEGIN
     COMBOBOX        IDC_VC_DISPLAY_ADAPTER,76,12,173,100,CBS_DROPDOWNLIST | 
