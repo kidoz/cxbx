@@ -112,7 +112,7 @@ typedef CONST WCHAR        *LPCWSTR, *PCWSTR;
 // * NTSTATUS
 // ******************************************************************
 typedef long                            NTSTATUS;
-typedef unsigned __int64                ULONGLONG;
+typedef unsigned long long              ULONGLONG;
 
 #define NT_SUCCESS(Status)              ((NTSTATUS) (Status) >= 0)
 
