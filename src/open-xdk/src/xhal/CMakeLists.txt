@@ -1,6 +1,6 @@
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11")
 
-include_directories("${CXBX_SOURCE_DIR}/include/open-xdk")
+include_directories("${CXBX_SOURCE_DIR}/include/open-xdk/include")
 
 file(GLOB XHAL_SRC "src/*.c")
 
