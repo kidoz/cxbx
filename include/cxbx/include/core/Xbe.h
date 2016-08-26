@@ -34,7 +34,7 @@
 #ifndef XBE_H
 #define XBE_H
 
-#include "Error.h"
+#include "core/Error.h"
 
 #include <stdio.h>
 
@@ -129,9 +129,9 @@ class Xbe : public Error
             uint32 dwXAPILibraryVersionAddr;        // 0x016C - xapi library version address
             uint32 dwLogoBitmapAddr;                // 0x0170 - logo bitmap address
             uint32 dwSizeofLogoBitmap;              // 0x0174 - logo bitmap size
-        }
+        };
         #include "AlignPosfix1.h"
-        m_Header;
+        Header m_Header;
 
         // ******************************************************************
         // * XBE header extra bytes (used to preserve unknown data)

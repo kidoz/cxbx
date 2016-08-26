@@ -31,8 +31,8 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "Xbe.h"
-#include "Exe.h"
+#include "core/Xbe.h"
+#include "core/Exe.h"
 #include "Emu.h"
 
 #include <memory.h>
