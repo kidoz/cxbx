@@ -211,6 +211,15 @@ class XBController : public Error
         m_InputDevice[XBCTRL_MAX_DEVICES];
 
         // ******************************************************************
+        // * DirectInput Enumeration Types
+        // ******************************************************************
+        enum XBCtrlState
+        {
+            XBCTRL_STATE_NONE = 0,
+            XBCTRL_STATE_CONFIG,
+            XBCTRL_STATE_LISTEN
+        };
+        // ******************************************************************
         // * Current State
         // ******************************************************************
         enum XBCtrlState m_CurrentState;
@@ -251,15 +260,5 @@ class XBController : public Error
 #define DETECT_SENSITIVITY_BUTTON   0
 #define DETECT_SENSITIVITY_MOUSE    5
 #define DETECT_SENSITIVITY_POV      50000
-
-// ******************************************************************
-// * DirectInput Enumeration Types
-// ******************************************************************
-enum XBCtrlState
-{
-    XBCTRL_STATE_NONE = 0,
-    XBCTRL_STATE_CONFIG,
-    XBCTRL_STATE_LISTEN
-};
 
 #endif
