@@ -34,7 +34,7 @@
 #ifndef WND_H
 #define WND_H
 
-#include "error.h"
+#include "core/Error.h"
 
 #include <windows.h>
 

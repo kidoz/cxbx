@@ -36,80 +36,71 @@
 #include "EmuShared.h"
 
 #define DIRECTINPUT_VERSION 0x0800
-#include <dinput.h>
-#include <stdio.h>
 
 // ******************************************************************
 // * Static Function(s)
 // ******************************************************************
 static INT_PTR CALLBACK DlgControllerConfigProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
 static VOID ConfigureInput(HWND hWndDlg, HWND hWndButton, XBCtrlObject object);
 
 // ******************************************************************
 // * Static Variable(s)
 // ******************************************************************
 static XBController g_XBController;
-static BOOL         g_bHasChanges;
+static BOOL g_bHasChanges;
 
 // ******************************************************************
 // * Show Controller Configuration Dialog Window
 // ******************************************************************
-void ShowControllerConfig(HWND hwnd)
-{
-	g_bHasChanges = FALSE;
+void ShowControllerConfig(HWND hwnd) {
+    g_bHasChanges = FALSE;
 
     g_EmuShared->GetXBController(&g_XBController);
 
     DialogBox
-    (
-        GetModuleHandle(NULL),
-        MAKEINTRESOURCE(IDD_CONTROLLER_CFG),
-        hwnd,
-        DlgControllerConfigProc
-    );
+            (
+                    GetModuleHandle(NULL),
+                    MAKEINTRESOURCE(IDD_CONTROLLER_CFG),
+                    hwnd,
+                    DlgControllerConfigProc
+            );
 }
 
 // ******************************************************************
 // * Controller Configuration Dialog Procedure
 // ******************************************************************
-INT_PTR CALLBACK DlgControllerConfigProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
-    switch(uMsg)
-    {
+INT_PTR CALLBACK DlgControllerConfigProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
         case WM_INITDIALOG:
-            SetClassLong(hWndDlg, GCL_HICON, (LONG)LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_CXBX)));
+            SetClassLong(hWndDlg, GCL_HICON, (LONG) LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_CXBX)));
             SetFocus(GetDlgItem(hWndDlg, IDC_SET_X));
             break;
         case WM_CLOSE:
-            if(g_bHasChanges)
-            {
-                int ret = MessageBox(hWndDlg, "Do you wish to apply your changes?", "cxbx", MB_ICONQUESTION | MB_YESNOCANCEL);
+            if (g_bHasChanges) {
+                int ret = MessageBox(hWndDlg, "Do you wish to apply your changes?", "cxbx",
+                                     MB_ICONQUESTION | MB_YESNOCANCEL);
 
-                switch(ret)
-                {
+                switch (ret) {
                     case IDYES:
                         PostMessage(hWndDlg, WM_COMMAND, IDC_INPUT_CONFIG_ACCEPT, 0);
                         break;
-					case IDNO:
-						PostMessage(hWndDlg, WM_COMMAND, IDC_INPUT_CONFIG_CANCEL, 0);
-					default:
+                    case IDNO:
+                        PostMessage(hWndDlg, WM_COMMAND, IDC_INPUT_CONFIG_CANCEL, 0);
+                    default:
                         break;
                 }
+            } else {
+                PostMessage(hWndDlg, WM_COMMAND, IDC_INPUT_CONFIG_CANCEL, 0);
+                break;
             }
-			else
-			{
-				PostMessage(hWndDlg, WM_COMMAND, IDC_INPUT_CONFIG_CANCEL, 0);
-				break;
-			}
-			break;
-        case WM_COMMAND:
-        {
+            break;
+        case WM_COMMAND: {
             HWND hWndButton = GetDlgItem(hWndDlg, LOWORD(wParam));
 
-            switch(LOWORD(wParam))
-            { 
+            switch (LOWORD(wParam)) {
                 case IDC_INPUT_CONFIG_CANCEL:
-                    EndDialog(hWndDlg, wParam); 
+                    EndDialog(hWndDlg, wParam);
                     break;
                 case IDC_INPUT_CONFIG_ACCEPT:
                     g_EmuShared->SetXBController(&g_XBController);
@@ -187,24 +178,23 @@ INT_PTR CALLBACK DlgControllerConfigProc(HWND hWndDlg, UINT uMsg, WPARAM wParam,
                 case IDC_SET_RTHUMB:
                     ConfigureInput(hWndDlg, hWndButton, XBCTRL_OBJECT_RTHUMB);
                     break;
-            } 
+            }
         }
-        break;
-    } 
-    return FALSE; 
+            break;
+    }
+    return FALSE;
 }
 
 // ******************************************************************
 // * ConfigureInput
 // ******************************************************************
-VOID ConfigureInput(HWND hWndDlg, HWND hWndButton, XBCtrlObject object)
-{
+VOID ConfigureInput(HWND hWndDlg, HWND hWndButton, XBCtrlObject object) {
     static bConfigDone = true;
 
-    if(!bConfigDone)
+    if (!bConfigDone)
         return;
-	
-	g_bHasChanges = true;
+
+    g_bHasChanges = true;
 
     bConfigDone = false;
 
@@ -219,41 +209,39 @@ VOID ConfigureInput(HWND hWndDlg, HWND hWndButton, XBCtrlObject object)
     // ******************************************************************
     // * Wait for input, or 5 second timeout
     // ******************************************************************
-    for(int v=100;v>0;v--)
-    {
+    for (int v = 100; v > 0; v--) {
         // ******************************************************************
         // * Update the button text every second
         // ******************************************************************
-        if(v%20 == 0)
-        {
+        if (v % 20 == 0) {
             char szBuffer[255];
 
-            sprintf(szBuffer, "%d", (v+19)/20);
+            sprintf(szBuffer, "%d", (v + 19) / 20);
 
             SetWindowText(hWndButton, szBuffer);
         }
 
-        if(g_XBController.GetError())
+        if (g_XBController.GetError())
             goto cleanup;
 
-        if(g_XBController.ConfigPoll(szNewText))
+        if (g_XBController.ConfigPoll(szNewText))
             break;
 
         Sleep(50);
     }
 
-    if(g_XBController.GetError())
+    if (g_XBController.GetError())
         goto cleanup;
     else
         g_XBController.ConfigEnd();
 
-cleanup:
+    cleanup:
 
     // ******************************************************************
     // * Update Window
     // ******************************************************************
     {
-        if(g_XBController.GetError())
+        if (g_XBController.GetError())
             sprintf(szNewText, "%s", g_XBController.GetError());
 
         SetWindowText(hWndButton, szOrgText);
@@ -262,8 +250,8 @@ cleanup:
 
         MSG Msg;
 
-        while(PeekMessage(&Msg, hWndDlg, WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE));
-        while(PeekMessage(&Msg, hWndDlg, WM_KEYFIRST,   WM_KEYLAST,   PM_REMOVE));
+        while (PeekMessage(&Msg, hWndDlg, WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE));
+        while (PeekMessage(&Msg, hWndDlg, WM_KEYFIRST, WM_KEYLAST, PM_REMOVE));
 
     }
 

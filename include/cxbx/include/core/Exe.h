@@ -34,7 +34,7 @@
 #ifndef EXE_H
 #define EXE_H
 
-#include "Error.h"
+#include "core/Error.h"
 
 // ******************************************************************
 // * Exe (PE) file object
@@ -82,9 +82,9 @@ class Exe : public Error
             uint16 m_oeminfo;               // OEM information
             uint16 m_res2[10];              // reserved words
             uint32 m_lfanew;                // file address of new .EXE header
-        }
+        };
         #include "AlignPosfix1.h"
-        m_DOSHeader;
+        DOSHeader m_DOSHeader;
 
         // ******************************************************************
         // * Header (PE)
@@ -100,9 +100,9 @@ class Exe : public Error
             uint32 m_symbols;                       // number of symbols
             uint16 m_sizeof_optional_header;        // size of optional header
             uint16 m_characteristics;               // characteristics
-        }
+        };
         #include "AlignPosfix1.h"
-        m_Header;
+        Header m_Header;
 
         // ******************************************************************
         // * OptionalHeader (PE)
@@ -147,9 +147,9 @@ class Exe : public Error
                 uint32 m_size;                      // size
             }
             m_image_data_directory[0x10];
-        }
+        };
         #include "AlignPosfix1.h"
-        m_OptionalHeader;
+        OptionalHeader m_OptionalHeader;
 
         // ******************************************************************
         // * PE Section Header

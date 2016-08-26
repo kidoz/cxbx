@@ -34,7 +34,7 @@
 #ifndef EMUEXE_H
 #define EMUEXE_H
 
-#include "Exe.h"
+#include "core/Exe.h"
 
 // ******************************************************************
 // * class : EmuExe
