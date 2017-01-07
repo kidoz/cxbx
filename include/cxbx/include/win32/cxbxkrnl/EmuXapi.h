@@ -91,7 +91,7 @@ typedef HANDLE             *PHANDLE;
 // * documentation purposes only
 // ******************************************************************
 #define EXPORTNUM(a)
-#define UNALIGNED
+#define UNALIGNED __unaligned
 #define OPTIONAL
 #define IN
 #define OUT
