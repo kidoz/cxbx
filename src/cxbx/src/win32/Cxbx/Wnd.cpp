@@ -114,7 +114,7 @@ bool Wnd::ProcessMessages()
             goto cleanup;
         }
 
-        SetWindowLong(m_hwnd, GWL_USERDATA, (LONG)this);
+        SetWindowLongPtr(m_hwnd, GWL_USERDATA, (LONG)this);
 
 cleanup:;
 
@@ -142,7 +142,7 @@ cleanup:;
 // ******************************************************************
 LRESULT CALLBACK Wnd::WndProcForward(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    Wnd *forward_to = (Wnd*)GetWindowLong(hwnd, GWL_USERDATA);
+    Wnd *forward_to = (Wnd*)GetWindowLongPtr(hwnd, GWL_USERDATA);
 
     if(forward_to == 0)
     {
