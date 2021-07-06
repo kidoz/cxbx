@@ -11,7 +11,7 @@
 // ******************************************************************
 
 #include	<ansidecl.h>
-#include <string.h>
+#include <cstring>
 //
 // Return the length of a string
 //

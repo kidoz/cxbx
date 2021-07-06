@@ -36,7 +36,7 @@
 #include "EmuShared.h"
 #include "Emu.h"
 
-#include <stdio.h>
+#include <cstdio>
 #include <d3d8.h>
 
 // ******************************************************************

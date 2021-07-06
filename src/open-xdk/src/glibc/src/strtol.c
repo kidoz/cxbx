@@ -19,7 +19,7 @@ Cambridge, MA 02139, USA.  */
 
 #include <limits.h>
 #include <stddef.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <errno.h>
 #include <ctype.h>
 

@@ -34,6 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
+#define POINTER_64 __ptr64
 #include <windows.h>
 
 // ******************************************************************

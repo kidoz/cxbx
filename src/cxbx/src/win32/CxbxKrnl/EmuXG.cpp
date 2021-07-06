@@ -35,6 +35,8 @@
 #define _XBOXKRNL_LOCAL_
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
+#define POINTER_64 __ptr64
+
 #include <windows.h>
 
 #include "Emu.h"

@@ -18,7 +18,7 @@
 
 
 #include <stdarg.h>
-#include <stdio.h>
+#include <cstdio>
 #include "consts.h"
 // BB
 #if 0

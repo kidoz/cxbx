@@ -18,7 +18,7 @@ Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
 #include <errno.h>
-#include <string.h>
+#include <cstring>
 
 
 static char *olds = NULL;

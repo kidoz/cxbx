@@ -85,10 +85,10 @@ extern int memcmp(const void *,const void *,unsigned int);
 #endif
 #else
 #include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
+#include <cstdlib>
 #include "consts.h"
-#include <string.h>
+#include <cstring>
 #endif
 
 /*------------------------------------------------------------------------*/ 

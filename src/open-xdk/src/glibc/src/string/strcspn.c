@@ -17,7 +17,7 @@ License along with the GNU C Library; see the file COPYING.LIB.  If
 not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
-#include <string.h>
+#include <cstring>
 
 /* Return the length of the maximum inital segment of S
    which contains no characters from REJECT.  */

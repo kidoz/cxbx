@@ -19,7 +19,7 @@ Cambridge, MA 02139, USA.  */
 /* This is almost copied from strncpy.c, written by Torbjorn Granlund.  */
 
 #include <ansidecl.h>
-#include <string.h>
+#include <cstring>
 #include <memcopy.h>
 
 

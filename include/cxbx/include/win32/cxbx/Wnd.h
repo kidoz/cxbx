@@ -36,6 +36,7 @@
 
 #include "core/Error.h"
 
+#define POINTER_64 __ptr64
 #include <windows.h>
 
 // ******************************************************************

@@ -18,7 +18,7 @@ Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
 #include <limits.h>
-#include <string.h>
+#include <cstring>
 
 #undef	ffs
 

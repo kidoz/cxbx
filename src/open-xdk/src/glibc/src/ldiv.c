@@ -53,7 +53,7 @@ Cambridge, MA 02139, USA.  */
  */
 
 #include <ansidecl.h>
-#include <stdlib.h>
+#include <cstdlib>
 
 
 /* Return the `ldiv_t' representation of NUMER over DENOM.  */

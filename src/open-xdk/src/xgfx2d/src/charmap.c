@@ -15,7 +15,7 @@
 
 #include <openxdk.h>
 #include <malloc.h>
-#include <stdio.h>
+#include <cstdio>
 #include "xhal/xvga_def.h"
 #include <xgfx2d/charmap.h>
 

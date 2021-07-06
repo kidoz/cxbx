@@ -33,7 +33,7 @@ Cambridge, MA 02139, USA.  */
 #endif /* C++ or ANSI C.  */
 
 #if defined (HAVE_STRING_H) || defined (_LIBC)
-#include <string.h>
+#include <cstring>
 #endif
 
 #ifdef _LIBC

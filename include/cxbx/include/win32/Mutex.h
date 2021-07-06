@@ -34,6 +34,7 @@
 #ifndef MUTEX_H
 #define MUTEX_H
 
+#define POINTER_64 __ptr64
 #include <windows.h>
 
 // ******************************************************************

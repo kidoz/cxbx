@@ -19,7 +19,7 @@ not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
-#include <string.h>
+#include <cstring>
 #include <memcopy.h>
 
 /* All this is so that bcopy.c can #include

@@ -31,7 +31,7 @@ Cambridge, MA 02139, USA.
 #endif
 
 #if	defined(_LIBC) || defined(STDC_HEADERS) || defined(USG)
-#include <string.h>
+#include <cstring>
 #else
 #ifndef memset
 #define	memset(s, zero, n)	bzero ((s), (n))
