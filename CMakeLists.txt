@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.15)
 project(CXBX)
 
 add_subdirectory(src/cxbx)
@@ -9,6 +9,10 @@ add_subdirectory(src/open-xdk/src/xhal)
 add_subdirectory(src/open-xdk/src/xlibc)
 add_subdirectory(src/open-xdk/src/xusb)
 add_subdirectory(src/open-xdk/src/xvga)
+
+list (APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+
+find_package (DirectX)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     function(add_clang_static_analysis target)
