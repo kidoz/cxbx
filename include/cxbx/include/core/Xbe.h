@@ -36,7 +36,9 @@
 
 #include "core/Error.h"
 
-#include <stdio.h>
+#include <cstdio>
+
+#define POINTER_64 __ptr64
 
 // ******************************************************************
 // * Xbe (Xbox Executable) file object

@@ -18,7 +18,7 @@ Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
 #include <stddef.h>
-#include <stdlib.h>
+#include <cstdlib>
 
 
 extern int _mb_shift;	/* Defined in mbtowc.c.  */

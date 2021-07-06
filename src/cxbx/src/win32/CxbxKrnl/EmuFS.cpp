@@ -47,7 +47,7 @@ namespace xboxkrnl
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
-#include <stdio.h>
+#include <cstdio>
 
 // ******************************************************************
 // * data: EmuAutoSleepRate

@@ -18,8 +18,8 @@ Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
 #include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdlib>
+#include <cstring>
 
 
 /* Duplicate S, returning an identical malloc'd string.  */

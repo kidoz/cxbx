@@ -18,7 +18,7 @@ Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
 #include <stddef.h>
-#include <string.h>
+#include <cstring>
 
 
 /* Return the first occurrence of NEEDLE in HAYSTACK.  */

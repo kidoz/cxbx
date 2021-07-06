@@ -17,9 +17,9 @@ not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
-#include <string.h>
-#include <stdlib.h>
-//#include <time.h>
+#include <cstring>
+#include <cstdlib>
+//#include <ctime>
 
 char *
 DEFUN(strfry, (string), char *string)

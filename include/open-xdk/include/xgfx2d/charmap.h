@@ -21,7 +21,7 @@
 #define		__CHARMAP_H_
 
 #include <openxdk.h>
-#include <stdio.h>
+#include <cstdio>
 
 #if defined(__cplusplus)
 extern "C"

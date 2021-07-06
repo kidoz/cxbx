@@ -38,9 +38,8 @@
 #include "core/Error.h"
 #include "Mutex.h"
 
-#include <stdio.h>
-#include <string.h>
-#include <windows.h>
+#include <cstdio>
+#include <cstring>
 
 // ******************************************************************
 // * prevent name collisions

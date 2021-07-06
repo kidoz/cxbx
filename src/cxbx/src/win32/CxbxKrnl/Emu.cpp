@@ -53,7 +53,7 @@ namespace XTL
     #include "EmuXTL.h"
 };
 
-#include <locale.h>
+#include <clocale>
 
 #include "EmuShared.h"
 #include "HLEDataBase.h"

@@ -17,7 +17,7 @@ not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
-#include <string.h>
+#include <cstring>
 
 
 /* Copy SRC to DEST, returning the address of the terminating '\0' in DEST.  */

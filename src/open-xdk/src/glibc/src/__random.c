@@ -25,7 +25,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stddef.h>
-#include <stdlib.h>
+#include <cstdlib>
 
 long int DEFUN_VOID(__random);		// forward def
 

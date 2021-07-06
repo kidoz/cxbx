@@ -18,7 +18,7 @@ Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
 #include <ctype.h>
-#include <string.h>
+#include <cstring>
 
 /* Compare no more than N characters of S1 and S2,
    ignoring case, returning less than, equal to or

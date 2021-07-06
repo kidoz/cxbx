@@ -19,8 +19,8 @@
 
 #include "usb_wrapper.h"
 #include <stdarg.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdlib>
+#include <cstring>
 
 /* internal state */
 

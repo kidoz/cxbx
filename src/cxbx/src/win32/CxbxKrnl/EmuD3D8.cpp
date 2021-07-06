@@ -57,7 +57,7 @@ namespace XTL
 #include "ResCxbxDll.h"
 
 #include <process.h>
-#include <locale.h>
+#include <clocale>
 
 // ******************************************************************
 // * Global(s)

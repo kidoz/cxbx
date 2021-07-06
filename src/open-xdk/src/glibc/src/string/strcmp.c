@@ -17,7 +17,7 @@ not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
 #include <ansidecl.h>
-#include <string.h>
+#include <cstring>
 #include <memcopy.h>
 
 /* Compare S1 and S2, returning less than, equal to or

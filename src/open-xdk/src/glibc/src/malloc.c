@@ -323,7 +323,7 @@ extern "C" {
 
 #define  LACKS_SYS_PARAM_H
 
-//#include <stdio.h>    /* needed for malloc_stats */
+//#include <cstdio>    /* needed for malloc_stats */
 #if 0
 #include <errno.h>    /* needed for optional MALLOC_FAILURE_ACTION */
 #endif

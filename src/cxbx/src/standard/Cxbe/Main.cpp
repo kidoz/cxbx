@@ -34,7 +34,7 @@
 #include "core/Exe.h"
 #include "core/Xbe.h"
 
-#include <string.h>
+#include <cstring>
 
 // ******************************************************************
 // * Static Global(s)

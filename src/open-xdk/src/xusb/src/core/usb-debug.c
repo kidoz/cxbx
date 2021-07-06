@@ -20,7 +20,7 @@
 #include "usb_wrapper.h"
 #endif
 
-#include <stdio.h>
+#include <cstdio>
 
 static void usb_show_endpoint(struct usb_host_endpoint *endpoint)
 {

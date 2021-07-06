@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-1999 Kungliga Tekniska Högskolan
+ * Copyright (c) 1995-1999 Kungliga Tekniska Hï¿½gskolan
  * (Royal Institute of Technology, Stockholm, Sweden).
  * All rights reserved.
  * 
@@ -34,8 +34,8 @@
 /* $Id: snprintf.c,v 1.1 2002/11/30 23:05:18 dreamspec Exp $ */
 
 #include <stdarg.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdlib>
+#include <cstring>
 
 //
 // BIGBOY

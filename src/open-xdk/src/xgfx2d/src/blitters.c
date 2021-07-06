@@ -13,7 +13,7 @@
 // *
 // ******************************************************************
 
-#include <string.h>				// memcpy
+#include <cstring>				// memcpy
 
 #include "xgfx2d/blitters.h"
 
@@ -83,7 +83,7 @@ alphaloop:
 		punpcklbw mm1, mm1
 		punpcklbw mm3, mm3
 		
-		// öka upp datan till wordstorlek
+		// ï¿½ka upp datan till wordstorlek
 		psrlw mm0, 4
 		psrlw mm1, 4
 		psrlw mm2, 4

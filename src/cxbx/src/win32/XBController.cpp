@@ -333,7 +333,7 @@ bool XBController::ConfigPoll(char *szStatus)
                         dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rglSlider[b]);
             else 
                 for(int b=0;b<4;b++)
-                    if(abs(JoyState.rgdwPOV[b]) > DETECT_SENSITIVITY_POV)
+                    if(JoyState.rgdwPOV[b] > DETECT_SENSITIVITY_POV)
                         dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rgdwPOV[b]);
             else
                 for(int b=0;b<32;b++)
@@ -495,7 +495,7 @@ bool XBController::ConfigPoll(char *szStatus)
                 // ******************************************************************
                 if(dwHow != -1)
                 {
-                    char *szDirection = (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive" : "Negative";
+                    const char *szDirection = (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive" : "Negative";
                     char *szObjName = "Unknown";
 
                     ObjectInstance.dwSize = sizeof(ObjectInstance);
