@@ -14,17 +14,17 @@
 // ******************************************************************
 
 #include <open-xdk/openxdk.h>
-#include <malloc.h>
-#include <cstdio>
+#include <xlibc/malloc.h>
+#include <xlibc/string.h>
 #include "xhal/xvga_def.h"
-#include <xgfx2d/charmap.h>
+
 
 #include <xgfx2d/bitmap.h>
 #include <xgfx2d/blit.h>
 #include <xgfx2d/blitters.h>
-#include <xgfx2d/drawprim.h>
-	
-	PCharMap	g_pCharMap;		// current character map
+#include <xgfx2d/charmap.h>
+
+PCharMap	g_pCharMap;		// current character map
 
 	// Out attributes colours (32bit mode)
 	u32			CharMap_Attrib[]={	0x00000000, 0x000000ff, 0x0000ff00,0x00ff0000, 

@@ -20,8 +20,8 @@
 #ifndef		__CHARMAP_H_
 #define		__CHARMAP_H_
 
-#include <openxdk.h>
-#include <cstdio>
+#include <open-xdk/openxdk.h>
+#include <xlibc/stdio.h>
 
 #if defined(__cplusplus)
 extern "C"

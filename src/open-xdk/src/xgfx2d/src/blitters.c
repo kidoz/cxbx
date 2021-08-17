@@ -13,7 +13,7 @@
 // *
 // ******************************************************************
 
-#include <cstring>				// memcpy
+#include "xlibc/string.h"			// memcpy
 
 #include "xgfx2d/blitters.h"
 
