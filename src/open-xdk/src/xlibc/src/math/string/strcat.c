@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 //
 // Return the length of a string

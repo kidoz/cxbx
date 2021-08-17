@@ -9,7 +9,7 @@
 // * note : This LIBC is TOTALLY free - do what you like with it!!
 // *
 // ******************************************************************
-#include	<stdlib.h>
+#include	<xlibc/stdlib.h>
 
 int 	_errno;
 int		_fltused;			// This is needed whenever a float is used.

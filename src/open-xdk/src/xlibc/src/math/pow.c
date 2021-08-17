@@ -12,7 +12,7 @@
 
 // NEEDS WORK
 
-#include <math.h>
+#include <xlibc/math.h>
 
 
 //really bad approximation due to expf, log being approximations already :D

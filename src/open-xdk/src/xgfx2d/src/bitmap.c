@@ -11,7 +11,7 @@
 // ******************************************************************
 
 #include <malloc.h>
-#include <cstdio>
+#include <xlibc/stdio.h>
 #include "xgfx2d/bitmap.h"
 #include "xhal/xvga.h"
 

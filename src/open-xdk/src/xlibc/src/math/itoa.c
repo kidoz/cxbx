@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 extern	char	conv[];			// get this from ltoa() function
 

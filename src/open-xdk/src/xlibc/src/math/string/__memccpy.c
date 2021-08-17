@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 //
 // Copy an array of characters till "C" is hit

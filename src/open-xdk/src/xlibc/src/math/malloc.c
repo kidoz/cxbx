@@ -1,5 +1,5 @@
-#include "../xboxkrnl/xboxkrnl.h"
-#include <ansidecl.h>
+#include "xboxkrnl/xboxkrnl.h"
+#include <xlibc/ansidecl.h>
 #include <malloc.h>
 
 //dummy malloc

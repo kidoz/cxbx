@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 char	conv[]={"0123456789abcdefghijklmnopqrstuvwxyz"};
 char* ltoa( long value, char *string, int radix )
