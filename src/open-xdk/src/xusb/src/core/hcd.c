@@ -47,6 +47,7 @@
 #endif
 
 #include "xusb/core/hcd.h"
+#include <xlibc/string.h>
 
 // #define USB_BANDWIDTH_MESSAGES
 
