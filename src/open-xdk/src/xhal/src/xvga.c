@@ -15,7 +15,7 @@
 //
 // ************************************************************************************
 
-#include	<openxdk.h>
+#include    <open-xdk/openxdk.h>
 
 #include "xhal/xvga_def.h"
 #include "xhal/xnvidia.h"

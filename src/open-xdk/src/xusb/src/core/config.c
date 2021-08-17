@@ -6,7 +6,7 @@
 #include <linux/slab.h>
 #include <asm/byteorder.h>
 #else
-#include "usb_wrapper.h"
+#include "xusb/usb_wrapper.h"
 #endif
 
 #define USB_MAXALTSETTING		128	/* Hard limit */

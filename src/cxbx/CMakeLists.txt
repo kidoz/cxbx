@@ -12,3 +12,4 @@ include_directories(
 file(GLOB CXBX_SRC "src/core/*.cpp" "src/standard/cxbe/*.cpp" "src/win32/cxbx/*.cpp" "src/win32/cxbxkrnl/*.cpp" "src/win32/*.cpp")
 
 add_executable(cxbx ${CXBX_SRC})
+target_link_libraries(cxbx xboxkrnl xgfx2d xhal xlibc xusb xvga)

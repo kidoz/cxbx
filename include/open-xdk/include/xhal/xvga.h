@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#include "openxdk.h"
+#include "open-xdk/openxdk.h"
 
 // ******************************************************************
 // * User Variables

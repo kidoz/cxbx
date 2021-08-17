@@ -9,8 +9,8 @@
 // * note : XBox VGA
 // *
 // ******************************************************************
-#include "xvga.h"
-#include "xvga_def.h"
+#include "../../../../../include/open-xdk/include/xvga/xvga.h"
+#include "../../../../../include/open-xdk/include/xvga/xvga_def.h"
 
 // ******************************************************************
 // * static functions

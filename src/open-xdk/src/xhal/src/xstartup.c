@@ -9,7 +9,7 @@
 // * note : Entry point for user applications
 // *
 // ******************************************************************
-#include "openxdk.h"
+#include "open-xdk/openxdk.h"
 
 // ******************************************************************
 // * XBoxCRTStartup

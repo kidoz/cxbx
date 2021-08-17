@@ -5,10 +5,10 @@
  *
  */
 
-#include "usb_wrapper.h"
+#include "xusb/usb_wrapper.h"
 #define __KERNEL__
 #define CONFIG_PCI
-#include "core/hcd.h"
+#include "xusb/core/hcd.h"
 
 /*------------------------------------------------------------------------*/ 
 int hcd_buffer_create (struct usb_hcd *hcd)

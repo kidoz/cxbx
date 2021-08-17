@@ -18,6 +18,6 @@ double asin(double r) {
 }
 
 
-float asinf( float r ) {
-	return atanf( r / sqrtf(1.f - r * r) );
-}
+//float asinf( float r ) {
+//	return atanf( r / sqrtf(1.f - r * r) );
+//}

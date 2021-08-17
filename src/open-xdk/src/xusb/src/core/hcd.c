@@ -41,12 +41,12 @@
 
 #include <linux/usb.h>
 #else
-#include "linux_wrapper.h"
-#include "usb_wrapper.h"
+#include "xusb/linux_wrapper.h"
+#include "xusb/usb_wrapper.h"
 //#define DEBUG
 #endif
 
-#include "core/hcd.h"
+#include "xusb/core/hcd.h"
 
 // #define USB_BANDWIDTH_MESSAGES
 

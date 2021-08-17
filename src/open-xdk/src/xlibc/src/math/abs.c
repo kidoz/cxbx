@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 
 // Return the absolute value of I. 

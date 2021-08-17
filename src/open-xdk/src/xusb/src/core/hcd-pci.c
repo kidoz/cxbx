@@ -34,8 +34,8 @@
 #include "hcd.h"
 #else
 #define DEBUG
-#include "usb_wrapper.h"
-#include "core/hcd.h"
+#include "xusb/usb_wrapper.h"
+#include "xusb/core/hcd.h"
 #endif
 
 

@@ -13,7 +13,7 @@
 // *
 // ******************************************************************
 
-#include <openxdk.h>
+#include <open-xdk/openxdk.h>
 #include <malloc.h>
 #include <cstdio>
 #include "xhal/xvga_def.h"
