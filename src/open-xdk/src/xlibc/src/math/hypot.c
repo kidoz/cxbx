@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include <math.h>
+#include <xlibc/math.h>
 
 
 float hypotf(float f, float g)

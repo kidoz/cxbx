@@ -16,7 +16,7 @@
 #ifndef XBLITTERS_H
 #define XBLITTERS_H
 
-#include <openxdk.h>
+#include <open-xdk/openxdk.h>
 #include "xgfx2d/bitmap.h"
 
 #if defined(__cplusplus)

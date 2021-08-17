@@ -10,9 +10,8 @@
 // *
 // ******************************************************************
 
-#include <stdarg.h>
-#include <cstdlib>
-#include <cstring>
+#include <xlibc/stdarg.h>
+#include <xlibc/stdio.h>
 
 
 #define		FLOAT_BIAS		127

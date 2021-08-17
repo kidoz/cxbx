@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 //
 // Compare 2 blocks of memory

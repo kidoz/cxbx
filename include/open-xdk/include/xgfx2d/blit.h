@@ -14,7 +14,7 @@
 #ifndef XBLIT_H
 #define XBLIT_H
 
-#include <openxdk.h>
+#include <open-xdk/openxdk.h>
 #include "xgfx2d/bitmap.h"
 
 #if defined(__cplusplus)

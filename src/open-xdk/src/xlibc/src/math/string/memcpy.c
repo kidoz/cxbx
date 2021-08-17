@@ -9,7 +9,7 @@
 // * note : This LIBC is TOTALLY free - do what you like with it!!
 // *
 // ******************************************************************
-#include	<ansidecl.h>
+#include	<xlibc/ansidecl.h>
 
 //
 // copy a block of memory

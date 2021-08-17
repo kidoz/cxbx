@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include	<stdlib.h>
+#include	<xlibc/stdlib.h>
 
 // NEEDS WORK
 // - ector^XL

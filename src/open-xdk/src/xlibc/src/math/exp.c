@@ -12,7 +12,7 @@
 
 // NEEDS WORK
 
-#include <math.h>
+#include <xlibc/math.h>
 
 
 //This is a fast approximation

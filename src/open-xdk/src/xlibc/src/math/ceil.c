@@ -10,7 +10,7 @@
 // *
 // ******************************************************************
 
-#include <math.h>
+#include <xlibc/math.h>
 
 #ifdef WINVER
 #error
