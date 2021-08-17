@@ -9,7 +9,7 @@
 // * note : XBox USB Open Host Controller Interface (PCI)
 // *
 // ******************************************************************
-#include "openxdk.h"
+#include "open-xdk/openxdk.h"
 #include <xlibc/stdio.h>
 
 // ******************************************************************

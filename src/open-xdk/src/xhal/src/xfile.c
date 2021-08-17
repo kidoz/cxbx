@@ -9,7 +9,7 @@
 // * note : XBox File Access
 // *
 // ******************************************************************
-#include "openxdk.h"
+#include "open-xdk/openxdk.h"
 #include "xhal/xfile_def.h"
 
 u32 LastErrorCode=1;

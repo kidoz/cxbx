@@ -18,8 +18,8 @@ double acos(double r)
 }
 
 
-float acosf(float r)
-{
-	return 3.14159265358979323846f / 2 - asinf(r);
-}
+//float acosf(float r)
+//{
+//	return 3.14159265358979323846f / 2 - asinf(r);
+//}
 

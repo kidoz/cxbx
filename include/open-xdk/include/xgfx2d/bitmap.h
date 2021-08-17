@@ -13,7 +13,7 @@
 #ifndef XBITMAP_H
 #define XBITMAP_H
 
-#include "openxdk.h"
+#include "open-xdk/openxdk.h"
 
 #if defined(__cplusplus)
 extern "C"
