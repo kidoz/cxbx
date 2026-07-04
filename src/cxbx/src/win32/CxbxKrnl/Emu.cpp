@@ -164,6 +164,200 @@ static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
     return false;
 }
 
+static ULONG EmuContextRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
+{
+    switch(RegisterIndex & 0x07)
+    {
+        case 0: return ContextRecord->Eax;
+        case 1: return ContextRecord->Ecx;
+        case 2: return ContextRecord->Edx;
+        case 3: return ContextRecord->Ebx;
+        case 4: return ContextRecord->Esp;
+        case 5: return ContextRecord->Ebp;
+        case 6: return ContextRecord->Esi;
+        case 7: return ContextRecord->Edi;
+    }
+
+    return 0;
+}
+
+static void EmuSetContextRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, ULONG Value)
+{
+    switch(RegisterIndex & 0x07)
+    {
+        case 0: ContextRecord->Eax = Value; break;
+        case 1: ContextRecord->Ecx = Value; break;
+        case 2: ContextRecord->Edx = Value; break;
+        case 3: ContextRecord->Ebx = Value; break;
+        case 4: ContextRecord->Esp = Value; break;
+        case 5: ContextRecord->Ebp = Value; break;
+        case 6: ContextRecord->Esi = Value; break;
+        case 7: ContextRecord->Edi = Value; break;
+    }
+}
+
+static BYTE EmuContextByteRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
+{
+    switch(RegisterIndex & 0x07)
+    {
+        case 0: return (BYTE)ContextRecord->Eax;
+        case 1: return (BYTE)ContextRecord->Ecx;
+        case 2: return (BYTE)ContextRecord->Edx;
+        case 3: return (BYTE)ContextRecord->Ebx;
+        case 4: return (BYTE)(ContextRecord->Eax >> 8);
+        case 5: return (BYTE)(ContextRecord->Ecx >> 8);
+        case 6: return (BYTE)(ContextRecord->Edx >> 8);
+        case 7: return (BYTE)(ContextRecord->Ebx >> 8);
+    }
+
+    return 0;
+}
+
+static void EmuSetContextByteRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, BYTE Value)
+{
+    switch(RegisterIndex & 0x07)
+    {
+        case 0: ContextRecord->Eax = (ContextRecord->Eax & 0xFFFFFF00) | Value; break;
+        case 1: ContextRecord->Ecx = (ContextRecord->Ecx & 0xFFFFFF00) | Value; break;
+        case 2: ContextRecord->Edx = (ContextRecord->Edx & 0xFFFFFF00) | Value; break;
+        case 3: ContextRecord->Ebx = (ContextRecord->Ebx & 0xFFFFFF00) | Value; break;
+        case 4: ContextRecord->Eax = (ContextRecord->Eax & 0xFFFF00FF) | ((ULONG)Value << 8); break;
+        case 5: ContextRecord->Ecx = (ContextRecord->Ecx & 0xFFFF00FF) | ((ULONG)Value << 8); break;
+        case 6: ContextRecord->Edx = (ContextRecord->Edx & 0xFFFF00FF) | ((ULONG)Value << 8); break;
+        case 7: ContextRecord->Ebx = (ContextRecord->Ebx & 0xFFFF00FF) | ((ULONG)Value << 8); break;
+    }
+}
+
+static bool EmuDecodeModRmAddress(const CONTEXT *ContextRecord, const BYTE *Instruction, ULONG *Address, ULONG *Length)
+{
+    BYTE ModRm = Instruction[1];
+    ULONG Mod = (ModRm >> 6) & 0x03;
+    ULONG Rm = ModRm & 0x07;
+    ULONG Offset = 2;
+    ULONG Result = 0;
+
+    if(Mod == 3)
+        return false;
+
+    if(Rm == 4)
+    {
+        BYTE Sib = Instruction[Offset++];
+        ULONG Scale = 1 << ((Sib >> 6) & 0x03);
+        ULONG Index = (Sib >> 3) & 0x07;
+        ULONG Base = Sib & 0x07;
+
+        if(Mod == 0 && Base == 5)
+        {
+            Result = *(ULONG*)&Instruction[Offset];
+            Offset += 4;
+        }
+        else
+        {
+            Result = EmuContextRegister(ContextRecord, Base);
+        }
+
+        if(Index != 4)
+            Result += EmuContextRegister(ContextRecord, Index) * Scale;
+    }
+    else if(Mod == 0 && Rm == 5)
+    {
+        Result = *(ULONG*)&Instruction[Offset];
+        Offset += 4;
+    }
+    else
+    {
+        Result = EmuContextRegister(ContextRecord, Rm);
+    }
+
+    if(Mod == 1)
+        Result += (LONG)(CHAR)Instruction[Offset++];
+    else if(Mod == 2)
+    {
+        Result += *(ULONG*)&Instruction[Offset];
+        Offset += 4;
+    }
+
+    *Address = Result;
+    *Length = Offset;
+    return true;
+}
+
+static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
+{
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
+        return false;
+
+    __try
+    {
+        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        ULONG Port = e->ContextRecord->Edx & 0xFFFF;
+
+        switch(Instruction[0])
+        {
+            case 0xEC:
+                EmuSetContextByteRegister(e->ContextRecord, 0, 0);
+                e->ContextRecord->Eip += 1;
+                printf("Emu (0x%lX): Emulated IN AL, DX port=0x%.04lX.\n", GetCurrentThreadId(), Port);
+                fflush(stdout);
+                return true;
+
+            case 0xED:
+                e->ContextRecord->Eax = 0;
+                e->ContextRecord->Eip += 1;
+                printf("Emu (0x%lX): Emulated IN EAX, DX port=0x%.04lX.\n", GetCurrentThreadId(), Port);
+                fflush(stdout);
+                return true;
+
+            case 0xEE:
+                e->ContextRecord->Eip += 1;
+                printf("Emu (0x%lX): Emulated OUT DX, AL port=0x%.04lX value=0x%.02X.\n",
+                       GetCurrentThreadId(), Port, EmuContextByteRegister(e->ContextRecord, 0));
+                fflush(stdout);
+                return true;
+
+            case 0xEF:
+                e->ContextRecord->Eip += 1;
+                printf("Emu (0x%lX): Emulated OUT DX, EAX port=0x%.04lX value=0x%.08lX.\n",
+                       GetCurrentThreadId(), Port, e->ContextRecord->Eax);
+                fflush(stdout);
+                return true;
+
+            case 0xE4:
+                EmuSetContextByteRegister(e->ContextRecord, 0, 0);
+                e->ContextRecord->Eip += 2;
+                printf("Emu (0x%lX): Emulated IN AL, 0x%.02X.\n", GetCurrentThreadId(), Instruction[1]);
+                fflush(stdout);
+                return true;
+
+            case 0xE5:
+                e->ContextRecord->Eax = 0;
+                e->ContextRecord->Eip += 2;
+                printf("Emu (0x%lX): Emulated IN EAX, 0x%.02X.\n", GetCurrentThreadId(), Instruction[1]);
+                fflush(stdout);
+                return true;
+
+            case 0xE6:
+                e->ContextRecord->Eip += 2;
+                printf("Emu (0x%lX): Emulated OUT 0x%.02X, AL value=0x%.02X.\n",
+                       GetCurrentThreadId(), Instruction[1], EmuContextByteRegister(e->ContextRecord, 0));
+                fflush(stdout);
+                return true;
+
+            case 0xE7:
+                e->ContextRecord->Eip += 2;
+                printf("Emu (0x%lX): Emulated OUT 0x%.02X, EAX value=0x%.08lX.\n",
+                       GetCurrentThreadId(), Instruction[1], e->ContextRecord->Eax);
+                fflush(stdout);
+                return true;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return false;
+}
+
 static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 {
     if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
@@ -192,6 +386,24 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             return true;
         }
 
+        if(AccessType == 0 && Instruction[0] == 0x8B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, 0);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x01 &&
            e->ContextRecord->Ecx == FaultAddress)
         {
@@ -199,6 +411,71 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             e->ContextRecord->Eip += 2;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x08 &&
+           e->ContextRecord->Eax == FaultAddress)
+        {
+            e->ContextRecord->Ecx = 0;
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x00 &&
+           e->ContextRecord->Eax == FaultAddress)
+        {
+            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8A)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                EmuSetContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, 0);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x0F && Instruction[1] == 0xB6 &&
+           (Instruction[2] & 0xC7) == 0x40 &&
+           e->ContextRecord->Eax + (LONG)(CHAR)Instruction[3] == FaultAddress)
+        {
+            switch((Instruction[2] >> 3) & 0x07)
+            {
+                case 0: e->ContextRecord->Eax = 0; break;
+                case 1: e->ContextRecord->Ecx = 0; break;
+                case 2: e->ContextRecord->Edx = 0; break;
+                case 3: e->ContextRecord->Ebx = 0; break;
+                case 4: e->ContextRecord->Esp = 0; break;
+                case 5: e->ContextRecord->Ebp = 0; break;
+                case 6: e->ContextRecord->Esi = 0; break;
+                case 7: e->ContextRecord->Edi = 0; break;
+            }
+            e->ContextRecord->Eip += 4;
+
+            printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
             fflush(stdout);
 
             return true;
@@ -263,6 +540,97 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             return true;
         }
 
+        if(AccessType == 1 && Instruction[0] == 0xC7 && Instruction[1] == 0x01 &&
+           e->ContextRecord->Ecx == FaultAddress)
+        {
+            ULONG Value = *(ULONG*)&Instruction[2];
+            e->ContextRecord->Eip += 6;
+
+            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, Value);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x89)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x88)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = EmuContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xC7 &&
+           (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = *(ULONG*)&Instruction[OperandLength];
+                e->ContextRecord->Eip += OperandLength + 4;
+
+                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xC6 &&
+           (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = Instruction[OperandLength];
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 1 && Instruction[0] == 0xC7 && Instruction[1] == 0x05 &&
            *(ULONG*)&Instruction[2] == FaultAddress)
         {
@@ -304,6 +672,14 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         EmuSwapFS();
 
     if(EmuTryEmulateRdmsr(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulatePortIo(e))
     {
         if(WasXboxFS)
             EmuSwapFS();
