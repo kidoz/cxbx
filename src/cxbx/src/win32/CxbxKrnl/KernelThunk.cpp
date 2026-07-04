@@ -94,6 +94,12 @@ extern "C" VOID NTAPI EmuIoDeleteDevice(PVOID DeviceObject);
 extern "C" NTSTATUS NTAPI EmuIoCreateSymbolicLink(xboxkrnl::PSTRING SymbolicLinkName, xboxkrnl::PSTRING DeviceName);
 extern "C" NTSTATUS NTAPI EmuIoDeleteSymbolicLink(xboxkrnl::PSTRING SymbolicLinkName);
 extern "C" NTSTATUS NTAPI EmuPsCreateSystemThread(PHANDLE ThreadHandle, ULONG ThreadExtraSize, xboxkrnl::PKSTART_ROUTINE StartRoutine, PVOID StartContext, BOOLEAN CreateSuspended);
+extern "C" NTSTATUS NTAPI EmuRtlAppendStringToString(xboxkrnl::PSTRING Destination, xboxkrnl::PSTRING Source);
+extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeStringToString(xboxkrnl::PUNICODE_STRING Destination, xboxkrnl::PUNICODE_STRING Source);
+extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeToString(xboxkrnl::PUNICODE_STRING Destination, USHORT *Source);
+extern "C" VOID NTAPI EmuRtlCaptureContext(PVOID ContextRecord);
+extern "C" VOID NTAPI EmuRtlInitAnsiString(xboxkrnl::PANSI_STRING DestinationString, const char *SourceString);
+extern "C" VOID NTAPI EmuRtlInitUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, USHORT *SourceString);
 struct EmuObjectType;
 extern "C" EmuObjectType g_EmuExEventObjectType;
 extern "C" EmuObjectType g_EmuExMutantObjectType;
@@ -381,10 +387,10 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuObReferenceObjectByHandle,          // 0x00F6 (246)
     (uint32)PANIC(0x00F7),                          // 0x00F7 (247)
     (uint32)PANIC(0x00F8),                          // 0x00F8 (248)
-    (uint32)PANIC(0x00F9),                          // 0x00F9 (249)
+    (uint32)&g_EmuObSymbolicLinkObjectType,         // 0x00F9 (249)
     (uint32)&EmuObfDereferenceObject,               // 0x00FA (250)
     (uint32)&EmuObfReferenceObject,                 // 0x00FB (251)
-    (uint32)&g_EmuObSymbolicLinkObjectType,         // 0x00FC (252)
+    (uint32)PANIC(0x00FC),                          // 0x00FC (252)
     (uint32)PANIC(0x00FD),                          // 0x00FD (253)
     (uint32)&EmuPsCreateSystemThread,               // 0x00FE (254)
     (uint32)&xboxkrnl::PsCreateSystemThreadEx,      // 0x00FF (255)
@@ -393,11 +399,11 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&xboxkrnl::PsTerminateSystemThread,     // 0x0102 (258)
     (uint32)&g_EmuPsThreadObjectType,               // 0x0103 (259)
     (uint32)&xboxkrnl::RtlAnsiStringToUnicodeString,// 0x0104 (260)
-    (uint32)PANIC(0x0105),                          // 0x0105 (261)
-    (uint32)PANIC(0x0106),                          // 0x0106 (262)
-    (uint32)PANIC(0x0107),                          // 0x0107 (263)
+    (uint32)&EmuRtlAppendStringToString,            // 0x0105 (261)
+    (uint32)&EmuRtlAppendUnicodeStringToString,     // 0x0106 (262)
+    (uint32)&EmuRtlAppendUnicodeToString,           // 0x0107 (263)
     (uint32)PANIC(0x0108),                          // 0x0108 (264)
-    (uint32)PANIC(0x0109),                          // 0x0109 (265)
+    (uint32)&EmuRtlCaptureContext,                  // 0x0109 (265)
     (uint32)PANIC(0x010A),                          // 0x010A (266)
     (uint32)PANIC(0x010B),                          // 0x010B (267)
     (uint32)PANIC(0x010C),                          // 0x010C (268)
@@ -421,8 +427,8 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x011E),                          // 0x011E (286)
     (uint32)PANIC(0x011F),                          // 0x011F (287)
     (uint32)PANIC(0x0120),                          // 0x0120 (288)
-    (uint32)&xboxkrnl::RtlInitAnsiString,           // 0x0121 (289)
-    (uint32)PANIC(0x0122),                          // 0x0122 (290)
+    (uint32)&EmuRtlInitAnsiString,                  // 0x0121 (289)
+    (uint32)&EmuRtlInitUnicodeString,               // 0x0122 (290)
     (uint32)&xboxkrnl::RtlInitializeCriticalSection,// 0x0123 (291)
     (uint32)PANIC(0x0124),                          // 0x0124 (292)
     (uint32)PANIC(0x0125),                          // 0x0125 (293)

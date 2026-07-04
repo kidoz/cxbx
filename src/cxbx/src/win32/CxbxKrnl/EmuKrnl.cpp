@@ -102,6 +102,7 @@ struct EmuObjectHeader
     ULONGLONG Body;
 };
 
+static const ULONG EmuGenericObjectMagic = 0x4F626A48;
 static const ULONG EmuThreadObjectMagic = 0x54687264;
 struct EmuThreadObjectHeader
 {
@@ -173,6 +174,15 @@ extern "C" NTSTATUS NTAPI EmuObReferenceObjectByHandle(HANDLE ObjectHandle, PVOI
     if(ObjectHandle == NULL || ObjectHandle == INVALID_HANDLE_VALUE || ObjectHandle == (HANDLE)100000 || ObjectHandle == (HANDLE)-1)
         return 0xC0000008;
 
+    if(ObjectHandle == (HANDLE)-2)
+    {
+        if(ObjectType != NULL && !EmuIsThreadObjectType(ObjectType))
+            return 0xC0000024;
+
+        *Object = EmuGetCurrentThread();
+        return STATUS_SUCCESS;
+    }
+
     if(EmuIsThreadObjectType(ObjectType))
     {
         EmuThreadObjectHeader *ThreadHeader = new EmuThreadObjectHeader;
@@ -193,6 +203,7 @@ extern "C" NTSTATUS NTAPI EmuObReferenceObjectByHandle(HANDLE ObjectHandle, PVOI
     Header->PointerCount = 1;
     Header->HandleCount = 1;
     Header->Type = ObjectType;
+    Header->Flags = EmuGenericObjectMagic;
     *Object = &Header->Body;
 
     return STATUS_SUCCESS;
@@ -203,6 +214,9 @@ extern "C" VOID __fastcall EmuObfDereferenceObject(PVOID Object)
     if(Object == NULL)
         return;
 
+    if(Object == EmuGetCurrentThread())
+        return;
+
     EmuObjectHeader *Header = (EmuObjectHeader*)((BYTE*)Object - 16);
     if(Header->Flags == EmuThreadObjectMagic)
     {
@@ -210,11 +224,140 @@ extern "C" VOID __fastcall EmuObfDereferenceObject(PVOID Object)
         return;
     }
 
-    delete Header;
+    if(Header->Flags == EmuGenericObjectMagic)
+        delete Header;
 }
 
 extern "C" VOID __fastcall EmuObfReferenceObject(PVOID Object)
 {
+}
+
+extern "C" __declspec(naked) VOID NTAPI EmuRtlCaptureContext(PVOID ContextRecord)
+{
+    __asm
+    {
+        pushfd
+        pushad
+
+        mov     esi, [esp+40]
+
+        mov     eax, [esp+28]
+        mov     [esi+0B0h], eax
+        mov     eax, [esp+24]
+        mov     [esi+0ACh], eax
+        mov     eax, [esp+20]
+        mov     [esi+0A8h], eax
+        mov     eax, [esp+16]
+        mov     [esi+0A4h], eax
+        mov     eax, [esp+4]
+        mov     [esi+0A0h], eax
+        mov     eax, [esp]
+        mov     [esi+09Ch], eax
+
+        mov     ax, cs
+        movzx   eax, ax
+        mov     [esi+0BCh], eax
+        mov     ax, ss
+        movzx   eax, ax
+        mov     [esi+0C8h], eax
+
+        mov     eax, [esp+32]
+        mov     [esi+0C0h], eax
+
+        popad
+        popfd
+        ret     4
+    }
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlAppendStringToString(xboxkrnl::PSTRING Destination, xboxkrnl::PSTRING Source)
+{
+    if(Destination == NULL || Source == NULL)
+        return STATUS_SUCCESS;
+
+    if((ULONG)Destination->Length + Source->Length > Destination->MaximumLength)
+        return 0xC0000023;
+
+    if(Source->Length != 0)
+        memcpy(Destination->Buffer + Destination->Length, Source->Buffer, Source->Length);
+
+    Destination->Length += Source->Length;
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeStringToString(xboxkrnl::PUNICODE_STRING Destination, xboxkrnl::PUNICODE_STRING Source)
+{
+    if(Destination == NULL || Source == NULL)
+        return STATUS_SUCCESS;
+
+    if((ULONG)Destination->Length + Source->Length > Destination->MaximumLength)
+        return 0xC0000023;
+
+    if(Source->Length != 0)
+        memcpy((BYTE*)Destination->Buffer + Destination->Length, Source->Buffer, Source->Length);
+
+    Destination->Length += Source->Length;
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeToString(xboxkrnl::PUNICODE_STRING Destination, USHORT *Source)
+{
+    xboxkrnl::UNICODE_STRING SourceString;
+    SourceString.Length = 0;
+    SourceString.MaximumLength = sizeof(USHORT);
+    SourceString.Buffer = Source;
+
+    if(Source != NULL)
+    {
+        while(Source[SourceString.Length / sizeof(USHORT)] != 0)
+            SourceString.Length += sizeof(USHORT);
+
+        SourceString.MaximumLength = SourceString.Length + sizeof(USHORT);
+    }
+
+    return EmuRtlAppendUnicodeStringToString(Destination, &SourceString);
+}
+
+extern "C" VOID NTAPI EmuRtlInitAnsiString(xboxkrnl::PANSI_STRING DestinationString, const char *SourceString)
+{
+    if(DestinationString == NULL)
+        return;
+
+    DestinationString->Buffer = (PCHAR)SourceString;
+    if(SourceString == NULL)
+    {
+        DestinationString->Length = 0;
+        DestinationString->MaximumLength = 0;
+        return;
+    }
+
+    size_t Length = strlen(SourceString);
+    if(Length > 0xFFFE)
+        Length = 0xFFFE;
+
+    DestinationString->Length = (USHORT)Length;
+    DestinationString->MaximumLength = (USHORT)(Length + 1);
+}
+
+extern "C" VOID NTAPI EmuRtlInitUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, USHORT *SourceString)
+{
+    if(DestinationString == NULL)
+        return;
+
+    DestinationString->Buffer = SourceString;
+    if(SourceString == NULL)
+    {
+        DestinationString->Length = 0;
+        DestinationString->MaximumLength = 0;
+        return;
+    }
+
+    USHORT Length = 0;
+    while(SourceString[Length / sizeof(USHORT)] != 0 && Length <= 0xFFFC)
+        Length += sizeof(USHORT);
+
+    DestinationString->Length = Length;
+    DestinationString->MaximumLength = Length + sizeof(USHORT);
 }
 
 // ******************************************************************
@@ -1835,6 +1978,12 @@ XBSYSAPI EXPORTNUM(187) NTSTATUS NTAPI xboxkrnl::NtClose
     #endif
 
     NTSTATUS ret = STATUS_SUCCESS;
+
+    if(Handle == (HANDLE)-2)
+    {
+        EmuSwapFS();   // Xbox FS
+        return STATUS_SUCCESS;
+    }
     
     // ******************************************************************
     // * delete 'special' handles
@@ -2659,14 +2808,22 @@ extern "C" NTSTATUS NTAPI EmuNtOpenSymbolicLinkObject
 {
     EmuSwapFS();   // Win2k/XP FS
 
-    if(LinkHandle != 0)
-        *LinkHandle = 0;
+    if(LinkHandle == NULL || ObjectAttributes == NULL || ObjectAttributes->ObjectName == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return 0xC000000D;
+    }
 
-    printf("EmuKrnl (0x%X): NtOpenSymbolicLinkObject is not implemented.\n", (uint32)GetCurrentThreadId());
+    *LinkHandle = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if(*LinkHandle == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return 0xC000009A;
+    }
 
     EmuSwapFS();   // Xbox FS
 
-    return STATUS_OBJECT_NAME_NOT_FOUND;
+    return STATUS_SUCCESS;
 }
 
 extern "C" NTSTATUS NTAPI EmuNtOpenDirectoryObject
