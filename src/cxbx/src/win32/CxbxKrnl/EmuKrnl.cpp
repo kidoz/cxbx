@@ -141,6 +141,7 @@ static std::map<std::string, std::string> g_EmuSymbolicLinks;
 static const NTSTATUS EmuStatusInvalidParameter = (NTSTATUS)0xC000000D;
 static const NTSTATUS EmuStatusObjectNameInvalid = (NTSTATUS)0xC0000033;
 static const NTSTATUS EmuStatusObjectPathNotFound = (NTSTATUS)0xC000003A;
+static const NTSTATUS EmuStatusSuspendCountExceeded = (NTSTATUS)0xC000004A;
 
 static bool EmuObjectStringToStdString(xboxkrnl::PSTRING ObjectName, std::string *Value)
 {
@@ -4223,7 +4224,7 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
 
         if(SuspendCount >= 0x7F)
         {
-            ret = 0xC000004A;
+            ret = EmuStatusSuspendCountExceeded;
         }
         else
         {
@@ -4564,6 +4565,9 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx
         iPCSTProxyParam->StartRoutine  = StartRoutine;
 
         *ThreadHandle = CreateThread(NULL, NULL, &PCSTProxy, iPCSTProxyParam, CreateSuspended ? CREATE_SUSPENDED : NULL, &dwThreadId);
+
+        if(*ThreadHandle != NULL)
+            g_EmuThreadSuspendCounts[*ThreadHandle] = CreateSuspended ? 1 : 0;
 
         if(ThreadId != NULL)
             *ThreadId = dwThreadId;
