@@ -2496,11 +2496,28 @@ extern "C" VOID NTAPI EmuAvSetSavedDataAddress(PVOID Address)
 extern "C" VOID NTAPI EmuAvSendTVEncoderOption(PVOID RegisterBase, ULONG Option, ULONG Param, ULONG *Result)
 {
     if(Result != NULL)
-        *Result = 0;
+    {
+        // Option 6 == VIDEO_ENC_GET_SETTINGS: report the AV pack + TV standard the
+        // guest video HAL uses to enumerate display modes. Return "standard AV
+        // pack, NTSC-M" (AV_PACK_STANDARD 0x01 | VIDEO_REGION_NTSCM 0x100) so nxdk
+        // and the XDK find the 640x480 60Hz mode. Returning 0 (AV_PACK_NONE) means
+        // no mode matches -> XVideoSetMode fails without allocating a framebuffer
+        // -> XVideoGetFB() returns NULL.
+        *Result = (Option == 6) ? 0x00000101 : 0;
+    }
 }
 
 extern "C" ULONG NTAPI EmuAvSetDisplayMode(PVOID RegisterBase, ULONG Step, ULONG Mode, ULONG Format, ULONG Pitch, ULONG FrameBuffer)
 {
+    EmuSwapFS();   // Win2k/XP FS
+    // Report where the scanout frame lives + its geometry. FrameBuffer is the
+    // physical/virtual address of the displayed surface; Pitch is bytes/scanline;
+    // Mode/Format encode resolution and pixel format.
+    printf("EmuKrnl (0x%lX): AvSetDisplayMode step=%lu mode=0x%.08lX format=0x%.08lX "
+           "pitch=0x%.08lX (%lu) framebuffer=0x%.08lX\n",
+           GetCurrentThreadId(), Step, Mode, Format, Pitch, Pitch, FrameBuffer);
+    fflush(stdout);
+    EmuSwapFS();   // Xbox FS
     return 0;
 }
 
@@ -3869,6 +3886,61 @@ XBSYSAPI EXPORTNUM(156) volatile xboxkrnl::DWORD xboxkrnl::KeTickCount = 0;
 XBSYSAPI EXPORTNUM(164) xboxkrnl::DWORD xboxkrnl::LaunchDataPage = 0;
 
 // ******************************************************************
+// * First-image framebuffer dump (diagnostic)
+// *
+// * When D3D8 allocates the 640x480x32 scanout surface, a host-side thread
+// * snapshots it to %TEMP%\cxbx_frameN.bmp every few seconds so the rendered
+// * frame can be inspected. This does not touch the NV2A/render path; it just
+// * reads the surface memory. If the frame is black, the title renders through
+// * the (un-rasterized) NV2A 3D pipeline; if it shows pixels, it software-fills.
+// ******************************************************************
+static volatile ULONG g_EmuFramebufferAddress = 0;
+
+static DWORD WINAPI EmuFramebufferDumpThread(LPVOID)
+{
+    const ULONG W = 640, H = 480, DataSize = W * H * 4;
+    char dir[MAX_PATH] = {0};
+    GetTempPathA(sizeof(dir), dir);
+
+    for(ULONG index = 0; ; )
+    {
+        Sleep(3000);
+
+        ULONG fb = g_EmuFramebufferAddress;
+        if(fb == 0)
+            continue;
+
+        char path[MAX_PATH];
+        sprintf(path, "%scxbx_frame%lu.bmp", dir, index++);
+
+        FILE *f = fopen(path, "wb");
+        if(f == NULL)
+            continue;
+
+        unsigned char fh[14] = {0}, ih[40] = {0};
+        ULONG fileSize = 54 + DataSize;
+        fh[0] = 'B'; fh[1] = 'M';
+        fh[2] = (unsigned char)fileSize;         fh[3] = (unsigned char)(fileSize >> 8);
+        fh[4] = (unsigned char)(fileSize >> 16); fh[5] = (unsigned char)(fileSize >> 24);
+        fh[10] = 54;
+        ih[0] = 40;
+        ih[4] = (unsigned char)W; ih[5] = (unsigned char)(W >> 8);
+        LONG nh = -(LONG)H;   // negative height => top-down bitmap
+        ih[8] = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
+        ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+        ih[12] = 1;    // planes
+        ih[14] = 32;   // bpp (BGRA, matches Xbox X8R8G8B8 little-endian)
+        fwrite(fh, 1, 14, f);
+        fwrite(ih, 1, 40, f);
+        fwrite((const void *)fb, 1, DataSize, f);
+        fclose(f);
+
+        printf("EmuKrnl: dumped framebuffer 0x%.08lX -> %s\n", fb, path);
+        fflush(stdout);
+    }
+}
+
+// ******************************************************************
 // * 0x00A5 - MmAllocateContiguousMemory
 // ******************************************************************
 XBSYSAPI EXPORTNUM(165) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemory
@@ -3896,6 +3968,24 @@ XBSYSAPI EXPORTNUM(165) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
     const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
     PVOID pRet = (AllocationSize != 0) ? (PVOID)new unsigned char[AllocationSize] : NULL;
     EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
+
+    // Large contiguous blocks are display/render surfaces (D3D8 front/back
+    // buffers). The framebuffer-sized one (~640x480xbpp) is where the frame
+    // lives; log size + address to locate it.
+    if(pRet != NULL && AllocationSize >= 0x00040000)
+    {
+        printf("EmuKrnl (0x%lX): large contiguous alloc size=0x%.08lX (%lu KiB) -> 0x%.08lX\n",
+               GetCurrentThreadId(), AllocationSize, AllocationSize / 1024, (ULONG)pRet);
+        fflush(stdout);
+
+        // 640x480x32 surface => the scanout framebuffer. Capture it and start
+        // the snapshot thread (see EmuFramebufferDumpThread).
+        if(AllocationSize == 0x0012C000 && g_EmuFramebufferAddress == 0)
+        {
+            g_EmuFramebufferAddress = (ULONG)pRet;
+            CreateThread(NULL, 0, EmuFramebufferDumpThread, NULL, 0, NULL);
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -3939,6 +4029,24 @@ XBSYSAPI EXPORTNUM(166) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
     const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
     PVOID pRet = (AllocationSize != 0) ? (PVOID)new unsigned char[AllocationSize] : NULL;
     EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
+
+    // Large contiguous blocks are display/render surfaces (D3D8 front/back
+    // buffers). The framebuffer-sized one (~640x480xbpp) is where the frame
+    // lives; log size + address to locate it.
+    if(pRet != NULL && AllocationSize >= 0x00040000)
+    {
+        printf("EmuKrnl (0x%lX): large contiguous alloc size=0x%.08lX (%lu KiB) -> 0x%.08lX\n",
+               GetCurrentThreadId(), AllocationSize, AllocationSize / 1024, (ULONG)pRet);
+        fflush(stdout);
+
+        // 640x480x32 surface => the scanout framebuffer. Capture it and start
+        // the snapshot thread (see EmuFramebufferDumpThread).
+        if(AllocationSize == 0x0012C000 && g_EmuFramebufferAddress == 0)
+        {
+            g_EmuFramebufferAddress = (ULONG)pRet;
+            CreateThread(NULL, 0, EmuFramebufferDumpThread, NULL, 0, NULL);
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
