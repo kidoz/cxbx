@@ -120,6 +120,21 @@ static void BuildTempExePath(const char *szXbePath, char *szExePath)
     snprintf(szExePath, 260, "%s%s", szTempRoot, szBaseName);
 }
 
+static void BuildXbeDirectory(const char *szXbePath, char *szDirectory)
+{
+    strncpy(szDirectory, szXbePath, 259);
+    szDirectory[259] = '\0';
+
+    char *szSlash = strrchr(szDirectory, '\\');
+    if(szSlash == NULL)
+        szSlash = strrchr(szDirectory, '/');
+
+    if(szSlash != NULL)
+        *szSlash = '\0';
+    else
+        GetModuleDirectory(szDirectory);
+}
+
 static void CopyRuntimeDllNextToExe(const char *szExePath)
 {
     char szModuleDirectory[260];
@@ -147,7 +162,7 @@ static void CopyRuntimeDllNextToExe(const char *szExePath)
         printf("cxbx: failed to copy runtime DLL from %s to %s (error=%lu).\n", szSourceDll, szTargetDll, GetLastError());
 }
 
-static int RunXbeBatch(const char *szXbePath)
+static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
 {
     printf("cxbx: batch opening %s.\n", szXbePath);
 
@@ -163,7 +178,16 @@ static int RunXbeBatch(const char *szXbePath)
     printf("cxbx: batch converting to %s.\n", szExePath);
 
     char szDebugFilename[260] = {0};
-    EmuExe i_EmuExe(&i_Xbe, DM_NONE, szDebugFilename);
+    DebugMode DebugMode = DM_NONE;
+
+    if(szLogFile != NULL && szLogFile[0] != '\0')
+    {
+        strncpy(szDebugFilename, szLogFile, sizeof(szDebugFilename) - 1);
+        szDebugFilename[sizeof(szDebugFilename) - 1] = '\0';
+        DebugMode = DM_FILE;
+    }
+
+    EmuExe i_EmuExe(&i_Xbe, DebugMode, szDebugFilename);
     i_EmuExe.Export(szExePath);
 
     if(i_EmuExe.GetError() != 0)
@@ -177,7 +201,7 @@ static int RunXbeBatch(const char *szXbePath)
     g_EmuShared->SetXbePath(i_Xbe.m_szPath);
 
     char szWorkingDirectory[260];
-    GetModuleDirectory(szWorkingDirectory);
+    BuildXbeDirectory(szXbePath, szWorkingDirectory);
 
     SHELLEXECUTEINFO sei;
     memset(&sei, 0, sizeof(sei));
@@ -280,7 +304,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     if(bBatchRun)
     {
-        int ret = RunXbeBatch(szXbeArg);
+        int ret = RunXbeBatch(szXbeArg, szLogFile);
         EmuShared::Cleanup();
         return ret;
     }
