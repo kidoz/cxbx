@@ -11,6 +11,7 @@
 // ******************************************************************
 
 #include	<xlibc/ansidecl.h>
+#include	<xlibc/ctype.h>
 
 //
 // Compare 2 blocks of memory
@@ -22,8 +23,12 @@ int strncmp( const void *buff1, const void *buff2 )
 
 	while( true ){
 		char	a,b;
-		a = tolower(*pBuff1++);
-		b = tolower(*pBuff2++);
+		// tolower() is a macro; keep the post-increment out of it so the
+		// pointer is only advanced once per character.
+		a = *pBuff1++;
+		b = *pBuff2++;
+		a = tolower(a);
+		b = tolower(b);
 
 		if( (a|b) == 0 ) return 0;			// both end at the same time, so equal
 
