@@ -3498,9 +3498,13 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
     // ******************************************************************
     // * Redirect to NtCreateFile
     // ******************************************************************
+    ACCESS_MASK NtDesiredAccess = DesiredAccess;
+    if((CreateOptions & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT)) != 0)
+        NtDesiredAccess |= SYNCHRONIZE;
+
     NTSTATUS ret = NtDll::NtCreateFile
     (
-        FileHandle, DesiredAccess, &NtObjAttr, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock,
+        FileHandle, NtDesiredAccess, &NtObjAttr, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock,
         (NtDll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess, CreateDisposition, CreateOptions, NULL, NULL
     );
 
