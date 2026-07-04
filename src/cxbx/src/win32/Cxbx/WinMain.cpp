@@ -135,6 +135,16 @@ static void BuildXbeDirectory(const char *szXbePath, char *szDirectory)
         GetModuleDirectory(szDirectory);
 }
 
+static void BuildAbsolutePath(const char *szPath, char *szAbsolutePath)
+{
+    DWORD dwAbsolutePath = GetFullPathName(szPath, 260, szAbsolutePath, NULL);
+    if(dwAbsolutePath == 0 || dwAbsolutePath >= 260)
+    {
+        strncpy(szAbsolutePath, szPath, 259);
+        szAbsolutePath[259] = '\0';
+    }
+}
+
 static void CopyRuntimeDllNextToExe(const char *szExePath)
 {
     char szModuleDirectory[260];
@@ -164,9 +174,12 @@ static void CopyRuntimeDllNextToExe(const char *szExePath)
 
 static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
 {
-    printf("cxbx: batch opening %s.\n", szXbePath);
+    char szAbsoluteXbePath[260];
+    BuildAbsolutePath(szXbePath, szAbsoluteXbePath);
 
-    Xbe i_Xbe(szXbePath);
+    printf("cxbx: batch opening %s.\n", szAbsoluteXbePath);
+
+    Xbe i_Xbe(szAbsoluteXbePath);
     if(i_Xbe.GetError() != 0)
     {
         printf("cxbx: %s\n", i_Xbe.GetError());
@@ -174,7 +187,7 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     }
 
     char szExePath[260];
-    BuildTempExePath(szXbePath, szExePath);
+    BuildTempExePath(szAbsoluteXbePath, szExePath);
     printf("cxbx: batch converting to %s.\n", szExePath);
 
     char szDebugFilename[260] = {0};
@@ -182,8 +195,7 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
 
     if(szLogFile != NULL && szLogFile[0] != '\0')
     {
-        strncpy(szDebugFilename, szLogFile, sizeof(szDebugFilename) - 1);
-        szDebugFilename[sizeof(szDebugFilename) - 1] = '\0';
+        BuildAbsolutePath(szLogFile, szDebugFilename);
         DebugMode = DM_FILE;
     }
 
@@ -201,7 +213,7 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     g_EmuShared->SetXbePath(i_Xbe.m_szPath);
 
     char szWorkingDirectory[260];
-    BuildXbeDirectory(szXbePath, szWorkingDirectory);
+    BuildXbeDirectory(szAbsoluteXbePath, szWorkingDirectory);
 
     SHELLEXECUTEINFO sei;
     memset(&sei, 0, sizeof(sei));
