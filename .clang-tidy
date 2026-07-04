@@ -1,0 +1,24 @@
+---
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-reserved-identifier,
+  -bugprone-switch-missing-default-case,
+  portability-*,
+  clang-analyzer-*,
+  -clang-analyzer-core.FixedAddressDereference,
+  -clang-analyzer-core.NullDereference,
+  -clang-analyzer-core.UndefinedBinaryOperatorResult,
+  -clang-analyzer-security.insecureAPI.*,
+  cppcoreguidelines-pro-type-*,
+  -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-type-const-cast,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-vararg
+HeaderFilterRegex: '^(src|include|tests)/'
+FormatStyle: file
+WarningsAsErrors: ''
+CheckOptions:
+  - key: bugprone-easily-swappable-parameters.MinimumLength
+    value: '4'
+...
