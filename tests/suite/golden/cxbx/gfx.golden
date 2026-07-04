@@ -1,4 +1,6 @@
 #suite xbox-conformance v1
 #probe gfx
-CHK gfx.fb_nonnull FAIL
-#result gfx verdict=FAIL checks=1 fail=1
+CHK gfx.fb_nonnull PASS
+CHK gfx.fb_readback PASS
+CHK gfx.block_hash PASS
+#result gfx verdict=PASS checks=3 fail=0

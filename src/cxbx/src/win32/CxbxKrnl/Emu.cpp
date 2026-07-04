@@ -2581,6 +2581,20 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             return true;
         }
 
+        // 0xA2 = mov moffs8, AL : 8-bit store to an absolute address (used by the
+        // video-DAC / gamma-ramp writes, e.g. XVideoSetGammaRamp to PRMDIO).
+        if(AccessType == 1 && Instruction[0] == 0xA2 && *(ULONG*)&Instruction[1] == FaultAddress)
+        {
+            EmuWriteMmio(FaultAddress, 1, e->ContextRecord->Eax & 0xFF);
+            e->ContextRecord->Eip += 5;
+
+            printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
+                   GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax & 0xFF);
+            fflush(stdout);
+
+            return true;
+        }
+
         if(AccessType == 1 && Instruction[0] == 0x89 && Instruction[1] == 0x01 &&
            e->ContextRecord->Ecx == FaultAddress)
         {
