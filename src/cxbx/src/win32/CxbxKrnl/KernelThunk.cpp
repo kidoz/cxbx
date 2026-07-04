@@ -52,6 +52,8 @@ extern "C" ULONG NTAPI EmuAvSetDisplayMode(PVOID RegisterBase, ULONG Step, ULONG
 extern "C" VOID NTAPI EmuAvSetSavedDataAddress(PVOID Address);
 extern "C" VOID NTAPI EmuExAcquireReadWriteLockExclusive(PVOID Lock);
 extern "C" VOID NTAPI EmuExAcquireReadWriteLockShared(PVOID Lock);
+extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag);
+extern "C" VOID NTAPI EmuExFreePool(PVOID P);
 extern "C" VOID NTAPI EmuExInitializeReadWriteLock(PVOID Lock);
 extern "C" VOID NTAPI EmuExReleaseReadWriteLock(PVOID Lock);
 extern "C" NTSTATUS NTAPI EmuNtOpenDirectoryObject(PHANDLE DirectoryHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
@@ -98,8 +100,54 @@ extern "C" NTSTATUS NTAPI EmuRtlAppendStringToString(xboxkrnl::PSTRING Destinati
 extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeStringToString(xboxkrnl::PUNICODE_STRING Destination, xboxkrnl::PUNICODE_STRING Source);
 extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeToString(xboxkrnl::PUNICODE_STRING Destination, USHORT *Source);
 extern "C" VOID NTAPI EmuRtlCaptureContext(PVOID ContextRecord);
+extern "C" USHORT NTAPI EmuRtlCaptureStackBackTrace(ULONG FramesToSkip, ULONG FramesToCapture, PVOID *BackTrace, PULONG BackTraceHash);
+extern "C" NTSTATUS NTAPI EmuRtlCharToInteger(const char *String, ULONG Base, PULONG Value);
+extern "C" SIZE_T NTAPI EmuRtlCompareMemory(const VOID *Source1, const VOID *Source2, SIZE_T Length);
+extern "C" SIZE_T NTAPI EmuRtlCompareMemoryUlong(const VOID *Source, SIZE_T Length, ULONG Pattern);
+extern "C" LONG NTAPI EmuRtlCompareString(xboxkrnl::PSTRING String1, xboxkrnl::PSTRING String2, BOOLEAN CaseInSensitive);
+extern "C" LONG NTAPI EmuRtlCompareUnicodeString(xboxkrnl::PUNICODE_STRING String1, xboxkrnl::PUNICODE_STRING String2, BOOLEAN CaseInSensitive);
+extern "C" VOID NTAPI EmuRtlCopyString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString);
+extern "C" VOID NTAPI EmuRtlCopyUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, const xboxkrnl::UNICODE_STRING *SourceString);
+extern "C" USHORT NTAPI EmuRtlDowncaseUnicodeChar(USHORT SourceCharacter);
+extern "C" NTSTATUS NTAPI EmuRtlDowncaseUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, xboxkrnl::PUNICODE_STRING SourceString, BOOLEAN AllocateDestinationString);
+extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
+extern "C" VOID NTAPI EmuRtlEnterCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
+extern "C" BOOLEAN NTAPI EmuRtlEqualString(xboxkrnl::PSTRING String1, xboxkrnl::PSTRING String2, BOOLEAN CaseInSensitive);
+extern "C" BOOLEAN NTAPI EmuRtlEqualUnicodeString(xboxkrnl::PUNICODE_STRING String1, xboxkrnl::PUNICODE_STRING String2, BOOLEAN CaseInSensitive);
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuRtlExtendedIntegerMultiply(xboxkrnl::LARGE_INTEGER Multiplicand, LONG Multiplier);
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuRtlExtendedLargeIntegerDivide(xboxkrnl::LARGE_INTEGER Dividend, ULONG Divisor, PULONG Remainder);
+extern "C" VOID NTAPI EmuRtlFillMemory(PVOID Destination, SIZE_T Length, UCHAR Fill);
+extern "C" VOID NTAPI EmuRtlFillMemoryUlong(PVOID Destination, SIZE_T Length, ULONG Pattern);
+extern "C" VOID NTAPI EmuRtlFreeAnsiString(xboxkrnl::PANSI_STRING AnsiString);
+extern "C" VOID NTAPI EmuRtlFreeUnicodeString(xboxkrnl::PUNICODE_STRING UnicodeString);
+extern "C" VOID NTAPI EmuRtlGetCallersAddress(PVOID *CallerAddress, PVOID *CallersCaller);
 extern "C" VOID NTAPI EmuRtlInitAnsiString(xboxkrnl::PANSI_STRING DestinationString, const char *SourceString);
 extern "C" VOID NTAPI EmuRtlInitUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, USHORT *SourceString);
+extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
+extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
+extern "C" VOID NTAPI EmuRtlLeaveCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
+extern "C" CHAR NTAPI EmuRtlLowerChar(CHAR Character);
+extern "C" BOOLEAN NTAPI EmuRtlTimeFieldsToTime(const void *TimeFields, xboxkrnl::PLARGE_INTEGER Time);
+extern "C" VOID NTAPI EmuRtlTimeToTimeFields(const xboxkrnl::LARGE_INTEGER *Time, void *TimeFields);
+extern "C" ULONG NTAPI EmuRtlUlongByteSwap(ULONG Source);
+extern "C" CHAR NTAPI EmuRtlUpperChar(CHAR Character);
+extern "C" VOID NTAPI EmuRtlUpperString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString);
+extern "C" USHORT NTAPI EmuRtlUshortByteSwap(USHORT Source);
+extern "C" ULONG NTAPI EmuRtlWalkFrameChain(PVOID *Callers, ULONG Count, ULONG Flags);
+extern "C" VOID NTAPI EmuXcSHAInit(UCHAR *SHAContext);
+extern "C" VOID NTAPI EmuXcSHAUpdate(UCHAR *SHAContext, UCHAR *Input, ULONG InputLength);
+extern "C" VOID NTAPI EmuXcSHAFinal(UCHAR *SHAContext, UCHAR *Digest);
+extern "C" ULONG NTAPI EmuXcPKEncPublic(PUCHAR Key, PUCHAR Input, PUCHAR Output);
+extern "C" ULONG NTAPI EmuXcPKDecPrivate(PUCHAR Key, PUCHAR Input, PUCHAR Output);
+extern "C" ULONG NTAPI EmuXcPKGetKeyLen(PUCHAR Key);
+extern "C" ULONG NTAPI EmuXcVerifyPKCS1Signature(PUCHAR Signature, PUCHAR Key, PUCHAR Digest);
+extern "C" ULONG NTAPI EmuXcModExp(PULONG Output, PULONG Base, PULONG Exponent, PULONG Modulus, ULONG Count);
+extern "C" VOID NTAPI EmuXcDESKeyParity(PUCHAR Key, ULONG KeyLength);
+extern "C" VOID NTAPI EmuXcKeyTable(ULONG CipherSelector, PUCHAR KeyTable, PUCHAR Key);
+extern "C" VOID NTAPI EmuXcBlockCrypt(ULONG CipherSelector, PUCHAR Output, PUCHAR Input, PUCHAR KeyTable, ULONG Encrypt);
+extern "C" VOID NTAPI EmuXcBlockCryptCBC(ULONG CipherSelector, ULONG InputLength, PUCHAR Output, PUCHAR Input, PUCHAR KeyTable, ULONG Encrypt, PUCHAR Feedback);
+extern "C" ULONG NTAPI EmuXcCryptService(ULONG Service, PVOID Buffer);
+extern "C" ULONG NTAPI EmuXcUpdateCrypto(ULONG Unknown, PVOID Buffer);
 struct EmuObjectType;
 extern "C" EmuObjectType g_EmuExEventObjectType;
 extern "C" EmuObjectType g_EmuExMutantObjectType;
@@ -153,9 +201,9 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuExAcquireReadWriteLockExclusive,    // 0x000C (12)
     (uint32)&EmuExAcquireReadWriteLockShared,       // 0x000D (13)
     (uint32)&xboxkrnl::ExAllocatePool,              // 0x000E (14)
-    (uint32)PANIC(0x000F),                          // 0x000F (15)
+    (uint32)&EmuExAllocatePoolWithTag,              // 0x000F (15)
     (uint32)&g_EmuExEventObjectType,                // 0x0010 (16)
-    (uint32)PANIC(0x0011),                          // 0x0011 (17)
+    (uint32)&EmuExFreePool,                         // 0x0011 (17)
     (uint32)&EmuExInitializeReadWriteLock,          // 0x0012 (18)
     (uint32)PANIC(0x0013),                          // 0x0013 (19)
     (uint32)PANIC(0x0014),                          // 0x0014 (20)
@@ -404,37 +452,37 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuRtlAppendUnicodeToString,           // 0x0107 (263)
     (uint32)PANIC(0x0108),                          // 0x0108 (264)
     (uint32)&EmuRtlCaptureContext,                  // 0x0109 (265)
-    (uint32)PANIC(0x010A),                          // 0x010A (266)
-    (uint32)PANIC(0x010B),                          // 0x010B (267)
-    (uint32)PANIC(0x010C),                          // 0x010C (268)
-    (uint32)PANIC(0x010D),                          // 0x010D (269)
-    (uint32)PANIC(0x010E),                          // 0x010E (270)
-    (uint32)PANIC(0x010F),                          // 0x010F (271)
-    (uint32)PANIC(0x0110),                          // 0x0110 (272)
-    (uint32)PANIC(0x0111),                          // 0x0111 (273)
+    (uint32)&EmuRtlCaptureStackBackTrace,           // 0x010A (266)
+    (uint32)&EmuRtlCharToInteger,                   // 0x010B (267)
+    (uint32)&EmuRtlCompareMemory,                   // 0x010C (268)
+    (uint32)&EmuRtlCompareMemoryUlong,              // 0x010D (269)
+    (uint32)&EmuRtlCompareString,                   // 0x010E (270)
+    (uint32)&EmuRtlCompareUnicodeString,            // 0x010F (271)
+    (uint32)&EmuRtlCopyString,                      // 0x0110 (272)
+    (uint32)&EmuRtlCopyUnicodeString,               // 0x0111 (273)
     (uint32)PANIC(0x0112),                          // 0x0112 (274)
-    (uint32)PANIC(0x0113),                          // 0x0113 (275)
-    (uint32)PANIC(0x0114),                          // 0x0114 (276)
-    (uint32)&xboxkrnl::RtlEnterCriticalSection,     // 0x0115 (277)
-    (uint32)PANIC(0x0116),                          // 0x0116 (278)
-    (uint32)PANIC(0x0117),                          // 0x0117 (279)
-    (uint32)PANIC(0x0118),                          // 0x0118 (280)
-    (uint32)PANIC(0x0119),                          // 0x0119 (281)
-    (uint32)PANIC(0x011A),                          // 0x011A (282)
+    (uint32)&EmuRtlDowncaseUnicodeChar,             // 0x0113 (275)
+    (uint32)&EmuRtlDowncaseUnicodeString,           // 0x0114 (276)
+    (uint32)&EmuRtlEnterCriticalSection,            // 0x0115 (277)
+    (uint32)&EmuRtlEnterCriticalSectionAndRegion,   // 0x0116 (278)
+    (uint32)&EmuRtlEqualString,                     // 0x0117 (279)
+    (uint32)&EmuRtlEqualUnicodeString,              // 0x0118 (280)
+    (uint32)&EmuRtlExtendedIntegerMultiply,         // 0x0119 (281)
+    (uint32)&EmuRtlExtendedLargeIntegerDivide,      // 0x011A (282)
     (uint32)PANIC(0x011B),                          // 0x011B (283)
-    (uint32)PANIC(0x011C),                          // 0x011C (284)
-    (uint32)PANIC(0x011D),                          // 0x011D (285)
-    (uint32)PANIC(0x011E),                          // 0x011E (286)
-    (uint32)PANIC(0x011F),                          // 0x011F (287)
-    (uint32)PANIC(0x0120),                          // 0x0120 (288)
+    (uint32)&EmuRtlFillMemory,                      // 0x011C (284)
+    (uint32)&EmuRtlFillMemoryUlong,                 // 0x011D (285)
+    (uint32)&EmuRtlFreeAnsiString,                  // 0x011E (286)
+    (uint32)&EmuRtlFreeUnicodeString,               // 0x011F (287)
+    (uint32)&EmuRtlGetCallersAddress,               // 0x0120 (288)
     (uint32)&EmuRtlInitAnsiString,                  // 0x0121 (289)
     (uint32)&EmuRtlInitUnicodeString,               // 0x0122 (290)
-    (uint32)&xboxkrnl::RtlInitializeCriticalSection,// 0x0123 (291)
+    (uint32)&EmuRtlInitializeCriticalSection,       // 0x0123 (291)
     (uint32)PANIC(0x0124),                          // 0x0124 (292)
     (uint32)PANIC(0x0125),                          // 0x0125 (293)
-    (uint32)&xboxkrnl::RtlLeaveCriticalSection,     // 0x0126 (294)
-    (uint32)PANIC(0x0127),                          // 0x0127 (295)
-    (uint32)PANIC(0x0128),                          // 0x0128 (296)
+    (uint32)&EmuRtlLeaveCriticalSection,            // 0x0126 (294)
+    (uint32)&EmuRtlLeaveCriticalSectionAndRegion,   // 0x0127 (295)
+    (uint32)&EmuRtlLowerChar,                       // 0x0128 (296)
     (uint32)PANIC(0x0129),                          // 0x0129 (297)
     (uint32)PANIC(0x012A),                          // 0x012A (298)
     (uint32)PANIC(0x012B),                          // 0x012B (299)
@@ -442,10 +490,10 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&xboxkrnl::RtlNtStatusToDosError,       // 0x012D (301)
     (uint32)PANIC(0x012E),                          // 0x012E (302)
     (uint32)PANIC(0x012F),                          // 0x012F (303)
-    (uint32)PANIC(0x0130),                          // 0x0130 (304)
-    (uint32)PANIC(0x0131),                          // 0x0131 (305)
+    (uint32)&EmuRtlTimeFieldsToTime,                // 0x0130 (304)
+    (uint32)&EmuRtlTimeToTimeFields,                // 0x0131 (305)
     (uint32)PANIC(0x0132),                          // 0x0132 (306)
-    (uint32)PANIC(0x0133),                          // 0x0133 (307)
+    (uint32)&EmuRtlUlongByteSwap,                   // 0x0133 (307)
     (uint32)&xboxkrnl::RtlUnicodeStringToAnsiString,// 0x0134 (308)
     (uint32)PANIC(0x0135),                          // 0x0135 (309)
     (uint32)PANIC(0x0136),                          // 0x0136 (310)
@@ -454,10 +502,10 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0139),                          // 0x0139 (313)
     (uint32)PANIC(0x013A),                          // 0x013A (314)
     (uint32)PANIC(0x013B),                          // 0x013B (315)
-    (uint32)PANIC(0x013C),                          // 0x013C (316)
-    (uint32)PANIC(0x013D),                          // 0x013D (317)
-    (uint32)PANIC(0x013E),                          // 0x013E (318)
-    (uint32)PANIC(0x013F),                          // 0x013F (319)
+    (uint32)&EmuRtlUpperChar,                       // 0x013C (316)
+    (uint32)&EmuRtlUpperString,                     // 0x013D (317)
+    (uint32)&EmuRtlUshortByteSwap,                  // 0x013E (318)
+    (uint32)&EmuRtlWalkFrameChain,                  // 0x013F (319)
     (uint32)PANIC(0x0140),                          // 0x0140 (320)
     (uint32)PANIC(0x0141),                          // 0x0141 (321)
     (uint32)&xboxkrnl::XboxHardwareInfo,            // 0x0142 (322)
@@ -473,23 +521,23 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x014C),                          // 0x014C (332)
     (uint32)PANIC(0x014D),                          // 0x014D (333)
     (uint32)PANIC(0x014E),                          // 0x014E (334)
-    (uint32)&xboxkrnl::XcSHAInit,                   // 0x014F (335)
-    (uint32)&xboxkrnl::XcSHAUpdate,                 // 0x0150 (336)
-    (uint32)&xboxkrnl::XcSHAFinal,                  // 0x0151 (337)
+    (uint32)&EmuXcSHAInit,                          // 0x014F (335)
+    (uint32)&EmuXcSHAUpdate,                        // 0x0150 (336)
+    (uint32)&EmuXcSHAFinal,                         // 0x0151 (337)
     (uint32)PANIC(0x0152),                          // 0x0152 (338)
     (uint32)PANIC(0x0153),                          // 0x0153 (339)
     (uint32)PANIC(0x0154),                          // 0x0154 (340)
-    (uint32)PANIC(0x0155),                          // 0x0155 (341)
-    (uint32)PANIC(0x0156),                          // 0x0156 (342)
-    (uint32)PANIC(0x0157),                          // 0x0157 (343)
-    (uint32)PANIC(0x0158),                          // 0x0158 (344)
-    (uint32)PANIC(0x0159),                          // 0x0159 (345)
-    (uint32)PANIC(0x015A),                          // 0x015A (346)
-    (uint32)PANIC(0x015B),                          // 0x015B (347)
-    (uint32)PANIC(0x015C),                          // 0x015C (348)
-    (uint32)PANIC(0x015D),                          // 0x015D (349)
-    (uint32)PANIC(0x015E),                          // 0x015E (350)
-    (uint32)PANIC(0x015F),                          // 0x015F (351)
+    (uint32)&EmuXcPKEncPublic,                      // 0x0155 (341)
+    (uint32)&EmuXcPKDecPrivate,                     // 0x0156 (342)
+    (uint32)&EmuXcPKGetKeyLen,                      // 0x0157 (343)
+    (uint32)&EmuXcVerifyPKCS1Signature,             // 0x0158 (344)
+    (uint32)&EmuXcModExp,                           // 0x0159 (345)
+    (uint32)&EmuXcDESKeyParity,                     // 0x015A (346)
+    (uint32)&EmuXcKeyTable,                         // 0x015B (347)
+    (uint32)&EmuXcBlockCrypt,                       // 0x015C (348)
+    (uint32)&EmuXcBlockCryptCBC,                    // 0x015D (349)
+    (uint32)&EmuXcCryptService,                     // 0x015E (350)
+    (uint32)&EmuXcUpdateCrypto,                     // 0x015F (351)
     (uint32)PANIC(0x0160),                          // 0x0160 (352)
     (uint32)PANIC(0x0161),                          // 0x0161 (353)
     (uint32)PANIC(0x0162),                          // 0x0162 (354)

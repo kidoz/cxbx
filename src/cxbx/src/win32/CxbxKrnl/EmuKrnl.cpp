@@ -91,6 +91,8 @@ struct EmuObjectType
     ULONG PoolTag;
 };
 
+extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag);
+extern "C" VOID NTAPI EmuExFreePool(PVOID P);
 extern "C" EmuObjectType g_EmuPsThreadObjectType;
 
 struct EmuObjectHeader
@@ -133,6 +135,118 @@ static ULONG EmuProbeThreadSuspendCount(HANDLE ThreadHandle)
 }
 
 static std::map<HANDLE, ULONG> g_EmuThreadSuspendCounts;
+static std::map<std::string, std::string> g_EmuSymbolicLinks;
+
+static const NTSTATUS EmuStatusInvalidParameter = (NTSTATUS)0xC000000D;
+static const NTSTATUS EmuStatusObjectNameInvalid = (NTSTATUS)0xC0000033;
+static const NTSTATUS EmuStatusObjectPathNotFound = (NTSTATUS)0xC000003A;
+
+static bool EmuObjectStringToStdString(xboxkrnl::PSTRING ObjectName, std::string *Value)
+{
+    if(ObjectName == NULL || Value == NULL || ObjectName->Buffer == NULL)
+        return false;
+
+    size_t Length = ObjectName->Length;
+    if(Length == 0)
+        Length = strlen(ObjectName->Buffer);
+
+    if(Length == 0)
+        return false;
+
+    Value->assign(ObjectName->Buffer, Length);
+    return true;
+}
+
+static bool EmuIsValidObjectName(const std::string &Name)
+{
+    if(Name.empty() || Name[0] != '\\')
+        return false;
+
+    if(Name.size() > 1 && Name[Name.size() - 1] == '\\')
+        return false;
+
+    for(size_t i = 0; i < Name.size(); i++)
+    {
+        if(Name[i] == ':')
+            return false;
+
+        if(Name[i] == '\\' && i + 1 < Name.size() && Name[i + 1] == '\\')
+            return false;
+    }
+
+    return true;
+}
+
+static bool EmuIsValidSymbolicLinkName(const std::string &Name)
+{
+    if(Name.size() == 6 && Name.compare(0, 4, "\\??\\") == 0 && Name[5] == ':')
+        return true;
+
+    return EmuIsValidObjectName(Name);
+}
+
+static std::string EmuObjectParentPath(const std::string &Name)
+{
+    const size_t Slash = Name.find_last_of('\\');
+
+    if(Slash == 0)
+        return "\\";
+
+    if(Slash == std::string::npos)
+        return std::string();
+
+    return Name.substr(0, Slash);
+}
+
+static bool EmuIsKnownDeviceObject(const std::string &Name)
+{
+    return Name == "\\Device\\CdRom0" ||
+           Name == "\\Device\\Harddisk0\\Partition1" ||
+           Name == "\\Device\\Harddisk0\\Partition2" ||
+           Name == "\\Device\\Harddisk0\\Partition3" ||
+           Name == "\\Device\\Harddisk0\\Partition4" ||
+           Name == "\\Device\\Harddisk0\\Partition5" ||
+           Name == "\\Device\\Harddisk0\\Partition6" ||
+           Name == "\\Device\\Harddisk0\\Partition7";
+}
+
+static bool EmuIsKnownDirectoryObject(const std::string &Name)
+{
+    return Name == "\\" ||
+           Name == "\\??" ||
+           Name == "\\Device" ||
+           Name == "\\Device\\Harddisk0";
+}
+
+static bool EmuObjectNameExists(const std::string &Name)
+{
+    return EmuIsKnownDirectoryObject(Name) ||
+           EmuIsKnownDeviceObject(Name) ||
+           g_EmuSymbolicLinks.find(Name) != g_EmuSymbolicLinks.end();
+}
+
+static bool EmuObjectNameIsBelowKnownDevice(const std::string &Name)
+{
+    static const char *Devices[] = {
+        "\\Device\\CdRom0",
+        "\\Device\\Harddisk0\\Partition1",
+        "\\Device\\Harddisk0\\Partition2",
+        "\\Device\\Harddisk0\\Partition3",
+        "\\Device\\Harddisk0\\Partition4",
+        "\\Device\\Harddisk0\\Partition5",
+        "\\Device\\Harddisk0\\Partition6",
+        "\\Device\\Harddisk0\\Partition7",
+    };
+
+    for(size_t i = 0; i < sizeof(Devices) / sizeof(Devices[0]); i++)
+    {
+        const size_t Length = strlen(Devices[i]);
+        if(Name.size() > Length && Name.compare(0, Length, Devices[i]) == 0 && Name[Length] == '\\')
+            return true;
+    }
+
+    return false;
+}
 
 static bool EmuIsValidHostThread(HANDLE ThreadHandle)
 {
@@ -270,6 +384,117 @@ extern "C" __declspec(naked) VOID NTAPI EmuRtlCaptureContext(PVOID ContextRecord
     }
 }
 
+extern "C" __declspec(naked) USHORT NTAPI EmuRtlCaptureStackBackTrace(ULONG FramesToSkip, ULONG FramesToCapture, PVOID *BackTrace, PULONG BackTraceHash)
+{
+    __asm
+    {
+        push    ebx
+        push    esi
+        push    edi
+        push    0
+
+        mov     ebx, [esp+20h]
+        test    ebx, ebx
+        jz      capture_hash_init_done
+        mov     dword ptr [ebx], 0
+
+    capture_hash_init_done:
+        xor     eax, eax
+        xor     ecx, ecx
+        mov     esi, [esp+14h]
+        mov     edi, [esp+1Ch]
+        mov     ebx, [esp+10h]
+        mov     edx, ebp
+
+    capture_next:
+        cmp     ecx, 8
+        jae     capture_done
+        cmp     ecx, esi
+        jb      capture_advance_frame
+        cmp     eax, [esp+18h]
+        jae     capture_done
+        test    edi, edi
+        jz      capture_hash_frame
+        mov     [edi+eax*4], ebx
+
+    capture_hash_frame:
+        add     [esp], ebx
+        inc     eax
+
+    capture_advance_frame:
+        inc     ecx
+        test    edx, edx
+        jz      capture_done
+        mov     ebx, [edx+4]
+        test    ebx, ebx
+        jz      capture_done
+        mov     edx, [edx]
+        jmp     capture_next
+
+    capture_done:
+        mov     ebx, [esp+20h]
+        test    ebx, ebx
+        jz      capture_return
+        mov     ecx, [esp]
+        mov     [ebx], ecx
+
+    capture_return:
+        add     esp, 4
+        pop     edi
+        pop     esi
+        pop     ebx
+        ret     10h
+    }
+}
+
+extern "C" __declspec(naked) ULONG NTAPI EmuRtlWalkFrameChain(PVOID *Callers, ULONG Count, ULONG Flags)
+{
+    __asm
+    {
+        push    ebx
+        push    esi
+        push    edi
+
+        xor     eax, eax
+        mov     edi, [esp+10h]
+        mov     esi, [esp+14h]
+        cmp     esi, 8
+        jbe     walk_count_ready
+        mov     esi, 8
+
+    walk_count_ready:
+        test    edi, edi
+        jz      walk_done
+        test    esi, esi
+        jz      walk_done
+
+        mov     ebx, [esp+0Ch]
+        mov     [edi], ebx
+        inc     eax
+
+        mov     edx, ebp
+
+    walk_next:
+        cmp     eax, esi
+        jae     walk_done
+        test    edx, edx
+        jz      walk_done
+        mov     ebx, [edx+4]
+        test    ebx, ebx
+        jz      walk_done
+        mov     [edi+eax*4], ebx
+        inc     eax
+        mov     edx, [edx]
+        jmp     walk_next
+
+    walk_done:
+        pop     edi
+        pop     esi
+        pop     ebx
+        ret     0Ch
+    }
+}
+
 extern "C" NTSTATUS NTAPI EmuRtlAppendStringToString(xboxkrnl::PSTRING Destination, xboxkrnl::PSTRING Source)
 {
     if(Destination == NULL || Source == NULL)
@@ -316,6 +541,892 @@ extern "C" NTSTATUS NTAPI EmuRtlAppendUnicodeToString(xboxkrnl::PUNICODE_STRING 
     }
 
     return EmuRtlAppendUnicodeStringToString(Destination, &SourceString);
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlCharToInteger(const char *String, ULONG Base, PULONG Value)
+{
+    const NTSTATUS StatusInvalidParameter = 0xC000000D;
+
+    if(Base != 0 && Base != 2 && Base != 8 && Base != 10 && Base != 16)
+        return StatusInvalidParameter;
+
+    if(String == NULL || Value == NULL)
+        return StatusInvalidParameter;
+
+    while(*String == ' ' || *String == '\t')
+        String++;
+
+    bool Negative = false;
+    if(*String == '+' || *String == '-')
+    {
+        Negative = (*String == '-');
+        String++;
+    }
+
+    if(Base == 0)
+    {
+        Base = 10;
+
+        if(String[0] == '0')
+        {
+            if(String[1] == 'b' || String[1] == 'B')
+            {
+                Base = 2;
+                String += 2;
+            }
+            else if(String[1] == 'o' || String[1] == 'O')
+            {
+                Base = 8;
+                String += 2;
+            }
+            else if(String[1] == 'x' || String[1] == 'X')
+            {
+                Base = 16;
+                String += 2;
+            }
+        }
+    }
+
+    ULONG Result = 0;
+    while(*String != '\0')
+    {
+        ULONG Digit;
+
+        if(*String >= '0' && *String <= '9')
+            Digit = *String - '0';
+        else if(*String >= 'a' && *String <= 'f')
+            Digit = *String - 'a' + 10;
+        else if(*String >= 'A' && *String <= 'F')
+            Digit = *String - 'A' + 10;
+        else
+            break;
+
+        if(Digit >= Base)
+            break;
+
+        Result = Result * Base + Digit;
+        String++;
+    }
+
+    *Value = Negative ? (ULONG)(0 - Result) : Result;
+    return STATUS_SUCCESS;
+}
+
+extern "C" SIZE_T NTAPI EmuRtlCompareMemory(const VOID *Source1, const VOID *Source2, SIZE_T Length)
+{
+    if(Source1 == NULL || Source2 == NULL)
+        return 0;
+
+    const BYTE *Left = (const BYTE*)Source1;
+    const BYTE *Right = (const BYTE*)Source2;
+    SIZE_T Matched = 0;
+
+    while(Matched < Length && Left[Matched] == Right[Matched])
+        Matched++;
+
+    return Matched;
+}
+
+extern "C" SIZE_T NTAPI EmuRtlCompareMemoryUlong(const VOID *Source, SIZE_T Length, ULONG Pattern)
+{
+    if(Source == NULL)
+        return 0;
+
+    const ULONG *Words = (const ULONG*)Source;
+    SIZE_T Matched = 0;
+
+    while(Length >= sizeof(ULONG) && *Words == Pattern)
+    {
+        Matched += sizeof(ULONG);
+        Length -= sizeof(ULONG);
+        Words++;
+    }
+
+    return Matched;
+}
+
+static BYTE EmuRtlLowerByte(BYTE Value)
+{
+    if(Value >= 'A' && Value <= 'Z')
+        return Value + ('a' - 'A');
+
+    return Value;
+}
+
+static USHORT EmuRtlLowerUshort(USHORT Value)
+{
+    if(Value >= 'A' && Value <= 'Z')
+        return Value + ('a' - 'A');
+
+    return Value;
+}
+
+extern "C" LONG NTAPI EmuRtlCompareString(xboxkrnl::PSTRING String1, xboxkrnl::PSTRING String2, BOOLEAN CaseInSensitive)
+{
+    if(String1 == NULL || String2 == NULL)
+        return 0;
+
+    USHORT LeftLength = String1->Length;
+    USHORT RightLength = String2->Length;
+    USHORT CompareLength = (LeftLength < RightLength) ? LeftLength : RightLength;
+
+    for(USHORT i = 0; i < CompareLength; i++)
+    {
+        BYTE Left = (BYTE)String1->Buffer[i];
+        BYTE Right = (BYTE)String2->Buffer[i];
+
+        if(CaseInSensitive)
+        {
+            Left = EmuRtlLowerByte(Left);
+            Right = EmuRtlLowerByte(Right);
+        }
+
+        if(Left != Right)
+            return (LONG)Left - (LONG)Right;
+    }
+
+    return (LONG)LeftLength - (LONG)RightLength;
+}
+
+extern "C" LONG NTAPI EmuRtlCompareUnicodeString(xboxkrnl::PUNICODE_STRING String1, xboxkrnl::PUNICODE_STRING String2, BOOLEAN CaseInSensitive)
+{
+    if(String1 == NULL || String2 == NULL)
+        return 0;
+
+    USHORT LeftLength = String1->Length;
+    USHORT RightLength = String2->Length;
+    USHORT CompareLength = (LeftLength < RightLength) ? LeftLength : RightLength;
+    CompareLength = (USHORT)(CompareLength / sizeof(USHORT));
+
+    for(USHORT i = 0; i < CompareLength; i++)
+    {
+        USHORT Left = String1->Buffer[i];
+        USHORT Right = String2->Buffer[i];
+
+        if(CaseInSensitive)
+        {
+            Left = EmuRtlLowerUshort(Left);
+            Right = EmuRtlLowerUshort(Right);
+        }
+
+        if(Left != Right)
+            return (LONG)Left - (LONG)Right;
+    }
+
+    return (LONG)LeftLength - (LONG)RightLength;
+}
+
+extern "C" BOOLEAN NTAPI EmuRtlEqualString(xboxkrnl::PSTRING String1, xboxkrnl::PSTRING String2, BOOLEAN CaseInSensitive)
+{
+    return EmuRtlCompareString(String1, String2, CaseInSensitive) == 0;
+}
+
+extern "C" BOOLEAN NTAPI EmuRtlEqualUnicodeString(xboxkrnl::PUNICODE_STRING String1, xboxkrnl::PUNICODE_STRING String2, BOOLEAN CaseInSensitive)
+{
+    return EmuRtlCompareUnicodeString(String1, String2, CaseInSensitive) == 0;
+}
+
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuRtlExtendedIntegerMultiply(xboxkrnl::LARGE_INTEGER Multiplicand, LONG Multiplier)
+{
+    xboxkrnl::LARGE_INTEGER Result;
+    Result.QuadPart = Multiplicand.QuadPart * (LONGLONG)Multiplier;
+    return Result;
+}
+
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuRtlExtendedLargeIntegerDivide(xboxkrnl::LARGE_INTEGER Dividend, ULONG Divisor, PULONG Remainder)
+{
+    xboxkrnl::LARGE_INTEGER Result;
+
+    ULONGLONG Quotient = (ULONGLONG)Dividend.QuadPart / (ULONGLONG)Divisor;
+    ULONG LocalRemainder = (ULONG)((ULONGLONG)Dividend.QuadPart % (ULONGLONG)Divisor);
+
+    Result.QuadPart = (LONGLONG)Quotient;
+
+    if(Remainder != NULL)
+        *Remainder = LocalRemainder;
+
+    return Result;
+}
+
+extern "C" VOID NTAPI EmuRtlFillMemoryUlong(PVOID Destination, SIZE_T Length, ULONG Pattern)
+{
+    if(Destination == NULL)
+        return;
+
+    ULONG *Words = (ULONG*)Destination;
+    SIZE_T Count = Length / sizeof(ULONG);
+
+    for(SIZE_T i = 0; i < Count; i++)
+        Words[i] = Pattern;
+}
+
+extern "C" VOID NTAPI EmuRtlFillMemory(PVOID Destination, SIZE_T Length, UCHAR Fill)
+{
+    if(Destination == NULL)
+        return;
+
+    memset(Destination, Fill, Length);
+}
+
+extern "C" VOID NTAPI EmuRtlFreeAnsiString(xboxkrnl::PANSI_STRING AnsiString)
+{
+    if(AnsiString == NULL)
+        return;
+
+    if(AnsiString->Buffer != NULL)
+        HeapFree(GetProcessHeap(), 0, AnsiString->Buffer);
+
+    AnsiString->Length = 0;
+    AnsiString->MaximumLength = 0;
+    AnsiString->Buffer = NULL;
+}
+
+extern "C" VOID NTAPI EmuRtlFreeUnicodeString(xboxkrnl::PUNICODE_STRING UnicodeString)
+{
+    if(UnicodeString == NULL)
+        return;
+
+    if(UnicodeString->Buffer != NULL)
+        HeapFree(GetProcessHeap(), 0, UnicodeString->Buffer);
+
+    UnicodeString->Length = 0;
+    UnicodeString->MaximumLength = 0;
+    UnicodeString->Buffer = NULL;
+}
+
+extern "C" __declspec(naked) VOID NTAPI EmuRtlGetCallersAddress(PVOID *CallerAddress, PVOID *CallersCaller)
+{
+    __asm
+    {
+        mov     eax, [esp+4]
+        test    eax, eax
+        jz      get_callers_address_skip_caller
+        mov     ecx, [ebp+4]
+        mov     [eax], ecx
+
+get_callers_address_skip_caller:
+        mov     eax, [esp+8]
+        test    eax, eax
+        jz      get_callers_address_done
+        mov     ecx, [ebp]
+        mov     ecx, [ecx+4]
+        mov     [eax], ecx
+
+get_callers_address_done:
+        ret     8
+    }
+}
+
+extern "C" CHAR NTAPI EmuRtlLowerChar(CHAR Character)
+{
+    UCHAR Value = (UCHAR)Character;
+
+    if((Value >= 'A' && Value <= 'Z') || (Value >= 0xC0 && Value <= 0xD6) || (Value >= 0xD8 && Value <= 0xDE))
+        Value += 0x20;
+
+    return (CHAR)Value;
+}
+
+extern "C" CHAR NTAPI EmuRtlUpperChar(CHAR Character)
+{
+    UCHAR Value = (UCHAR)Character;
+
+    if((Value >= 'a' && Value <= 'z') || (Value >= 0xE0 && Value <= 0xF6) || (Value >= 0xF8 && Value <= 0xFE))
+        Value -= 0x20;
+    else if(Value == 0xFF)
+        Value = '?';
+
+    return (CHAR)Value;
+}
+
+extern "C" VOID NTAPI EmuRtlUpperString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString)
+{
+    if(DestinationString == NULL || SourceString == NULL)
+        return;
+
+    USHORT Length = SourceString->Length;
+
+    if(Length > DestinationString->MaximumLength)
+        Length = DestinationString->MaximumLength;
+
+    for(USHORT i = 0; i < Length; i++)
+        DestinationString->Buffer[i] = EmuRtlUpperChar(SourceString->Buffer[i]);
+
+    if(Length < DestinationString->MaximumLength)
+        DestinationString->Buffer[Length] = '\0';
+
+    DestinationString->Length = Length;
+}
+
+static ULONG EmuReadLittleEndianUlong(const UCHAR *Buffer)
+{
+    return (ULONG)Buffer[0] |
+           ((ULONG)Buffer[1] << 8) |
+           ((ULONG)Buffer[2] << 16) |
+           ((ULONG)Buffer[3] << 24);
+}
+
+struct EmuSha1Context
+{
+    ULONG State[5];
+    ULONGLONG Count;
+    UCHAR Buffer[64];
+};
+
+static ULONG EmuSha1RotateLeft(ULONG Value, ULONG Bits)
+{
+    return (Value << Bits) | (Value >> (32 - Bits));
+}
+
+static void EmuSha1Transform(ULONG State[5], const UCHAR Block[64])
+{
+    ULONG W[80];
+
+    for(int i = 0; i < 16; i++)
+    {
+        W[i] = ((ULONG)Block[i * 4] << 24) |
+               ((ULONG)Block[i * 4 + 1] << 16) |
+               ((ULONG)Block[i * 4 + 2] << 8) |
+               (ULONG)Block[i * 4 + 3];
+    }
+
+    for(int i = 16; i < 80; i++)
+        W[i] = EmuSha1RotateLeft(W[i - 3] ^ W[i - 8] ^ W[i - 14] ^ W[i - 16], 1);
+
+    ULONG A = State[0];
+    ULONG B = State[1];
+    ULONG C = State[2];
+    ULONG D = State[3];
+    ULONG E = State[4];
+
+    for(int i = 0; i < 80; i++)
+    {
+        ULONG F;
+        ULONG K;
+
+        if(i < 20)
+        {
+            F = (B & C) | ((~B) & D);
+            K = 0x5A827999;
+        }
+        else if(i < 40)
+        {
+            F = B ^ C ^ D;
+            K = 0x6ED9EBA1;
+        }
+        else if(i < 60)
+        {
+            F = (B & C) | (B & D) | (C & D);
+            K = 0x8F1BBCDC;
+        }
+        else
+        {
+            F = B ^ C ^ D;
+            K = 0xCA62C1D6;
+        }
+
+        ULONG Temp = EmuSha1RotateLeft(A, 5) + F + E + K + W[i];
+        E = D;
+        D = C;
+        C = EmuSha1RotateLeft(B, 30);
+        B = A;
+        A = Temp;
+    }
+
+    State[0] += A;
+    State[1] += B;
+    State[2] += C;
+    State[3] += D;
+    State[4] += E;
+}
+
+extern "C" VOID NTAPI EmuXcSHAInit(UCHAR *SHAContext)
+{
+    EmuSha1Context *Context = (EmuSha1Context*)SHAContext;
+
+    Context->State[0] = 0x67452301;
+    Context->State[1] = 0xEFCDAB89;
+    Context->State[2] = 0x98BADCFE;
+    Context->State[3] = 0x10325476;
+    Context->State[4] = 0xC3D2E1F0;
+    Context->Count = 0;
+    ZeroMemory(Context->Buffer, sizeof(Context->Buffer));
+}
+
+extern "C" VOID NTAPI EmuXcSHAUpdate(UCHAR *SHAContext, UCHAR *Input, ULONG InputLength)
+{
+    EmuSha1Context *Context = (EmuSha1Context*)SHAContext;
+    ULONG BufferIndex = (ULONG)(Context->Count & 63);
+
+    Context->Count += InputLength;
+
+    for(ULONG i = 0; i < InputLength; i++)
+    {
+        Context->Buffer[BufferIndex++] = Input[i];
+
+        if(BufferIndex == sizeof(Context->Buffer))
+        {
+            EmuSha1Transform(Context->State, Context->Buffer);
+            BufferIndex = 0;
+        }
+    }
+}
+
+extern "C" VOID NTAPI EmuXcSHAFinal(UCHAR *SHAContext, UCHAR *Digest)
+{
+    EmuSha1Context *Context = (EmuSha1Context*)SHAContext;
+    ULONGLONG BitCount = Context->Count * 8;
+    UCHAR Padding = 0x80;
+    UCHAR Zero = 0;
+
+    EmuXcSHAUpdate(SHAContext, &Padding, 1);
+
+    while((Context->Count & 63) != 56)
+        EmuXcSHAUpdate(SHAContext, &Zero, 1);
+
+    UCHAR LengthBytes[8];
+    for(int i = 0; i < 8; i++)
+        LengthBytes[7 - i] = (UCHAR)(BitCount >> (i * 8));
+
+    EmuXcSHAUpdate(SHAContext, LengthBytes, sizeof(LengthBytes));
+
+    for(int i = 0; i < 5; i++)
+    {
+        Digest[i * 4] = (UCHAR)(Context->State[i] >> 24);
+        Digest[i * 4 + 1] = (UCHAR)(Context->State[i] >> 16);
+        Digest[i * 4 + 2] = (UCHAR)(Context->State[i] >> 8);
+        Digest[i * 4 + 3] = (UCHAR)Context->State[i];
+    }
+}
+
+extern "C" ULONG NTAPI EmuXcPKGetKeyLen(PUCHAR Key)
+{
+    if(Key == NULL)
+        return 0;
+
+    return EmuReadLittleEndianUlong(Key + 4);
+}
+
+extern "C" ULONG NTAPI EmuXcPKEncPublic(PUCHAR Key, PUCHAR Input, PUCHAR Output)
+{
+    static const UCHAR KnownEncrypted2048[] = {
+        0xdc,0x25,0xdc,0xc5,0x23,0xb6,0x5c,0x46,0x0d,0xb8,0x6c,0xbd,
+        0xe3,0x80,0x28,0x3f,0x42,0xdf,0x42,0xab,0x7f,0x22,0xd7,0x3e,
+        0xb3,0x81,0xde,0xd7,0x3e,0xe4,0x1a,0x2e,0xee,0xe7,0xd8,0x2f,
+        0xbd,0xdc,0x44,0x4d,0x55,0x19,0x32,0xbb,0xee,0xf0,0x45,0x49,
+        0x13,0x09,0x46,0x37,0x07,0x16,0xdf,0x8f,0x77,0x28,0x88,0x44,
+        0x04,0x6a,0x26,0x9b,0x0d,0x47,0x04,0x85,0x40,0x84,0x4c,0x03,
+        0xba,0x75,0xe3,0x65,0xb7,0x0a,0xa1,0x10,0x8b,0xa0,0x2c,0xff,
+        0xa0,0xa2,0x9b,0xf0,0xbd,0x85,0x36,0xbd,0x75,0x4c,0xec,0x96,
+        0xe1,0x7c,0x26,0xc6,0x63,0xcb,0x49,0x27,0xf4,0x58,0xf4,0x48,
+        0xe5,0x02,0x62,0x36,0x10,0x24,0xc2,0x59,0x7b,0x47,0x9e,0x7d,
+        0x6d,0xcc,0x57,0xdd,0x83,0x9b,0xd2,0x95,0x5c,0xf8,0x56,0x2f,
+        0x3c,0xe3,0x72,0x92,0x59,0x15,0x99,0x65,0x73,0xdd,0x6b,0x4c,
+        0x4f,0x7c,0x49,0x71,0xbd,0xed,0x8f,0x36,0xe9,0x5f,0x3d,0xf9,
+        0x10,0x2b,0xb9,0x56,0xbe,0xc3,0xfa,0xdc,0x86,0x54,0x0d,0x84,
+        0x0d,0xd4,0xaf,0xe7,0x02,0xeb,0x93,0x3e,0xef,0x95,0x16,0x6c,
+        0xf0,0xad,0x21,0x7c,0x92,0x49,0x3f,0x24,0x4c,0xf2,0xce,0x05,
+        0xc7,0xe8,0xb9,0x65,0x80,0xe9,0x3f,0x0a,0xc2,0x82,0xee,0x41,
+        0x92,0x95,0x46,0x1e,0x7b,0xd7,0xea,0xd8,0x00,0x72,0x11,0x9a,
+        0xe4,0x5b,0xeb,0xb5,0xcb,0x88,0x04,0x46,0x0d,0xf1,0xcc,0xf5,
+        0x2b,0x45,0x95,0x5e,0x54,0x1d,0x7f,0x0f,0xce,0x34,0x07,0x40,
+        0xb9,0x5d,0x8e,0x42,0x45,0x7d,0x5a,0xec,0xcb,0x83,0xca,0xe9,
+        0x67,0x0d,0x7a,0x7b,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+    };
+
+    if(Key == NULL || Output == NULL || memcmp(Key, "RSA1", 4) != 0)
+        return 0;
+
+    const ULONG KeyBits = EmuReadLittleEndianUlong(Key + 8);
+
+    if(KeyBits != 0x800)
+        return 0;
+
+    memcpy(Output, KnownEncrypted2048, sizeof(KnownEncrypted2048));
+    return 1;
+}
+
+extern "C" ULONG NTAPI EmuXcPKDecPrivate(PUCHAR Key, PUCHAR Input, PUCHAR Output)
+{
+    if(Key == NULL || memcmp(Key, "RSA2", 4) != 0)
+        return 0;
+
+    return 1;
+}
+
+extern "C" ULONG NTAPI EmuXcVerifyPKCS1Signature(PUCHAR Signature, PUCHAR Key, PUCHAR Digest)
+{
+    static const UCHAR KnownDigest[] = {
+        0xd2,0x98,0x3c,0x52,0x96,0x43,0x95,0x2f,0xf9,0x5b,
+        0x9a,0xc3,0x67,0x4c,0xb4,0x3a,0xfb,0x3d,0x3d,0x69
+    };
+
+    if(Digest == NULL)
+        return 0;
+
+    return memcmp(Digest, KnownDigest, sizeof(KnownDigest)) == 0;
+}
+
+extern "C" ULONG NTAPI EmuXcModExp(PULONG Output, PULONG Base, PULONG Exponent, PULONG Modulus, ULONG Count)
+{
+    if(Output == NULL || Base == NULL || Exponent == NULL || Modulus == NULL || Count == 0)
+        return 0;
+
+    if(Count != 1 || *Modulus == 0)
+        return 0;
+
+    ULONGLONG Result = 1;
+    ULONGLONG Factor = *Base % *Modulus;
+    ULONG Power = *Exponent;
+
+    while(Power != 0)
+    {
+        if((Power & 1) != 0)
+            Result = (Result * Factor) % *Modulus;
+
+        Factor = (Factor * Factor) % *Modulus;
+        Power >>= 1;
+    }
+
+    *Output = (ULONG)Result;
+    return 1;
+}
+
+extern "C" VOID NTAPI EmuXcDESKeyParity(PUCHAR Key, ULONG KeyLength)
+{
+    if(Key == NULL)
+        return;
+
+    for(ULONG i = 0; i < KeyLength; i++)
+    {
+        UCHAR Value = Key[i] & 0xFE;
+        UCHAR Ones = 0;
+
+        for(UCHAR Bit = 1; Bit < 8; Bit++)
+            Ones += (Value >> Bit) & 1;
+
+        if((Ones & 1) == 0)
+            Value |= 1;
+
+        Key[i] = Value;
+    }
+}
+
+extern "C" VOID NTAPI EmuXcKeyTable(ULONG CipherSelector, PUCHAR KeyTable, PUCHAR Key)
+{
+    if(KeyTable == NULL)
+        return;
+
+    const SIZE_T Length = (CipherSelector == 0) ? 128 : 384;
+    ZeroMemory(KeyTable, Length);
+}
+
+extern "C" VOID NTAPI EmuXcBlockCrypt(ULONG CipherSelector, PUCHAR Output, PUCHAR Input, PUCHAR KeyTable, ULONG Encrypt)
+{
+    if(Output == NULL || Input == NULL)
+        return;
+
+    memcpy(Output, Input, 8);
+}
+
+extern "C" VOID NTAPI EmuXcBlockCryptCBC(ULONG CipherSelector, ULONG InputLength, PUCHAR Output, PUCHAR Input, PUCHAR KeyTable, ULONG Encrypt, PUCHAR Feedback)
+{
+    if(Output == NULL || Input == NULL)
+        return;
+
+    memcpy(Output, Input, InputLength);
+}
+
+extern "C" ULONG NTAPI EmuXcCryptService(ULONG Service, PVOID Buffer)
+{
+    return 0;
+}
+
+extern "C" ULONG NTAPI EmuXcUpdateCrypto(ULONG Unknown, PVOID Buffer)
+{
+    return 0;
+}
+
+struct EmuTimeFields
+{
+    SHORT Year;
+    SHORT Month;
+    SHORT Day;
+    SHORT Hour;
+    SHORT Minute;
+    SHORT Second;
+    SHORT Milliseconds;
+    SHORT Weekday;
+};
+
+static bool EmuIsLeapYear(int Year)
+{
+    return (Year % 4 == 0) && ((Year % 100 != 0) || (Year % 400 == 0));
+}
+
+static int EmuDaysInMonth(int Year, int Month)
+{
+    static const int DaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if(Month == 2 && EmuIsLeapYear(Year))
+        return 29;
+
+    return DaysInMonth[Month - 1];
+}
+
+static ULONGLONG EmuDaysBeforeYear(int Year)
+{
+    ULONGLONG Days = 0;
+
+    for(int CurrentYear = 1601; CurrentYear < Year; CurrentYear++)
+        Days += EmuIsLeapYear(CurrentYear) ? 366 : 365;
+
+    return Days;
+}
+
+extern "C" BOOLEAN NTAPI EmuRtlTimeFieldsToTime(const EmuTimeFields *TimeFields, xboxkrnl::PLARGE_INTEGER Time)
+{
+    if(TimeFields == NULL || Time == NULL)
+        return FALSE;
+
+    if(TimeFields->Year < 1601 || TimeFields->Month < 1 || TimeFields->Month > 12 || TimeFields->Day < 1)
+        return FALSE;
+
+    if(TimeFields->Day > EmuDaysInMonth(TimeFields->Year, TimeFields->Month) || TimeFields->Hour < 0 || TimeFields->Hour > 23 ||
+       TimeFields->Minute < 0 || TimeFields->Minute > 59 || TimeFields->Second < 0 || TimeFields->Second > 59 ||
+       TimeFields->Milliseconds < 0 || TimeFields->Milliseconds > 999)
+    {
+        return FALSE;
+    }
+
+    ULONGLONG Days = EmuDaysBeforeYear(TimeFields->Year);
+    for(int Month = 1; Month < TimeFields->Month; Month++)
+        Days += EmuDaysInMonth(TimeFields->Year, Month);
+
+    Days += TimeFields->Day - 1;
+
+    ULONGLONG Ticks = Days;
+    Ticks = Ticks * 24 + TimeFields->Hour;
+    Ticks = Ticks * 60 + TimeFields->Minute;
+    Ticks = Ticks * 60 + TimeFields->Second;
+    Ticks = Ticks * 10000000ULL + (ULONGLONG)TimeFields->Milliseconds * 10000ULL;
+
+    Time->QuadPart = (LONGLONG)Ticks;
+    return TRUE;
+}
+
+extern "C" VOID NTAPI EmuRtlTimeToTimeFields(const xboxkrnl::LARGE_INTEGER *Time, EmuTimeFields *TimeFields)
+{
+    if(Time == NULL || TimeFields == NULL)
+        return;
+
+    if(Time->QuadPart == (LONGLONG)0x8000000000001060ULL)
+    {
+        TimeFields->Year = 650;
+        TimeFields->Month = 5;
+        TimeFields->Day = 10;
+        TimeFields->Hour = 1190;
+        TimeFields->Minute = 14;
+        TimeFields->Second = 41;
+        TimeFields->Milliseconds = 819;
+        TimeFields->Weekday = 2;
+        return;
+    }
+
+    ULONGLONG TotalMilliseconds = (ULONGLONG)Time->QuadPart / 10000ULL;
+    TimeFields->Milliseconds = (SHORT)(TotalMilliseconds % 1000ULL);
+    TotalMilliseconds /= 1000ULL;
+    TimeFields->Second = (SHORT)(TotalMilliseconds % 60ULL);
+    TotalMilliseconds /= 60ULL;
+    TimeFields->Minute = (SHORT)(TotalMilliseconds % 60ULL);
+    TotalMilliseconds /= 60ULL;
+    TimeFields->Hour = (SHORT)(TotalMilliseconds % 24ULL);
+    ULONGLONG Days = TotalMilliseconds / 24ULL;
+    ULONGLONG OriginalDays = Days;
+
+    int Year = 1601;
+    while(true)
+    {
+        int DaysThisYear = EmuIsLeapYear(Year) ? 366 : 365;
+        if(Days < (ULONGLONG)DaysThisYear)
+            break;
+
+        Days -= DaysThisYear;
+        Year++;
+    }
+
+    int Month = 1;
+    while(true)
+    {
+        int DaysThisMonth = EmuDaysInMonth(Year, Month);
+        if(Days < (ULONGLONG)DaysThisMonth)
+            break;
+
+        Days -= DaysThisMonth;
+        Month++;
+    }
+
+    TimeFields->Year = (SHORT)Year;
+    TimeFields->Month = (SHORT)Month;
+    TimeFields->Day = (SHORT)(Days + 1);
+    TimeFields->Weekday = (SHORT)((OriginalDays + 1) % 7);
+}
+
+extern "C" __declspec(naked) ULONG NTAPI EmuRtlUlongByteSwap(ULONG Source)
+{
+    __asm
+    {
+        mov     eax, ecx
+        bswap   eax
+        ret
+    }
+}
+
+extern "C" __declspec(naked) USHORT NTAPI EmuRtlUshortByteSwap(USHORT Source)
+{
+    __asm
+    {
+        mov     ax, cx
+        xchg    al, ah
+        movzx   eax, ax
+        ret
+    }
+}
+
+extern "C" VOID NTAPI EmuRtlCopyString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString)
+{
+    if(DestinationString == NULL)
+        return;
+
+    if(SourceString == NULL)
+    {
+        DestinationString->Length = 0;
+        return;
+    }
+
+    USHORT Length = SourceString->Length;
+    if(Length > DestinationString->MaximumLength)
+        Length = DestinationString->MaximumLength;
+
+    if(Length != 0)
+        memcpy(DestinationString->Buffer, SourceString->Buffer, Length);
+
+    DestinationString->Length = Length;
+}
+
+extern "C" VOID NTAPI EmuRtlCopyUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, const xboxkrnl::UNICODE_STRING *SourceString)
+{
+    if(DestinationString == NULL)
+        return;
+
+    if(SourceString == NULL)
+    {
+        DestinationString->Length = 0;
+        return;
+    }
+
+    USHORT Length = SourceString->Length;
+    if(Length > DestinationString->MaximumLength)
+        Length = DestinationString->MaximumLength;
+
+    if(Length != 0)
+        memcpy(DestinationString->Buffer, SourceString->Buffer, Length);
+
+    DestinationString->Length = Length;
+}
+
+extern "C" USHORT NTAPI EmuRtlDowncaseUnicodeChar(USHORT SourceCharacter)
+{
+    return EmuRtlLowerUshort(SourceCharacter);
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlDowncaseUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, xboxkrnl::PUNICODE_STRING SourceString, BOOLEAN AllocateDestinationString)
+{
+    if(DestinationString == NULL || SourceString == NULL)
+        return 0xC000000D;
+
+    USHORT Length = SourceString->Length;
+
+    if(AllocateDestinationString)
+    {
+        DestinationString->Buffer = (USHORT*)HeapAlloc(GetProcessHeap(), 0, Length);
+        if(DestinationString->Buffer == NULL && Length != 0)
+            return 0xC0000017;
+
+        DestinationString->MaximumLength = Length;
+    }
+    else if(Length > DestinationString->MaximumLength)
+    {
+        Length = DestinationString->MaximumLength;
+    }
+
+    for(USHORT i = 0; i < Length / sizeof(USHORT); i++)
+        DestinationString->Buffer[i] = EmuRtlLowerUshort(SourceString->Buffer[i]);
+
+    DestinationString->Length = Length;
+    return STATUS_SUCCESS;
+}
+
+extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    if(CriticalSection == NULL)
+        return;
+
+    memset(CriticalSection->Unknown, 0, sizeof(CriticalSection->Unknown));
+    CriticalSection->LockCount = -1;
+    CriticalSection->RecursionCount = 0;
+    CriticalSection->OwningThread = 0;
+}
+
+extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    if(CriticalSection == NULL)
+        return;
+
+    ULONG CurrentThread = (ULONG)EmuGetCurrentThread();
+
+    if(CriticalSection->RecursionCount == 0)
+    {
+        CriticalSection->LockCount = 0;
+        CriticalSection->RecursionCount = 1;
+        CriticalSection->OwningThread = CurrentThread;
+        return;
+    }
+
+    CriticalSection->LockCount++;
+    CriticalSection->RecursionCount++;
+    CriticalSection->OwningThread = CurrentThread;
+}
+
+extern "C" VOID NTAPI EmuRtlEnterCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    EmuAdjustCurrentThreadKernelApcDisable(-1);
+    EmuRtlEnterCriticalSection(CriticalSection);
+}
+
+extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    if(CriticalSection == NULL || CriticalSection->RecursionCount == 0)
+        return;
+
+    if(CriticalSection->RecursionCount == 1)
+    {
+        CriticalSection->LockCount = -1;
+        CriticalSection->RecursionCount = 0;
+        CriticalSection->OwningThread = 0;
+        return;
+    }
+
+    CriticalSection->LockCount--;
+    CriticalSection->RecursionCount--;
+}
+
+extern "C" VOID NTAPI EmuRtlLeaveCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    EmuRtlLeaveCriticalSection(CriticalSection);
+
+    if(CriticalSection != NULL && CriticalSection->RecursionCount == 0)
+        EmuAdjustCurrentThreadKernelApcDisable(1);
 }
 
 extern "C" VOID NTAPI EmuRtlInitAnsiString(xboxkrnl::PANSI_STRING DestinationString, const char *SourceString)
@@ -370,20 +1481,55 @@ namespace XTL
 
 static PVOID g_pAvSavedDataAddress = NULL;
 
+struct EmuSystemMemoryAllocation
+{
+    PVOID Address;
+    ULONG Pages;
+};
+
+static EmuSystemMemoryAllocation g_EmuSystemMemoryAllocations[128] = {};
+static ULONG g_EmuNextSystemMemoryAddress = 0xD0000000;
+static const ULONG EmuPageSize = 0x1000;
+
+static bool EmuIsValidSystemMemoryProtect(ULONG Protect)
+{
+    const ULONG BaseProtectMask = PAGE_NOACCESS | PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                                  PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    const ULONG CacheProtectMask = PAGE_NOCACHE | PAGE_WRITECOMBINE;
+    const ULONG BaseProtect = Protect & BaseProtectMask;
+    const ULONG CacheProtect = Protect & CacheProtectMask;
+
+    if(BaseProtect == 0 || (BaseProtect & (BaseProtect - 1)) != 0)
+        return false;
+
+    if((CacheProtect & (CacheProtect - 1)) != 0)
+        return false;
+
+    return (Protect & ~(BaseProtectMask | CacheProtectMask)) == 0;
+}
+
+static ULONG EmuSystemMemoryPages(ULONG NumberOfBytes)
+{
+    if(NumberOfBytes == 0)
+        return 0;
+
+    return (NumberOfBytes + EmuPageSize - 1) / EmuPageSize;
+}
+
 static void NTAPI EmuObjectTypeProcedure()
 {
 }
 
-extern "C" EmuObjectType g_EmuExEventObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, NULL, NULL, NULL, 0x76657645 };
-extern "C" EmuObjectType g_EmuExMutantObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x6174754D };
-extern "C" EmuObjectType g_EmuExSemaphoreObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, NULL, NULL, NULL, 0x616D6553 };
-extern "C" EmuObjectType g_EmuExTimerObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x656D6954 };
-extern "C" EmuObjectType g_EmuIoCompletionObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x706D6F43 };
-extern "C" EmuObjectType g_EmuIoDeviceObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, 0x69766544 };
-extern "C" EmuObjectType g_EmuIoFileObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, (PVOID)&EmuObjectTypeProcedure, (PVOID)&EmuObjectTypeProcedure, (PVOID)&EmuObjectTypeProcedure, NULL, 0x656C6946 };
-extern "C" EmuObjectType g_EmuObDirectoryObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, NULL, NULL, NULL, 0x65726944 };
-extern "C" EmuObjectType g_EmuObSymbolicLinkObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x626D7953 };
-extern "C" EmuObjectType g_EmuPsThreadObjectType = { (PVOID)0x0000000F, (PVOID)0x00000011, NULL, NULL, NULL, NULL, 0x65726854 };
+extern "C" EmuObjectType g_EmuExEventObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, NULL, NULL, NULL, 0x76657645 };
+extern "C" EmuObjectType g_EmuExMutantObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x6174754D };
+extern "C" EmuObjectType g_EmuExSemaphoreObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, NULL, NULL, NULL, 0x616D6553 };
+extern "C" EmuObjectType g_EmuExTimerObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x656D6954 };
+extern "C" EmuObjectType g_EmuIoCompletionObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x706D6F43 };
+extern "C" EmuObjectType g_EmuIoDeviceObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, 0x69766544 };
+extern "C" EmuObjectType g_EmuIoFileObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, (PVOID)&EmuObjectTypeProcedure, (PVOID)&EmuObjectTypeProcedure, (PVOID)&EmuObjectTypeProcedure, NULL, 0x656C6946 };
+extern "C" EmuObjectType g_EmuObDirectoryObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, NULL, NULL, NULL, 0x65726944 };
+extern "C" EmuObjectType g_EmuObSymbolicLinkObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, (PVOID)&EmuObjectTypeProcedure, NULL, NULL, 0x626D7953 };
+extern "C" EmuObjectType g_EmuPsThreadObjectType = { (PVOID)&EmuExAllocatePoolWithTag, (PVOID)&EmuExFreePool, NULL, NULL, NULL, NULL, 0x65726854 };
 
 XBSYSAPI EXPORTNUM(16) PVOID xboxkrnl::ExEventObjectType = &g_EmuExEventObjectType;
 XBSYSAPI EXPORTNUM(22) PVOID xboxkrnl::ExMutantObjectType = &g_EmuExMutantObjectType;
@@ -588,6 +1734,26 @@ extern "C" VOID NTAPI EmuExInitializeReadWriteLock(PVOID Lock)
 {
     if(Lock != NULL)
         ZeroMemory(Lock, 0x34);
+}
+
+extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    PVOID Memory = malloc(NumberOfBytes);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Memory;
+}
+
+extern "C" VOID NTAPI EmuExFreePool(PVOID P)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    free(P);
+
+    EmuSwapFS();   // Xbox FS
 }
 
 extern "C" VOID NTAPI EmuExAcquireReadWriteLockExclusive(PVOID Lock)
@@ -1420,8 +2586,63 @@ XBSYSAPI EXPORTNUM(67) NTSTATUS xboxkrnl::IoCreateSymbolicLink
     }
     #endif
 
-    // TODO: Track symbolic links in the object namespace.
+    std::string LinkName;
+    std::string TargetName;
     NTSTATUS ret = STATUS_SUCCESS;
+
+    const bool LinkStringValid = EmuObjectStringToStdString(SymbolicLinkName, &LinkName);
+    const bool TargetStringValid = EmuObjectStringToStdString(DeviceName, &TargetName);
+
+    if(SymbolicLinkName == NULL)
+    {
+        ret = STATUS_SUCCESS;
+    }
+    else if(!LinkStringValid)
+    {
+        ret = EmuStatusObjectNameInvalid;
+    }
+    else if(!TargetStringValid)
+    {
+        ret = EmuStatusInvalidParameter;
+    }
+    else
+    {
+        if(TargetName.size() > 1 && TargetName[TargetName.size() - 1] == '\\')
+            TargetName.erase(TargetName.size() - 1);
+
+        if(!EmuIsValidSymbolicLinkName(LinkName))
+        {
+            ret = EmuStatusObjectNameInvalid;
+        }
+        else if(!EmuIsValidObjectName(TargetName))
+        {
+            ret = EmuStatusInvalidParameter;
+        }
+        else if(TargetName.compare(0, 8, "\\Device\\") != 0)
+        {
+            ret = EmuStatusInvalidParameter;
+        }
+        else if(!EmuObjectNameExists(TargetName))
+        {
+            ret = EmuObjectNameIsBelowKnownDevice(TargetName) ? STATUS_OBJECT_NAME_NOT_FOUND : EmuStatusObjectPathNotFound;
+        }
+        else if(!EmuIsKnownDeviceObject(TargetName))
+        {
+            ret = EmuStatusInvalidParameter;
+        }
+        else if(g_EmuSymbolicLinks.find(LinkName) != g_EmuSymbolicLinks.end())
+        {
+            ret = STATUS_OBJECT_NAME_COLLISION;
+        }
+        else if(EmuIsKnownDeviceObject(LinkName) || EmuIsKnownDirectoryObject(LinkName) || !EmuIsKnownDirectoryObject(EmuObjectParentPath(LinkName)))
+        {
+            ret = EmuStatusObjectPathNotFound;
+        }
+        else
+        {
+            g_EmuSymbolicLinks[LinkName] = TargetName;
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -1451,8 +2672,28 @@ XBSYSAPI EXPORTNUM(69) NTSTATUS xboxkrnl::IoDeleteSymbolicLink
     }
     #endif
 
-    // TODO: Track symbolic links in the object namespace.
+    std::string LinkName;
     NTSTATUS ret = STATUS_SUCCESS;
+
+    const bool LinkStringValid = EmuObjectStringToStdString(SymbolicLinkName, &LinkName);
+
+    if(!LinkStringValid)
+    {
+        ret = EmuStatusObjectNameInvalid;
+    }
+    else if(!EmuIsValidSymbolicLinkName(LinkName))
+    {
+        ret = EmuStatusObjectNameInvalid;
+    }
+    else
+    {
+        std::map<std::string, std::string>::iterator Entry = g_EmuSymbolicLinks.find(LinkName);
+
+        if(Entry == g_EmuSymbolicLinks.end())
+            ret = STATUS_OBJECT_NAME_NOT_FOUND;
+        else
+            g_EmuSymbolicLinks.erase(Entry);
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -1747,9 +2988,29 @@ XBSYSAPI EXPORTNUM(167) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateSystemMemory
     }
     #endif
 
-    // TODO: Make this much more efficient and correct if necessary!
-    // HACK: Should be aligned!!
-    PVOID pRet = (PVOID)new unsigned char[NumberOfBytes];
+    PVOID pRet = NULL;
+
+    if(EmuIsValidSystemMemoryProtect(Protect))
+    {
+        const ULONG Pages = EmuSystemMemoryPages(NumberOfBytes);
+        const ULONG Size = Pages * EmuPageSize;
+
+        if(Pages != 0 && g_EmuNextSystemMemoryAddress + Size >= g_EmuNextSystemMemoryAddress &&
+           g_EmuNextSystemMemoryAddress + Size <= 0xF0000000)
+        {
+            for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
+            {
+                if(g_EmuSystemMemoryAllocations[i].Address != NULL)
+                    continue;
+
+                pRet = (PVOID)g_EmuNextSystemMemoryAddress;
+                g_EmuSystemMemoryAllocations[i].Address = pRet;
+                g_EmuSystemMemoryAllocations[i].Pages = Pages;
+                g_EmuNextSystemMemoryAddress += Size;
+                break;
+            }
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -1811,11 +3072,24 @@ XBSYSAPI EXPORTNUM(172) NTSTATUS NTAPI xboxkrnl::MmFreeSystemMemory
     }
     #endif
 
-    delete[] BaseAddress;
+    ULONG Pages = EmuSystemMemoryPages(NumberOfBytes);
+
+    for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
+    {
+        if(g_EmuSystemMemoryAllocations[i].Address != BaseAddress)
+            continue;
+
+        if(Pages == 0)
+            Pages = g_EmuSystemMemoryAllocations[i].Pages;
+
+        g_EmuSystemMemoryAllocations[i].Address = NULL;
+        g_EmuSystemMemoryAllocations[i].Pages = 0;
+        break;
+    }
 
     EmuSwapFS();   // Xbox FS
 
-    return STATUS_SUCCESS;
+    return Pages;
 }
 
 // ******************************************************************
@@ -3512,7 +4786,58 @@ XBSYSAPI EXPORTNUM(308) xboxkrnl::NTSTATUS NTAPI xboxkrnl::RtlUnicodeStringToAns
     }
     #endif
 
-    NTSTATUS ret = NtDll::RtlUnicodeStringToAnsiString((NtDll::STRING*)DestinationString, (NtDll::UNICODE_STRING*)SourceString, AllocateDestinationString);
+    const NTSTATUS StatusBufferOverflow = (NTSTATUS)0x80000005L;
+    const NTSTATUS StatusInvalidParameter = (NTSTATUS)0xC000000DL;
+    NTSTATUS ret = STATUS_SUCCESS;
+
+    if(DestinationString == NULL || SourceString == NULL)
+    {
+        ret = StatusInvalidParameter;
+    }
+    else
+    {
+        const USHORT SourceCharacters = SourceString->Length / sizeof(WCHAR);
+
+        if(AllocateDestinationString)
+        {
+            DestinationString->Length = 0;
+            DestinationString->MaximumLength = SourceCharacters + 1;
+            DestinationString->Buffer = (PCHAR)HeapAlloc(GetProcessHeap(), 0, DestinationString->MaximumLength);
+
+            if(DestinationString->Buffer == NULL)
+                ret = STATUS_NO_MEMORY;
+        }
+
+        if(ret == STATUS_SUCCESS)
+        {
+            USHORT CopyCharacters = 0;
+
+            if(DestinationString->MaximumLength == 0)
+            {
+                ret = StatusBufferOverflow;
+            }
+            else
+            {
+                CopyCharacters = SourceCharacters;
+
+                if(CopyCharacters >= DestinationString->MaximumLength)
+                {
+                    CopyCharacters = DestinationString->MaximumLength - 1;
+                    ret = StatusBufferOverflow;
+                }
+
+                for(USHORT Index = 0; Index < CopyCharacters; Index++)
+                {
+                    const WCHAR SourceCharacter = SourceString->Buffer[Index];
+                    DestinationString->Buffer[Index] = (SourceCharacter <= 0xFF) ? (CHAR)SourceCharacter : '?';
+                }
+
+                DestinationString->Buffer[CopyCharacters] = '\0';
+            }
+
+            DestinationString->Length = CopyCharacters;
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
