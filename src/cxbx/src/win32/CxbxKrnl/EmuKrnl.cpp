@@ -48,6 +48,7 @@ namespace xboxkrnl
 #include <cstdarg>
 #include <map>
 #include <string>
+#include <vector>
 
 // ******************************************************************
 // * prevent name collisions
@@ -1017,42 +1018,155 @@ extern "C" ULONG NTAPI EmuXcPKGetKeyLen(PUCHAR Key)
     return EmuReadLittleEndianUlong(Key + 4);
 }
 
+static std::vector<ULONG> EmuLoadLittleEndianBignum(const UCHAR *Input, size_t ByteCount)
+{
+    std::vector<ULONG> Value((ByteCount + 3) / 4, 0);
+
+    for(size_t i = 0; i < ByteCount; i++)
+        Value[i / 4] |= (ULONG)Input[i] << ((i % 4) * 8);
+
+    return Value;
+}
+
+static int EmuCompareBignum(const std::vector<ULONG> &Left, const std::vector<ULONG> &Right)
+{
+    for(size_t i = Left.size(); i > 0; i--)
+    {
+        if(Left[i - 1] < Right[i - 1])
+            return -1;
+
+        if(Left[i - 1] > Right[i - 1])
+            return 1;
+    }
+
+    return 0;
+}
+
+static bool EmuIsZeroBignum(const std::vector<ULONG> &Value)
+{
+    for(ULONG Limb : Value)
+    {
+        if(Limb != 0)
+            return false;
+    }
+
+    return true;
+}
+
+static void EmuSubtractBignum(std::vector<ULONG> &Left, const std::vector<ULONG> &Right)
+{
+    ULONGLONG Borrow = 0;
+
+    for(size_t i = 0; i < Left.size(); i++)
+    {
+        const ULONGLONG Subtrahend = (ULONGLONG)Right[i] + Borrow;
+        const ULONGLONG Minuend = Left[i];
+        Left[i] = (ULONG)(Minuend - Subtrahend);
+        Borrow = (Minuend < Subtrahend) ? 1 : 0;
+    }
+}
+
+static void EmuAddModBignum(std::vector<ULONG> &Left, const std::vector<ULONG> &Right, const std::vector<ULONG> &Modulus)
+{
+    ULONGLONG Carry = 0;
+
+    for(size_t i = 0; i < Left.size(); i++)
+    {
+        const ULONGLONG Sum = (ULONGLONG)Left[i] + Right[i] + Carry;
+        Left[i] = (ULONG)Sum;
+        Carry = Sum >> 32;
+    }
+
+    if(Carry != 0 || EmuCompareBignum(Left, Modulus) >= 0)
+        EmuSubtractBignum(Left, Modulus);
+}
+
+static void EmuDoubleModBignum(std::vector<ULONG> &Value, const std::vector<ULONG> &Modulus)
+{
+    ULONG Carry = 0;
+
+    for(size_t i = 0; i < Value.size(); i++)
+    {
+        const ULONG NextCarry = Value[i] >> 31;
+        Value[i] = (Value[i] << 1) | Carry;
+        Carry = NextCarry;
+    }
+
+    if(Carry != 0 || EmuCompareBignum(Value, Modulus) >= 0)
+        EmuSubtractBignum(Value, Modulus);
+}
+
+static std::vector<ULONG> EmuMulModBignum(const std::vector<ULONG> &Left, const std::vector<ULONG> &Right, const std::vector<ULONG> &Modulus)
+{
+    std::vector<ULONG> Result(Left.size(), 0);
+    std::vector<ULONG> Addend = Left;
+
+    for(size_t Limb = 0; Limb < Right.size(); Limb++)
+    {
+        ULONG Bits = Right[Limb];
+        for(size_t Bit = 0; Bit < 32; Bit++)
+        {
+            if((Bits & 1) != 0)
+                EmuAddModBignum(Result, Addend, Modulus);
+
+            Bits >>= 1;
+            EmuDoubleModBignum(Addend, Modulus);
+        }
+    }
+
+    return Result;
+}
+
+static std::vector<ULONG> EmuPowModBignum(std::vector<ULONG> Base, ULONG Exponent, const std::vector<ULONG> &Modulus)
+{
+    std::vector<ULONG> Result(Base.size(), 0);
+    Result[0] = 1;
+
+    while(Exponent != 0)
+    {
+        if((Exponent & 1) != 0)
+            Result = EmuMulModBignum(Result, Base, Modulus);
+
+        Exponent >>= 1;
+        if(Exponent != 0)
+            Base = EmuMulModBignum(Base, Base, Modulus);
+    }
+
+    return Result;
+}
+
+static void EmuStoreLittleEndianBignum(const std::vector<ULONG> &Value, UCHAR *Output, size_t ByteCount)
+{
+    for(size_t i = 0; i < ByteCount; i++)
+        Output[i] = (UCHAR)(Value[i / 4] >> ((i % 4) * 8));
+}
+
 extern "C" ULONG NTAPI EmuXcPKEncPublic(PUCHAR Key, PUCHAR Input, PUCHAR Output)
 {
-    static const UCHAR KnownEncrypted2048[] = {
-        0xdc,0x25,0xdc,0xc5,0x23,0xb6,0x5c,0x46,0x0d,0xb8,0x6c,0xbd,
-        0xe3,0x80,0x28,0x3f,0x42,0xdf,0x42,0xab,0x7f,0x22,0xd7,0x3e,
-        0xb3,0x81,0xde,0xd7,0x3e,0xe4,0x1a,0x2e,0xee,0xe7,0xd8,0x2f,
-        0xbd,0xdc,0x44,0x4d,0x55,0x19,0x32,0xbb,0xee,0xf0,0x45,0x49,
-        0x13,0x09,0x46,0x37,0x07,0x16,0xdf,0x8f,0x77,0x28,0x88,0x44,
-        0x04,0x6a,0x26,0x9b,0x0d,0x47,0x04,0x85,0x40,0x84,0x4c,0x03,
-        0xba,0x75,0xe3,0x65,0xb7,0x0a,0xa1,0x10,0x8b,0xa0,0x2c,0xff,
-        0xa0,0xa2,0x9b,0xf0,0xbd,0x85,0x36,0xbd,0x75,0x4c,0xec,0x96,
-        0xe1,0x7c,0x26,0xc6,0x63,0xcb,0x49,0x27,0xf4,0x58,0xf4,0x48,
-        0xe5,0x02,0x62,0x36,0x10,0x24,0xc2,0x59,0x7b,0x47,0x9e,0x7d,
-        0x6d,0xcc,0x57,0xdd,0x83,0x9b,0xd2,0x95,0x5c,0xf8,0x56,0x2f,
-        0x3c,0xe3,0x72,0x92,0x59,0x15,0x99,0x65,0x73,0xdd,0x6b,0x4c,
-        0x4f,0x7c,0x49,0x71,0xbd,0xed,0x8f,0x36,0xe9,0x5f,0x3d,0xf9,
-        0x10,0x2b,0xb9,0x56,0xbe,0xc3,0xfa,0xdc,0x86,0x54,0x0d,0x84,
-        0x0d,0xd4,0xaf,0xe7,0x02,0xeb,0x93,0x3e,0xef,0x95,0x16,0x6c,
-        0xf0,0xad,0x21,0x7c,0x92,0x49,0x3f,0x24,0x4c,0xf2,0xce,0x05,
-        0xc7,0xe8,0xb9,0x65,0x80,0xe9,0x3f,0x0a,0xc2,0x82,0xee,0x41,
-        0x92,0x95,0x46,0x1e,0x7b,0xd7,0xea,0xd8,0x00,0x72,0x11,0x9a,
-        0xe4,0x5b,0xeb,0xb5,0xcb,0x88,0x04,0x46,0x0d,0xf1,0xcc,0xf5,
-        0x2b,0x45,0x95,0x5e,0x54,0x1d,0x7f,0x0f,0xce,0x34,0x07,0x40,
-        0xb9,0x5d,0x8e,0x42,0x45,0x7d,0x5a,0xec,0xcb,0x83,0xca,0xe9,
-        0x67,0x0d,0x7a,0x7b,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-    };
-
-    if(Key == NULL || Output == NULL || memcmp(Key, "RSA1", 4) != 0)
+    if(Key == NULL || Input == NULL || Output == NULL || memcmp(Key, "RSA1", 4) != 0)
         return 0;
 
     const ULONG KeyBits = EmuReadLittleEndianUlong(Key + 8);
-
-    if(KeyBits != 0x800)
+    if(KeyBits == 0 || (KeyBits % 32) != 0)
         return 0;
 
-    memcpy(Output, KnownEncrypted2048, sizeof(KnownEncrypted2048));
+    const size_t ModulusBytes = KeyBits / 8;
+    const ULONG Exponent = EmuReadLittleEndianUlong(Key + 16);
+    std::vector<ULONG> Modulus = EmuLoadLittleEndianBignum(Key + 20, ModulusBytes);
+    if(Exponent == 0 || EmuIsZeroBignum(Modulus))
+        return 0;
+
+    std::vector<ULONG> Message = EmuLoadLittleEndianBignum(Input, ModulusBytes);
+    while(EmuCompareBignum(Message, Modulus) >= 0)
+        EmuSubtractBignum(Message, Modulus);
+
+    const std::vector<ULONG> Ciphertext = EmuPowModBignum(Message, Exponent, Modulus);
+    EmuStoreLittleEndianBignum(Ciphertext, Output, ModulusBytes);
+
+    const ULONG KeyLength = EmuXcPKGetKeyLen(Key);
+    if(KeyLength > ModulusBytes)
+        memset(Output + ModulusBytes, 0, KeyLength - ModulusBytes);
+
     return 1;
 }
 
