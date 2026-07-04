@@ -1,6 +1,6 @@
 # CXBX
 
-[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE.md)
+[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Build system: Meson](https://img.shields.io/badge/build-Meson-00ADD8.svg)](https://mesonbuild.com/)
 [![C](https://img.shields.io/badge/C-C11-555555.svg)](meson.build)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](meson.build)
@@ -167,7 +167,7 @@ Useful starting points:
 ## Legal
 
 CXBX is licensed under the GNU General Public License version 2 or later. See
-[LICENSE.md](LICENSE.md).
+[LICENSE](LICENSE).
 
 This project does not include Xbox BIOS images, retail game data, or console
 firmware. It does include legacy compatibility material such as DirectX headers
