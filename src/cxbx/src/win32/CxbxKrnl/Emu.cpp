@@ -156,6 +156,16 @@ static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
 
             return true;
         }
+
+        if(Instruction[0] == 0x0F && Instruction[1] == 0x09)
+        {
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated WBINVD.\n", GetCurrentThreadId());
+            fflush(stdout);
+
+            return true;
+        }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -228,6 +238,80 @@ static void EmuSetContextByteRegister(CONTEXT *ContextRecord, ULONG RegisterInde
     }
 }
 
+static bool EmuHasEvenParity(BYTE Value)
+{
+    bool Even = true;
+
+    while(Value != 0)
+    {
+        Even = !Even;
+        Value &= Value - 1;
+    }
+
+    return Even;
+}
+
+static void EmuSetTestFlags(CONTEXT *ContextRecord, ULONG Result, ULONG SignFlagMask)
+{
+    static const ULONG CarryFlag = 0x00000001;
+    static const ULONG ParityFlag = 0x00000004;
+    static const ULONG AdjustFlag = 0x00000010;
+    static const ULONG ZeroFlag = 0x00000040;
+    static const ULONG SignFlag = 0x00000080;
+    static const ULONG OverflowFlag = 0x00000800;
+
+    ULONG EFlags = ContextRecord->EFlags;
+    EFlags &= ~(CarryFlag | ParityFlag | AdjustFlag | ZeroFlag | SignFlag | OverflowFlag);
+
+    if(Result == 0)
+        EFlags |= ZeroFlag;
+
+    if((Result & SignFlagMask) != 0)
+        EFlags |= SignFlag;
+
+    if(EmuHasEvenParity((BYTE)Result))
+        EFlags |= ParityFlag;
+
+    ContextRecord->EFlags = EFlags;
+}
+
+static void EmuSetSubtractFlags(CONTEXT *ContextRecord, ULONG Left, ULONG Right, ULONG Result, ULONG SignFlagMask)
+{
+    static const ULONG CarryFlag = 0x00000001;
+    static const ULONG ParityFlag = 0x00000004;
+    static const ULONG AdjustFlag = 0x00000010;
+    static const ULONG ZeroFlag = 0x00000040;
+    static const ULONG SignFlag = 0x00000080;
+    static const ULONG OverflowFlag = 0x00000800;
+    ULONG Mask = SignFlagMask | (SignFlagMask - 1);
+    Left &= Mask;
+    Right &= Mask;
+    Result &= Mask;
+
+    ULONG EFlags = ContextRecord->EFlags;
+    EFlags &= ~(CarryFlag | ParityFlag | AdjustFlag | ZeroFlag | SignFlag | OverflowFlag);
+
+    if(Left < Right)
+        EFlags |= CarryFlag;
+
+    if(Result == 0)
+        EFlags |= ZeroFlag;
+
+    if((Result & SignFlagMask) != 0)
+        EFlags |= SignFlag;
+
+    if(EmuHasEvenParity((BYTE)Result))
+        EFlags |= ParityFlag;
+
+    if(((Left ^ Right ^ Result) & 0x10) != 0)
+        EFlags |= AdjustFlag;
+
+    if(((Left ^ Right) & (Left ^ Result) & SignFlagMask) != 0)
+        EFlags |= OverflowFlag;
+
+    ContextRecord->EFlags = EFlags;
+}
+
 static bool EmuDecodeModRmAddress(const CONTEXT *ContextRecord, const BYTE *Instruction, ULONG *Address, ULONG *Length)
 {
     BYTE ModRm = Instruction[1];
@@ -280,6 +364,550 @@ static bool EmuDecodeModRmAddress(const CONTEXT *ContextRecord, const BYTE *Inst
     *Address = Result;
     *Length = Offset;
     return true;
+}
+
+static const ULONG EmuMmioRegisterSlotCount = 65536;
+
+struct EmuMmioRegister
+{
+    ULONG Address;
+    ULONG Value;
+    bool Used;
+};
+
+static EmuMmioRegister g_EmuMmioRegisters[EmuMmioRegisterSlotCount] = {};
+
+static bool EmuLookupMmioRegister(ULONG Address, ULONG *Value)
+{
+    ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
+
+    for(ULONG i = 0; i < EmuMmioRegisterSlotCount; i++)
+    {
+        ULONG Index = (Slot + i) & (EmuMmioRegisterSlotCount - 1);
+
+        if(!g_EmuMmioRegisters[Index].Used)
+            return false;
+
+        if(g_EmuMmioRegisters[Index].Address == Address)
+        {
+            if(Value != NULL)
+                *Value = g_EmuMmioRegisters[Index].Value;
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void EmuStoreMmioRegister(ULONG Address, ULONG Value)
+{
+    ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
+
+    for(ULONG i = 0; i < EmuMmioRegisterSlotCount; i++)
+    {
+        ULONG Index = (Slot + i) & (EmuMmioRegisterSlotCount - 1);
+
+        if(g_EmuMmioRegisters[Index].Used && g_EmuMmioRegisters[Index].Address == Address)
+        {
+            g_EmuMmioRegisters[Index].Value = Value;
+            return;
+        }
+
+        if(!g_EmuMmioRegisters[Index].Used)
+        {
+            g_EmuMmioRegisters[Index].Address = Address;
+            g_EmuMmioRegisters[Index].Value = Value;
+            g_EmuMmioRegisters[Index].Used = true;
+            return;
+        }
+    }
+
+    printf("Emu (0x%lX): MMIO register cache exhausted at 0x%.08lX.\n",
+           GetCurrentThreadId(), Address);
+    fflush(stdout);
+}
+
+static ULONG EmuReadMmioRegister32(ULONG Address)
+{
+    ULONG Value = 0;
+
+    if(Address == 0xFD100410)
+        return 0;
+
+    if(Address == 0xFD002400)
+        return 0x10;
+
+    if(Address == 0xFD003214)
+    {
+        EmuLookupMmioRegister(Address, &Value);
+        return Value | 0x10;
+    }
+
+    if(Address == 0xFD800044 && EmuLookupMmioRegister(0xFD800040, &Value))
+        return Value;
+
+    EmuLookupMmioRegister(Address, &Value);
+    return Value;
+}
+
+static ULONG EmuReadMmio(ULONG Address, ULONG Size)
+{
+    ULONG AlignedAddress = Address & ~3;
+    ULONG Value = EmuReadMmioRegister32(AlignedAddress);
+    ULONG Shift = (Address & 3) * 8;
+
+    if(Size == 1)
+        return (Value >> Shift) & 0xFF;
+
+    return Value;
+}
+
+static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
+{
+    ULONG AlignedAddress = Address & ~3;
+
+    if(Size == 1)
+    {
+        ULONG OldValue = EmuReadMmioRegister32(AlignedAddress);
+        ULONG Shift = (Address & 3) * 8;
+        ULONG Mask = 0xFF << Shift;
+        Value = (OldValue & ~Mask) | ((Value & 0xFF) << Shift);
+        Address = AlignedAddress;
+    }
+
+    if(Address == 0xFD000100 || Address == 0xFD002100 || Address == 0xFD400100)
+        Value = EmuReadMmioRegister32(Address) & ~Value;
+
+    EmuStoreMmioRegister(Address, Value);
+}
+
+static const ULONG EmuPhysicalMapBase = 0x80000000;
+static const ULONG EmuPhysicalMapEnd = 0x8FFFFFFF;
+static const ULONG EmuPhysicalPageSize = 0x1000;
+static const ULONG EmuPhysicalPageSlotCount = 4096;
+
+struct EmuPhysicalPage
+{
+    ULONG Address;
+    BYTE *Data;
+};
+
+static EmuPhysicalPage g_EmuPhysicalPages[EmuPhysicalPageSlotCount] = {};
+
+static bool EmuIsPhysicalMapAddress(ULONG Address)
+{
+    return Address >= EmuPhysicalMapBase && Address <= EmuPhysicalMapEnd;
+}
+
+static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
+{
+    if(!EmuIsPhysicalMapAddress(Address))
+        return NULL;
+
+    ULONG PageAddress = Address & ~(EmuPhysicalPageSize - 1);
+
+    for(ULONG i = 0; i < EmuPhysicalPageSlotCount; i++)
+    {
+        if(g_EmuPhysicalPages[i].Data != NULL && g_EmuPhysicalPages[i].Address == PageAddress)
+            return g_EmuPhysicalPages[i].Data;
+    }
+
+    if(!Create)
+        return NULL;
+
+    for(ULONG i = 0; i < EmuPhysicalPageSlotCount; i++)
+    {
+        if(g_EmuPhysicalPages[i].Data == NULL)
+        {
+            BYTE *Page = new BYTE[EmuPhysicalPageSize];
+            ZeroMemory(Page, EmuPhysicalPageSize);
+            g_EmuPhysicalPages[i].Address = PageAddress;
+            g_EmuPhysicalPages[i].Data = Page;
+            return Page;
+        }
+    }
+
+    printf("Emu (0x%lX): Physical map backing exhausted at 0x%.08lX.\n",
+           GetCurrentThreadId(), Address);
+    fflush(stdout);
+
+    return NULL;
+}
+
+static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
+{
+    ULONG End = Address + Size - 1;
+    if(Size == 0 || Value == NULL || End < Address || !EmuIsPhysicalMapAddress(Address) ||
+       !EmuIsPhysicalMapAddress(End))
+    {
+        return false;
+    }
+
+    ULONG Result = 0;
+    for(ULONG i = 0; i < Size; i++)
+    {
+        BYTE *Page = EmuGetPhysicalPage(Address + i, false);
+        BYTE ByteValue = 0;
+        if(Page != NULL)
+            ByteValue = Page[(Address + i) & (EmuPhysicalPageSize - 1)];
+
+        Result |= (ULONG)ByteValue << (i * 8);
+    }
+
+    *Value = Result;
+    return true;
+}
+
+static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
+{
+    ULONG End = Address + Size - 1;
+    if(Size == 0 || End < Address || !EmuIsPhysicalMapAddress(Address) ||
+       !EmuIsPhysicalMapAddress(End))
+    {
+        return false;
+    }
+
+    for(ULONG i = 0; i < Size; i++)
+    {
+        BYTE *Page = EmuGetPhysicalPage(Address + i, true);
+        if(Page == NULL)
+            return false;
+
+        Page[(Address + i) & (EmuPhysicalPageSize - 1)] = (BYTE)(Value >> (i * 8));
+    }
+
+    return true;
+}
+
+static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
+{
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
+       e->ExceptionRecord->NumberParameters < 2)
+    {
+        return false;
+    }
+
+    ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
+    ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
+    if(!EmuIsPhysicalMapAddress(FaultAddress))
+        return false;
+
+    __try
+    {
+        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+
+        if(AccessType == 0 && Instruction[0] == 0xA1 && *(ULONG*)&Instruction[1] == FaultAddress)
+        {
+            ULONG Value = 0;
+            if(!EmuReadPhysicalMap(FaultAddress, 4, &Value))
+                return false;
+
+            e->ContextRecord->Eax = Value;
+            e->ContextRecord->Eip += 5;
+
+            printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, Value);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Value))
+                    return false;
+
+                EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, Value);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8A)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, 1, &Value))
+                    return false;
+
+                EmuSetContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, (BYTE)Value);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical byte read 0x%.08lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0xF7 && (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                ULONG Immediate = *(ULONG*)&Instruction[OperandLength];
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Value))
+                    return false;
+
+                EmuSetTestFlags(e->ContextRecord, Value & Immediate, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 4;
+
+                printf("Emu (0x%lX): Emulated physical test 0x%.08lX & 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Immediate);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0xF6 && (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                ULONG Immediate = Instruction[OperandLength];
+                if(!EmuReadPhysicalMap(FaultAddress, 1, &Value))
+                    return false;
+
+                EmuSetTestFlags(e->ContextRecord, (Value & Immediate) & 0xFF, 0x80);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated physical byte test 0x%.08lX & 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Immediate);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x39)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = 0;
+                ULONG Right = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Left))
+                    return false;
+
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x3B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                ULONG Right = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Right))
+                    return false;
+
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), Left, FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x3B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                ULONG Right = EmuReadMmio(FaultAddress, 4);
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), Left, FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x83 && (Instruction[1] & 0x38) == 0x38)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = 0;
+                ULONG Right = (ULONG)(LONG)(CHAR)Instruction[OperandLength];
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Left))
+                    return false;
+
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated physical compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xA3 && *(ULONG*)&Instruction[1] == FaultAddress)
+        {
+            ULONG Value = e->ContextRecord->Eax;
+            if(!EmuWritePhysicalMap(FaultAddress, 4, Value))
+                return false;
+
+            e->ContextRecord->Eip += 5;
+
+            printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, Value);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x89)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                if(!EmuWritePhysicalMap(FaultAddress, 4, Value))
+                    return false;
+
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x88)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = EmuContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                if(!EmuWritePhysicalMap(FaultAddress, 1, Value))
+                    return false;
+
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical byte write 0x%.08lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xC7 && (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = *(ULONG*)&Instruction[OperandLength];
+                if(!EmuWritePhysicalMap(FaultAddress, 4, Value))
+                    return false;
+
+                e->ContextRecord->Eip += OperandLength + 4;
+
+                printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xC6 && (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = Instruction[OperandLength];
+                if(!EmuWritePhysicalMap(FaultAddress, 1, Value))
+                    return false;
+
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated physical byte write 0x%.08lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return false;
 }
 
 static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
@@ -377,7 +1005,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 
         if(AccessType == 0 && Instruction[0] == 0xA1 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
-            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 5;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -394,7 +1022,8 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
                Address == FaultAddress)
             {
-                EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, 0);
+                ULONG Value = EmuReadMmio(FaultAddress, 4);
+                EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, Value);
                 e->ContextRecord->Eip += OperandLength;
 
                 printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -407,7 +1036,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x01 &&
            e->ContextRecord->Ecx == FaultAddress)
         {
-            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 2;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -419,7 +1048,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x08 &&
            e->ContextRecord->Eax == FaultAddress)
         {
-            e->ContextRecord->Ecx = 0;
+            e->ContextRecord->Ecx = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 2;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -431,7 +1060,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x00 &&
            e->ContextRecord->Eax == FaultAddress)
         {
-            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 2;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -448,7 +1077,8 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
                Address == FaultAddress)
             {
-                EmuSetContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, 0);
+                ULONG Value = EmuReadMmio(FaultAddress, 1);
+                EmuSetContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, (BYTE)Value);
                 e->ContextRecord->Eip += OperandLength;
 
                 printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -462,17 +1092,8 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
            (Instruction[2] & 0xC7) == 0x40 &&
            e->ContextRecord->Eax + (LONG)(CHAR)Instruction[3] == FaultAddress)
         {
-            switch((Instruction[2] >> 3) & 0x07)
-            {
-                case 0: e->ContextRecord->Eax = 0; break;
-                case 1: e->ContextRecord->Ecx = 0; break;
-                case 2: e->ContextRecord->Edx = 0; break;
-                case 3: e->ContextRecord->Ebx = 0; break;
-                case 4: e->ContextRecord->Esp = 0; break;
-                case 5: e->ContextRecord->Ebp = 0; break;
-                case 6: e->ContextRecord->Esi = 0; break;
-                case 7: e->ContextRecord->Edi = 0; break;
-            }
+            EmuSetContextRegister(e->ContextRecord, (Instruction[2] >> 3) & 0x07,
+                                  EmuReadMmio(FaultAddress, 1));
             e->ContextRecord->Eip += 4;
 
             printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -484,7 +1105,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x82 &&
            e->ContextRecord->Edx + *(ULONG*)&Instruction[2] == FaultAddress)
         {
-            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 6;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -496,7 +1117,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x92 &&
            e->ContextRecord->Edx + *(ULONG*)&Instruction[2] == FaultAddress)
         {
-            e->ContextRecord->Edx = 0;
+            e->ContextRecord->Edx = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 6;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -508,7 +1129,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x87 &&
            e->ContextRecord->Edi + *(ULONG*)&Instruction[2] == FaultAddress)
         {
-            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 6;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
@@ -517,8 +1138,93 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             return true;
         }
 
+        if(AccessType == 0 && Instruction[0] == 0xF7 && (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Immediate = *(ULONG*)&Instruction[OperandLength];
+                ULONG Value = EmuReadMmio(FaultAddress, 4);
+                EmuSetTestFlags(e->ContextRecord, Value & Immediate, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 4;
+
+                printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Immediate);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0xF6 && (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Immediate = Instruction[OperandLength];
+                ULONG Value = EmuReadMmio(FaultAddress, 1);
+                EmuSetTestFlags(e->ContextRecord, (Value & Immediate) & 0xFF, 0x80);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated MMIO byte test 0x%.08lX & 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Immediate);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x39)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuReadMmio(FaultAddress, 4);
+                ULONG Right = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x83 && (Instruction[1] & 0x38) == 0x38)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuReadMmio(FaultAddress, 4);
+                ULONG Right = (ULONG)(LONG)(CHAR)Instruction[OperandLength];
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 1 && Instruction[0] == 0xA3 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
+            EmuWriteMmio(FaultAddress, 4, e->ContextRecord->Eax);
             e->ContextRecord->Eip += 5;
 
             printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -531,6 +1237,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
         if(AccessType == 1 && Instruction[0] == 0x89 && Instruction[1] == 0x01 &&
            e->ContextRecord->Ecx == FaultAddress)
         {
+            EmuWriteMmio(FaultAddress, 4, e->ContextRecord->Eax);
             e->ContextRecord->Eip += 2;
 
             printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -544,6 +1251,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
            e->ContextRecord->Ecx == FaultAddress)
         {
             ULONG Value = *(ULONG*)&Instruction[2];
+            EmuWriteMmio(FaultAddress, 4, Value);
             e->ContextRecord->Eip += 6;
 
             printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -562,6 +1270,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                Address == FaultAddress)
             {
                 ULONG Value = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                EmuWriteMmio(FaultAddress, 4, Value);
                 e->ContextRecord->Eip += OperandLength;
 
                 printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -581,6 +1290,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                Address == FaultAddress)
             {
                 ULONG Value = EmuContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                EmuWriteMmio(FaultAddress, 1, Value);
                 e->ContextRecord->Eip += OperandLength;
 
                 printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
@@ -601,6 +1311,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                Address == FaultAddress)
             {
                 ULONG Value = *(ULONG*)&Instruction[OperandLength];
+                EmuWriteMmio(FaultAddress, 4, Value);
                 e->ContextRecord->Eip += OperandLength + 4;
 
                 printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -621,6 +1332,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                Address == FaultAddress)
             {
                 ULONG Value = Instruction[OperandLength];
+                EmuWriteMmio(FaultAddress, 1, Value);
                 e->ContextRecord->Eip += OperandLength + 1;
 
                 printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
@@ -635,6 +1347,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
            *(ULONG*)&Instruction[2] == FaultAddress)
         {
             ULONG Value = *(ULONG*)&Instruction[6];
+            EmuWriteMmio(FaultAddress, 4, Value);
             e->ContextRecord->Eip += 10;
 
             printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -648,6 +1361,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
            e->ContextRecord->Edi + *(ULONG*)&Instruction[2] == FaultAddress)
         {
             ULONG Value = *(ULONG*)&Instruction[6];
+            EmuWriteMmio(FaultAddress, 4, Value);
             e->ContextRecord->Eip += 10;
 
             printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
@@ -680,6 +1394,14 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     }
 
     if(EmuTryEmulatePortIo(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulatePhysicalMapAccess(e))
     {
         if(WasXboxFS)
             EmuSwapFS();
@@ -1756,6 +2478,22 @@ int EmuException(LPEXCEPTION_POINTERS e)
         EmuSwapFS();
 
     if(EmuTryEmulateRdmsr(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulatePortIo(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulatePhysicalMapAccess(e))
     {
         if(WasXboxFS)
             EmuSwapFS();
