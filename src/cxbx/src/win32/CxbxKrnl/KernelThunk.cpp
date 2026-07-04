@@ -59,6 +59,10 @@ extern "C" VOID NTAPI EmuExReleaseReadWriteLock(PVOID Lock);
 extern "C" NTSTATUS NTAPI EmuNtOpenDirectoryObject(PHANDLE DirectoryHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
 extern "C" NTSTATUS NTAPI EmuNtOpenSymbolicLinkObject(PHANDLE LinkHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
 extern "C" NTSTATUS NTAPI EmuNtCreateIoCompletion(PHANDLE IoCompletionHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, ULONG Count);
+extern "C" ULONG NTAPI EmuHalGetInterruptVector(ULONG BusInterruptLevel, PUCHAR Irql);
+extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject);
+extern "C" VOID NTAPI EmuKeInitializeInterrupt(PVOID InterruptObject, PVOID ServiceRoutine, PVOID ServiceContext,
+                                               ULONG Vector, ULONG Irql, ULONG InterruptMode, BOOLEAN ShareVector);
 extern "C" NTSTATUS NTAPI EmuNtCreateSemaphore(PHANDLE SemaphoreHandle, PVOID ObjectAttributes, LONG InitialCount, LONG MaximumCount);
 extern "C" NTSTATUS NTAPI EmuNtCreateTimer(PHANDLE TimerHandle, PVOID ObjectAttributes, ULONG TimerType);
 extern "C" NTSTATUS NTAPI EmuNtSetIoCompletion(HANDLE IoCompletionHandle, PVOID KeyContext, PVOID ApcContext, NTSTATUS IoStatus, ULONG IoStatusInformation);
@@ -127,6 +131,8 @@ extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SE
 extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
 extern "C" VOID NTAPI EmuRtlLeaveCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
 extern "C" CHAR NTAPI EmuRtlLowerChar(CHAR Character);
+extern "C" VOID NTAPI EmuRtlRaiseException(PEXCEPTION_RECORD ExceptionRecord);
+extern "C" VOID NTAPI EmuRtlRaiseStatus(NTSTATUS Status);
 extern "C" BOOLEAN NTAPI EmuRtlTimeFieldsToTime(const void *TimeFields, xboxkrnl::PLARGE_INTEGER Time);
 extern "C" VOID NTAPI EmuRtlTimeToTimeFields(const xboxkrnl::LARGE_INTEGER *Time, void *TimeFields);
 extern "C" ULONG NTAPI EmuRtlUlongByteSwap(ULONG Source);
@@ -180,7 +186,57 @@ namespace xboxkrnl
 // *
 // ******************************************************************
 //#define PANIC(numb) EmuPanic
+
+// ******************************************************************
+// * Unimplemented-kernel-export warned trap.
+// *
+// * Historically an unwired ordinal stored its own number in the thunk
+// * table (PANIC(numb) -> numb), so calling it jumped to a bogus low address
+// * and crashed with no diagnostic. With CXBX_TRAP_UNIMPLEMENTED (default on)
+// * each unwired ordinal instead points at a per-ordinal template stub that
+// * logs which kernel export was called, and from where, then returns 0.
+// *
+// * Caveat: the Xbox kernel ABI is __stdcall (callee cleans arguments) and the
+// * true argument count of an unimplemented export is unknown here, so for a
+// * multi-argument export the stub cannot restore the caller's stack and the
+// * title may still destabilise afterwards. The value is the diagnostic: you
+// * learn which ordinal to implement next instead of chasing a crash at
+// * address 0x000000NN. Build with CXBX_TRAP_UNIMPLEMENTED=0 to restore the
+// * old crash-at-ordinal behaviour.
+// ******************************************************************
+#include "EmuKrnlLogging.h"
+
+#ifndef CXBX_TRAP_UNIMPLEMENTED
+#define CXBX_TRAP_UNIMPLEMENTED 1
+#endif
+
+#if CXBX_TRAP_UNIMPLEMENTED
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
+#define CXBX_RETADDR() _ReturnAddress()
+#else
+#define CXBX_RETADDR() __builtin_return_address(0)
+#endif
+
+extern "C" void EmuUnimplementedKernelLog(int Ordinal, void *Caller)
+{
+    printf("KTRACE| UNIMPLEMENTED ordinal=%d (0x%03X) caller=%p\n",
+           Ordinal, (unsigned)Ordinal, Caller);
+    fflush(stdout);
+}
+
+template <int Ordinal>
+static uint32 __stdcall CxbxUnimplementedStub(void)
+{
+    EmuUnimplementedKernelLog(Ordinal, CXBX_RETADDR());
+    return 0;
+}
+
+#define PANIC(numb) &CxbxUnimplementedStub<numb>
+#else
 #define PANIC(numb) numb
+#endif
 
 // ******************************************************************
 // * KernelThunkTable
@@ -231,7 +287,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0029),                          // 0x0029 (41)
     (uint32)PANIC(0x002A),                          // 0x002A (42)
     (uint32)PANIC(0x002B),                          // 0x002B (43)
-    (uint32)PANIC(0x002C),                          // 0x002C (44)
+    (uint32)&EmuHalGetInterruptVector,              // 0x002C (44)
     (uint32)&EmuHalReadSMBusValue,                  // 0x002D (45)
     (uint32)&xboxkrnl::HalReadWritePCISpace,        // 0x002E (46)
     (uint32)PANIC(0x002F),                          // 0x002F (47)
@@ -285,7 +341,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x005F),                          // 0x005F (95)
     (uint32)PANIC(0x0060),                          // 0x0060 (96)
     (uint32)PANIC(0x0061),                          // 0x0061 (97)
-    (uint32)PANIC(0x0062),                          // 0x0062 (98)
+    (uint32)&EmuKeConnectInterrupt,                 // 0x0062 (98)
     (uint32)&xboxkrnl::KeDelayExecutionThread,      // 0x0063 (99)
     (uint32)PANIC(0x0064),                          // 0x0064 (100)
     (uint32)&EmuKeEnterCriticalRegion,              // 0x0065 (101)
@@ -296,7 +352,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x006A),                          // 0x006A (106)
     (uint32)&xboxkrnl::KeInitializeDpc,             // 0x006B (107)
     (uint32)PANIC(0x006C),                          // 0x006C (108)
-    (uint32)PANIC(0x006D),                          // 0x006D (109)
+    (uint32)&EmuKeInitializeInterrupt,              // 0x006D (109)
     (uint32)PANIC(0x006E),                          // 0x006E (110)
     (uint32)PANIC(0x006F),                          // 0x006F (111)
     (uint32)PANIC(0x0070),                          // 0x0070 (112)
@@ -489,8 +545,8 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x012B),                          // 0x012B (299)
     (uint32)PANIC(0x012C),                          // 0x012C (300)
     (uint32)&xboxkrnl::RtlNtStatusToDosError,       // 0x012D (301)
-    (uint32)PANIC(0x012E),                          // 0x012E (302)
-    (uint32)PANIC(0x012F),                          // 0x012F (303)
+    (uint32)&EmuRtlRaiseException,                  // 0x012E (302)
+    (uint32)&EmuRtlRaiseStatus,                     // 0x012F (303)
     (uint32)&EmuRtlTimeFieldsToTime,                // 0x0130 (304)
     (uint32)&EmuRtlTimeToTimeFields,                // 0x0131 (305)
     (uint32)PANIC(0x0132),                          // 0x0132 (306)

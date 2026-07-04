@@ -144,9 +144,50 @@ static const NTSTATUS EmuStatusObjectNameInvalid = (NTSTATUS)0xC0000033;
 static const NTSTATUS EmuStatusObjectPathNotFound = (NTSTATUS)0xC000003A;
 static const NTSTATUS EmuStatusSuspendCountExceeded = (NTSTATUS)0xC000004A;
 
+static bool EmuIsWritableMemoryRange(PVOID Address, SIZE_T Size)
+{
+    if(Address == NULL || Size == 0)
+        return false;
+
+    ULONG_PTR Current = (ULONG_PTR)Address;
+    ULONG_PTR End = Current + Size;
+    if(End < Current)
+        return false;
+
+    while(Current < End)
+    {
+        MEMORY_BASIC_INFORMATION MemoryInfo;
+        if(VirtualQuery((PVOID)Current, &MemoryInfo, sizeof(MemoryInfo)) != sizeof(MemoryInfo))
+            return false;
+
+        if(MemoryInfo.State != MEM_COMMIT || (MemoryInfo.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+            return false;
+
+        switch(MemoryInfo.Protect & 0xFF)
+        {
+            case PAGE_READWRITE:
+            case PAGE_WRITECOPY:
+            case PAGE_EXECUTE_READWRITE:
+            case PAGE_EXECUTE_WRITECOPY:
+                break;
+
+            default:
+                return false;
+        }
+
+        ULONG_PTR RegionEnd = (ULONG_PTR)MemoryInfo.BaseAddress + MemoryInfo.RegionSize;
+        if(RegionEnd <= Current)
+            return false;
+
+        Current = RegionEnd;
+    }
+
+    return true;
+}
+
 typedef int (__cdecl *EmuGuestExceptionHandler)(PEXCEPTION_RECORD ExceptionRecord, void *EstablisherFrame, PCONTEXT ContextRecord, void *DispatcherContext);
 
-static bool EmuRaiseGuestException(NTSTATUS Status, ULONG GuestEip, ULONG GuestEsp, ULONG GuestEbp)
+static bool EmuRaiseGuestExceptionRecord(PEXCEPTION_RECORD ExceptionRecord, ULONG GuestEip, ULONG GuestEsp, ULONG GuestEbp)
 {
     void *Registration = NULL;
 
@@ -156,17 +197,13 @@ static bool EmuRaiseGuestException(NTSTATUS Status, ULONG GuestEip, ULONG GuestE
         mov Registration, eax
     }
 
-    if(Registration == NULL || Registration == (void*)-1)
-        return false;
+    EXCEPTION_RECORD LocalExceptionRecord;
+    if(ExceptionRecord != NULL)
+        LocalExceptionRecord = *ExceptionRecord;
+    else
+        ZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
 
-    EmuGuestExceptionHandler Handler = *(EmuGuestExceptionHandler*)((uint08*)Registration + 4);
-    if(Handler == NULL)
-        return false;
-
-    EXCEPTION_RECORD ExceptionRecord;
-    ZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-    ExceptionRecord.ExceptionCode = Status;
-    ExceptionRecord.ExceptionAddress = (PVOID)GuestEip;
+    LocalExceptionRecord.ExceptionAddress = (PVOID)GuestEip;
 
     CONTEXT ContextRecord;
     ZeroMemory(&ContextRecord, sizeof(ContextRecord));
@@ -175,8 +212,29 @@ static bool EmuRaiseGuestException(NTSTATUS Status, ULONG GuestEip, ULONG GuestE
     ContextRecord.Esp = GuestEsp;
     ContextRecord.Ebp = GuestEbp;
 
-    Handler(&ExceptionRecord, Registration, &ContextRecord, NULL);
-    return true;
+    while(Registration != NULL && Registration != (void*)-1)
+    {
+        EmuGuestExceptionHandler Handler = *(EmuGuestExceptionHandler*)((uint08*)Registration + 4);
+        if(Handler != NULL)
+        {
+            int Disposition = Handler(&LocalExceptionRecord, Registration, &ContextRecord, NULL);
+            if(Disposition != ExceptionContinueSearch)
+                return true;
+        }
+
+        Registration = *(void**)Registration;
+    }
+
+    return false;
+}
+
+static bool EmuRaiseGuestException(NTSTATUS Status, ULONG GuestEip, ULONG GuestEsp, ULONG GuestEbp)
+{
+    EXCEPTION_RECORD ExceptionRecord;
+    ZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+    ExceptionRecord.ExceptionCode = Status;
+
+    return EmuRaiseGuestExceptionRecord(&ExceptionRecord, GuestEip, GuestEsp, GuestEbp);
 }
 
 static bool EmuObjectStringToStdString(xboxkrnl::PSTRING ObjectName, std::string *Value)
@@ -889,6 +947,61 @@ extern "C" VOID NTAPI EmuRtlUnwind(PVOID TargetFrame, PVOID TargetIp, PEXCEPTION
 {
     EmuSwapFS();   // Win2k/XP FS
     EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuRtlRaiseException(PEXCEPTION_RECORD ExceptionRecord)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG GuestEip;
+    ULONG GuestEsp;
+    ULONG GuestEbp;
+
+    __asm
+    {
+        mov eax, [ebp+4]
+        mov GuestEip, eax
+        lea eax, [ebp+12]
+        mov GuestEsp, eax
+        mov eax, [ebp]
+        mov GuestEbp, eax
+    }
+
+    EXCEPTION_RECORD LocalExceptionRecord;
+    if(ExceptionRecord != NULL)
+    {
+        LocalExceptionRecord = *ExceptionRecord;
+    }
+    else
+    {
+        ZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
+        LocalExceptionRecord.ExceptionCode = EmuStatusInvalidParameter;
+    }
+
+    EmuSwapFS();   // Xbox FS
+    EmuRaiseGuestExceptionRecord(&LocalExceptionRecord, GuestEip, GuestEsp, GuestEbp);
+}
+
+extern "C" VOID NTAPI EmuRtlRaiseStatus(NTSTATUS Status)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG GuestEip;
+    ULONG GuestEsp;
+    ULONG GuestEbp;
+
+    __asm
+    {
+        mov eax, [ebp+4]
+        mov GuestEip, eax
+        lea eax, [ebp+12]
+        mov GuestEsp, eax
+        mov eax, [ebp]
+        mov GuestEbp, eax
+    }
+
+    EmuSwapFS();   // Xbox FS
+    EmuRaiseGuestException(Status, GuestEip, GuestEsp, GuestEbp);
 }
 
 extern "C" VOID NTAPI EmuRtlUpperString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString)
@@ -1859,6 +1972,13 @@ extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SE
     if(CriticalSection == NULL)
         return;
 
+    if(!EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+    {
+        printf("EmuKrnl (0x%lX): RtlInitializeCriticalSection ignored invalid pointer 0x%.08lX.\n",
+               (uint32)GetCurrentThreadId(), (uint32)CriticalSection);
+        return;
+    }
+
     memset(CriticalSection->Unknown, 0, sizeof(CriticalSection->Unknown));
     CriticalSection->LockCount = -1;
     CriticalSection->RecursionCount = 0;
@@ -1869,6 +1989,13 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
 {
     if(CriticalSection == NULL)
         return;
+
+    if(!EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+    {
+        printf("EmuKrnl (0x%lX): RtlEnterCriticalSection ignored invalid pointer 0x%.08lX.\n",
+               (uint32)GetCurrentThreadId(), (uint32)CriticalSection);
+        return;
+    }
 
     ULONG CurrentThread = (ULONG)EmuGetCurrentThread();
 
@@ -1887,13 +2014,32 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
 
 extern "C" VOID NTAPI EmuRtlEnterCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
 {
+    if(CriticalSection == NULL || !EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+    {
+        if(CriticalSection != NULL)
+            printf("EmuKrnl (0x%lX): RtlEnterCriticalSectionAndRegion ignored invalid pointer 0x%.08lX.\n",
+                   (uint32)GetCurrentThreadId(), (uint32)CriticalSection);
+
+        return;
+    }
+
     EmuAdjustCurrentThreadKernelApcDisable(-1);
     EmuRtlEnterCriticalSection(CriticalSection);
 }
 
 extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
 {
-    if(CriticalSection == NULL || CriticalSection->RecursionCount == 0)
+    if(CriticalSection == NULL)
+        return;
+
+    if(!EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+    {
+        printf("EmuKrnl (0x%lX): RtlLeaveCriticalSection ignored invalid pointer 0x%.08lX.\n",
+               (uint32)GetCurrentThreadId(), (uint32)CriticalSection);
+        return;
+    }
+
+    if(CriticalSection->RecursionCount == 0)
         return;
 
     if(CriticalSection->RecursionCount == 1)
@@ -1910,6 +2056,15 @@ extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
 
 extern "C" VOID NTAPI EmuRtlLeaveCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
 {
+    if(CriticalSection == NULL || !EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+    {
+        if(CriticalSection != NULL)
+            printf("EmuKrnl (0x%lX): RtlLeaveCriticalSectionAndRegion ignored invalid pointer 0x%.08lX.\n",
+                   (uint32)GetCurrentThreadId(), (uint32)CriticalSection);
+
+        return;
+    }
+
     EmuRtlLeaveCriticalSection(CriticalSection);
 
     if(CriticalSection != NULL && CriticalSection->RecursionCount == 0)
@@ -2497,6 +2652,102 @@ static void EmuDispatchPendingDpc()
 
 extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request)
 {
+}
+
+typedef BOOLEAN (NTAPI *EmuInterruptServiceRoutine)(PVOID Interrupt, PVOID ServiceContext);
+
+struct EmuKInterrupt
+{
+    EmuInterruptServiceRoutine ServiceRoutine;
+    PVOID ServiceContext;
+    ULONG BusInterruptLevel;
+    ULONG Irql;
+    BOOLEAN Connected;
+    BOOLEAN ShareVector;
+    ULONG Mode;
+    ULONG ServiceCount;
+    ULONG DispatchCode[22];
+};
+
+static PVOID g_EmuInterruptList[16] = {};
+
+static ULONG EmuInterruptVectorToIrq(ULONG Vector)
+{
+    if(Vector >= 0x30)
+        return Vector - 0x30;
+
+    return Vector;
+}
+
+extern "C" ULONG NTAPI EmuHalGetInterruptVector(ULONG BusInterruptLevel, PUCHAR Irql)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG Vector = 0;
+    if(BusInterruptLevel < sizeof(g_EmuInterruptList) / sizeof(g_EmuInterruptList[0]))
+    {
+        Vector = 0x30 + BusInterruptLevel;
+        if(Irql != NULL && EmuIsWritableMemoryRange(Irql, sizeof(*Irql)))
+            *Irql = (UCHAR)BusInterruptLevel;
+    }
+
+    printf("EmuKrnl (0x%lX): HalGetInterruptVector level=0x%.08lX vector=0x%.08lX.\n",
+           GetCurrentThreadId(), BusInterruptLevel, Vector);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Vector;
+}
+
+extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    BOOLEAN Connected = FALSE;
+    EmuKInterrupt *Interrupt = (EmuKInterrupt*)InterruptObject;
+
+    if(EmuIsWritableMemoryRange(Interrupt, sizeof(*Interrupt)) &&
+       Interrupt->BusInterruptLevel < sizeof(g_EmuInterruptList) / sizeof(g_EmuInterruptList[0]))
+    {
+        if(!Interrupt->Connected && g_EmuInterruptList[Interrupt->BusInterruptLevel] == NULL)
+        {
+            Interrupt->Connected = TRUE;
+            g_EmuInterruptList[Interrupt->BusInterruptLevel] = Interrupt;
+            Connected = TRUE;
+        }
+    }
+
+    printf("EmuKrnl (0x%lX): KeConnectInterrupt interrupt=0x%.08lX connected=%lu.\n",
+           GetCurrentThreadId(), (ULONG)InterruptObject, (ULONG)Connected);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Connected;
+}
+
+extern "C" VOID NTAPI EmuKeInitializeInterrupt(PVOID InterruptObject, PVOID ServiceRoutine, PVOID ServiceContext,
+                                               ULONG Vector, ULONG Irql, ULONG InterruptMode, BOOLEAN ShareVector)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuKInterrupt *Interrupt = (EmuKInterrupt*)InterruptObject;
+    if(EmuIsWritableMemoryRange(Interrupt, sizeof(*Interrupt)))
+    {
+        Interrupt->ServiceRoutine = (EmuInterruptServiceRoutine)ServiceRoutine;
+        Interrupt->ServiceContext = ServiceContext;
+        Interrupt->BusInterruptLevel = EmuInterruptVectorToIrq(Vector);
+        Interrupt->Irql = Irql;
+        Interrupt->Connected = FALSE;
+        Interrupt->ShareVector = ShareVector;
+        Interrupt->Mode = InterruptMode;
+        Interrupt->ServiceCount = 0;
+        memset(Interrupt->DispatchCode, 0, sizeof(Interrupt->DispatchCode));
+    }
+
+    printf("EmuKrnl (0x%lX): KeInitializeInterrupt interrupt=0x%.08lX vector=0x%.08lX irql=0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)InterruptObject, Vector, Irql);
+
+    EmuSwapFS();   // Xbox FS
 }
 
 extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemArgument1, PVOID SystemArgument2)
@@ -3375,11 +3626,19 @@ XBSYSAPI EXPORTNUM(149) xboxkrnl::BOOLEAN NTAPI xboxkrnl::KeSetTimer
     }
     #endif
 
-    EmuCleanup("KeSetTimer: Not Implemented!");
+    BOOLEAN WasInserted = Timer->Header.Inserted != 0;
+
+    Timer->DueTime = *(ULARGE_INTEGER*)&DueTime;
+    Timer->Dpc = Dpc;
+    Timer->Header.SignalState = 0;
+    Timer->Header.Inserted = 1;
 
     EmuSwapFS();   // Xbox FS
 
-    return TRUE;
+    if(Dpc != NULL)
+        EmuKeInsertQueueDpc(Dpc, NULL, NULL);
+
+    return WasInserted;
 }
 
 // ******************************************************************
@@ -3902,6 +4161,18 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
     // * D:\ should map to current directory
     // ******************************************************************
     if( (szBuffer[0] == 'D' || szBuffer[0] == 'd') && szBuffer[1] == ':' && szBuffer[2] == '\\')
+    {
+        szBuffer += 3;
+
+        ObjectAttributes->RootDirectory = g_hCurDir;
+
+        #ifdef _DEBUG_TRACE
+        printf("EmuKrnl (0x%X): NtCreateFile Corrected path...\n", GetCurrentThreadId());
+        printf("  Org:\"%s\"\n", szOriginalBuffer);
+        printf("  New:\"$XbePath\\%s\"\n", szBuffer);
+        #endif
+    }
+    else if( (szBuffer[0] == 'E' || szBuffer[0] == 'e') && szBuffer[1] == ':' && szBuffer[2] == '\\')
     {
         szBuffer += 3;
 
