@@ -3261,7 +3261,7 @@ XBSYSAPI EXPORTNUM(187) NTSTATUS NTAPI xboxkrnl::NtClose
 
     NTSTATUS ret = STATUS_SUCCESS;
 
-    if(Handle == (HANDLE)-2)
+    if(Handle == NULL || Handle == (HANDLE)-1 || Handle == (HANDLE)-2)
     {
         EmuSwapFS();   // Xbox FS
         return STATUS_SUCCESS;
