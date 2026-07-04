@@ -133,11 +133,23 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
     {
         using namespace NtDll;
 
-        if(!NT_SUCCESS(NtDll::NtSetLdtEntries((x*8)+7+8, LDTEntry, 0, LDTEntry)))
+        if(NtDll::NtSetLdtEntries == NULL)
         {
             LeaveCriticalSection(&EmuLDTLock);
+            g_bEmuFSUnavailable = true;
+            printf("EmuLDT (0x%X): NtSetLdtEntries is unavailable.\n", (uint32)GetCurrentThreadId());
 
-			EmuCleanup("Could not set LDT entries");
+            return 0;
+        }
+
+        NTSTATUS Status = NtDll::NtSetLdtEntries((x*8)+7+8, LDTEntry, 0, LDTEntry);
+
+        if(!NT_SUCCESS(Status))
+        {
+            LeaveCriticalSection(&EmuLDTLock);
+            g_bEmuFSUnavailable = true;
+            printf("EmuLDT (0x%X): NtSetLdtEntries failed with status 0x%.08X.\n",
+                   (uint32)GetCurrentThreadId(), (uint32)Status);
 
             return 0;
         }
@@ -155,6 +167,9 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
 // ******************************************************************
 void EmuDeallocateLDT(uint16 wSelector)
 {
+    if(g_bEmuFSUnavailable || wSelector == 0 || NtDll::NtSetLdtEntries == NULL)
+        return;
+
     NtDll::LDT_ENTRY LDTEntry;
 
     EnterCriticalSection(&EmuLDTLock);

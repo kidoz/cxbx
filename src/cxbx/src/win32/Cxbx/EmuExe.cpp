@@ -548,12 +548,14 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
             if(x_Xbe->m_LibraryVersion != 0 && x_Xbe->m_KernelLibraryVersion != 0 && x_Xbe->m_XAPILibraryVersion != 0)
             {
                 *(uint32 *)((uint32)m_bzSection[i] + 31) = WriteCursor;
-                WriteCursor += sizeof(Xbe::LibraryVersion) * x_Xbe->m_Header.dwLibraryVersions;
             }
             else
             {
                 *(uint32 *)((uint32)m_bzSection[i] + 31) = 0;
             }
+
+            if(x_Xbe->m_LibraryVersion != 0)
+                WriteCursor += sizeof(Xbe::LibraryVersion) * x_Xbe->m_Header.dwLibraryVersions;
 
             // Param 2 : pTLS
             if(x_Xbe->m_TLS != 0)

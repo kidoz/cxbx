@@ -122,6 +122,88 @@ static void EmuConfigureLogFile()
         setvbuf(err, NULL, _IONBF, 0);
 }
 
+static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
+{
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
+        return false;
+
+    __try
+    {
+        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+
+        if(Instruction[0] == 0x0F && Instruction[1] == 0x32 && e->ContextRecord->Ecx == 0x2A)
+        {
+            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Edx = 0;
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated RDMSR 0x0000002A.\n", GetCurrentThreadId());
+            fflush(stdout);
+
+            return true;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return false;
+}
+
+static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
+{
+    bool WasXboxFS = EmuIsXboxFS();
+
+    if(WasXboxFS)
+        EmuSwapFS();
+
+    if(EmuTryEmulateRdmsr(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    printf("Emu (0x%lX): Vectored exception [0x%.08lX]@0x%.08lX\n",
+           GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+    printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
+           GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+
+    __try
+    {
+        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        printf("Emu (0x%lX): Vectored bytes: 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X\n",
+               GetCurrentThreadId(), Instruction[0], Instruction[1], Instruction[2], Instruction[3],
+               Instruction[4], Instruction[5], Instruction[6], Instruction[7]);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        printf("Emu (0x%lX): Vectored bytes unavailable.\n", GetCurrentThreadId());
+    }
+
+    __try
+    {
+        DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+
+        printf("Emu (0x%lX): Vectored stack: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
+               GetCurrentThreadId(), Stack[0], Stack[1], Stack[2], Stack[3], Stack[4], Stack[5], Stack[6], Stack[7]);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        printf("Emu (0x%lX): Vectored stack unavailable.\n", GetCurrentThreadId());
+    }
+
+    fflush(stdout);
+
+    if(WasXboxFS)
+        EmuSwapFS();
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static PVOID g_hEmuVectoredExceptionHandler = NULL;
+
 // ******************************************************************
 // * func: DllMain
 // ******************************************************************
@@ -137,7 +219,15 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
     }
     
     if(fdwReason == DLL_PROCESS_DETACH)
+    {
+        if(g_hEmuVectoredExceptionHandler != NULL)
+        {
+            RemoveVectoredExceptionHandler(g_hEmuVectoredExceptionHandler);
+            g_hEmuVectoredExceptionHandler = NULL;
+        }
+
         EmuShared::Cleanup();
+    }
 
     return TRUE;
 }
@@ -237,6 +327,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
     EmuConfigureLogFile();
     printf("--- cxbx runtime start ---\n");
+
+    if(g_hEmuVectoredExceptionHandler == NULL)
+        g_hEmuVectoredExceptionHandler = AddVectoredExceptionHandler(1, EmuVectoredExceptionHandler);
 
     // ******************************************************************
     // * debug trace
@@ -372,7 +465,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
             g_hZDrive = CreateFile(szBuffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 
-            if(g_hUDrive == INVALID_HANDLE_VALUE)
+            if(g_hZDrive == INVALID_HANDLE_VALUE)
                 EmuCleanup("Could not map Z:\\\n");
         }
     }
@@ -554,9 +647,15 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // * Initialize FS Emulation
     // ******************************************************************
     {
+        printf("Emu (0x%X): Initializing FS emulation.\n", GetCurrentThreadId());
+
         EmuInitFS();
 
+        printf("Emu (0x%X): Generating initial FS state.\n", GetCurrentThreadId());
+
         EmuGenerateFS(pTLS, pTLSData);
+
+        printf("Emu (0x%X): FS emulation initialized.\n", GetCurrentThreadId());
     }
 
     printf("Emu (0x%X): Initializing Direct3D.\n", GetCurrentThreadId());
@@ -653,7 +752,10 @@ extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char *szErrorMessage, ...)
 
         printf("%s\n", szBuffer1);
 
-        MessageBox(NULL, szBuffer1, "cxbxkrnl", MB_OK | MB_ICONEXCLAMATION);
+        char szLogFile[260];
+
+        if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+            MessageBox(NULL, szBuffer1, "cxbxkrnl", MB_OK | MB_ICONEXCLAMATION);
     }
 
     printf("cxbxkrnl: Terminating Process\n");
@@ -911,8 +1013,18 @@ void EmuXRefFailure()
 // ******************************************************************
 int EmuException(LPEXCEPTION_POINTERS e)
 {
-    if(EmuIsXboxFS())
+    bool WasXboxFS = EmuIsXboxFS();
+
+    if(WasXboxFS)
         EmuSwapFS();
+
+    if(EmuTryEmulateRdmsr(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
 
     // ******************************************************************
 	// * Debugging Information
@@ -920,6 +1032,18 @@ int EmuException(LPEXCEPTION_POINTERS e)
 	{
 		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
 		printf("Emu (0x%X): Recieved Exception [0x%.08X]@0x%.08X\n", GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+        printf("Emu (0x%X): ESP=0x%.08X EBP=0x%.08X\n", GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+        __try
+        {
+            DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+
+            printf("Emu (0x%X): Stack: 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X\n",
+                   GetCurrentThreadId(), Stack[0], Stack[1], Stack[2], Stack[3], Stack[4], Stack[5], Stack[6], Stack[7]);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            printf("Emu (0x%X): Stack unavailable.\n", GetCurrentThreadId());
+        }
 		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
 	}
 
@@ -932,6 +1056,11 @@ int EmuException(LPEXCEPTION_POINTERS e)
 		char buffer[256];
 
 		sprintf(buffer, "Recieved Exception [0x%.08X]@0x%.08X\n\nPress 'OK' to terminate emulation.\nPress 'Cancel' to debug.", e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+
+        char szLogFile[260];
+
+        if(EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+            ExitProcess(e->ExceptionRecord->ExceptionCode);
 
         if(MessageBox(XTL::g_hEmuWindow, buffer, "cxbx", MB_ICONSTOP | MB_OKCANCEL) == IDOK)
 			ExitProcess(1);

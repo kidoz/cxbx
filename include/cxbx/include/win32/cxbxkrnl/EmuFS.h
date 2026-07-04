@@ -58,6 +58,21 @@ extern void EmuCleanupFS();
 extern void EmuInitFS();
 
 // ******************************************************************
+// * data: g_bEmuFSUnavailable
+// ******************************************************************
+extern bool g_bEmuFSUnavailable;
+
+// ******************************************************************
+// * func: EmuGetCurrentThread
+// ******************************************************************
+extern void *EmuGetCurrentThread();
+
+// ******************************************************************
+// * func: EmuAdjustCurrentThreadKernelApcDisable
+// ******************************************************************
+extern void EmuAdjustCurrentThreadKernelApcDisable(long Delta);
+
+// ******************************************************************
 // * func: EmuIsXboxFS
 // ******************************************************************
 // *
@@ -68,6 +83,9 @@ extern void EmuInitFS();
 // ******************************************************************
 static inline bool EmuIsXboxFS()
 {
+    if(g_bEmuFSUnavailable)
+        return false;
+
     unsigned char chk;
 
     __asm
@@ -107,6 +125,9 @@ extern uint32 EmuAutoSleepRate;
 // ******************************************************************
 static inline void EmuSwapFS()
 {
+    if(g_bEmuFSUnavailable)
+        return;
+
     // Note that this is only the *approximate* interception count,
     // because not all interceptions swap the FS register, and some
     // non-interception code uses it
