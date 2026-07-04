@@ -45,6 +45,73 @@ namespace xboxkrnl
 #include "Cxbx.h"
 #include "Emu.h"
 
+extern "C" uint32 __cdecl EmuDbgPrint(const char *Format, ...);
+extern "C" PVOID NTAPI EmuAvGetSavedDataAddress();
+extern "C" VOID NTAPI EmuAvSendTVEncoderOption(PVOID RegisterBase, ULONG Option, ULONG Param, ULONG *Result);
+extern "C" ULONG NTAPI EmuAvSetDisplayMode(PVOID RegisterBase, ULONG Step, ULONG Mode, ULONG Format, ULONG Pitch, ULONG FrameBuffer);
+extern "C" VOID NTAPI EmuAvSetSavedDataAddress(PVOID Address);
+extern "C" VOID NTAPI EmuExAcquireReadWriteLockExclusive(PVOID Lock);
+extern "C" VOID NTAPI EmuExAcquireReadWriteLockShared(PVOID Lock);
+extern "C" VOID NTAPI EmuExInitializeReadWriteLock(PVOID Lock);
+extern "C" VOID NTAPI EmuExReleaseReadWriteLock(PVOID Lock);
+extern "C" NTSTATUS NTAPI EmuNtOpenDirectoryObject(PHANDLE DirectoryHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
+extern "C" NTSTATUS NTAPI EmuNtOpenSymbolicLinkObject(PHANDLE LinkHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
+extern "C" NTSTATUS NTAPI EmuNtCreateIoCompletion(PHANDLE IoCompletionHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, ULONG Count);
+extern "C" NTSTATUS NTAPI EmuNtCreateSemaphore(PHANDLE SemaphoreHandle, PVOID ObjectAttributes, LONG InitialCount, LONG MaximumCount);
+extern "C" NTSTATUS NTAPI EmuNtCreateTimer(PHANDLE TimerHandle, PVOID ObjectAttributes, ULONG TimerType);
+extern "C" NTSTATUS NTAPI EmuNtSetIoCompletion(HANDLE IoCompletionHandle, PVOID KeyContext, PVOID ApcContext, NTSTATUS IoStatus, ULONG IoStatusInformation);
+extern "C" NTSTATUS NTAPI EmuNtRemoveIoCompletion(HANDLE IoCompletionHandle, PVOID *KeyContext, PVOID *ApcContext, xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock, PLARGE_INTEGER Timeout);
+extern "C" NTSTATUS NTAPI EmuNtReleaseMutant(HANDLE MutantHandle, PLONG PreviousCount);
+extern "C" NTSTATUS NTAPI EmuNtReleaseSemaphore(HANDLE SemaphoreHandle, LONG ReleaseCount, PLONG PreviousCount);
+extern "C" ULONG NTAPI EmuHalReadSMBusValue(UCHAR Address, UCHAR Command, BOOLEAN WordFlag, PULONG Value);
+extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request);
+extern "C" NTSTATUS NTAPI EmuNtSuspendThread(HANDLE ThreadHandle, PULONG PreviousSuspendCount);
+extern "C" LONG __fastcall EmuInterlockedCompareExchange(PLONG Destination, LONG Exchange, LONG Comperand);
+extern "C" LONG __fastcall EmuInterlockedDecrement(PLONG Addend);
+extern "C" LONG __fastcall EmuInterlockedIncrement(PLONG Addend);
+extern "C" LONG __fastcall EmuInterlockedExchange(PLONG Target, LONG Value);
+extern "C" LONG __fastcall EmuInterlockedExchangeAdd(PLONG Addend, LONG Value);
+extern "C" UCHAR NTAPI EmuKeGetCurrentIrql();
+extern "C" xboxkrnl::PKTHREAD NTAPI EmuKeGetCurrentThread();
+extern "C" VOID NTAPI EmuKeEnterCriticalRegion();
+extern "C" VOID NTAPI EmuKeLeaveCriticalRegion();
+extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemArgument1, PVOID SystemArgument2);
+extern "C" BOOLEAN NTAPI EmuKeIsExecutingDpc();
+extern "C" UCHAR NTAPI EmuKeRaiseIrqlToDpcLevel();
+extern "C" UCHAR NTAPI EmuKeRaiseIrqlToSynchLevel();
+extern "C" BOOLEAN NTAPI EmuKeRemoveQueueDpc(xboxkrnl::PKDPC Dpc);
+extern "C" ULONG NTAPI EmuKeResumeThread(xboxkrnl::PKTHREAD Thread);
+extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread);
+extern "C" UCHAR __fastcall EmuKfRaiseIrql(UCHAR NewIrql);
+extern "C" VOID __fastcall EmuKfLowerIrql(UCHAR NewIrql);
+extern "C" BOOLEAN NTAPI EmuMmIsAddressValid(PVOID VirtualAddress);
+extern "C" NTSTATUS NTAPI EmuObReferenceObjectByHandle(HANDLE ObjectHandle, PVOID ObjectType, PVOID *Object);
+extern "C" NTSTATUS NTAPI EmuObOpenObjectByName(xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes, PVOID ObjectType, PVOID ParseContext, PHANDLE Handle);
+extern "C" VOID __fastcall EmuObfDereferenceObject(PVOID Object);
+extern "C" VOID __fastcall EmuObfReferenceObject(PVOID Object);
+extern "C" NTSTATUS NTAPI EmuIoCreateDevice(PVOID DriverObject, ULONG DeviceExtensionSize, xboxkrnl::PSTRING DeviceName, ULONG DeviceType, BOOLEAN Exclusive, PVOID *DeviceObject);
+extern "C" VOID NTAPI EmuIoDeleteDevice(PVOID DeviceObject);
+extern "C" NTSTATUS NTAPI EmuIoCreateSymbolicLink(xboxkrnl::PSTRING SymbolicLinkName, xboxkrnl::PSTRING DeviceName);
+extern "C" NTSTATUS NTAPI EmuIoDeleteSymbolicLink(xboxkrnl::PSTRING SymbolicLinkName);
+extern "C" NTSTATUS NTAPI EmuPsCreateSystemThread(PHANDLE ThreadHandle, ULONG ThreadExtraSize, xboxkrnl::PKSTART_ROUTINE StartRoutine, PVOID StartContext, BOOLEAN CreateSuspended);
+struct EmuObjectType;
+extern "C" EmuObjectType g_EmuExEventObjectType;
+extern "C" EmuObjectType g_EmuExMutantObjectType;
+extern "C" EmuObjectType g_EmuExSemaphoreObjectType;
+extern "C" EmuObjectType g_EmuExTimerObjectType;
+extern "C" EmuObjectType g_EmuIoCompletionObjectType;
+extern "C" EmuObjectType g_EmuIoDeviceObjectType;
+extern "C" EmuObjectType g_EmuIoFileObjectType;
+extern "C" EmuObjectType g_EmuObDirectoryObjectType;
+extern "C" EmuObjectType g_EmuObSymbolicLinkObjectType;
+extern "C" EmuObjectType g_EmuPsThreadObjectType;
+namespace xboxkrnl
+{
+    struct EmuXboxKernelVersion;
+    extern EmuXboxKernelVersion EmuXboxKrnlVersion;
+    extern STRING EmuXeImageFileName;
+}
+
 // ******************************************************************
 // * NOTE:
 // ******************************************************************
@@ -66,37 +133,37 @@ namespace xboxkrnl
 extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
 {
     (uint32)PANIC(0x0000),                          // 0x0000 (0)
-    (uint32)PANIC(0x0001),                          // 0x0001 (1)
-    (uint32)PANIC(0x0002),                          // 0x0002 (2)
-    (uint32)PANIC(0x0003),                          // 0x0003 (3)
-    (uint32)PANIC(0x0004),                          // 0x0004 (4)
+    (uint32)&EmuAvGetSavedDataAddress,              // 0x0001 (1)
+    (uint32)&EmuAvSendTVEncoderOption,              // 0x0002 (2)
+    (uint32)&EmuAvSetDisplayMode,                   // 0x0003 (3)
+    (uint32)&EmuAvSetSavedDataAddress,              // 0x0004 (4)
     (uint32)PANIC(0x0005),                          // 0x0005 (5)
     (uint32)PANIC(0x0006),                          // 0x0006 (6)
     (uint32)PANIC(0x0007),                          // 0x0007 (7)
-    (uint32)PANIC(0x0008),                          // 0x0008 (8)
+    (uint32)&EmuDbgPrint,                           // 0x0008 (8)
     (uint32)PANIC(0x0009),                          // 0x0009 (9)
     (uint32)PANIC(0x000A),                          // 0x000A (10)
     (uint32)PANIC(0x000B),                          // 0x000B (11)
-    (uint32)PANIC(0x000C),                          // 0x000C (12)
-    (uint32)PANIC(0x000D),                          // 0x000D (13)
+    (uint32)&EmuExAcquireReadWriteLockExclusive,    // 0x000C (12)
+    (uint32)&EmuExAcquireReadWriteLockShared,       // 0x000D (13)
     (uint32)&xboxkrnl::ExAllocatePool,              // 0x000E (14)
     (uint32)PANIC(0x000F),                          // 0x000F (15)
-    (uint32)PANIC(0x0010),                          // 0x0010 (16)
+    (uint32)&g_EmuExEventObjectType,                // 0x0010 (16)
     (uint32)PANIC(0x0011),                          // 0x0011 (17)
-    (uint32)PANIC(0x0012),                          // 0x0012 (18)
+    (uint32)&EmuExInitializeReadWriteLock,          // 0x0012 (18)
     (uint32)PANIC(0x0013),                          // 0x0013 (19)
     (uint32)PANIC(0x0014),                          // 0x0014 (20)
     (uint32)PANIC(0x0015),                          // 0x0015 (21)
-    (uint32)PANIC(0x0016),                          // 0x0016 (22)
+    (uint32)&g_EmuExMutantObjectType,               // 0x0016 (22)
     (uint32)PANIC(0x0017),                          // 0x0017 (23)
     (uint32)&xboxkrnl::ExQueryNonVolatileSetting,   // 0x0018 (24)
     (uint32)PANIC(0x0019),                          // 0x0019 (25)
     (uint32)PANIC(0x001A),                          // 0x001A (26)
     (uint32)PANIC(0x001B),                          // 0x001B (27)
-    (uint32)PANIC(0x001C),                          // 0x001C (28)
+    (uint32)&EmuExReleaseReadWriteLock,             // 0x001C (28)
     (uint32)PANIC(0x001D),                          // 0x001D (29)
-    (uint32)PANIC(0x001E),                          // 0x001E (30)
-    (uint32)PANIC(0x001F),                          // 0x001F (31)
+    (uint32)&g_EmuExSemaphoreObjectType,            // 0x001E (30)
+    (uint32)&g_EmuExTimerObjectType,                // 0x001F (31)
     (uint32)PANIC(0x0020),                          // 0x0020 (32)
     (uint32)PANIC(0x0021),                          // 0x0021 (33)
     (uint32)PANIC(0x0022),                          // 0x0022 (34)
@@ -110,17 +177,17 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x002A),                          // 0x002A (42)
     (uint32)PANIC(0x002B),                          // 0x002B (43)
     (uint32)PANIC(0x002C),                          // 0x002C (44)
-    (uint32)PANIC(0x002D),                          // 0x002D (45)
-    (uint32)PANIC(0x002E),                          // 0x002E (46)
+    (uint32)&EmuHalReadSMBusValue,                  // 0x002D (45)
+    (uint32)&xboxkrnl::HalReadWritePCISpace,        // 0x002E (46)
     (uint32)PANIC(0x002F),                          // 0x002F (47)
-    (uint32)PANIC(0x0030),                          // 0x0030 (48)
+    (uint32)&EmuHalRequestSoftwareInterrupt,        // 0x0030 (48)
     (uint32)&xboxkrnl::HalReturnToFirmware,         // 0x0031 (49)
-    (uint32)PANIC(0x0032),                          // 0x0032 (50)
-    (uint32)PANIC(0x0033),                          // 0x0033 (51)
-    (uint32)PANIC(0x0034),                          // 0x0034 (52)
-    (uint32)PANIC(0x0035),                          // 0x0035 (53)
-    (uint32)PANIC(0x0036),                          // 0x0036 (54)
-    (uint32)PANIC(0x0037),                          // 0x0037 (55)
+    (uint32)&xboxkrnl::HalWriteSMBusValue,          // 0x0032 (50)
+    (uint32)&EmuInterlockedCompareExchange,         // 0x0033 (51)
+    (uint32)&EmuInterlockedDecrement,               // 0x0034 (52)
+    (uint32)&EmuInterlockedIncrement,               // 0x0035 (53)
+    (uint32)&EmuInterlockedExchange,                // 0x0036 (54)
+    (uint32)&EmuInterlockedExchangeAdd,             // 0x0037 (55)
     (uint32)PANIC(0x0038),                          // 0x0038 (56)
     (uint32)PANIC(0x0039),                          // 0x0039 (57)
     (uint32)PANIC(0x003A),                          // 0x003A (58)
@@ -129,14 +196,14 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x003D),                          // 0x003D (61)
     (uint32)PANIC(0x003E),                          // 0x003E (62)
     (uint32)PANIC(0x003F),                          // 0x003F (63)
-    (uint32)PANIC(0x0040),                          // 0x0040 (64)
-    (uint32)PANIC(0x0041),                          // 0x0041 (65)
+    (uint32)&g_EmuIoCompletionObjectType,           // 0x0040 (64)
+    (uint32)&EmuIoCreateDevice,                     // 0x0041 (65)
     (uint32)&xboxkrnl::IoCreateFile,                // 0x0042 (66)
-    (uint32)&xboxkrnl::IoCreateSymbolicLink,        // 0x0043 (67)
-    (uint32)PANIC(0x0044),                          // 0x0044 (68)
-    (uint32)&xboxkrnl::IoDeleteSymbolicLink,        // 0x0045 (69)
-    (uint32)PANIC(0x0046),                          // 0x0046 (70)
-    (uint32)PANIC(0x0047),                          // 0x0047 (71)
+    (uint32)&EmuIoCreateSymbolicLink,               // 0x0043 (67)
+    (uint32)&EmuIoDeleteDevice,                     // 0x0044 (68)
+    (uint32)&EmuIoDeleteSymbolicLink,               // 0x0045 (69)
+    (uint32)&g_EmuIoDeviceObjectType,               // 0x0046 (70)
+    (uint32)&g_EmuIoFileObjectType,                 // 0x0047 (71)
     (uint32)PANIC(0x0048),                          // 0x0048 (72)
     (uint32)PANIC(0x0049),                          // 0x0049 (73)
     (uint32)PANIC(0x004A),                          // 0x004A (74)
@@ -166,10 +233,10 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0062),                          // 0x0062 (98)
     (uint32)&xboxkrnl::KeDelayExecutionThread,      // 0x0063 (99)
     (uint32)PANIC(0x0064),                          // 0x0064 (100)
-    (uint32)PANIC(0x0065),                          // 0x0065 (101)
+    (uint32)&EmuKeEnterCriticalRegion,              // 0x0065 (101)
     (uint32)PANIC(0x0066),                          // 0x0066 (102)
-    (uint32)PANIC(0x0067),                          // 0x0067 (103)
-    (uint32)PANIC(0x0068),                          // 0x0068 (104)
+    (uint32)&EmuKeGetCurrentIrql,                   // 0x0067 (103)
+    (uint32)&EmuKeGetCurrentThread,                 // 0x0068 (104)
     (uint32)PANIC(0x0069),                          // 0x0069 (105)
     (uint32)PANIC(0x006A),                          // 0x006A (106)
     (uint32)&xboxkrnl::KeInitializeDpc,             // 0x006B (107)
@@ -184,28 +251,28 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0074),                          // 0x0074 (116)
     (uint32)PANIC(0x0075),                          // 0x0075 (117)
     (uint32)PANIC(0x0076),                          // 0x0076 (118)
-    (uint32)PANIC(0x0077),                          // 0x0077 (119)
+    (uint32)&EmuKeInsertQueueDpc,                   // 0x0077 (119)
     (uint32)PANIC(0x0078),                          // 0x0078 (120)
-    (uint32)PANIC(0x0079),                          // 0x0079 (121)
-    (uint32)PANIC(0x007A),                          // 0x007A (122)
+    (uint32)&EmuKeIsExecutingDpc,                   // 0x0079 (121)
+    (uint32)&EmuKeLeaveCriticalRegion,              // 0x007A (122)
     (uint32)PANIC(0x007B),                          // 0x007B (123)
     (uint32)PANIC(0x007C),                          // 0x007C (124)
     (uint32)PANIC(0x007D),                          // 0x007D (125)
     (uint32)PANIC(0x007E),                          // 0x007E (126)
     (uint32)PANIC(0x007F),                          // 0x007F (127)
     (uint32)&xboxkrnl::KeQuerySystemTime,           // 0x0080 (128)
-    (uint32)PANIC(0x0081),                          // 0x0081 (129)
-    (uint32)PANIC(0x0082),                          // 0x0082 (130)
+    (uint32)&EmuKeRaiseIrqlToDpcLevel,              // 0x0081 (129)
+    (uint32)&EmuKeRaiseIrqlToSynchLevel,            // 0x0082 (130)
     (uint32)PANIC(0x0083),                          // 0x0083 (131)
     (uint32)PANIC(0x0084),                          // 0x0084 (132)
     (uint32)PANIC(0x0085),                          // 0x0085 (133)
     (uint32)PANIC(0x0086),                          // 0x0086 (134)
     (uint32)PANIC(0x0087),                          // 0x0087 (135)
     (uint32)PANIC(0x0088),                          // 0x0088 (136)
-    (uint32)PANIC(0x0089),                          // 0x0089 (137)
+    (uint32)&EmuKeRemoveQueueDpc,                   // 0x0089 (137)
     (uint32)PANIC(0x008A),                          // 0x008A (138)
     (uint32)PANIC(0x008B),                          // 0x008B (139)
-    (uint32)PANIC(0x008C),                          // 0x008C (140)
+    (uint32)&EmuKeResumeThread,                     // 0x008C (140)
     (uint32)PANIC(0x008D),                          // 0x008D (141)
     (uint32)PANIC(0x008E),                          // 0x008E (142)
     (uint32)PANIC(0x008F),                          // 0x008F (143)
@@ -217,7 +284,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&xboxkrnl::KeSetTimer,                  // 0x0095 (149)
     (uint32)PANIC(0x0096),                          // 0x0096 (150)
     (uint32)PANIC(0x0097),                          // 0x0097 (151)
-    (uint32)PANIC(0x0098),                          // 0x0098 (152)
+    (uint32)&EmuKeSuspendThread,                    // 0x0098 (152)
     (uint32)PANIC(0x0099),                          // 0x0099 (153)
     (uint32)PANIC(0x009A),                          // 0x009A (154)
     (uint32)PANIC(0x009B),                          // 0x009B (155)
@@ -225,8 +292,8 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x009D),                          // 0x009D (157)
     (uint32)PANIC(0x009E),                          // 0x009E (158)
     (uint32)PANIC(0x009F),                          // 0x009F (159)
-    (uint32)PANIC(0x00A0),                          // 0x00A0 (160)
-    (uint32)PANIC(0x00A1),                          // 0x00A1 (161)
+    (uint32)&EmuKfRaiseIrql,                        // 0x00A0 (160)
+    (uint32)&EmuKfLowerIrql,                        // 0x00A1 (161)
     (uint32)PANIC(0x00A2),                          // 0x00A2 (162)
     (uint32)PANIC(0x00A3),                          // 0x00A3 (163)
     (uint32)&xboxkrnl::LaunchDataPage,              // 0x00A4 (164)
@@ -239,7 +306,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&xboxkrnl::MmFreeContiguousMemory,      // 0x00AB (171)
     (uint32)&xboxkrnl::MmFreeSystemMemory,          // 0x00AC (172)
     (uint32)PANIC(0x00AD),                          // 0x00AD (173)
-    (uint32)PANIC(0x00AE),                          // 0x00AE (174)
+    (uint32)&EmuMmIsAddressValid,                   // 0x00AE (174)
     (uint32)PANIC(0x00AF),                          // 0x00AF (175)
     (uint32)PANIC(0x00B0),                          // 0x00B0 (176)
     (uint32)PANIC(0x00B1),                          // 0x00B1 (177)
@@ -256,19 +323,19 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x00BC),                          // 0x00BC (188)
     (uint32)&xboxkrnl::NtCreateEvent,               // 0x00BD (189)
     (uint32)&xboxkrnl::NtCreateFile,                // 0x00BE (190)
-    (uint32)PANIC(0x00BF),                          // 0x00BF (191)
+    (uint32)&EmuNtCreateIoCompletion,               // 0x00BF (191)
     (uint32)&xboxkrnl::NtCreateMutant,              // 0x00C0 (192)
-    (uint32)PANIC(0x00C1),                          // 0x00C1 (193)
-    (uint32)PANIC(0x00C2),                          // 0x00C2 (194)
+    (uint32)&EmuNtCreateSemaphore,                  // 0x00C1 (193)
+    (uint32)&EmuNtCreateTimer,                      // 0x00C2 (194)
     (uint32)PANIC(0x00C3),                          // 0x00C3 (195)
     (uint32)PANIC(0x00C4),                          // 0x00C4 (196)
     (uint32)&xboxkrnl::NtDuplicateObject,           // 0x00C5 (197)
     (uint32)PANIC(0x00C6),                          // 0x00C6 (198)
     (uint32)&xboxkrnl::NtFreeVirtualMemory,         // 0x00C7 (199)
     (uint32)PANIC(0x00C8),                          // 0x00C8 (200)
-    (uint32)PANIC(0x00C9),                          // 0x00C9 (201)
+    (uint32)&EmuNtOpenDirectoryObject,              // 0x00C9 (201)
     (uint32)&xboxkrnl::NtOpenFile,                  // 0x00CA (202)
-    (uint32)PANIC(0x00CB),                          // 0x00CB (203)
+    (uint32)&EmuNtOpenSymbolicLinkObject,           // 0x00CB (203)
     (uint32)PANIC(0x00CC),                          // 0x00CC (204)
     (uint32)PANIC(0x00CD),                          // 0x00CD (205)
     (uint32)PANIC(0x00CE),                          // 0x00CE (206)
@@ -286,45 +353,45 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&xboxkrnl::NtQueryVolumeInformationFile,// 0x00DA (218)
     (uint32)&xboxkrnl::NtReadFile,                  // 0x00DB (219)
     (uint32)PANIC(0x00DC),                          // 0x00DC (220)
-    (uint32)PANIC(0x00DD),                          // 0x00DD (221)
-    (uint32)PANIC(0x00DE),                          // 0x00DE (222)
-    (uint32)PANIC(0x00DF),                          // 0x00DF (223)
+    (uint32)&EmuNtReleaseMutant,                    // 0x00DD (221)
+    (uint32)&EmuNtReleaseSemaphore,                 // 0x00DE (222)
+    (uint32)&EmuNtRemoveIoCompletion,               // 0x00DF (223)
     (uint32)&xboxkrnl::NtResumeThread,              // 0x00E0 (224)
     (uint32)&xboxkrnl::NtSetEvent,                  // 0x00E1 (225)
     (uint32)&xboxkrnl::NtSetInformationFile,        // 0x00E2 (226)
-    (uint32)PANIC(0x00E3),                          // 0x00E3 (227)
+    (uint32)&EmuNtSetIoCompletion,                  // 0x00E3 (227)
     (uint32)PANIC(0x00E4),                          // 0x00E4 (228)
     (uint32)PANIC(0x00E5),                          // 0x00E5 (229)
     (uint32)PANIC(0x00E6),                          // 0x00E6 (230)
-    (uint32)PANIC(0x00E7),                          // 0x00E7 (231)
+    (uint32)&EmuNtSuspendThread,                    // 0x00E7 (231)
     (uint32)&xboxkrnl::NtUserIoApcDispatcher,       // 0x00E8 (232)
-    (uint32)PANIC(0x00E9),                          // 0x00E9 (233)
+    (uint32)&xboxkrnl::NtWaitForSingleObject,       // 0x00E9 (233)
     (uint32)&xboxkrnl::NtWaitForSingleObjectEx,     // 0x00EA (234)
     (uint32)PANIC(0x00EB),                          // 0x00EB (235)
     (uint32)&xboxkrnl::NtWriteFile,                 // 0x00EC (236)
     (uint32)PANIC(0x00ED),                          // 0x00ED (237)
     (uint32)&xboxkrnl::NtYieldExecution,            // 0x00EE (238)
     (uint32)PANIC(0x00EF),                          // 0x00EF (239)
-    (uint32)PANIC(0x00F0),                          // 0x00F0 (240)
+    (uint32)&g_EmuObDirectoryObjectType,            // 0x00F0 (240)
     (uint32)PANIC(0x00F1),                          // 0x00F1 (241)
     (uint32)PANIC(0x00F2),                          // 0x00F2 (242)
-    (uint32)PANIC(0x00F3),                          // 0x00F3 (243)
+    (uint32)&EmuObOpenObjectByName,                 // 0x00F3 (243)
     (uint32)PANIC(0x00F4),                          // 0x00F4 (244)
     (uint32)PANIC(0x00F5),                          // 0x00F5 (245)
-    (uint32)PANIC(0x00F6),                          // 0x00F6 (246)
+    (uint32)&EmuObReferenceObjectByHandle,          // 0x00F6 (246)
     (uint32)PANIC(0x00F7),                          // 0x00F7 (247)
     (uint32)PANIC(0x00F8),                          // 0x00F8 (248)
     (uint32)PANIC(0x00F9),                          // 0x00F9 (249)
-    (uint32)PANIC(0x00FA),                          // 0x00FA (250)
-    (uint32)PANIC(0x00FB),                          // 0x00FB (251)
-    (uint32)PANIC(0x00FC),                          // 0x00FC (252)
+    (uint32)&EmuObfDereferenceObject,               // 0x00FA (250)
+    (uint32)&EmuObfReferenceObject,                 // 0x00FB (251)
+    (uint32)&g_EmuObSymbolicLinkObjectType,         // 0x00FC (252)
     (uint32)PANIC(0x00FD),                          // 0x00FD (253)
-    (uint32)PANIC(0x00FE),                          // 0x00FE (254)
+    (uint32)&EmuPsCreateSystemThread,               // 0x00FE (254)
     (uint32)&xboxkrnl::PsCreateSystemThreadEx,      // 0x00FF (255)
     (uint32)PANIC(0x0100),                          // 0x0100 (256)
     (uint32)PANIC(0x0101),                          // 0x0101 (257)
     (uint32)&xboxkrnl::PsTerminateSystemThread,     // 0x0102 (258)
-    (uint32)PANIC(0x0103),                          // 0x0103 (259)
+    (uint32)&g_EmuPsThreadObjectType,               // 0x0103 (259)
     (uint32)&xboxkrnl::RtlAnsiStringToUnicodeString,// 0x0104 (260)
     (uint32)PANIC(0x0105),                          // 0x0105 (261)
     (uint32)PANIC(0x0106),                          // 0x0106 (262)
@@ -389,9 +456,9 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0141),                          // 0x0141 (321)
     (uint32)&xboxkrnl::XboxHardwareInfo,            // 0x0142 (322)
     (uint32)PANIC(0x0143),                          // 0x0143 (323)
-    (uint32)PANIC(0x0144),                          // 0x0144 (324)
+    (uint32)&xboxkrnl::EmuXboxKrnlVersion,          // 0x0144 (324)
     (uint32)&xboxkrnl::XboxSignatureKey,            // 0x0145 (325)
-    (uint32)PANIC(0x0146),                          // 0x0146 (326)
+    (uint32)&xboxkrnl::EmuXeImageFileName,          // 0x0146 (326)
     (uint32)PANIC(0x0147),                          // 0x0147 (327)
     (uint32)PANIC(0x0148),                          // 0x0148 (328)
     (uint32)PANIC(0x0149),                          // 0x0149 (329)

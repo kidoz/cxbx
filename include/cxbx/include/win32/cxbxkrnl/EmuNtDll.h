@@ -656,6 +656,25 @@ typedef NTSTATUS (NTAPI *FPTR_NtWaitForSingleObject)
 );
 
 // ******************************************************************
+// * NtReleaseMutant
+// ******************************************************************
+typedef NTSTATUS (NTAPI *FPTR_NtReleaseMutant)
+(
+    IN HANDLE               MutantHandle,
+    OUT PLONG               PreviousCount OPTIONAL
+);
+
+// ******************************************************************
+// * NtReleaseSemaphore
+// ******************************************************************
+typedef NTSTATUS (NTAPI *FPTR_NtReleaseSemaphore)
+(
+    IN HANDLE               SemaphoreHandle,
+    IN LONG                 ReleaseCount,
+    OUT PLONG               PreviousCount OPTIONAL
+);
+
+// ******************************************************************
 // * NtCreateEvent
 // ******************************************************************
 typedef NTSTATUS (NTAPI *FPTR_NtCreateEvent)
@@ -876,6 +895,8 @@ extern FPTR_RtlInitializeCriticalSection   RtlInitializeCriticalSection;
 extern FPTR_RtlEnterCriticalSection        RtlEnterCriticalSection;
 extern FPTR_RtlLeaveCriticalSection        RtlLeaveCriticalSection;
 extern FPTR_NtWaitForSingleObject          NtWaitForSingleObject;
+extern FPTR_NtReleaseMutant                NtReleaseMutant;
+extern FPTR_NtReleaseSemaphore             NtReleaseSemaphore;
 extern FPTR_RtlCreateHeap                  RtlCreateHeap;
 extern FPTR_RtlAllocateHeap                RtlAllocateHeap;
 extern FPTR_RtlFreeHeap                    RtlFreeHeap;
