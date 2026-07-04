@@ -55,6 +55,7 @@ extern "C" VOID NTAPI EmuExAcquireReadWriteLockShared(PVOID Lock);
 extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag);
 extern "C" VOID NTAPI EmuExFreePool(PVOID P);
 extern "C" VOID NTAPI EmuExInitializeReadWriteLock(PVOID Lock);
+extern "C" ULONG NTAPI EmuExQueryPoolBlockSize(PVOID PoolBlock);
 extern "C" VOID NTAPI EmuExReleaseReadWriteLock(PVOID Lock);
 extern "C" NTSTATUS NTAPI EmuNtOpenDirectoryObject(PHANDLE DirectoryHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
 extern "C" NTSTATUS NTAPI EmuNtOpenSymbolicLinkObject(PHANDLE LinkHandle, xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes);
@@ -74,6 +75,11 @@ extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistrat
 extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request);
 extern "C" NTSTATUS NTAPI EmuNtSuspendThread(HANDLE ThreadHandle, PULONG PreviousSuspendCount);
 extern "C" PVOID NTAPI EmuMmClaimGpuInstanceMemory(SIZE_T NumberOfBytes, SIZE_T *NumberOfPaddingBytes);
+extern "C" xboxkrnl::PHYSICAL_ADDRESS NTAPI EmuMmGetPhysicalAddress(PVOID BaseAddress);
+extern "C" VOID NTAPI EmuMmLockUnlockBufferPages(PVOID BaseAddress, SIZE_T NumberOfBytes, BOOLEAN UnlockPages);
+extern "C" VOID NTAPI EmuMmLockUnlockPhysicalPage(ULONG PhysicalAddress, BOOLEAN UnlockPage);
+extern "C" ULONG NTAPI EmuMmQueryAllocationSize(PVOID BaseAddress);
+extern "C" NTSTATUS NTAPI EmuMmQueryStatistics(PVOID MemoryStatistics);
 extern "C" LONG __fastcall EmuInterlockedCompareExchange(PLONG Destination, LONG Exchange, LONG Comperand);
 extern "C" LONG __fastcall EmuInterlockedDecrement(PLONG Addend);
 extern "C" LONG __fastcall EmuInterlockedIncrement(PLONG Addend);
@@ -89,6 +95,7 @@ extern "C" UCHAR NTAPI EmuKeRaiseIrqlToDpcLevel();
 extern "C" UCHAR NTAPI EmuKeRaiseIrqlToSynchLevel();
 extern "C" BOOLEAN NTAPI EmuKeRemoveQueueDpc(xboxkrnl::PKDPC Dpc);
 extern "C" ULONG NTAPI EmuKeResumeThread(xboxkrnl::PKTHREAD Thread);
+extern "C" VOID NTAPI EmuKeStallExecutionProcessor(ULONG Microseconds);
 extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread);
 extern "C" UCHAR __fastcall EmuKfRaiseIrql(UCHAR NewIrql);
 extern "C" VOID __fastcall EmuKfLowerIrql(UCHAR NewIrql);
@@ -268,7 +275,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0014),                          // 0x0014 (20)
     (uint32)PANIC(0x0015),                          // 0x0015 (21)
     (uint32)&g_EmuExMutantObjectType,               // 0x0016 (22)
-    (uint32)PANIC(0x0017),                          // 0x0017 (23)
+    (uint32)&EmuExQueryPoolBlockSize,               // 0x0017 (23)
     (uint32)&xboxkrnl::ExQueryNonVolatileSetting,   // 0x0018 (24)
     (uint32)PANIC(0x0019),                          // 0x0019 (25)
     (uint32)PANIC(0x001A),                          // 0x001A (26)
@@ -396,7 +403,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0094),                          // 0x0094 (148)
     (uint32)&xboxkrnl::KeSetTimer,                  // 0x0095 (149)
     (uint32)PANIC(0x0096),                          // 0x0096 (150)
-    (uint32)PANIC(0x0097),                          // 0x0097 (151)
+    (uint32)&EmuKeStallExecutionProcessor,          // 0x0097 (151)
     (uint32)&EmuKeSuspendThread,                    // 0x0098 (152)
     (uint32)PANIC(0x0099),                          // 0x0099 (153)
     (uint32)PANIC(0x009A),                          // 0x009A (154)
@@ -418,15 +425,15 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x00AA),                          // 0x00AA (170)
     (uint32)&xboxkrnl::MmFreeContiguousMemory,      // 0x00AB (171)
     (uint32)&xboxkrnl::MmFreeSystemMemory,          // 0x00AC (172)
-    (uint32)PANIC(0x00AD),                          // 0x00AD (173)
+    (uint32)&EmuMmGetPhysicalAddress,               // 0x00AD (173)
     (uint32)&EmuMmIsAddressValid,                   // 0x00AE (174)
-    (uint32)PANIC(0x00AF),                          // 0x00AF (175)
-    (uint32)PANIC(0x00B0),                          // 0x00B0 (176)
+    (uint32)&EmuMmLockUnlockBufferPages,            // 0x00AF (175)
+    (uint32)&EmuMmLockUnlockPhysicalPage,           // 0x00B0 (176)
     (uint32)PANIC(0x00B1),                          // 0x00B1 (177)
     (uint32)&xboxkrnl::MmPersistContiguousMemory,   // 0x00B2 (178)
     (uint32)PANIC(0x00B3),                          // 0x00B3 (179)
-    (uint32)PANIC(0x00B4),                          // 0x00B4 (180)
-    (uint32)PANIC(0x00B5),                          // 0x00B5 (181)
+    (uint32)&EmuMmQueryAllocationSize,              // 0x00B4 (180)
+    (uint32)&EmuMmQueryStatistics,                  // 0x00B5 (181)
     (uint32)&xboxkrnl::MmSetAddressProtect,         // 0x00B6 (182)
     (uint32)PANIC(0x00B7),                          // 0x00B7 (183)
     (uint32)&xboxkrnl::NtAllocateVirtualMemory,     // 0x00B8 (184)
