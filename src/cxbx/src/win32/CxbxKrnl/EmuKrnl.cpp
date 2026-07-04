@@ -1150,7 +1150,12 @@ extern "C" ULONG NTAPI EmuXcPKEncPublic(PUCHAR Key, PUCHAR Input, PUCHAR Output)
     if(KeyBits == 0 || (KeyBits % 32) != 0)
         return 0;
 
-    const size_t ModulusBytes = KeyBits / 8;
+    const ULONG KeyLength = EmuXcPKGetKeyLen(Key);
+    if(KeyLength == 0)
+        return 0;
+
+    const size_t HeaderSizedModulusBytes = (KeyBits / 8) + 8;
+    const size_t ModulusBytes = HeaderSizedModulusBytes < KeyLength ? HeaderSizedModulusBytes : KeyLength;
     const ULONG Exponent = EmuReadLittleEndianUlong(Key + 16);
     std::vector<ULONG> Modulus = EmuLoadLittleEndianBignum(Key + 20, ModulusBytes);
     if(Exponent == 0 || EmuIsZeroBignum(Modulus))
@@ -1163,7 +1168,6 @@ extern "C" ULONG NTAPI EmuXcPKEncPublic(PUCHAR Key, PUCHAR Input, PUCHAR Output)
     const std::vector<ULONG> Ciphertext = EmuPowModBignum(Message, Exponent, Modulus);
     EmuStoreLittleEndianBignum(Ciphertext, Output, ModulusBytes);
 
-    const ULONG KeyLength = EmuXcPKGetKeyLen(Key);
     if(KeyLength > ModulusBytes)
         memset(Output + ModulusBytes, 0, KeyLength - ModulusBytes);
 
