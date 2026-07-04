@@ -402,7 +402,11 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
 
                 memset(m_bzSection[v], 0, SectionSize);
 
-                memcpy(m_bzSection[v], x_Xbe->m_bzSection[v], x_Xbe->m_SectionHeader[v].dwSizeofRaw);
+                uint32 CopySize = x_Xbe->m_SectionHeader[v].dwSizeofRaw;
+                if(CopySize > SectionSize)
+                    CopySize = SectionSize;
+
+                memcpy(m_bzSection[v], x_Xbe->m_bzSection[v], CopySize);
 
                 printf("OK\n");
             }
@@ -444,11 +448,7 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
             *(uint32*)&m_bzSection[i][0x34] = 0;
             *(uint16*)&m_bzSection[i][0x38] = 0x0001;
 
-#ifdef _DEBUG
-            memcpy(&m_bzSection[i][0x3A], "_EmuNoFunc@0\0\0CxbxKrnl.dll\0\0", 28);
-#else
             memcpy(&m_bzSection[i][0x3A], "_EmuNoFunc@0\0\0Cxbx.dll\0\0\0\0\0\0", 28);
-#endif
             printf("OK\n");
         }
 
@@ -470,27 +470,28 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
                 ep ^= XOR_EP_RETAIL;
 
             m_bzSection[i] = new uint08[m_SectionHeader[i].m_sizeof_raw];
+            memset(m_bzSection[i], 0, m_SectionHeader[i].m_sizeof_raw);
 
             uint08 *pWriteCursor = m_bzSection[i];
 
             // ******************************************************************
             // * append prolog section
             // ******************************************************************
-            memcpy(pWriteCursor, Prolog, 0x1000);
+            memcpy(pWriteCursor, Prolog, PrologSize);
             pWriteCursor += 0x100;
 
             // ******************************************************************
             // * append xbe header
             // ******************************************************************
+            uint08 *pHeaderCursor = pWriteCursor;
             memcpy(pWriteCursor, &x_Xbe->m_Header, sizeof(Xbe::Header));
-            pWriteCursor += sizeof(Xbe::Header);
 
             // ******************************************************************
             // * append xbe extra header bytes
             // ******************************************************************
-            memcpy(pWriteCursor, x_Xbe->m_HeaderEx, x_Xbe->m_Header.dwSizeofHeaders - sizeof(Xbe::Header));
-            pWriteCursor -= sizeof(Xbe::Header);
-            pWriteCursor += x_Xbe->m_Header.dwSizeofHeaders;
+            if(x_Xbe->m_Header.dwSizeofHeaders > sizeof(Xbe::Header) && x_Xbe->m_HeaderEx != 0)
+                memcpy(pHeaderCursor + sizeof(Xbe::Header), x_Xbe->m_HeaderEx, x_Xbe->m_Header.dwSizeofHeaders - sizeof(Xbe::Header));
+            pWriteCursor = pHeaderCursor + x_Xbe->m_Header.dwSizeofHeaders;
 
             // ******************************************************************
             // * append x_debug_filename
@@ -544,7 +545,7 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
             *(uint32 *)((uint32)m_bzSection[i] + 26) = x_debug_mode;
 
             // Param 3 : pLibraryVersion
-            if(x_Xbe->m_LibraryVersion != 0)
+            if(x_Xbe->m_LibraryVersion != 0 && x_Xbe->m_KernelLibraryVersion != 0 && x_Xbe->m_XAPILibraryVersion != 0)
             {
                 *(uint32 *)((uint32)m_bzSection[i] + 31) = WriteCursor;
                 WriteCursor += sizeof(Xbe::LibraryVersion) * x_Xbe->m_Header.dwLibraryVersions;

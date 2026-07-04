@@ -237,21 +237,22 @@ Xbe::Xbe(const char *x_szFilename)
 
             if(m_Header.dwKernelLibraryVersionAddr == 0)
             {
-                SetError("Could not locate kernel library version", true);
-                goto cleanup;
+                printf("None\n");
             }
-
-            fseek(XbeFile, m_Header.dwKernelLibraryVersionAddr - m_Header.dwBaseAddr, SEEK_SET);
-
-            m_KernelLibraryVersion = new LibraryVersion;
-
-            if(fread(m_KernelLibraryVersion, sizeof(*m_LibraryVersion), 1, XbeFile) != 1)
+            else
             {
-                SetError("Unexpected end of file while reading Xbe Kernel Version", true);
-                goto cleanup;
-            }
+                fseek(XbeFile, m_Header.dwKernelLibraryVersionAddr - m_Header.dwBaseAddr, SEEK_SET);
 
-            printf("OK\n");
+                m_KernelLibraryVersion = new LibraryVersion;
+
+                if(fread(m_KernelLibraryVersion, sizeof(*m_LibraryVersion), 1, XbeFile) != 1)
+                {
+                    SetError("Unexpected end of file while reading Xbe Kernel Version", true);
+                    goto cleanup;
+                }
+
+                printf("OK\n");
+            }
         }
 
         // ******************************************************************
@@ -262,21 +263,22 @@ Xbe::Xbe(const char *x_szFilename)
 
             if(m_Header.dwXAPILibraryVersionAddr == 0)
             {
-                SetError("Could not locate Xapi Library Version", true);
-                goto cleanup;
+                printf("None\n");
             }
-
-            fseek(XbeFile, m_Header.dwXAPILibraryVersionAddr - m_Header.dwBaseAddr, SEEK_SET);
-
-            m_XAPILibraryVersion = new LibraryVersion;
-
-            if(fread(m_XAPILibraryVersion, sizeof(*m_LibraryVersion), 1, XbeFile) != 1)
+            else
             {
-                SetError("Unexpected end of file while reading Xbe Xapi Version", true);
-                goto cleanup;
-            }
+                fseek(XbeFile, m_Header.dwXAPILibraryVersionAddr - m_Header.dwBaseAddr, SEEK_SET);
 
-            printf("OK\n");
+                m_XAPILibraryVersion = new LibraryVersion;
+
+                if(fread(m_XAPILibraryVersion, sizeof(*m_LibraryVersion), 1, XbeFile) != 1)
+                {
+                    SetError("Unexpected end of file while reading Xbe Xapi Version", true);
+                    goto cleanup;
+                }
+
+                printf("OK\n");
+            }
         }
     }
 

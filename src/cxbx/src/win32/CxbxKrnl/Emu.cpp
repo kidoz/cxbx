@@ -54,6 +54,8 @@ namespace XTL
 };
 
 #include <clocale>
+#include <cstdio>
+#include <cstring>
 
 #include "EmuShared.h"
 #include "HLEDataBase.h"
@@ -76,6 +78,49 @@ static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuXRefFailure();
 static int   ExitException(LPEXCEPTION_POINTERS e);
+static void  EmuConfigureLogFile();
+static void  EmuAppendLogLine(const char *szLine);
+
+static bool EmuGetLogFile(char *szLogFile, DWORD dwLogFileSize)
+{
+    DWORD dwLogFile = GetEnvironmentVariable("CXBX_LOG_FILE", szLogFile, dwLogFileSize);
+
+    return dwLogFile != 0 && dwLogFile < dwLogFileSize;
+}
+
+static void EmuAppendLogLine(const char *szLine)
+{
+    char szLogFile[260];
+
+    if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+        return;
+
+    HANDLE hFile = CreateFile(szLogFile, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if(hFile == INVALID_HANDLE_VALUE)
+        return;
+
+    DWORD dwWritten = 0;
+    WriteFile(hFile, szLine, (DWORD)strlen(szLine), &dwWritten, NULL);
+    WriteFile(hFile, "\r\n", 2, &dwWritten, NULL);
+    CloseHandle(hFile);
+}
+
+static void EmuConfigureLogFile()
+{
+    char szLogFile[260];
+
+    if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+        return;
+
+    FILE *out = freopen(szLogFile, "a", stdout);
+    if(out != NULL)
+        setvbuf(out, NULL, _IONBF, 0);
+
+    FILE *err = freopen(szLogFile, "a", stderr);
+    if(err != NULL)
+        setvbuf(err, NULL, _IONBF, 0);
+}
 
 // ******************************************************************
 // * func: DllMain
@@ -83,7 +128,13 @@ static int   ExitException(LPEXCEPTION_POINTERS e);
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
     if(fdwReason == DLL_PROCESS_ATTACH)
+    {
+        EmuAppendLogLine("--- cxbx runtime process attach ---");
+        EmuConfigureLogFile();
+        printf("--- cxbx runtime attach ---\n");
         EmuShared::Init();
+        EmuAppendLogLine("--- cxbx runtime shared memory initialized ---");
+    }
     
     if(fdwReason == DLL_PROCESS_DETACH)
         EmuShared::Cleanup();
@@ -96,6 +147,8 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 // ******************************************************************
 extern "C" CXBXKRNL_API void NTAPI EmuNoFunc()
 {
+    EmuConfigureLogFile();
+
     EmuSwapFS();   // Win2k/XP FS
 
     printf("Emu (0x%X): EmuNoFunc()\n", GetCurrentThreadId());
@@ -181,6 +234,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         if(GetConsoleTitle(buffer, 16) != NULL)
             freopen("nul", "w", stdout);
     }
+
+    EmuConfigureLogFile();
+    printf("--- cxbx runtime start ---\n");
 
     // ******************************************************************
     // * debug trace

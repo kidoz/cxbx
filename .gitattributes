@@ -1,1 +1,2 @@
 * text=auto eol=lf
+*.xbe -text -diff -merge -eol

@@ -25,17 +25,8 @@ xlibc_src = files(
   'src/math/sqrt.c',
   'src/math/stdio/conio.c',
   'src/math/stdio/file_io.c',
-  'src/math/stdio/sprintf.c',
-  'src/math/string/__memccpy.c',
-  'src/math/string/memcmp.c',
-  'src/math/string/memcpy.c',
-  'src/math/string/memset.c',
-  'src/math/string/strcat.c',
-  'src/math/string/strcmp.c',
-  'src/math/string/strcpy.c',
-  'src/math/string/strlen.c',
-  'src/math/string/strncat.c',
-  'src/math/string/strncmp.c',
+  # Use the host CRT string/printf routines in the emulator build. Several
+  # legacy xlibc replacements use Xbox assumptions and corrupt host memory.
   'src/math/tan.c',
 )
 

@@ -1820,7 +1820,7 @@ bool WndMain::ConvertToExe(const char *x_filename, bool x_bVerifyIfExists)
 // ******************************************************************
 // * StartEmulation
 // ******************************************************************
-void WndMain::StartEmulation(EnumAutoConvert x_AutoConvert)
+void WndMain::StartEmulation(EnumAutoConvert x_AutoConvert, bool x_bWaitForExit)
 {
     char szBuffer[260];
 
@@ -1832,21 +1832,21 @@ void WndMain::StartEmulation(EnumAutoConvert x_AutoConvert)
         if(x_AutoConvert == AUTO_CONVERT_WINDOWS_TEMP)
         {
             char szTempPath[260];
+            char szTempRoot[260];
 
-            GetTempPath(259, szTempPath);
+            GetTempPath(259, szTempRoot);
 
             SuggestFilename(m_XbeFilename, szBuffer, ".exe");
 
-            int v=0, c=0;
+            const char *szBaseName = strrchr(szBuffer, '\\');
+            if(szBaseName == NULL)
+                szBaseName = strrchr(szBuffer, '/');
+            if(szBaseName != NULL)
+                szBaseName++;
+            else
+                szBaseName = szBuffer;
 
-            while(szBuffer[v] != '\0')
-            {
-                if(szBuffer[v] == '\\')
-                    c = v+1;
-                v++;
-            }
-
-            strcat(szTempPath, &szBuffer[c]);
+            snprintf(szTempPath, sizeof(szTempPath), "%s%s", szTempRoot, szBaseName);
 
             if(!ConvertToExe(szTempPath, false))
                 return;
@@ -1888,7 +1888,17 @@ void WndMain::StartEmulation(EnumAutoConvert x_AutoConvert)
         if(spot != -1)
             szBuffer[spot] = '\0';
 
-        if((int)ShellExecute(NULL, "open", m_ExeFilename, NULL, szBuffer, SW_SHOWDEFAULT) <= 32)
+        SHELLEXECUTEINFO sei;
+        memset(&sei, 0, sizeof(sei));
+        sei.cbSize = sizeof(sei);
+        sei.fMask = x_bWaitForExit ? SEE_MASK_NOCLOSEPROCESS : 0;
+        sei.hwnd = m_hwnd;
+        sei.lpVerb = "open";
+        sei.lpFile = m_ExeFilename;
+        sei.lpDirectory = szBuffer;
+        sei.nShow = SW_SHOWDEFAULT;
+
+        if(!ShellExecuteEx(&sei))
         {
             MessageBox(m_hwnd, "Emulation failed.\n\nTry converting again. If this message repeats, the Xbe is not supported.", "cxbx", MB_ICONSTOP | MB_OK);
 
@@ -1897,6 +1907,17 @@ void WndMain::StartEmulation(EnumAutoConvert x_AutoConvert)
         else
         {
             printf("WndMain: %s emulation started.\n", m_Xbe->m_szAsciiTitle);
+
+            if(x_bWaitForExit && sei.hProcess != NULL)
+            {
+                WaitForSingleObject(sei.hProcess, INFINITE);
+
+                DWORD dwExitCode = 0;
+                GetExitCodeProcess(sei.hProcess, &dwExitCode);
+                CloseHandle(sei.hProcess);
+
+                printf("WndMain: %s emulation exited with code %lu.\n", m_Xbe->m_szAsciiTitle, dwExitCode);
+            }
         }
     }
 }

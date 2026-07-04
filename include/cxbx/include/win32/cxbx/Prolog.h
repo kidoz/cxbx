@@ -40,5 +40,6 @@
 // * func : Prolog
 // ******************************************************************
 extern uint08 Prolog[];
+extern uint32 PrologSize;
 
 #endif

@@ -85,7 +85,7 @@ class WndMain : public Wnd
         // ******************************************************************
         // * start emulation (converting to .exe if not done already)
         // ******************************************************************
-        void StartEmulation(EnumAutoConvert x_bAutoConvert);
+        void StartEmulation(EnumAutoConvert x_bAutoConvert, bool x_bWaitForExit = false);
 
         // ******************************************************************
         // * accessor

@@ -67,4 +67,6 @@ __declspec(allocate(".cxbxplg")) uint08 Prolog[] =
     0xC3                            // ret
 };
 
+uint32 PrologSize = sizeof(Prolog);
+
 #pragma code_seg()
