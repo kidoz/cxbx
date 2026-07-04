@@ -81,6 +81,7 @@ HANDLE       g_hZDrive    = NULL;
 // ******************************************************************
 static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
+static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static void  EmuXRefFailure();
 static int   ExitException(LPEXCEPTION_POINTERS e);
 static void  EmuConfigureLogFile();
@@ -163,6 +164,138 @@ static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
     return false;
 }
 
+static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
+{
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
+       e->ExceptionRecord->NumberParameters < 2)
+    {
+        return false;
+    }
+
+    ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
+    ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
+    if((FaultAddress & 0xFF000000) != 0xFD000000)
+        return false;
+
+    __try
+    {
+        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+
+        if(AccessType == 0 && Instruction[0] == 0xA1 && *(ULONG*)&Instruction[1] == FaultAddress)
+        {
+            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eip += 5;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x01 &&
+           e->ContextRecord->Ecx == FaultAddress)
+        {
+            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x82 &&
+           e->ContextRecord->Edx + *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eip += 6;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x92 &&
+           e->ContextRecord->Edx + *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            e->ContextRecord->Edx = 0;
+            e->ContextRecord->Eip += 6;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x87 &&
+           e->ContextRecord->Edi + *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            e->ContextRecord->Eax = 0;
+            e->ContextRecord->Eip += 6;
+
+            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xA3 && *(ULONG*)&Instruction[1] == FaultAddress)
+        {
+            e->ContextRecord->Eip += 5;
+
+            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x89 && Instruction[1] == 0x01 &&
+           e->ContextRecord->Ecx == FaultAddress)
+        {
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xC7 && Instruction[1] == 0x05 &&
+           *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            ULONG Value = *(ULONG*)&Instruction[6];
+            e->ContextRecord->Eip += 10;
+
+            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, Value);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xC7 && Instruction[1] == 0x87 &&
+           e->ContextRecord->Edi + *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            ULONG Value = *(ULONG*)&Instruction[6];
+            e->ContextRecord->Eip += 10;
+
+            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                   GetCurrentThreadId(), FaultAddress, Value);
+            fflush(stdout);
+
+            return true;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return false;
+}
+
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
     bool WasXboxFS = EmuIsXboxFS();
@@ -171,6 +304,14 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         EmuSwapFS();
 
     if(EmuTryEmulateRdmsr(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulateMmioAccess(e))
     {
         if(WasXboxFS)
             EmuSwapFS();
@@ -325,7 +466,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     {
         FreeConsole();
 
-        freopen(szDebugFilename, "wt", stdout);
+        freopen(szDebugFilename, "a", stdout);
 
         printf("Emu (0x%X): Debug console allocated (DM_FILE).\n", GetCurrentThreadId());
     }
@@ -655,6 +796,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         // * Display XRef Summary
         // ******************************************************************
         printf("Emu (0x%X): Resolved %d cross reference(s)\n", GetCurrentThreadId(), OrigUnResolvedXRefs - UnResolvedXRefs);
+
+        EmuInstallNestopiaX13Bootstrap(pXbeHeader);
     }
 
 	// ******************************************************************
@@ -816,6 +959,210 @@ inline void EmuInstallWrapper(void *FunctionAddr, void *WrapperAddr)
 
     *(uint08*)&FuncBytes[0] = 0xE9;
     *(uint32*)&FuncBytes[1] = (uint32)WrapperAddr - (uint32)FunctionAddr - 5;
+}
+
+static VOID WINAPI EmuNestopiaX13XapiInitProcess()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("Emu (0x%lX): NestopiaX 1.3 XapiInitProcess skipped.\n", GetCurrentThreadId());
+
+    EmuSwapFS();   // XBox FS
+}
+
+static DWORD WINAPI EmuNestopiaX13XLaunchNewImageA(LPCSTR lpTitlePath, PVOID pLaunchData)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("Emu (0x%lX): NestopiaX 1.3 XLaunchNewImageA title=\"%s\" launchData=0x%.08lX.\n",
+           GetCurrentThreadId(), lpTitlePath != NULL ? lpTitlePath : "(null)", (uint32)pLaunchData);
+
+    EmuSwapFS();   // XBox FS
+
+    return ERROR_GEN_FAILURE;
+}
+
+static PVOID WINAPI EmuNestopiaX13GetXapiProcess()
+{
+    static uint08 XapiProcess[0x200];
+    static bool Logged = false;
+
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(!Logged)
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 returning fallback XAPI process 0x%.08lX.\n",
+               GetCurrentThreadId(), (uint32)XapiProcess);
+        Logged = true;
+    }
+
+    EmuSwapFS();   // XBox FS
+
+    return XapiProcess;
+}
+
+static bool EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader)
+{
+    if(Address < pXbeHeader->dwBaseAddr)
+        return false;
+
+    if(Address + Count > pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage)
+        return false;
+
+    return memcmp((void*)Address, Bytes, Count) == 0;
+}
+
+static bool EmuIsNestopiaX13(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000 || pXbeHeader->dwSizeofImage != 0x00314240)
+        return false;
+
+    Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
+
+    return pCertificate->dwTitleId == 0xFFFF0780;
+}
+
+static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
+{
+    if(!EmuIsNestopiaX13(pXbeHeader))
+        return;
+
+    const uint08 XapiThreadStartupBytes[] =
+    {
+        0x6A, 0x18, 0x68, 0xC0, 0x57, 0x1D, 0x00, 0xE8,
+        0x9F, 0x74, 0x00, 0x00
+    };
+    const uint08 XapiInitProcessBytes[] =
+    {
+        0xA1, 0x04, 0x50, 0x1C, 0x00, 0x8B, 0x00, 0x8B,
+        0x0D, 0x0C, 0x50, 0x1C
+    };
+    const uint08 XLaunchNewImageABytes[] =
+    {
+        0xB8, 0x80, 0xFD, 0x1D, 0x00, 0x56, 0x8B, 0xF0,
+        0x8B, 0xC8, 0xB8, 0x84
+    };
+    const uint08 XapiProcessGetterBytes[] =
+    {
+        0x64, 0xA1, 0x28, 0x00, 0x00, 0x00, 0x8B, 0x80,
+        0x2C, 0x01, 0x00, 0x00, 0xC3
+    };
+    const uint08 XapiBugCheckGuardBytes[] =
+    {
+        0x64, 0x0F, 0xB6, 0x05, 0x24, 0x00, 0x00, 0x00,
+        0x3C, 0x02, 0x72, 0x08, 0x6A, 0x0A, 0xFF, 0x15,
+        0x9C, 0x50, 0x1C, 0x00
+    };
+    const uint08 XapiPerThreadDataBytes[] =
+    {
+        0x64, 0xA1, 0x28, 0x00, 0x00, 0x00, 0x83, 0x78,
+        0x28, 0x00, 0x74, 0x17
+    };
+    const uint08 XapiProcessStartupFsNotifyBytes[] =
+    {
+        0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
+        0x50, 0x02, 0x00, 0x00
+    };
+    const uint08 XapiFsCallbackABytes[] =
+    {
+        0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
+        0x50, 0x02, 0x00, 0x00
+    };
+    const uint08 XapiFsCallbackBBytes[] =
+    {
+        0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
+        0x50, 0x02, 0x00, 0x00
+    };
+
+    const uint32 XapiThreadStartup = 0x00133215;
+    const uint32 XapiInitProcess = 0x001346E6;
+    const uint32 XLaunchNewImageA = 0x001325AC;
+    const uint32 XapiProcessGetter = 0x0013331B;
+    const uint32 XapiBugCheckGuard = 0x0013BB39;
+    const uint32 XapiAfterBugCheckGuard = 0x0013BB4D;
+    const uint32 XapiPerThreadData = 0x0013BB4F;
+    const uint32 XapiGlobalDataFallback = 0x0013BB72;
+    const uint32 XapiProcessStartupFsNotify = 0x001336AE;
+    const uint32 XapiProcessStartupAfterFsNotify = 0x001336F0;
+    const uint32 XapiFsCallbackA = 0x00136B98;
+    const uint32 XapiAfterFsCallbackA = 0x00136BB1;
+    const uint32 XapiFsCallbackB = 0x00136C0C;
+    const uint32 XapiAfterFsCallbackB = 0x00136C25;
+
+    if(!EmuBytesMatch(XapiThreadStartup, XapiThreadStartupBytes, sizeof(XapiThreadStartupBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XapiThreadStartup bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiInitProcess, XapiInitProcessBytes, sizeof(XapiInitProcessBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XapiInitProcess bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XLaunchNewImageA, XLaunchNewImageABytes, sizeof(XLaunchNewImageABytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XLaunchNewImageA bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiProcessGetter, XapiProcessGetterBytes, sizeof(XapiProcessGetterBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XapiProcess getter bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiBugCheckGuard, XapiBugCheckGuardBytes, sizeof(XapiBugCheckGuardBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi bugcheck guard bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiPerThreadData, XapiPerThreadDataBytes, sizeof(XapiPerThreadDataBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi per-thread data bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiProcessStartupFsNotify, XapiProcessStartupFsNotifyBytes, sizeof(XapiProcessStartupFsNotifyBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XapiProcessStartup FS notify bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiFsCallbackA, XapiFsCallbackABytes, sizeof(XapiFsCallbackABytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi FS callback A bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(XapiFsCallbackB, XapiFsCallbackBBytes, sizeof(XapiFsCallbackBBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi FS callback B bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    printf("Emu (0x%lX): Installing NestopiaX 1.3 bootstrap HLE patches.\n", GetCurrentThreadId());
+    printf("Emu (0x%lX): 0x%.08lX -> EmuXapiThreadStartup\n", GetCurrentThreadId(), XapiThreadStartup);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13XapiInitProcess\n", GetCurrentThreadId(), XapiInitProcess);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13XLaunchNewImageA\n", GetCurrentThreadId(), XLaunchNewImageA);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13GetXapiProcess\n", GetCurrentThreadId(), XapiProcessGetter);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS bugcheck guard)\n", GetCurrentThreadId(), XapiBugCheckGuard, XapiAfterBugCheckGuard);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (use XAPI global data fallback)\n", GetCurrentThreadId(), XapiPerThreadData, XapiGlobalDataFallback);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS notify)\n", GetCurrentThreadId(), XapiProcessStartupFsNotify, XapiProcessStartupAfterFsNotify);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS callback A)\n", GetCurrentThreadId(), XapiFsCallbackA, XapiAfterFsCallbackA);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS callback B)\n", GetCurrentThreadId(), XapiFsCallbackB, XapiAfterFsCallbackB);
+
+    EmuInstallWrapper((void*)XapiThreadStartup, XTL::EmuXapiThreadStartup);
+    EmuInstallWrapper((void*)XapiInitProcess, EmuNestopiaX13XapiInitProcess);
+    EmuInstallWrapper((void*)XLaunchNewImageA, EmuNestopiaX13XLaunchNewImageA);
+    EmuInstallWrapper((void*)XapiProcessGetter, EmuNestopiaX13GetXapiProcess);
+    EmuInstallWrapper((void*)XapiBugCheckGuard, (void*)XapiAfterBugCheckGuard);
+    EmuInstallWrapper((void*)XapiPerThreadData, (void*)XapiGlobalDataFallback);
+    EmuInstallWrapper((void*)XapiProcessStartupFsNotify, (void*)XapiProcessStartupAfterFsNotify);
+    EmuInstallWrapper((void*)XapiFsCallbackA, (void*)XapiAfterFsCallbackA);
+    EmuInstallWrapper((void*)XapiFsCallbackB, (void*)XapiAfterFsCallbackB);
 }
 
 // ******************************************************************
@@ -1033,6 +1380,14 @@ int EmuException(LPEXCEPTION_POINTERS e)
         EmuSwapFS();
 
     if(EmuTryEmulateRdmsr(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulateMmioAccess(e))
     {
         if(WasXboxFS)
             EmuSwapFS();
