@@ -1,0 +1,44 @@
+[project]
+name = "cxbx-tools"
+version = "0.1.0"
+description = "Developer tooling for the CXBX project"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16",
+    "ruff>=0.12",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["tools/xtest"]
+extend-exclude = [
+    "tools/xtest/out",
+    "tools/xtest/__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+    "ANN",
+    "B",
+    "E",
+    "F",
+    "I",
+    "RUF",
+    "UP",
+]
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["tools/xtest"]
+strict = true
+exclude = [
+    "tools/xtest/out",
+    "tools/xtest/__pycache__",
+]
