@@ -1,0 +1,24 @@
+# xtest runner configuration. Paths use forward slashes (Windows-friendly).
+
+[paths]
+suite_dir  = "tests/suite"
+nxdk_dir   = "../nxdk"
+msys2_bash = "C:/msys2/usr/bin/bash.exe"
+
+# Built-in emulator adapter. {xbe} and {log} are substituted per run.
+# The trace file a probe writes to D:\<probe>.trace lands, for Cxbx, in the
+# XBE's own directory (D: is mapped there), i.e. <probe>/bin/<probe>.trace.
+[emulator.cxbx]
+exe        = "build/src/cxbx/cxbx.exe"
+run_args   = ["--run", "{xbe}", "--log", "{log}"]
+timeout    = 25
+# Capabilities this target advertises. A probe tagged (probe.toml `tags`) with a
+# capability not listed here is skipped. This Cxbx build has the NV2A MMIO model
+# (Emu.cpp), so it advertises "nv2a".
+capabilities = ["nv2a"]
+# Where the guest's D: drive maps on the host, relative to the XBE directory.
+# "." means D:\ == the directory containing default.xbe (Cxbx's behavior).
+d_drive    = "."
+# Extra guest processes to kill if the run times out (Cxbx spawns the converted
+# title as <xbe-basename>.exe in %TEMP%).
+kill_names = ["default.exe"]
