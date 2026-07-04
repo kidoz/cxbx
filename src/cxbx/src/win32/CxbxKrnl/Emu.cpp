@@ -209,6 +209,17 @@ static void EmuSetContextRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, U
     }
 }
 
+static WORD EmuContextWordRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
+{
+    return (WORD)EmuContextRegister(ContextRecord, RegisterIndex);
+}
+
+static void EmuSetContextWordRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, WORD Value)
+{
+    ULONG OldValue = EmuContextRegister(ContextRecord, RegisterIndex);
+    EmuSetContextRegister(ContextRecord, RegisterIndex, (OldValue & 0xFFFF0000) | Value);
+}
+
 static BYTE EmuContextByteRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
 {
     switch(RegisterIndex & 0x07)
@@ -239,6 +250,30 @@ static void EmuSetContextByteRegister(CONTEXT *ContextRecord, ULONG RegisterInde
         case 6: ContextRecord->Edx = (ContextRecord->Edx & 0xFFFF00FF) | ((ULONG)Value << 8); break;
         case 7: ContextRecord->Ebx = (ContextRecord->Ebx & 0xFFFF00FF) | ((ULONG)Value << 8); break;
     }
+}
+
+static bool EmuReadContextXmmRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex, BYTE Value[16])
+{
+#if defined(_X86_) || defined(_M_IX86) || defined(__i386__)
+    static const ULONG EmuFxSaveXmmBase = 160;
+    static const ULONG EmuFxSaveXmmRegisterSize = 16;
+
+    if(ContextRecord == NULL || Value == NULL || RegisterIndex >= 8 ||
+       EmuFxSaveXmmBase + ((RegisterIndex + 1) * EmuFxSaveXmmRegisterSize) > MAXIMUM_SUPPORTED_EXTENSION)
+    {
+        return false;
+    }
+
+    CopyMemory(Value,
+               &ContextRecord->ExtendedRegisters[EmuFxSaveXmmBase + (RegisterIndex * EmuFxSaveXmmRegisterSize)],
+               EmuFxSaveXmmRegisterSize);
+    return true;
+#else
+    (void)ContextRecord;
+    (void)RegisterIndex;
+    (void)Value;
+    return false;
+#endif
 }
 
 static bool EmuHasEvenParity(BYTE Value)
@@ -444,8 +479,30 @@ static const ULONG EmuNv2aPgraphFifoAccess = 0x00000001;
 static const ULONG EmuNv2aPfifoRunoutStatus = 0x002400;
 static const ULONG EmuNv2aPfifoCache1Push1 = 0x003204;
 static const ULONG EmuNv2aPfifoCache1Status = 0x003214;
+static const ULONG EmuNv2aPfbWbc = 0x100410;
 static const ULONG EmuNv2aUserChannel0Put = 0x800040;
 static const ULONG EmuNv2aUserChannel0Get = 0x800044;
+static const ULONG EmuUsb0MmioBase = PCI_USB0_REGISTER_BASE;
+static const ULONG EmuUsb0MmioEnd = PCI_USB0_REGISTER_BASE + 0x00000FFF;
+static const ULONG EmuUsbOhciRevision = 0x00000010;
+static const ULONG EmuApuMmioBase = 0xFE800000;
+static const ULONG EmuApuMmioEnd = EmuApuMmioBase + 0x0007FFFF;
+static const ULONG EmuApuXgscnt = 0x0000200C;
+static const ULONG EmuApuVpBase = 0x00020000;
+static const ULONG EmuApuVpPioFree = EmuApuVpBase + 0x00000010;
+static const ULONG EmuApuVpPioFreeQueueEmpty = 0x00000080;
+static const ULONG EmuAciMmioBase = 0xFEC00000;
+static const ULONG EmuAciMmioEnd = EmuAciMmioBase + 0x00000FFF;
+static const ULONG EmuAciBusMasterBase = 0x00000100;
+static const ULONG EmuAciGlobCnt = EmuAciBusMasterBase + 0x0000002C;
+static const ULONG EmuAciGlobSta = EmuAciBusMasterBase + 0x00000030;
+static const ULONG EmuAciCas = EmuAciBusMasterBase + 0x00000034;
+static const ULONG EmuAciGlobStaCodec0Ready = 0x00000100;
+static const ULONG EmuAciStatusDmaHalted = 0x00000001;
+static const ULONG EmuAciBusMasterStatusOffset = 0x00000006;
+static const ULONG EmuAciBusMasterControlOffset = 0x0000000B;
+static const ULONG EmuAciBusMasterControlRun = 0x00000001;
+static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 
 static ULONG g_EmuNv2aRamin[EmuNv2aRaminDwordCount] = {};
 static ULONG g_EmuNv2aSubchannelClass[8] = {};
@@ -453,6 +510,27 @@ static ULONG g_EmuNv2aSubchannelClass[8] = {};
 static bool EmuNv2aIsMmioAddress(ULONG Address)
 {
     return Address >= EmuNv2aMmioBase && Address <= EmuNv2aMmioEnd;
+}
+
+static bool EmuUsb0IsMmioAddress(ULONG Address)
+{
+    return Address >= EmuUsb0MmioBase && Address <= EmuUsb0MmioEnd;
+}
+
+static bool EmuApuIsMmioAddress(ULONG Address)
+{
+    return Address >= EmuApuMmioBase && Address <= EmuApuMmioEnd;
+}
+
+static bool EmuAciIsMmioAddress(ULONG Address)
+{
+    return Address >= EmuAciMmioBase && Address <= EmuAciMmioEnd;
+}
+
+static bool EmuIsMmioAddress(ULONG Address)
+{
+    return EmuNv2aIsMmioAddress(Address) || EmuUsb0IsMmioAddress(Address) ||
+           EmuApuIsMmioAddress(Address) || EmuAciIsMmioAddress(Address);
 }
 
 static ULONG EmuNv2aOffset(ULONG Address)
@@ -480,6 +558,233 @@ static ULONG EmuNv2aCachedRegister(ULONG Offset, ULONG DefaultValue)
 static void EmuNv2aStoreRegister(ULONG Offset, ULONG Value)
 {
     EmuStoreMmioRegister(EmuNv2aRegisterAddress(Offset), Value);
+}
+
+static ULONG EmuUsb0Offset(ULONG Address)
+{
+    return Address - EmuUsb0MmioBase;
+}
+
+static ULONG EmuUsb0CachedRegister(ULONG Address, ULONG DefaultValue)
+{
+    ULONG Value = DefaultValue;
+    EmuLookupMmioRegister(Address, &Value);
+    return Value;
+}
+
+static ULONG EmuApuOffset(ULONG Address)
+{
+    return Address - EmuApuMmioBase;
+}
+
+static ULONG EmuApuCachedRegister(ULONG Address, ULONG DefaultValue)
+{
+    ULONG Value = DefaultValue;
+    EmuLookupMmioRegister(Address, &Value);
+    return Value;
+}
+
+static ULONG EmuAciOffset(ULONG Address)
+{
+    return Address - EmuAciMmioBase;
+}
+
+static ULONG EmuAciCachedRegister(ULONG Address, ULONG DefaultValue)
+{
+    ULONG Value = DefaultValue;
+    EmuLookupMmioRegister(Address, &Value);
+    return Value;
+}
+
+static bool EmuAciIsBusMasterStatus(ULONG Offset)
+{
+    if(Offset < EmuAciBusMasterBase)
+        return false;
+
+    ULONG BusMasterOffset = Offset - EmuAciBusMasterBase;
+    ULONG RegisterOffset = BusMasterOffset & 0x0F;
+
+    return RegisterOffset == EmuAciBusMasterStatusOffset;
+}
+
+static void EmuAciClearCas()
+{
+    EmuStoreMmioRegister(EmuAciMmioBase + EmuAciCas, 0);
+}
+
+static void EmuAciStorePartialRegister(ULONG Address, ULONG Size, ULONG Value)
+{
+    ULONG AlignedAddress = Address & ~3;
+    ULONG OldValue = EmuAciCachedRegister(AlignedAddress, 0);
+    ULONG Shift = (Address & 3) * 8;
+    ULONG Mask = (Size == 1 ? 0xFF : 0xFFFF) << Shift;
+
+    EmuStoreMmioRegister(AlignedAddress,
+                         (OldValue & ~Mask) | ((Value & (Size == 1 ? 0xFF : 0xFFFF)) << Shift));
+}
+
+static void EmuAciSetBusMasterStatus(ULONG StreamBase, ULONG Status)
+{
+    EmuAciStorePartialRegister(EmuAciMmioBase + StreamBase + EmuAciBusMasterStatusOffset, 2, Status);
+}
+
+static ULONG EmuUsb0ReadRegister32(ULONG Address)
+{
+    ULONG Offset = EmuUsb0Offset(Address);
+    ULONG Value = Offset == 0 ? EmuUsbOhciRevision : EmuUsb0CachedRegister(Address, 0);
+
+    printf("Emu (0x%lX): USB0 MMIO read 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+
+    return Value;
+}
+
+static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
+{
+    EmuStoreMmioRegister(Address, Value);
+
+    printf("Emu (0x%lX): USB0 MMIO write 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+}
+
+static ULONG EmuApuReadRegister32(ULONG Address)
+{
+    ULONG Offset = EmuApuOffset(Address);
+    ULONG Value = 0;
+
+    switch(Offset)
+    {
+        case EmuApuXgscnt:
+            Value = GetTickCount() * 10000;
+            break;
+
+        case EmuApuVpPioFree:
+            Value = EmuApuVpPioFreeQueueEmpty;
+            break;
+
+        default:
+            Value = EmuApuCachedRegister(Address, 0);
+            break;
+    }
+
+    printf("Emu (0x%lX): APU MMIO read 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+
+    return Value;
+}
+
+static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
+{
+    EmuStoreMmioRegister(Address, Value);
+
+    printf("Emu (0x%lX): APU MMIO write 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+}
+
+static ULONG EmuAciReadRegister32(ULONG Address)
+{
+    ULONG Offset = EmuAciOffset(Address);
+    ULONG Value = 0;
+
+    switch(Offset)
+    {
+        case EmuAciGlobSta:
+            Value = EmuAciCachedRegister(Address, 0) | EmuAciGlobStaCodec0Ready;
+            break;
+
+        case EmuAciCas:
+            Value = EmuAciCachedRegister(Address, 0);
+            EmuStoreMmioRegister(Address, 1);
+            break;
+
+        default:
+            if(Offset < EmuAciBusMasterBase)
+                EmuAciClearCas();
+
+            Value = EmuAciCachedRegister(Address,
+                                         EmuAciIsBusMasterStatus(Offset) ? EmuAciStatusDmaHalted : 0);
+            break;
+    }
+
+    printf("Emu (0x%lX): ACI MMIO read 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+
+    return Value;
+}
+
+static void EmuAciWriteRegister32(ULONG Address, ULONG Value)
+{
+    ULONG Offset = EmuAciOffset(Address);
+
+    if(Offset == EmuAciGlobCnt)
+    {
+        if((Value & 0x00000006) == 0)
+            EmuStoreMmioRegister(Address, Value & 0x0000003F);
+    }
+    else if(Offset == EmuAciGlobSta)
+    {
+        ULONG Current = EmuAciReadRegister32(Address);
+        EmuStoreMmioRegister(Address, (Current & ~Value) | EmuAciGlobStaCodec0Ready);
+    }
+    else if(Offset == EmuAciCas)
+    {
+        EmuStoreMmioRegister(Address, Value);
+    }
+    else if(Offset < EmuAciBusMasterBase)
+    {
+        EmuAciClearCas();
+        EmuStoreMmioRegister(Address, Value);
+    }
+    else
+    {
+        EmuStoreMmioRegister(Address, Value);
+    }
+
+    printf("Emu (0x%lX): ACI MMIO write 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+}
+
+static void EmuAciWriteRegister(ULONG Address, ULONG Size, ULONG Value)
+{
+    if(Size == 4)
+    {
+        EmuAciWriteRegister32(Address, Value);
+        return;
+    }
+
+    ULONG Offset = EmuAciOffset(Address);
+    if(Offset < EmuAciBusMasterBase)
+    {
+        EmuAciClearCas();
+        EmuAciStorePartialRegister(Address, Size, Value);
+    }
+    else if(Size == 1 && ((Offset - EmuAciBusMasterBase) & 0x0F) == EmuAciBusMasterControlOffset)
+    {
+        ULONG StreamBase = Offset & ~0x0F;
+        ULONG Control = Value & 0x1F;
+
+        if((Control & EmuAciBusMasterControlReset) != 0)
+            Control = 0;
+
+        EmuAciStorePartialRegister(Address, 1, Control);
+
+        if((Control & EmuAciBusMasterControlRun) == 0)
+            EmuAciSetBusMasterStatus(StreamBase, EmuAciStatusDmaHalted);
+    }
+    else
+    {
+        EmuAciStorePartialRegister(Address, Size, Value);
+    }
+
+    printf("Emu (0x%lX): ACI MMIO %s write 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Size == 1 ? "byte" : "word", Address, Value);
+    fflush(stdout);
 }
 
 static ULONG EmuNv2aReadRamin32(ULONG Offset)
@@ -669,8 +974,11 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
 
         case NV_PFB_CFG0:
         case 0x100240:
-        case 0x100410:
             Value = EmuNv2aCachedRegister(Offset, 0);
+            break;
+
+        case EmuNv2aPfbWbc:
+            Value = 0;
             break;
 
         case EmuNv2aUserChannel0Get:
@@ -686,14 +994,70 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
     return Value;
 }
 
+// Unimplemented device-MMIO catch-all. A faulting access to hardware-MMIO space
+// that no device model (NV2A, USB0, ...) backs is logged and stubbed (reads -> 0,
+// writes ignored) instead of crashing the title. This mirrors the kernel warned
+// trap: the title survives to reveal the *next* device it needs, and the log
+// names the exact address (e.g. the NIC at 0xFEF00000, USB1 at 0xFED08000).
+// Set CXBX_STUB_UNHANDLED_MMIO=0 to restore crash-on-unhandled-MMIO when
+// isolating a specific device.
+#ifndef CXBX_STUB_UNHANDLED_MMIO
+#define CXBX_STUB_UNHANDLED_MMIO 1
+#endif
+
+// Xbox hardware device / flash MMIO region, above the NV2A aperture (0xFD...).
+// Kept high so genuine null/wild-pointer bugs (low addresses) still crash.
+static const ULONG EmuStubMmioBase = 0xFE000000;
+static const ULONG EmuStubMmioEnd  = 0xFEFFFFFF;
+
+static bool EmuIsStubMmioAddress(ULONG Address)
+{
+#if CXBX_STUB_UNHANDLED_MMIO
+    return Address >= EmuStubMmioBase && Address <= EmuStubMmioEnd;
+#else
+    (void)Address;
+    return false;
+#endif
+}
+
+static ULONG EmuStubMmioRead(ULONG Address)
+{
+    printf("Emu (0x%lX): *UNIMPLEMENTED MMIO* read 0x%.08lX -> 0\n",
+           GetCurrentThreadId(), Address);
+    fflush(stdout);
+    return 0;
+}
+
+static void EmuStubMmioWrite(ULONG Address, ULONG Value)
+{
+    printf("Emu (0x%lX): *UNIMPLEMENTED MMIO* write 0x%.08lX = 0x%.08lX (ignored)\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+}
+
 static ULONG EmuReadMmio(ULONG Address, ULONG Size)
 {
     ULONG AlignedAddress = Address & ~3;
-    ULONG Value = EmuReadMmioRegister32(AlignedAddress);
+
+    ULONG Value;
+    if(EmuUsb0IsMmioAddress(AlignedAddress))
+        Value = EmuUsb0ReadRegister32(AlignedAddress);
+    else if(EmuApuIsMmioAddress(AlignedAddress))
+        Value = EmuApuReadRegister32(AlignedAddress);
+    else if(EmuAciIsMmioAddress(AlignedAddress))
+        Value = EmuAciReadRegister32(AlignedAddress);
+    else if(EmuNv2aIsMmioAddress(AlignedAddress))
+        Value = EmuReadMmioRegister32(AlignedAddress);
+    else
+        Value = EmuStubMmioRead(AlignedAddress);
+
     ULONG Shift = (Address & 3) * 8;
 
     if(Size == 1)
         return (Value >> Shift) & 0xFF;
+
+    if(Size == 2)
+        return (Value >> Shift) & 0xFFFF;
 
     return Value;
 }
@@ -703,13 +1067,37 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
     ULONG AlignedAddress = Address & ~3;
     ULONG Offset = EmuNv2aOffset(AlignedAddress);
 
-    if(Size == 1)
+    if(EmuAciIsMmioAddress(Address))
     {
-        ULONG OldValue = EmuReadMmioRegister32(AlignedAddress);
+        EmuAciWriteRegister(Address, Size, Value);
+        return;
+    }
+
+    if(Size == 1 || Size == 2)
+    {
+        ULONG OldValue = EmuReadMmio(AlignedAddress, 4);
         ULONG Shift = (Address & 3) * 8;
-        ULONG Mask = 0xFF << Shift;
-        Value = (OldValue & ~Mask) | ((Value & 0xFF) << Shift);
+        ULONG Mask = (Size == 1 ? 0xFF : 0xFFFF) << Shift;
+        Value = (OldValue & ~Mask) | ((Value & (Size == 1 ? 0xFF : 0xFFFF)) << Shift);
         Address = AlignedAddress;
+    }
+
+    if(EmuUsb0IsMmioAddress(Address))
+    {
+        EmuUsb0WriteRegister32(Address, Value);
+        return;
+    }
+
+    if(EmuApuIsMmioAddress(Address))
+    {
+        EmuApuWriteRegister32(Address, Value);
+        return;
+    }
+
+    if(!EmuNv2aIsMmioAddress(Address))
+    {
+        EmuStubMmioWrite(Address, Value);
+        return;
     }
 
     if(EmuNv2aIsRaminOffset(Offset))
@@ -723,6 +1111,11 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
         Value = EmuNv2aPendingPmcInterrupts() & ~Value;
     else if(Offset == NV_PFIFO_INTR_0 || Offset == NV_PGRAPH_INTR)
         Value = EmuReadMmioRegister32(Address) & ~Value;
+    else if(Offset == EmuNv2aPfbWbc)
+    {
+        NV2A_TRACE_REG("wr", Offset, Value);
+        return;
+    }
 
     EmuNv2aStoreRegister(Offset, Value);
     NV2A_TRACE_REG("wr", Offset, Value);
@@ -736,6 +1129,12 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
 
 static const ULONG EmuPhysicalMapBase = 0x80000000;
 static const ULONG EmuPhysicalMapEnd = 0x8FFFFFFF;
+static const ULONG EmuPhysicalRamMirrorSize = 0x04000000;
+static const ULONG EmuPhysicalRamMirrorMask = EmuPhysicalRamMirrorSize - 1;
+static const ULONG EmuPhysicalShadowBase = 0xF0000000;
+static const ULONG EmuPhysicalShadowEnd = EmuPhysicalShadowBase + EmuPhysicalRamMirrorSize - 1;
+static const ULONG EmuPhysicalHighApertureBase = 0xF8000000;
+static const ULONG EmuPhysicalHighApertureEnd = 0xFCFFFFFF;
 static const ULONG EmuPhysicalPageSize = 0x1000;
 static const ULONG EmuPhysicalPageSlotCount = 4096;
 
@@ -746,10 +1145,21 @@ struct EmuPhysicalPage
 };
 
 static EmuPhysicalPage g_EmuPhysicalPages[EmuPhysicalPageSlotCount] = {};
+static ULONG g_EmuPhysicalMovntpsLogCount = 0;
 
 static bool EmuIsPhysicalMapAddress(ULONG Address)
 {
-    return Address >= EmuPhysicalMapBase && Address <= EmuPhysicalMapEnd;
+    return (Address >= EmuPhysicalMapBase && Address <= EmuPhysicalMapEnd) ||
+           (Address >= EmuPhysicalShadowBase && Address <= EmuPhysicalShadowEnd) ||
+           (Address >= EmuPhysicalHighApertureBase && Address <= EmuPhysicalHighApertureEnd);
+}
+
+static ULONG EmuPhysicalMapPageAddress(ULONG Address)
+{
+    if(Address >= EmuPhysicalMapBase && Address <= EmuPhysicalMapEnd)
+        return Address;
+
+    return EmuPhysicalMapBase + (Address & EmuPhysicalRamMirrorMask);
 }
 
 static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
@@ -757,7 +1167,7 @@ static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
     if(!EmuIsPhysicalMapAddress(Address))
         return NULL;
 
-    ULONG PageAddress = Address & ~(EmuPhysicalPageSize - 1);
+    ULONG PageAddress = EmuPhysicalMapPageAddress(Address) & ~(EmuPhysicalPageSize - 1);
 
     for(ULONG i = 0; i < EmuPhysicalPageSlotCount; i++)
     {
@@ -827,6 +1237,157 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
             return false;
 
         Page[(Address + i) & (EmuPhysicalPageSize - 1)] = (BYTE)(Value >> (i * 8));
+    }
+
+    return true;
+}
+
+static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size)
+{
+    ULONG End = Address + Size - 1;
+    if(Size == 0 || Data == NULL || End < Address || !EmuIsPhysicalMapAddress(Address) ||
+       !EmuIsPhysicalMapAddress(End))
+    {
+        return false;
+    }
+
+    for(ULONG i = 0; i < Size; i++)
+    {
+        BYTE *Page = EmuGetPhysicalPage(Address + i, true);
+        if(Page == NULL)
+            return false;
+
+        Page[(Address + i) & (EmuPhysicalPageSize - 1)] = Data[i];
+    }
+
+    return true;
+}
+
+static bool EmuWritePhysicalMapRepeated(ULONG Address, ULONG Count, ULONG Size, ULONG Value, bool DirectionDown)
+{
+    if(Count == 0 || Size == 0)
+        return false;
+
+    ULONGLONG TotalSize = (ULONGLONG)Count * Size;
+    if(TotalSize > 0x100000000ULL)
+        return false;
+
+    ULONG FirstAddress = Address;
+    ULONG LastAddress = Address;
+
+    if(DirectionDown)
+    {
+        ULONGLONG Span = TotalSize - Size;
+        if(Span > Address)
+            return false;
+
+        FirstAddress = Address - (ULONG)Span;
+    }
+    else
+    {
+        ULONGLONG End = (ULONGLONG)Address + TotalSize - 1;
+        if(End > 0xFFFFFFFFULL)
+            return false;
+
+        LastAddress = (ULONG)End;
+    }
+
+    if(!EmuIsPhysicalMapAddress(FirstAddress) || !EmuIsPhysicalMapAddress(LastAddress))
+        return false;
+
+    ULONG CurrentAddress = Address;
+    for(ULONG i = 0; i < Count; i++)
+    {
+        if(!EmuWritePhysicalMap(CurrentAddress, Size, Value))
+            return false;
+
+        if(DirectionDown)
+            CurrentAddress -= Size;
+        else
+            CurrentAddress += Size;
+    }
+
+    return true;
+}
+
+static bool EmuReadMemoryValue(ULONG Address, ULONG Size, ULONG *Value)
+{
+    if(Value == NULL)
+        return false;
+
+    if(EmuIsPhysicalMapAddress(Address))
+        return EmuReadPhysicalMap(Address, Size, Value);
+
+    __try
+    {
+        if(Size == 1)
+            *Value = *(BYTE*)Address;
+        else if(Size == 4)
+            *Value = *(ULONG*)Address;
+        else
+            return false;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static bool EmuCopyToPhysicalMapRepeated(ULONG DestinationAddress, ULONG SourceAddress, ULONG Count, ULONG Size, bool DirectionDown)
+{
+    if(Count == 0 || Size == 0)
+        return false;
+
+    ULONGLONG TotalSize = (ULONGLONG)Count * Size;
+    if(TotalSize > 0x100000000ULL)
+        return false;
+
+    ULONG FirstAddress = DestinationAddress;
+    ULONG LastAddress = DestinationAddress;
+
+    if(DirectionDown)
+    {
+        ULONGLONG Span = TotalSize - Size;
+        if(Span > DestinationAddress)
+            return false;
+
+        FirstAddress = DestinationAddress - (ULONG)Span;
+    }
+    else
+    {
+        ULONGLONG End = (ULONGLONG)DestinationAddress + TotalSize - 1;
+        if(End > 0xFFFFFFFFULL)
+            return false;
+
+        LastAddress = (ULONG)End;
+    }
+
+    if(!EmuIsPhysicalMapAddress(FirstAddress) || !EmuIsPhysicalMapAddress(LastAddress))
+        return false;
+
+    ULONG CurrentDestination = DestinationAddress;
+    ULONG CurrentSource = SourceAddress;
+    for(ULONG i = 0; i < Count; i++)
+    {
+        ULONG Value = 0;
+        if(!EmuReadMemoryValue(CurrentSource, Size, &Value))
+            return false;
+
+        if(!EmuWritePhysicalMap(CurrentDestination, Size, Value))
+            return false;
+
+        if(DirectionDown)
+        {
+            CurrentDestination -= Size;
+            CurrentSource -= Size;
+        }
+        else
+        {
+            CurrentDestination += Size;
+            CurrentSource += Size;
+        }
     }
 
     return true;
@@ -963,12 +1524,113 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
     ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
     ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
-    if(!EmuIsPhysicalMapAddress(FaultAddress))
+    bool FaultIsPhysicalMap = EmuIsPhysicalMapAddress(FaultAddress);
+    bool MayBePhysicalStoreFault = AccessType == 0 && FaultAddress == 0xFFFFFFFF;
+
+    if(!FaultIsPhysicalMap && !MayBePhysicalStoreFault)
         return false;
 
     __try
     {
         BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+
+        if(AccessType == 1 && Instruction[0] == 0xF3 &&
+           (Instruction[1] == 0xAB || Instruction[1] == 0xAA) &&
+           FaultAddress == e->ContextRecord->Edi)
+        {
+            ULONG Count = e->ContextRecord->Ecx;
+            ULONG Size = Instruction[1] == 0xAB ? 4 : 1;
+            bool DirectionDown = (e->ContextRecord->EFlags & 0x400) != 0;
+
+            if(!EmuWritePhysicalMapRepeated(FaultAddress, Count, Size, e->ContextRecord->Eax, DirectionDown))
+                return false;
+
+            ULONG TotalSize = Count * Size;
+            e->ContextRecord->Ecx = 0;
+            if(DirectionDown)
+                e->ContextRecord->Edi -= TotalSize;
+            else
+                e->ContextRecord->Edi += TotalSize;
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated physical rep stos%c 0x%.08lX count 0x%.08lX value 0x%.08lX.\n",
+                   GetCurrentThreadId(), Size == 4 ? 'd' : 'b', FaultAddress, Count, e->ContextRecord->Eax);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0xF3 &&
+           (Instruction[1] == 0xA5 || Instruction[1] == 0xA4) &&
+           FaultAddress == e->ContextRecord->Edi)
+        {
+            ULONG Count = e->ContextRecord->Ecx;
+            ULONG Size = Instruction[1] == 0xA5 ? 4 : 1;
+            ULONG SourceAddress = e->ContextRecord->Esi;
+            bool DirectionDown = (e->ContextRecord->EFlags & 0x400) != 0;
+
+            if(!EmuCopyToPhysicalMapRepeated(FaultAddress, SourceAddress, Count, Size, DirectionDown))
+                return false;
+
+            ULONG TotalSize = Count * Size;
+            e->ContextRecord->Ecx = 0;
+            if(DirectionDown)
+            {
+                e->ContextRecord->Edi -= TotalSize;
+                e->ContextRecord->Esi -= TotalSize;
+            }
+            else
+            {
+                e->ContextRecord->Edi += TotalSize;
+                e->ContextRecord->Esi += TotalSize;
+            }
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated physical rep movs%c 0x%.08lX <- 0x%.08lX count 0x%.08lX.\n",
+                   GetCurrentThreadId(), Size == 4 ? 'd' : 'b', FaultAddress, SourceAddress, Count);
+            fflush(stdout);
+
+            return true;
+        }
+
+        if((AccessType == 1 || MayBePhysicalStoreFault) && Instruction[0] == 0x0F && Instruction[1] == 0x2B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               ((FaultIsPhysicalMap && Address == FaultAddress) ||
+                (MayBePhysicalStoreFault && EmuIsPhysicalMapAddress(Address))))
+            {
+                BYTE Value[16];
+                ULONG RegisterIndex = (Instruction[2] >> 3) & 0x07;
+
+                if(!EmuReadContextXmmRegister(e->ContextRecord, RegisterIndex, Value) ||
+                   !EmuWritePhysicalMapBytes(Address, Value, sizeof(Value)))
+                {
+                    return false;
+                }
+
+                e->ContextRecord->Eip += 1 + OperandLength;
+
+                if(g_EmuPhysicalMovntpsLogCount < 16)
+                {
+                    printf("Emu (0x%lX): Emulated physical movntps 0x%.08lX <- xmm%lu.\n",
+                           GetCurrentThreadId(), Address, RegisterIndex);
+                    fflush(stdout);
+                }
+                else if(g_EmuPhysicalMovntpsLogCount == 16)
+                {
+                    printf("Emu (0x%lX): Emulated physical movntps logging suppressed.\n",
+                           GetCurrentThreadId());
+                    fflush(stdout);
+                }
+
+                g_EmuPhysicalMovntpsLogCount++;
+
+                return true;
+            }
+        }
 
         if(AccessType == 0 && Instruction[0] == 0xA1 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
@@ -1032,6 +1694,31 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        if(AccessType == 0 && Instruction[0] == 0x0F &&
+           (Instruction[1] == 0xB6 || Instruction[1] == 0xB7))
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Size = Instruction[1] == 0xB6 ? 1 : 2;
+                ULONG Value = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, Size, &Value))
+                    return false;
+
+                EmuSetContextRegister(e->ContextRecord, (Instruction[2] >> 3) & 0x07, Value);
+                e->ContextRecord->Eip += 1 + OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical movzx %s read 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), Size == 1 ? "byte" : "word", FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 0 && Instruction[0] == 0xF7 && (Instruction[1] & 0x38) == 0)
         {
             ULONG Address = 0;
@@ -1074,6 +1761,208 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
                 printf("Emu (0x%lX): Emulated physical byte test 0x%.08lX & 0x%.02lX.\n",
                        GetCurrentThreadId(), FaultAddress, Immediate);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x80 &&
+           ((Instruction[1] & 0x38) == 0x08 || (Instruction[1] & 0x38) == 0x20 ||
+            (Instruction[1] & 0x38) == 0x30))
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                ULONG Immediate = Instruction[OperandLength];
+                ULONG Operation = Instruction[1] & 0x38;
+                const char *OperationName = "or";
+
+                if(!EmuReadPhysicalMap(FaultAddress, 1, &Value))
+                    return false;
+
+                if(Operation == 0x20)
+                {
+                    Value = (Value & Immediate) & 0xFF;
+                    OperationName = "and";
+                }
+                else if(Operation == 0x30)
+                {
+                    Value = (Value ^ Immediate) & 0xFF;
+                    OperationName = "xor";
+                }
+                else
+                {
+                    Value = (Value | Immediate) & 0xFF;
+                }
+
+                if(!EmuWritePhysicalMap(FaultAddress, 1, Value))
+                    return false;
+
+                EmuSetTestFlags(e->ContextRecord, Value, 0x80);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated physical byte %s 0x%.08lX with 0x%.02lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), OperationName, FaultAddress, Immediate, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && (Instruction[0] == 0x83 || Instruction[0] == 0x81) &&
+           ((Instruction[1] & 0x38) == 0x08 || (Instruction[1] & 0x38) == 0x20 ||
+            (Instruction[1] & 0x38) == 0x30))
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                ULONG Immediate = 0;
+                ULONG ImmediateLength = 0;
+                ULONG Operation = Instruction[1] & 0x38;
+                const char *OperationName = "or";
+
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Value))
+                    return false;
+
+                if(Instruction[0] == 0x83)
+                {
+                    Immediate = (ULONG)(LONG)(CHAR)Instruction[OperandLength];
+                    ImmediateLength = 1;
+                }
+                else
+                {
+                    Immediate = *(ULONG*)&Instruction[OperandLength];
+                    ImmediateLength = 4;
+                }
+
+                if(Operation == 0x20)
+                {
+                    Value &= Immediate;
+                    OperationName = "and";
+                }
+                else if(Operation == 0x30)
+                {
+                    Value ^= Immediate;
+                    OperationName = "xor";
+                }
+                else
+                {
+                    Value |= Immediate;
+                }
+
+                if(!EmuWritePhysicalMap(FaultAddress, 4, Value))
+                    return false;
+
+                EmuSetTestFlags(e->ContextRecord, Value, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + ImmediateLength;
+
+                printf("Emu (0x%lX): Emulated physical %s 0x%.08lX with 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), OperationName, FaultAddress, Immediate, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x80 && (Instruction[1] & 0x38) == 0x38)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = 0;
+                ULONG Right = Instruction[OperandLength];
+                if(!EmuReadPhysicalMap(FaultAddress, 1, &Left))
+                    return false;
+
+                Left &= 0xFF;
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, (Left - Right) & 0xFF, 0x80);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated physical byte compare 0x%.08lX with 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x38)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = 0;
+                ULONG Right = EmuContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                if(!EmuReadPhysicalMap(FaultAddress, 1, &Left))
+                    return false;
+
+                Left &= 0xFF;
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, (Left - Right) & 0xFF, 0x80);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical byte compare 0x%.08lX with 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x3A)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                ULONG Right = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, 1, &Right))
+                    return false;
+
+                Right &= 0xFF;
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, (Left - Right) & 0xFF, 0x80);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical byte compare 0x%.02lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), Left, FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x85)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuReadMmio(FaultAddress, 4);
+                ULONG Right = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                EmuSetTestFlags(e->ContextRecord, Left & Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
                 fflush(stdout);
 
                 return true;
@@ -1254,6 +2143,29 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        if(AccessType == 1 && Instruction[0] == 0x66 && Instruction[1] == 0xC7 &&
+           (Instruction[2] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = *(USHORT*)&Instruction[1 + OperandLength];
+                if(!EmuWritePhysicalMap(FaultAddress, 2, Value))
+                    return false;
+
+                e->ContextRecord->Eip += 1 + OperandLength + 2;
+
+                printf("Emu (0x%lX): Emulated physical word write 0x%.08lX = 0x%.04lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 1 && Instruction[0] == 0xC6 && (Instruction[1] & 0x38) == 0)
         {
             ULONG Address = 0;
@@ -1369,7 +2281,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 
     ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
     ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
-    if(!EmuNv2aIsMmioAddress(FaultAddress))
+    if(!EmuIsMmioAddress(FaultAddress) && !EmuIsStubMmioAddress(FaultAddress))
         return false;
 
     __try
@@ -1400,6 +2312,26 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 e->ContextRecord->Eip += OperandLength;
 
                 printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x66 && Instruction[1] == 0x8B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = EmuReadMmio(FaultAddress, 2);
+                EmuSetContextWordRegister(e->ContextRecord, (Instruction[2] >> 3) & 0x07, (WORD)Value);
+                e->ContextRecord->Eip += 1 + OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO word read 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress);
                 fflush(stdout);
 
                 return true;
@@ -1553,6 +2485,27 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        if(AccessType == 0 && Instruction[0] == 0x85)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuReadMmio(FaultAddress, 4);
+                ULONG Right = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                EmuSetTestFlags(e->ContextRecord, Left & Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 0 && Instruction[0] == 0x39)
         {
             ULONG Address = 0;
@@ -1568,6 +2521,27 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 
                 printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
                        GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 0 && Instruction[0] == 0x3B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                ULONG Right = EmuReadMmio(FaultAddress, 4);
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), Left, FaultAddress);
                 fflush(stdout);
 
                 return true;
@@ -1654,6 +2628,26 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        if(AccessType == 1 && Instruction[0] == 0x66 && Instruction[1] == 0x89)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = EmuContextWordRegister(e->ContextRecord, (Instruction[2] >> 3) & 0x07);
+                EmuWriteMmio(FaultAddress, 2, Value);
+                e->ContextRecord->Eip += 1 + OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO word write 0x%.08lX = 0x%.04lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 1 && Instruction[0] == 0x88)
         {
             ULONG Address = 0;
@@ -1667,6 +2661,27 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 e->ContextRecord->Eip += OperandLength;
 
                 printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        if(AccessType == 1 && Instruction[0] == 0x66 && Instruction[1] == 0xC7 &&
+           (Instruction[2] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = *(WORD*)&Instruction[1 + OperandLength];
+                EmuWriteMmio(FaultAddress, 2, Value);
+                e->ContextRecord->Eip += 1 + OperandLength + 2;
+
+                printf("Emu (0x%lX): Emulated MMIO word write 0x%.08lX = 0x%.04lX.\n",
                        GetCurrentThreadId(), FaultAddress, Value);
                 fflush(stdout);
 
@@ -1794,8 +2809,25 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
            GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
     printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
            GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+    if(e->ExceptionRecord->NumberParameters >= 2)
+    {
+        printf("Emu (0x%lX): Vectored access type=%lu address=0x%.08lX\n",
+               GetCurrentThreadId(), e->ExceptionRecord->ExceptionInformation[0],
+               e->ExceptionRecord->ExceptionInformation[1]);
+    }
 
-    __try
+    // A near-null EIP means the guest executed a call/jump through a NULL or
+    // uninitialised function pointer (e.g. an un-HLE'd XDK callback slot). Say
+    // so explicitly and do NOT dereference it -- reading instruction bytes at a
+    // null EIP would fault the handler itself and print a confusing secondary
+    // "exception in EmuVectoredExceptionHandler" via the re-entrant vectored call.
+    if(e->ContextRecord->Eip < 0x00010000)
+    {
+        printf("Emu (0x%lX): Vectored EIP is near-null (0x%.08lX) -- guest called/jumped "
+               "through a NULL or uninitialised function pointer.\n",
+               GetCurrentThreadId(), e->ContextRecord->Eip);
+    }
+    else __try
     {
         BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
         printf("Emu (0x%lX): Vectored bytes: 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X\n",
@@ -2432,11 +3464,30 @@ inline void EmuInstallWrapper(void *FunctionAddr, void *WrapperAddr)
     *(uint32*)&FuncBytes[1] = (uint32)WrapperAddr - (uint32)FunctionAddr - 5;
 }
 
+static const uint32 EmuNestopiaX13DSoundApuHeapUsedPointer = 0x00197048;
+static const uint32 EmuNestopiaX13DSoundApuHeapCommittedPointer = 0x0019704C;
+static const uint32 EmuNestopiaX13DSoundApuHeapUsedCounter = 0x001968DC;
+static const uint32 EmuNestopiaX13DSoundApuHeapCommittedCounter = 0x001968D8;
+
+static void EmuInstallNestopiaX13DSoundCounters(bool ResetCounters)
+{
+    if(ResetCounters)
+    {
+        *(uint32*)EmuNestopiaX13DSoundApuHeapUsedCounter = 0;
+        *(uint32*)EmuNestopiaX13DSoundApuHeapCommittedCounter = 0;
+    }
+
+    *(uint32*)EmuNestopiaX13DSoundApuHeapUsedPointer = EmuNestopiaX13DSoundApuHeapUsedCounter;
+    *(uint32*)EmuNestopiaX13DSoundApuHeapCommittedPointer = EmuNestopiaX13DSoundApuHeapCommittedCounter;
+}
+
 static VOID WINAPI EmuNestopiaX13XapiInitProcess()
 {
     EmuSwapFS();   // Win2k/XP FS
 
     printf("Emu (0x%lX): NestopiaX 1.3 XapiInitProcess skipped.\n", GetCurrentThreadId());
+
+    EmuInstallNestopiaX13DSoundCounters(true);
 
     EmuSwapFS();   // XBox FS
 }
@@ -2481,6 +3532,11 @@ static bool EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe
         return false;
 
     return memcmp((void*)Address, Bytes, Count) == 0;
+}
+
+static void EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count)
+{
+    memcpy((void*)Address, Bytes, Count);
 }
 
 static bool EmuIsNestopiaX13(Xbe::Header *pXbeHeader)
@@ -2529,20 +3585,70 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
         0x64, 0xA1, 0x28, 0x00, 0x00, 0x00, 0x83, 0x78,
         0x28, 0x00, 0x74, 0x17
     };
-    const uint08 XapiProcessStartupFsNotifyBytes[] =
+    const uint08 XapiFsCallbackBytes[] =
     {
         0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
         0x50, 0x02, 0x00, 0x00
     };
-    const uint08 XapiFsCallbackABytes[] =
+    const uint08 DSoundApuHeapAllocateAccountingBytes[] =
     {
-        0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
-        0x50, 0x02, 0x00, 0x00
+        0xA1, 0x48, 0x70, 0x19, 0x00, 0x8B, 0x4B, 0x08,
+        0x01, 0x08
     };
-    const uint08 XapiFsCallbackBBytes[] =
+    const uint08 DSoundApuHeapAllocateAccountingPatch[] =
     {
-        0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
-        0x50, 0x02, 0x00, 0x00
+        0x8B, 0x4B, 0x08, 0x01, 0x0D, 0xDC, 0x68, 0x19,
+        0x00, 0x90
+    };
+    const uint08 DSoundApuHeapFreeAccountingBytes[] =
+    {
+        0xA1, 0x48, 0x70, 0x19, 0x00, 0x8B, 0x4E, 0x08,
+        0x29, 0x08
+    };
+    const uint08 DSoundApuHeapFreeAccountingPatch[] =
+    {
+        0x8B, 0x4E, 0x08, 0x29, 0x0D, 0xDC, 0x68, 0x19,
+        0x00, 0x90
+    };
+    const uint08 DSoundApuHeapCommitAccountingBytes[] =
+    {
+        0xA1, 0x4C, 0x70, 0x19, 0x00, 0x8B, 0x4D, 0x0C,
+        0x01, 0x08
+    };
+    const uint08 DSoundApuHeapCommitAccountingPatch[] =
+    {
+        0x8B, 0x4D, 0x0C, 0x01, 0x0D, 0xD8, 0x68, 0x19,
+        0x00, 0x90
+    };
+    const uint08 DSoundApuHeapResetAccountingBytes[] =
+    {
+        0xA1, 0x4C, 0x70, 0x19, 0x00, 0x83, 0x20, 0x00,
+        0xA1, 0x48, 0x70, 0x19, 0x00, 0x83, 0x20, 0x00
+    };
+    const uint08 DSoundApuHeapResetAccountingPatch[] =
+    {
+        0x83, 0x25, 0xD8, 0x68, 0x19, 0x00, 0x00, 0x90,
+        0x83, 0x25, 0xDC, 0x68, 0x19, 0x00, 0x00, 0x90
+    };
+
+    struct NestopiaFsCallbackPatch
+    {
+        const char *Name;
+        uint32 From;
+        uint32 To;
+    };
+
+    const NestopiaFsCallbackPatch XapiFsCallbackPatches[] =
+    {
+        { "Xapi thread start FS callback", 0x00132750, 0x00132767 },
+        { "Xapi shutdown FS callback", 0x001331D9, 0x001331F2 },
+        { "XapiProcessStartup FS notify", 0x001336AE, 0x001336F0 },
+        { "Xapi handle FS callback", 0x00133CE9, 0x00133CFF },
+        { "Xapi FS callback A", 0x00136B98, 0x00136BB1 },
+        { "Xapi FS callback B", 0x00136C0C, 0x00136C25 },
+        { "Xapi unwind FS callback A", 0x0013748B, 0x001374AA },
+        { "Xapi unwind FS callback B", 0x001374BA, 0x001374D9 },
+        { "D3D Present FS callback", 0x00151F25, 0x00151F79 }
     };
 
     const uint32 XapiThreadStartup = 0x00133215;
@@ -2553,12 +3659,10 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     const uint32 XapiAfterBugCheckGuard = 0x0013BB4D;
     const uint32 XapiPerThreadData = 0x0013BB4F;
     const uint32 XapiGlobalDataFallback = 0x0013BB72;
-    const uint32 XapiProcessStartupFsNotify = 0x001336AE;
-    const uint32 XapiProcessStartupAfterFsNotify = 0x001336F0;
-    const uint32 XapiFsCallbackA = 0x00136B98;
-    const uint32 XapiAfterFsCallbackA = 0x00136BB1;
-    const uint32 XapiFsCallbackB = 0x00136C0C;
-    const uint32 XapiAfterFsCallbackB = 0x00136C25;
+    const uint32 DSoundApuHeapAllocateAccounting = 0x0017FB26;
+    const uint32 DSoundApuHeapFreeAccounting = 0x0017FCA8;
+    const uint32 DSoundApuHeapCommitAccounting = 0x0017FA55;
+    const uint32 DSoundApuHeapResetAccounting = 0x0017F9C9;
 
     if(!EmuBytesMatch(XapiThreadStartup, XapiThreadStartupBytes, sizeof(XapiThreadStartupBytes), pXbeHeader))
     {
@@ -2584,6 +3688,20 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
         return;
     }
 
+    if(!EmuBytesMatch(DSoundApuHeapAllocateAccounting, DSoundApuHeapAllocateAccountingBytes,
+                      sizeof(DSoundApuHeapAllocateAccountingBytes), pXbeHeader) ||
+       !EmuBytesMatch(DSoundApuHeapFreeAccounting, DSoundApuHeapFreeAccountingBytes,
+                      sizeof(DSoundApuHeapFreeAccountingBytes), pXbeHeader) ||
+       !EmuBytesMatch(DSoundApuHeapCommitAccounting, DSoundApuHeapCommitAccountingBytes,
+                      sizeof(DSoundApuHeapCommitAccountingBytes), pXbeHeader) ||
+       !EmuBytesMatch(DSoundApuHeapResetAccounting, DSoundApuHeapResetAccountingBytes,
+                      sizeof(DSoundApuHeapResetAccountingBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; DSOUND APU heap accounting bytes did not match.\n",
+               GetCurrentThreadId());
+        return;
+    }
+
     if(!EmuBytesMatch(XapiBugCheckGuard, XapiBugCheckGuardBytes, sizeof(XapiBugCheckGuardBytes), pXbeHeader))
     {
         printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi bugcheck guard bytes did not match.\n", GetCurrentThreadId());
@@ -2596,22 +3714,14 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
         return;
     }
 
-    if(!EmuBytesMatch(XapiProcessStartupFsNotify, XapiProcessStartupFsNotifyBytes, sizeof(XapiProcessStartupFsNotifyBytes), pXbeHeader))
+    for(uint32 i = 0; i < sizeof(XapiFsCallbackPatches) / sizeof(XapiFsCallbackPatches[0]); i++)
     {
-        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XapiProcessStartup FS notify bytes did not match.\n", GetCurrentThreadId());
-        return;
-    }
-
-    if(!EmuBytesMatch(XapiFsCallbackA, XapiFsCallbackABytes, sizeof(XapiFsCallbackABytes), pXbeHeader))
-    {
-        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi FS callback A bytes did not match.\n", GetCurrentThreadId());
-        return;
-    }
-
-    if(!EmuBytesMatch(XapiFsCallbackB, XapiFsCallbackBBytes, sizeof(XapiFsCallbackBBytes), pXbeHeader))
-    {
-        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; Xapi FS callback B bytes did not match.\n", GetCurrentThreadId());
-        return;
+        if(!EmuBytesMatch(XapiFsCallbackPatches[i].From, XapiFsCallbackBytes, sizeof(XapiFsCallbackBytes), pXbeHeader))
+        {
+            printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; %s bytes did not match.\n",
+                   GetCurrentThreadId(), XapiFsCallbackPatches[i].Name);
+            return;
+        }
     }
 
     printf("Emu (0x%lX): Installing NestopiaX 1.3 bootstrap HLE patches.\n", GetCurrentThreadId());
@@ -2621,9 +3731,17 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13GetXapiProcess\n", GetCurrentThreadId(), XapiProcessGetter);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS bugcheck guard)\n", GetCurrentThreadId(), XapiBugCheckGuard, XapiAfterBugCheckGuard);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (use XAPI global data fallback)\n", GetCurrentThreadId(), XapiPerThreadData, XapiGlobalDataFallback);
-    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS notify)\n", GetCurrentThreadId(), XapiProcessStartupFsNotify, XapiProcessStartupAfterFsNotify);
-    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS callback A)\n", GetCurrentThreadId(), XapiFsCallbackA, XapiAfterFsCallbackA);
-    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS callback B)\n", GetCurrentThreadId(), XapiFsCallbackB, XapiAfterFsCallbackB);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (DSOUND APU heap used counter)\n",
+           GetCurrentThreadId(), EmuNestopiaX13DSoundApuHeapUsedPointer, EmuNestopiaX13DSoundApuHeapUsedCounter);
+    printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (DSOUND APU heap committed counter)\n",
+           GetCurrentThreadId(), EmuNestopiaX13DSoundApuHeapCommittedPointer, EmuNestopiaX13DSoundApuHeapCommittedCounter);
+    printf("Emu (0x%lX): Patching NestopiaX 1.3 DSOUND APU heap accounting.\n", GetCurrentThreadId());
+    for(uint32 i = 0; i < sizeof(XapiFsCallbackPatches) / sizeof(XapiFsCallbackPatches[0]); i++)
+    {
+        printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip %s)\n",
+               GetCurrentThreadId(), XapiFsCallbackPatches[i].From, XapiFsCallbackPatches[i].To,
+               XapiFsCallbackPatches[i].Name);
+    }
 
     EmuInstallWrapper((void*)XapiThreadStartup, XTL::EmuXapiThreadStartup);
     EmuInstallWrapper((void*)XapiInitProcess, EmuNestopiaX13XapiInitProcess);
@@ -2631,9 +3749,18 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     EmuInstallWrapper((void*)XapiProcessGetter, EmuNestopiaX13GetXapiProcess);
     EmuInstallWrapper((void*)XapiBugCheckGuard, (void*)XapiAfterBugCheckGuard);
     EmuInstallWrapper((void*)XapiPerThreadData, (void*)XapiGlobalDataFallback);
-    EmuInstallWrapper((void*)XapiProcessStartupFsNotify, (void*)XapiProcessStartupAfterFsNotify);
-    EmuInstallWrapper((void*)XapiFsCallbackA, (void*)XapiAfterFsCallbackA);
-    EmuInstallWrapper((void*)XapiFsCallbackB, (void*)XapiAfterFsCallbackB);
+    for(uint32 i = 0; i < sizeof(XapiFsCallbackPatches) / sizeof(XapiFsCallbackPatches[0]); i++)
+        EmuInstallWrapper((void*)XapiFsCallbackPatches[i].From, (void*)XapiFsCallbackPatches[i].To);
+
+    EmuInstallNestopiaX13DSoundCounters(true);
+    EmuWriteBytes(DSoundApuHeapAllocateAccounting, DSoundApuHeapAllocateAccountingPatch,
+                  sizeof(DSoundApuHeapAllocateAccountingPatch));
+    EmuWriteBytes(DSoundApuHeapFreeAccounting, DSoundApuHeapFreeAccountingPatch,
+                  sizeof(DSoundApuHeapFreeAccountingPatch));
+    EmuWriteBytes(DSoundApuHeapCommitAccounting, DSoundApuHeapCommitAccountingPatch,
+                  sizeof(DSoundApuHeapCommitAccountingPatch));
+    EmuWriteBytes(DSoundApuHeapResetAccounting, DSoundApuHeapResetAccountingPatch,
+                  sizeof(DSoundApuHeapResetAccountingPatch));
 }
 
 // ******************************************************************
