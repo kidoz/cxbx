@@ -355,28 +355,36 @@ extern "C" __declspec(naked) VOID NTAPI EmuRtlCaptureContext(PVOID ContextRecord
 
         mov     esi, [esp+40]
 
-        mov     eax, [esp+28]
-        mov     [esi+0B0h], eax
-        mov     eax, [esp+24]
-        mov     [esi+0ACh], eax
-        mov     eax, [esp+20]
-        mov     [esi+0A8h], eax
-        mov     eax, [esp+16]
-        mov     [esi+0A4h], eax
-        mov     eax, [esp+4]
-        mov     [esi+0A0h], eax
+        mov     dword ptr [esi], 10007h
+
         mov     eax, [esp]
-        mov     [esi+09Ch], eax
+        mov     [esi+208h], eax
+        mov     eax, [esp+4]
+        mov     [esi+20Ch], eax
+        mov     eax, [esp+16]
+        mov     [esi+210h], eax
+        mov     eax, [esp+20]
+        mov     [esi+214h], eax
+        mov     eax, [esp+24]
+        mov     [esi+218h], eax
+        mov     eax, [esp+28]
+        mov     [esi+21Ch], eax
+        mov     eax, [esp+8]
+        mov     [esi+220h], eax
+        mov     eax, [esp+36]
+        mov     [esi+224h], eax
 
         mov     ax, cs
         movzx   eax, ax
-        mov     [esi+0BCh], eax
+        mov     [esi+228h], eax
         mov     ax, ss
         movzx   eax, ax
-        mov     [esi+0C8h], eax
+        mov     [esi+234h], eax
 
         mov     eax, [esp+32]
-        mov     [esi+0C0h], eax
+        mov     [esi+22Ch], eax
+        lea     eax, [esp+44]
+        mov     [esi+230h], eax
 
         popad
         popfd
