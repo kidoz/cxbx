@@ -1292,8 +1292,8 @@ rescan:
 
 
 
-        for (urb = (((char *)((dev->urb_list)->next)-(unsigned long)(&  (0)->urb_list)));
-					&(urb->urb_list) != &(dev->urb_list); 
+        for (urb = list_entry((dev->urb_list)->next, typeof(*urb), urb_list);
+					&(urb->urb_list) != &(dev->urb_list);
 					urb = list_entry(urb->urb_list.next, typeof(*urb), urb_list), 1)
 
 

@@ -348,8 +348,11 @@ struct usbdevfs_hub_portinfo
 
 // #define sprintf(a,b,format, arg...) zxsprintf((a),(b),format, ## arg)
 // #define snprintf(a,b,format, arg...) zxsnprintf((a),(b),format, ##arg)
-// #define printk(format, arg...) zxprintf(format, ## arg)
-// #define BUG(...) do {} while(0)
+#define printk(format, arg...) zxprintf((char*)(format), ## arg)
+#define BUG(...) do {} while(0)
+// The driver calls the standard sprintf; it is resolved at final link against
+// xlibc (which provides the definition). Declare it here so every xusb TU sees it.
+int sprintf(char *buffer, const char *format, ...);
 
 /* Locks & friends */
 
@@ -553,7 +556,6 @@ void my_wait_for_completion(struct completion*);
 #define usbprintk printk
 #endif
 
-/*
 #ifndef DEBUG_MODE
 #define dev_printk(lvl,x,f,arg...) do {} while (0)
 #define dev_dbg(x,f,arg...) do {} while (0) //printk(f, ## arg)
@@ -563,7 +565,6 @@ void my_wait_for_completion(struct completion*);
 #define pr_debug(x,f,arg...) do {} while (0)
 #define usbprintk
 #endif
-*/
 
 
 #define PCI_DEVFN(a,b) 0

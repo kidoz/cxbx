@@ -19,6 +19,16 @@ add_project_arguments('-fms-extensions', language : ['c', 'cpp'])
 openxdk_root_inc = include_directories('include/open-xdk')
 openxdk_inc = include_directories('include/open-xdk/include')
 
+# The xusb library is a Linux-kernel-derived USB stack. Its sources use
+# quote-includes rooted at the xusb/ and open-xdk/ header directories
+# (e.g. "usb_wrapper.h", "linux/usb.h", "OpenXDK.h") rather than the
+# xusb/-prefixed form the other libraries use, so it needs those directories
+# on its include path directly.
+openxdk_xusb_inc = include_directories(
+  'include/open-xdk/include/xusb',
+  'include/open-xdk/include/open-xdk',
+)
+
 cxbx_inc = include_directories(
   'include/cxbx/include',
   'include/cxbx/include/win32',

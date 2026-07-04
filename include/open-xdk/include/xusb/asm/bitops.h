@@ -375,34 +375,20 @@ static __inline int find_first_zero_bit(void * addr, unsigned size)
  * @offset: The bitnumber to start searching at
  * @size: The maximum size to search
  */
-#if 0
+// Portable replacement for the original x86 GCC-asm version (bsfl), which does
+// not compile under clang. Returns the bit number of the first zero bit at or
+// after `offset`, or `size` if there is none.
 static __inline__ int find_next_zero_bit (void * addr, int size, int offset)
 {
-	unsigned long * p = ((unsigned long *) addr) + (offset >> 5);
-	int set = 0, bit = offset & 31, res;
-	
-	if (bit) {
-		/*
-		 * Look for zero in first byte
-		 */
-		__asm__("bsfl %1,%0\n\t"
-			"jne 1f\n\t"
-			"movl $32, %0\n"
-			"1:"
-			: "=r" (set)
-			: "r" (~(*p >> bit)));
-		if (set < (32 - bit))
-			return set + offset;
-		set = 32 - bit;
-		p++;
+	const unsigned int * p = (const unsigned int *) addr;
+	int bit;
+
+	for (bit = offset; bit < size; bit++) {
+		if (!((p[bit >> 5] >> (bit & 31)) & 1U))
+			return bit;
 	}
-	/*
-	 * No zero yet, search remaining full bytes for a zero
-	 */
-	res = find_first_zero_bit (p, size - 32 * (p - (unsigned long *) addr));
-	return (offset + set + res);
+	return size;
 }
-#endif 
 /**
  * ffz - find first zero in word.
  * @word: The word to search
