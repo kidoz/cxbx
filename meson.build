@@ -31,7 +31,12 @@ cxbx_inc = include_directories(
 
 # open-xdk support libraries. Each sets a `lib<name>` variable consumed by the
 # cxbx executable below (meson subdir() shares the enclosing scope).
-subdir('src/open-xdk/src/glibc')
+#
+# NOTE: src/open-xdk/src/glibc is intentionally not built. Its `glibc` archive
+# is never linked into the cxbx executable (xlibc supplies the libc/math/string
+# routines that are actually used), and its sources expect a private GNU libc
+# internal header tree that this build does not wire up. It is dead weight, so
+# it is excluded rather than ported. Re-add the subdir() line to restore it.
 subdir('src/open-xdk/src/xboxkrnl')
 subdir('src/open-xdk/src/xgfx2d')
 subdir('src/open-xdk/src/xhal')
