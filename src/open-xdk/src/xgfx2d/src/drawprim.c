@@ -10,6 +10,7 @@
 // *
 // ******************************************************************
 #include <math.h>
+#include <xlibc/string.h>
 #include "xgfx2d/drawprim.h"
 
 void clear(Bitmap *bmp, uint32 col) {

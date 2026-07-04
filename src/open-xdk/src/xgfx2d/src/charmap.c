@@ -157,7 +157,7 @@ void charmap_blit_screen( void )
 	Bitmap	*pScreen = get_screen_bitmap();
 	Bitmap	pCharBitmap;
 
-	pCharBitmap.data = (u32*)g_pCharMap->pBitmap;
+	pCharBitmap.data = (uint32*)g_pCharMap->pBitmap;
 	pCharBitmap.w = g_pCharMap->pixwidth;
 	pCharBitmap.h = g_pCharMap->pixheight;
 	pCharBitmap.pitch = g_pCharMap->pixwidth;
