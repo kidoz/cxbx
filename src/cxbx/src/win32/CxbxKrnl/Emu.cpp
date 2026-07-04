@@ -44,6 +44,7 @@ namespace xboxkrnl
 
 #include "Emu.h"
 #include "EmuFS.h"
+#include "EmuNV2ALogging.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -173,6 +174,8 @@ static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
 
     return false;
 }
+
+static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value);
 
 static ULONG EmuContextRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
 {
@@ -428,26 +431,258 @@ static void EmuStoreMmioRegister(ULONG Address, ULONG Value)
     fflush(stdout);
 }
 
-static ULONG EmuReadMmioRegister32(ULONG Address)
-{
-    ULONG Value = 0;
+static const ULONG EmuNv2aMmioBase = NV2A_XBOX_MMIO_BASE;
+static const ULONG EmuNv2aMmioEnd = NV2A_XBOX_MMIO_BASE + NV2A_MMIO_SIZE - 1;
+static const ULONG EmuNv2aRaminBase = NV_PRAMIN;
+static const ULONG EmuNv2aRaminSize = 0x00100000;
+static const ULONG EmuNv2aRaminDwordCount = EmuNv2aRaminSize / sizeof(ULONG);
+static const ULONG EmuNv2aPmcIntrPfifo = 0x00000100;
+static const ULONG EmuNv2aPmcIntrPgraph = 0x00001000;
+static const ULONG EmuNv2aPmcEnablePfifo = 0x00000100;
+static const ULONG EmuNv2aPmcEnablePgraph = 0x00001000;
+static const ULONG EmuNv2aPgraphFifoAccess = 0x00000001;
+static const ULONG EmuNv2aPfifoRunoutStatus = 0x002400;
+static const ULONG EmuNv2aPfifoCache1Push1 = 0x003204;
+static const ULONG EmuNv2aPfifoCache1Status = 0x003214;
+static const ULONG EmuNv2aUserChannel0Put = 0x800040;
+static const ULONG EmuNv2aUserChannel0Get = 0x800044;
 
-    if(Address == 0xFD100410)
+static ULONG g_EmuNv2aRamin[EmuNv2aRaminDwordCount] = {};
+static ULONG g_EmuNv2aSubchannelClass[8] = {};
+
+static bool EmuNv2aIsMmioAddress(ULONG Address)
+{
+    return Address >= EmuNv2aMmioBase && Address <= EmuNv2aMmioEnd;
+}
+
+static ULONG EmuNv2aOffset(ULONG Address)
+{
+    return Address - EmuNv2aMmioBase;
+}
+
+static bool EmuNv2aIsRaminOffset(ULONG Offset)
+{
+    return Offset >= EmuNv2aRaminBase && Offset < EmuNv2aRaminBase + EmuNv2aRaminSize;
+}
+
+static ULONG EmuNv2aRegisterAddress(ULONG Offset)
+{
+    return EmuNv2aMmioBase + Offset;
+}
+
+static ULONG EmuNv2aCachedRegister(ULONG Offset, ULONG DefaultValue)
+{
+    ULONG Value = DefaultValue;
+    EmuLookupMmioRegister(EmuNv2aRegisterAddress(Offset), &Value);
+    return Value;
+}
+
+static void EmuNv2aStoreRegister(ULONG Offset, ULONG Value)
+{
+    EmuStoreMmioRegister(EmuNv2aRegisterAddress(Offset), Value);
+}
+
+static ULONG EmuNv2aReadRamin32(ULONG Offset)
+{
+    ULONG RaminOffset = Offset - EmuNv2aRaminBase;
+
+    if(RaminOffset + sizeof(ULONG) > EmuNv2aRaminSize)
         return 0;
 
-    if(Address == 0xFD002400)
-        return 0x10;
+    return g_EmuNv2aRamin[RaminOffset / sizeof(ULONG)];
+}
 
-    if(Address == 0xFD003214)
+static void EmuNv2aWriteRamin32(ULONG Offset, ULONG Value)
+{
+    ULONG RaminOffset = Offset - EmuNv2aRaminBase;
+
+    if(RaminOffset + sizeof(ULONG) > EmuNv2aRaminSize)
+        return;
+
+    g_EmuNv2aRamin[RaminOffset / sizeof(ULONG)] = Value;
+}
+
+static ULONG EmuNv2aPendingPmcInterrupts()
+{
+    ULONG Pending = 0;
+    ULONG PfifoIntr = EmuNv2aCachedRegister(NV_PFIFO_INTR_0, 0);
+    ULONG PfifoIntrEn = EmuNv2aCachedRegister(NV_PFIFO_INTR_EN_0, 0);
+    ULONG PgraphIntr = EmuNv2aCachedRegister(NV_PGRAPH_INTR, 0);
+    ULONG PgraphIntrEn = EmuNv2aCachedRegister(NV_PGRAPH_INTR_EN, 0);
+
+    if((PfifoIntr & PfifoIntrEn) != 0)
+        Pending |= EmuNv2aPmcIntrPfifo;
+
+    if((PgraphIntr & PgraphIntrEn) != 0)
+        Pending |= EmuNv2aPmcIntrPgraph;
+
+    return Pending;
+}
+
+static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
+{
+    ULONG Ramht = EmuNv2aCachedRegister(NV_PFIFO_RAMHT, 0);
+    ULONG RamhtBase = ((Ramht & 0x000001F0) >> 4) << 12;
+    ULONG RamhtSize = 1 << (((Ramht & 0x00030000) >> 16) + 12);
+    ULONG Bits = 11;
+    ULONG Hash = 0;
+    ULONG TempHandle = Handle;
+
+    while((1ul << (Bits + 1)) < RamhtSize && Bits < 15)
+        Bits++;
+
+    while(TempHandle != 0)
     {
-        EmuLookupMmioRegister(Address, &Value);
-        return Value | 0x10;
+        Hash ^= TempHandle & ((1ul << Bits) - 1);
+        TempHandle >>= Bits;
     }
 
-    if(Address == 0xFD800044 && EmuLookupMmioRegister(0xFD800040, &Value))
-        return Value;
+    if(Bits > 4)
+        Hash ^= (EmuNv2aCachedRegister(EmuNv2aPfifoCache1Push1, 0) & 0x1F) << (Bits - 4);
 
-    EmuLookupMmioRegister(Address, &Value);
+    Hash &= (RamhtSize / 8) - 1;
+
+    for(ULONG Probe = 0; Probe < 16 && (Probe * 8) < RamhtSize; Probe++)
+    {
+        ULONG EntryOffset = EmuNv2aRaminBase + RamhtBase + (((Hash + Probe) & ((RamhtSize / 8) - 1)) * 8);
+        ULONG EntryHandle = EmuNv2aReadRamin32(EntryOffset);
+        ULONG EntryContext = EmuNv2aReadRamin32(EntryOffset + 4);
+
+        if(EntryHandle != Handle || (EntryContext & 0x80000000) == 0)
+            continue;
+
+        ULONG ObjectInstance = (EntryContext & 0x0000FFFF) << 4;
+        ULONG ObjectClass = EmuNv2aReadRamin32(EmuNv2aRaminBase + ObjectInstance) & 0xFF;
+
+        if(ObjectClass == 0)
+            ObjectClass = NV_CLASS_KELVIN;
+
+        if(Instance != NULL)
+            *Instance = ObjectInstance;
+
+        if(Class != NULL)
+            *Class = ObjectClass;
+
+        NV2A_TRACE_RAMHT(Handle, ObjectInstance, ObjectClass);
+        return true;
+    }
+
+    return false;
+}
+
+static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data)
+{
+    ULONG Class = g_EmuNv2aSubchannelClass[Subchannel & 0x07];
+
+    if(Method == 0)
+    {
+        ULONG Instance = 0;
+
+        if(EmuNv2aRamhtLookup(Data, &Instance, &Class))
+            g_EmuNv2aSubchannelClass[Subchannel & 0x07] = Class;
+        else
+            Class = NV_CLASS_KELVIN;
+
+        NV2A_TRACE_METHOD(Class, Method, Data);
+        return;
+    }
+
+    if(Class == 0)
+        Class = NV_CLASS_KELVIN;
+
+    if(Method >= 0x180 && Method < 0x200)
+    {
+        ULONG Instance = 0;
+        ULONG ObjectClass = 0;
+
+        if(EmuNv2aRamhtLookup(Data, &Instance, &ObjectClass))
+            Data = Instance;
+    }
+
+    EmuNv2aStoreRegister(NV_PGRAPH + (Method & 0x1FFC), Data);
+    NV2A_TRACE_METHOD(Class, Method, Data);
+}
+
+static void EmuNv2aRunPusher();
+
+static ULONG EmuReadMmioRegister32(ULONG Address)
+{
+    ULONG Offset = EmuNv2aOffset(Address);
+    ULONG Value = 0;
+
+    if(EmuNv2aIsRaminOffset(Offset))
+    {
+        Value = EmuNv2aReadRamin32(Offset);
+        NV2A_TRACE_REG("rd", Offset, Value);
+        return Value;
+    }
+
+    switch(Offset)
+    {
+        case NV_PMC_BOOT_0:
+            Value = 0x02A000A1;
+            break;
+
+        case NV_PMC_INTR_0:
+            Value = EmuNv2aPendingPmcInterrupts();
+            break;
+
+        case NV_PMC_ENABLE:
+            Value = EmuNv2aCachedRegister(Offset, EmuNv2aPmcEnablePfifo | EmuNv2aPmcEnablePgraph);
+            break;
+
+        case NV_PFIFO_INTR_0:
+        case NV_PFIFO_INTR_EN_0:
+        case NV_PFIFO_RAMHT:
+        case NV_PFIFO_RAMFC:
+        case NV_PFIFO_RAMRO:
+        case NV_PFIFO_CACHE1_DMA_STATE:
+        case NV_PFIFO_CACHE1_DMA_INSTANCE:
+        case NV_PFIFO_CACHE1_DMA_PUT:
+        case NV_PFIFO_CACHE1_DMA_GET:
+        case NV_PGRAPH_INTR:
+        case NV_PGRAPH_INTR_EN:
+        case NV_PGRAPH_CTX_CONTROL:
+            Value = EmuNv2aCachedRegister(Offset, 0);
+            break;
+
+        case NV_PFIFO_CACHE1_PUSH0:
+        case NV_PFIFO_CACHE1_DMA_PUSH:
+            Value = EmuNv2aCachedRegister(Offset, 1);
+            break;
+
+        case EmuNv2aPfifoRunoutStatus:
+            Value = 0x10;
+            break;
+
+        case EmuNv2aPfifoCache1Status:
+            Value = EmuNv2aCachedRegister(Offset, 0) | 0x10;
+            break;
+
+        case NV_PGRAPH_STATUS:
+            Value = 0;
+            break;
+
+        case NV_PGRAPH_FIFO:
+            Value = EmuNv2aCachedRegister(Offset, EmuNv2aPgraphFifoAccess) | EmuNv2aPgraphFifoAccess;
+            break;
+
+        case NV_PFB_CFG0:
+        case 0x100240:
+        case 0x100410:
+            Value = EmuNv2aCachedRegister(Offset, 0);
+            break;
+
+        case EmuNv2aUserChannel0Get:
+            Value = EmuNv2aCachedRegister(EmuNv2aUserChannel0Put, 0);
+            break;
+
+        default:
+            Value = EmuNv2aCachedRegister(Offset, 0);
+            break;
+    }
+
+    NV2A_TRACE_REG("rd", Offset, Value);
     return Value;
 }
 
@@ -466,6 +701,7 @@ static ULONG EmuReadMmio(ULONG Address, ULONG Size)
 static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
 {
     ULONG AlignedAddress = Address & ~3;
+    ULONG Offset = EmuNv2aOffset(AlignedAddress);
 
     if(Size == 1)
     {
@@ -476,10 +712,26 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
         Address = AlignedAddress;
     }
 
-    if(Address == 0xFD000100 || Address == 0xFD002100 || Address == 0xFD400100)
+    if(EmuNv2aIsRaminOffset(Offset))
+    {
+        EmuNv2aWriteRamin32(Offset, Value);
+        NV2A_TRACE_REG("wr", Offset, Value);
+        return;
+    }
+
+    if(Offset == NV_PMC_INTR_0)
+        Value = EmuNv2aPendingPmcInterrupts() & ~Value;
+    else if(Offset == NV_PFIFO_INTR_0 || Offset == NV_PGRAPH_INTR)
         Value = EmuReadMmioRegister32(Address) & ~Value;
 
-    EmuStoreMmioRegister(Address, Value);
+    EmuNv2aStoreRegister(Offset, Value);
+    NV2A_TRACE_REG("wr", Offset, Value);
+
+    if(Offset == NV_PFIFO_CACHE1_DMA_PUT || Offset == NV_PFIFO_CACHE1_DMA_PUSH ||
+       Offset == NV_PFIFO_CACHE1_PUSH0 || Offset == EmuNv2aUserChannel0Put)
+    {
+        EmuNv2aRunPusher();
+    }
 }
 
 static const ULONG EmuPhysicalMapBase = 0x80000000;
@@ -578,6 +830,127 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
     }
 
     return true;
+}
+
+static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)
+{
+    ULONG Instance = (EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_INSTANCE, 0) & 0x0000FFFF) << 4;
+
+    if(Instance + 12 > EmuNv2aRaminSize)
+        return false;
+
+    ULONG Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance);
+    ULONG DmaLimit = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 4);
+    ULONG Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 8);
+    ULONG Address = (Frame & 0x07FFFFFF) | (Flags & 0x00000FFF);
+
+    if(BaseAddress != NULL)
+        *BaseAddress = Address;
+
+    if(Limit != NULL)
+        *Limit = DmaLimit;
+
+    return true;
+}
+
+static bool EmuNv2aReadDmaWord(ULONG BaseAddress, ULONG Offset, ULONG *Value)
+{
+    ULONG PhysicalAddress = BaseAddress + Offset;
+
+    if(!EmuIsPhysicalMapAddress(PhysicalAddress))
+        PhysicalAddress = EmuPhysicalMapBase + (PhysicalAddress & (EmuPhysicalMapEnd - EmuPhysicalMapBase));
+
+    return EmuReadPhysicalMap(PhysicalAddress, 4, Value);
+}
+
+static void EmuNv2aRunPusher()
+{
+    ULONG Push0 = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_PUSH0, 1);
+    ULONG DmaPush = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUSH, 1);
+
+    if((Push0 & 1) == 0 || (DmaPush & 1) == 0)
+        return;
+
+    ULONG Get = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_GET, 0);
+    ULONG Put = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUT, 0);
+
+    if(Get == Put)
+        return;
+
+    ULONG BaseAddress = 0;
+    ULONG Limit = 0;
+
+    if(!EmuNv2aLoadDmaObject(&BaseAddress, &Limit))
+    {
+        printf("Emu (0x%lX): NV2A PFIFO missing DMA object; advancing GET to PUT.\n",
+               GetCurrentThreadId());
+        fflush(stdout);
+        EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_GET, Put);
+        return;
+    }
+
+    for(ULONG Guard = 0; Guard < 4096 && Get != Put; Guard++)
+    {
+        ULONG Word = 0;
+
+        if(Get > Limit || !EmuNv2aReadDmaWord(BaseAddress, Get, &Word))
+        {
+            printf("Emu (0x%lX): NV2A PFIFO cannot read pushbuffer at 0x%.08lX+0x%.08lX; advancing GET to PUT.\n",
+                   GetCurrentThreadId(), BaseAddress, Get);
+            fflush(stdout);
+            Get = Put;
+            break;
+        }
+
+        Get += 4;
+        NV2A_TRACE_PB(Word);
+
+        if((Word & 0xE0000003) == 0x20000000)
+        {
+            Get = Word & 0x1FFFFFFC;
+            continue;
+        }
+
+        if((Word & 3) == 1 || (Word & 3) == 2)
+        {
+            Get = Word & 0xFFFFFFFC;
+            continue;
+        }
+
+        if(Word == 0x00020000)
+            continue;
+
+        if((Word & 0xE0030003) == 0 || (Word & 0xE0030003) == 0x40000000)
+        {
+            bool Incrementing = (Word & 0xE0030003) == 0;
+            ULONG Method = Word & 0x1FFC;
+            ULONG Subchannel = (Word >> 13) & 0x07;
+            ULONG Count = (Word >> 18) & 0x07FF;
+
+            for(ULONG i = 0; i < Count && Get != Put; i++)
+            {
+                ULONG Data = 0;
+
+                if(Get > Limit || !EmuNv2aReadDmaWord(BaseAddress, Get, &Data))
+                {
+                    Get = Put;
+                    break;
+                }
+
+                Get += 4;
+                EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
+
+                if(Incrementing)
+                    Method += 4;
+            }
+        }
+    }
+
+    EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_GET, Get);
+
+    if(Get == Put)
+        EmuNv2aStoreRegister(EmuNv2aPfifoCache1Status,
+                             EmuNv2aCachedRegister(EmuNv2aPfifoCache1Status, 0) | 0x10);
 }
 
 static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
@@ -996,7 +1369,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 
     ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
     ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
-    if((FaultAddress & 0xFF000000) != 0xFD000000)
+    if(!EmuNv2aIsMmioAddress(FaultAddress))
         return false;
 
     __try
