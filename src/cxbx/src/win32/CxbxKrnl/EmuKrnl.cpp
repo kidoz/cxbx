@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include <clocale>
 #include <cstring>
 #include <cstdarg>
+#include <malloc.h>
 #include <map>
 #include <string>
 #include <vector>
@@ -2129,9 +2130,32 @@ struct EmuSystemMemoryAllocation
     ULONG Pages;
 };
 
+struct EmuContiguousMemoryAllocation
+{
+    PVOID Address;
+    ULONG Size;
+    ULONG PhysicalAddress;
+};
+
+struct EmuMmStatistics
+{
+    ULONG Length;
+    ULONG TotalPhysicalPages;
+    ULONG AvailablePages;
+    ULONG VirtualMemoryBytesCommitted;
+    ULONG VirtualMemoryBytesReserved;
+    ULONG CachePagesCommitted;
+    ULONG PoolPagesCommitted;
+    ULONG StackPagesCommitted;
+    ULONG ImagePagesCommitted;
+};
+
 static EmuSystemMemoryAllocation g_EmuSystemMemoryAllocations[128] = {};
+static EmuContiguousMemoryAllocation g_EmuContiguousMemoryAllocations[128] = {};
 static ULONG g_EmuNextSystemMemoryAddress = 0xD0000000;
+static ULONG g_EmuNextContiguousPhysicalAddress = 0x00100000;
 static const ULONG EmuPageSize = 0x1000;
+static const ULONG EmuXboxPhysicalMemoryBytes = 64 * 1024 * 1024;
 
 static bool EmuIsValidSystemMemoryProtect(ULONG Protect)
 {
@@ -2156,6 +2180,114 @@ static ULONG EmuSystemMemoryPages(ULONG NumberOfBytes)
         return 0;
 
     return (NumberOfBytes + EmuPageSize - 1) / EmuPageSize;
+}
+
+static ULONG EmuRoundToPageSize(ULONG NumberOfBytes)
+{
+    return EmuSystemMemoryPages(NumberOfBytes) * EmuPageSize;
+}
+
+static void EmuTrackContiguousMemoryAllocation(PVOID Address, ULONG Size)
+{
+    if(Address == NULL)
+        return;
+
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+    {
+        if(g_EmuContiguousMemoryAllocations[i].Address != NULL)
+            continue;
+
+        g_EmuContiguousMemoryAllocations[i].Address = Address;
+        g_EmuContiguousMemoryAllocations[i].Size = Size;
+        g_EmuContiguousMemoryAllocations[i].PhysicalAddress = g_EmuNextContiguousPhysicalAddress;
+        g_EmuNextContiguousPhysicalAddress += EmuRoundToPageSize(Size);
+        return;
+    }
+}
+
+static void EmuUntrackContiguousMemoryAllocation(PVOID Address)
+{
+    if(Address == NULL)
+        return;
+
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+    {
+        if(g_EmuContiguousMemoryAllocations[i].Address != Address)
+            continue;
+
+        g_EmuContiguousMemoryAllocations[i].Address = NULL;
+        g_EmuContiguousMemoryAllocations[i].Size = 0;
+        g_EmuContiguousMemoryAllocations[i].PhysicalAddress = 0;
+        return;
+    }
+}
+
+static ULONG EmuQuerySystemMemoryAllocationSize(PVOID Address)
+{
+    const ULONG Value = (ULONG)Address;
+
+    for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
+    {
+        const ULONG Base = (ULONG)g_EmuSystemMemoryAllocations[i].Address;
+        const ULONG Size = g_EmuSystemMemoryAllocations[i].Pages * EmuPageSize;
+
+        if(Base != 0 && Value >= Base && Value < Base + Size)
+            return Size - (Value - Base);
+    }
+
+    return 0;
+}
+
+static ULONG EmuQueryContiguousMemoryPhysicalAddress(PVOID Address)
+{
+    const ULONG Value = (ULONG)Address;
+
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+    {
+        const ULONG Base = (ULONG)g_EmuContiguousMemoryAllocations[i].Address;
+        const ULONG Size = g_EmuContiguousMemoryAllocations[i].Size;
+
+        if(Base != 0 && Value >= Base && Value < Base + Size)
+            return g_EmuContiguousMemoryAllocations[i].PhysicalAddress + (Value - Base);
+    }
+
+    return 0;
+}
+
+static ULONG EmuQueryContiguousMemoryAllocationSize(PVOID Address)
+{
+    const ULONG Value = (ULONG)Address;
+
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+    {
+        const ULONG Base = (ULONG)g_EmuContiguousMemoryAllocations[i].Address;
+        const ULONG Size = g_EmuContiguousMemoryAllocations[i].Size;
+
+        if(Base != 0 && Value >= Base && Value < Base + Size)
+            return Size - (Value - Base);
+    }
+
+    return 0;
+}
+
+static ULONG EmuCommittedSystemMemoryBytes()
+{
+    ULONG Total = 0;
+
+    for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
+        Total += g_EmuSystemMemoryAllocations[i].Pages * EmuPageSize;
+
+    return Total;
+}
+
+static ULONG EmuCommittedContiguousMemoryBytes()
+{
+    ULONG Total = 0;
+
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+        Total += g_EmuContiguousMemoryAllocations[i].Size;
+
+    return Total;
 }
 
 static void NTAPI EmuObjectTypeProcedure()
@@ -2387,6 +2519,22 @@ extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag)
     EmuSwapFS();   // Xbox FS
 
     return Memory;
+}
+
+extern "C" ULONG NTAPI EmuExQueryPoolBlockSize(PVOID PoolBlock)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG Size = 0;
+    if(PoolBlock != NULL)
+        Size = (ULONG)_msize(PoolBlock);
+
+    printf("EmuKrnl (0x%lX): ExQueryPoolBlockSize block=0x%.08lX size=0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)PoolBlock, Size);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Size;
 }
 
 extern "C" VOID NTAPI EmuExFreePool(PVOID P)
@@ -3652,6 +3800,58 @@ XBSYSAPI EXPORTNUM(149) xboxkrnl::BOOLEAN NTAPI xboxkrnl::KeSetTimer
 }
 
 // ******************************************************************
+// * 0x0097 - KeStallExecutionProcessor
+// ******************************************************************
+extern "C" VOID NTAPI EmuKeStallExecutionProcessor(ULONG Microseconds)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // ******************************************************************
+    // * debug trace
+    // ******************************************************************
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuKrnl (0x%X): KeStallExecutionProcessor\n"
+               "(\n"
+               "   Microseconds        : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Microseconds);
+    }
+    #endif
+
+    if(Microseconds != 0)
+    {
+        ::LARGE_INTEGER Frequency;
+        ::LARGE_INTEGER Start;
+        ::LARGE_INTEGER Now;
+
+        QueryPerformanceFrequency(&Frequency);
+        QueryPerformanceCounter(&Start);
+
+        if(Microseconds >= 2000)
+        {
+            DWORD Milliseconds = (Microseconds - 1000) / 1000;
+
+            if(Milliseconds != 0)
+                Sleep(Milliseconds);
+        }
+
+        ULONGLONG TargetTicks = ((ULONGLONG)Microseconds * (ULONGLONG)Frequency.QuadPart + 999999ULL) / 1000000ULL;
+
+        do
+        {
+            QueryPerformanceCounter(&Now);
+
+            if(Microseconds >= 1000)
+                Sleep(0);
+        }
+        while((ULONGLONG)(Now.QuadPart - Start.QuadPart) < TargetTicks);
+    }
+
+    EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
 // * 0x009C - KeTickCount
 // ******************************************************************
 XBSYSAPI EXPORTNUM(156) volatile xboxkrnl::DWORD xboxkrnl::KeTickCount = 0;
@@ -3686,7 +3886,9 @@ XBSYSAPI EXPORTNUM(165) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
 
     // TODO: Make this much more efficient and correct if necessary!
     // HACK: Should be aligned!!
-    PVOID pRet = (PVOID)new unsigned char[NumberOfBytes];
+    const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
+    PVOID pRet = (AllocationSize != 0) ? (PVOID)new unsigned char[AllocationSize] : NULL;
+    EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
 
     EmuSwapFS();   // Xbox FS
 
@@ -3727,7 +3929,9 @@ XBSYSAPI EXPORTNUM(166) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
 
     // TODO: Make this much more efficient and correct if necessary!
     // HACK: Should be aligned!!
-    PVOID pRet = (PVOID)new unsigned char[NumberOfBytes];
+    const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
+    PVOID pRet = (AllocationSize != 0) ? (PVOID)new unsigned char[AllocationSize] : NULL;
+    EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
 
     EmuSwapFS();   // Xbox FS
 
@@ -3854,7 +4058,8 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
     }
     #endif
 
-    delete[] BaseAddress;
+    EmuUntrackContiguousMemoryAllocation(BaseAddress);
+    delete[] (unsigned char *)BaseAddress;
 
     EmuSwapFS();   // Xbox FS
 
@@ -3907,6 +4112,63 @@ XBSYSAPI EXPORTNUM(172) NTSTATUS NTAPI xboxkrnl::MmFreeSystemMemory
 }
 
 // ******************************************************************
+// * 0x00AD - MmGetPhysicalAddress
+// ******************************************************************
+extern "C" PHYSICAL_ADDRESS NTAPI EmuMmGetPhysicalAddress
+(
+    IN PVOID BaseAddress
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    PHYSICAL_ADDRESS PhysicalAddress = EmuQueryContiguousMemoryPhysicalAddress(BaseAddress);
+    if(PhysicalAddress == 0)
+        PhysicalAddress = ((PHYSICAL_ADDRESS)BaseAddress) & (EmuXboxPhysicalMemoryBytes - 1);
+
+    printf("EmuKrnl (0x%lX): MmGetPhysicalAddress base=0x%.08lX physical=0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)BaseAddress, (ULONG)PhysicalAddress);
+
+    EmuSwapFS();   // Xbox FS
+
+    return PhysicalAddress;
+}
+
+// ******************************************************************
+// * 0x00AF - MmLockUnlockBufferPages
+// ******************************************************************
+extern "C" VOID NTAPI EmuMmLockUnlockBufferPages
+(
+    IN PVOID BaseAddress,
+    IN SIZE_T NumberOfBytes,
+    IN BOOLEAN UnlockPages
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): MmLockUnlockBufferPages base=0x%.08lX bytes=0x%.08lX unlock=%lu.\n",
+           GetCurrentThreadId(), (ULONG)BaseAddress, (ULONG)NumberOfBytes, (ULONG)UnlockPages);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
+// * 0x00B0 - MmLockUnlockPhysicalPage
+// ******************************************************************
+extern "C" VOID NTAPI EmuMmLockUnlockPhysicalPage
+(
+    IN ULONG PhysicalAddress,
+    IN BOOLEAN UnlockPage
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): MmLockUnlockPhysicalPage physical=0x%.08lX unlock=%lu.\n",
+           GetCurrentThreadId(), PhysicalAddress, (ULONG)UnlockPage);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
 // * 0x00B2 - MmPersistContiguousMemory
 // ******************************************************************
 XBSYSAPI EXPORTNUM(178) VOID NTAPI xboxkrnl::MmPersistContiguousMemory
@@ -3937,6 +4199,69 @@ XBSYSAPI EXPORTNUM(178) VOID NTAPI xboxkrnl::MmPersistContiguousMemory
     EmuWarning("MmPersistContiguousMemory is being ignored\n");
 
     EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
+// * 0x00B4 - MmQueryAllocationSize
+// ******************************************************************
+extern "C" ULONG NTAPI EmuMmQueryAllocationSize
+(
+    IN PVOID BaseAddress
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG Size = EmuQuerySystemMemoryAllocationSize(BaseAddress);
+    if(Size == 0)
+        Size = EmuQueryContiguousMemoryAllocationSize(BaseAddress);
+
+    printf("EmuKrnl (0x%lX): MmQueryAllocationSize base=0x%.08lX size=0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)BaseAddress, Size);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Size;
+}
+
+// ******************************************************************
+// * 0x00B5 - MmQueryStatistics
+// ******************************************************************
+extern "C" NTSTATUS NTAPI EmuMmQueryStatistics
+(
+    OUT EmuMmStatistics *MemoryStatistics
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    NTSTATUS ret = STATUS_SUCCESS;
+
+    if(MemoryStatistics == NULL || MemoryStatistics->Length != sizeof(EmuMmStatistics))
+    {
+        ret = EmuStatusInvalidParameter;
+    }
+    else
+    {
+        const ULONG SystemBytes = EmuCommittedSystemMemoryBytes();
+        const ULONG ContiguousBytes = EmuCommittedContiguousMemoryBytes();
+        const ULONG CommittedBytes = SystemBytes + ContiguousBytes;
+
+        MemoryStatistics->TotalPhysicalPages = EmuXboxPhysicalMemoryBytes / EmuPageSize;
+        MemoryStatistics->AvailablePages = (CommittedBytes < EmuXboxPhysicalMemoryBytes) ?
+                                           (EmuXboxPhysicalMemoryBytes - CommittedBytes) / EmuPageSize : 0;
+        MemoryStatistics->VirtualMemoryBytesCommitted = SystemBytes;
+        MemoryStatistics->VirtualMemoryBytesReserved = g_EmuNextSystemMemoryAddress - 0xD0000000;
+        MemoryStatistics->CachePagesCommitted = 0;
+        MemoryStatistics->PoolPagesCommitted = EmuSystemMemoryPages(ContiguousBytes);
+        MemoryStatistics->StackPagesCommitted = 0;
+        MemoryStatistics->ImagePagesCommitted = 0;
+    }
+
+    printf("EmuKrnl (0x%lX): MmQueryStatistics stats=0x%.08lX ret=0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)MemoryStatistics, ret);
+
+    EmuSwapFS();   // Xbox FS
+
+    return ret;
 }
 
 // ******************************************************************
