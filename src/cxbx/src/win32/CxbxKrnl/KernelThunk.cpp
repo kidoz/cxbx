@@ -70,8 +70,10 @@ extern "C" NTSTATUS NTAPI EmuNtRemoveIoCompletion(HANDLE IoCompletionHandle, PVO
 extern "C" NTSTATUS NTAPI EmuNtReleaseMutant(HANDLE MutantHandle, PLONG PreviousCount);
 extern "C" NTSTATUS NTAPI EmuNtReleaseSemaphore(HANDLE SemaphoreHandle, LONG ReleaseCount, PLONG PreviousCount);
 extern "C" ULONG NTAPI EmuHalReadSMBusValue(UCHAR Address, UCHAR Command, BOOLEAN WordFlag, PULONG Value);
+extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistration, BOOLEAN Register);
 extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request);
 extern "C" NTSTATUS NTAPI EmuNtSuspendThread(HANDLE ThreadHandle, PULONG PreviousSuspendCount);
+extern "C" PVOID NTAPI EmuMmClaimGpuInstanceMemory(SIZE_T NumberOfBytes, SIZE_T *NumberOfPaddingBytes);
 extern "C" LONG __fastcall EmuInterlockedCompareExchange(PLONG Destination, LONG Exchange, LONG Comperand);
 extern "C" LONG __fastcall EmuInterlockedDecrement(PLONG Addend);
 extern "C" LONG __fastcall EmuInterlockedIncrement(PLONG Addend);
@@ -290,7 +292,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuHalGetInterruptVector,              // 0x002C (44)
     (uint32)&EmuHalReadSMBusValue,                  // 0x002D (45)
     (uint32)&xboxkrnl::HalReadWritePCISpace,        // 0x002E (46)
-    (uint32)PANIC(0x002F),                          // 0x002F (47)
+    (uint32)&EmuHalRegisterShutdownNotification,    // 0x002F (47)
     (uint32)&EmuHalRequestSoftwareInterrupt,        // 0x0030 (48)
     (uint32)&xboxkrnl::HalReturnToFirmware,         // 0x0031 (49)
     (uint32)&xboxkrnl::HalWriteSMBusValue,          // 0x0032 (50)
@@ -411,7 +413,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&xboxkrnl::MmAllocateContiguousMemory,  // 0x00A5 (165)
     (uint32)&xboxkrnl::MmAllocateContiguousMemoryEx,// 0x00A6 (166)
     (uint32)&xboxkrnl::MmAllocateSystemMemory,      // 0x00A7 (167)
-    (uint32)PANIC(0x00A8),                          // 0x00A8 (168)
+    (uint32)&EmuMmClaimGpuInstanceMemory,           // 0x00A8 (168)
     (uint32)PANIC(0x00A9),                          // 0x00A9 (169)
     (uint32)PANIC(0x00AA),                          // 0x00AA (170)
     (uint32)&xboxkrnl::MmFreeContiguousMemory,      // 0x00AB (171)

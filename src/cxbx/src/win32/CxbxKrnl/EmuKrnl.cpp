@@ -2654,6 +2654,16 @@ extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request)
 {
 }
 
+extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistration, BOOLEAN Register)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): HalRegisterShutdownNotification registration=0x%.08lX register=%lu.\n",
+           GetCurrentThreadId(), (ULONG)ShutdownRegistration, (ULONG)Register);
+
+    EmuSwapFS();   // Xbox FS
+}
+
 typedef BOOLEAN (NTAPI *EmuInterruptServiceRoutine)(PVOID Interrupt, PVOID ServiceContext);
 
 struct EmuKInterrupt
@@ -3776,6 +3786,49 @@ XBSYSAPI EXPORTNUM(167) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateSystemMemory
     EmuSwapFS();   // Xbox FS
 
     return pRet;
+}
+
+// ******************************************************************
+// * 0x00A8 - MmClaimGpuInstanceMemory
+// ******************************************************************
+extern "C" PVOID NTAPI EmuMmClaimGpuInstanceMemory
+(
+    SIZE_T NumberOfBytes,
+    SIZE_T *NumberOfPaddingBytes
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    static PVOID InstanceMemory = NULL;
+    static SIZE_T InstanceMemorySize = 0;
+    static const SIZE_T InstanceMemoryDefaultSize = 0x10000;
+    static const SIZE_T InstanceMemoryPadding = 0x10000;
+
+    if(NumberOfPaddingBytes != NULL)
+        *NumberOfPaddingBytes = InstanceMemoryPadding;
+
+    SIZE_T RequestedSize = InstanceMemoryDefaultSize;
+    if(NumberOfBytes != (SIZE_T)-1 && NumberOfBytes > RequestedSize)
+        RequestedSize = NumberOfBytes;
+
+    RequestedSize = (RequestedSize + EmuPageSize - 1) & ~(SIZE_T)(EmuPageSize - 1);
+
+    if(InstanceMemory == NULL || InstanceMemorySize < RequestedSize)
+    {
+        PVOID NewMemory = VirtualAlloc(NULL, RequestedSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if(NewMemory != NULL)
+        {
+            InstanceMemory = NewMemory;
+            InstanceMemorySize = RequestedSize;
+        }
+    }
+
+    printf("EmuKrnl (0x%lX): MmClaimGpuInstanceMemory bytes=0x%lX padding=0x%lX result=%p.\n",
+           GetCurrentThreadId(), (ULONG)NumberOfBytes, (ULONG)InstanceMemoryPadding, InstanceMemory);
+
+    EmuSwapFS();   // Xbox FS
+
+    return InstanceMemory;
 }
 
 // ******************************************************************
