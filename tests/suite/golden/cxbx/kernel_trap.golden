@@ -1,0 +1,4 @@
+#suite xbox-conformance v1
+#probe kernel_trap
+CHK trap.survived_unimplemented_call PASS
+#result kernel_trap verdict=PASS checks=1 fail=0

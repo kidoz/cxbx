@@ -1,0 +1,10 @@
+#suite xbox-conformance v1
+#probe kernel_cov
+CHK ke.systime_nonzero PASS
+CHK ke.systime_monotonic PASS
+CHK ke.tickcount_monotonic PASS
+CHK rtl.equalstring_eq PASS
+CHK rtl.equalstring_ne PASS
+CHK rtl.comparemem_equal PASS
+CHK rtl.comparemem_first8 PASS
+#result kernel_cov verdict=PASS checks=7 fail=0

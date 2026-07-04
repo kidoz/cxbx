@@ -1,0 +1,2 @@
+# Requires a target with an NV2A GPU model (traps 0xFD000000 MMIO + physical map).
+tags = ["nv2a"]

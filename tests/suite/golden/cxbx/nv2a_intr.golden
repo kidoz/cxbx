@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe nv2a_intr
+CHK nv2a.pmc_intr_initial PASS
+CHK nv2a.pfifo_inten_latch PASS
+CHK nv2a.pgraph_inten_latch PASS
+CHK nv2a.pmc_intr_no_pending PASS
+CHK nv2a.pfifo_intr_w1c PASS
+#result nv2a_intr verdict=PASS checks=5 fail=0
