@@ -1,0 +1,14 @@
+#suite xbox-conformance v1
+#probe fileio
+CHK io.create_write PASS
+CHK io.write_ok PASS
+CHK io.write_count PASS
+CHK io.open_read PASS
+CHK io.size PASS
+CHK io.read_ok PASS
+CHK io.read_count PASS
+CHK io.content PASS
+CHK io.seek_char PASS
+CHK io.delete PASS
+CHK io.deleted_absent PASS
+#result fileio verdict=PASS checks=11 fail=0

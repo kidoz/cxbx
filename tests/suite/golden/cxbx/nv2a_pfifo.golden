@@ -1,0 +1,5 @@
+#suite xbox-conformance v1
+#probe nv2a_pfifo
+CHK nv2a.pusher_get_eq_put PASS
+CHK nv2a.pgraph_method_data PASS
+#result nv2a_pfifo verdict=PASS checks=2 fail=0

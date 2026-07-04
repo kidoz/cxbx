@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe memory
+CHK mm.alloc_nonnull PASS
+CHK mm.alloc_page_aligned FAIL
+CHK mm.readback_pattern PASS
+CHK mm.word_first PASS
+CHK mm.word_last PASS
+#result memory verdict=FAIL checks=5 fail=1

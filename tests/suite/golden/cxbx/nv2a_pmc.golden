@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe nv2a_pmc
+CHK nv2a.pmc_boot0 PASS
+CHK nv2a.pmc_enable_pfifo PASS
+CHK nv2a.pmc_enable_pgraph PASS
+CHK nv2a.ramin_0 PASS
+CHK nv2a.ramin_1 PASS
+CHK nv2a.ramin_2 PASS
+#result nv2a_pmc verdict=PASS checks=6 fail=0

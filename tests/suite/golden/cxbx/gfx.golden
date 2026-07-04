@@ -1,0 +1,4 @@
+#suite xbox-conformance v1
+#probe gfx
+CHK gfx.fb_nonnull FAIL
+#result gfx verdict=FAIL checks=1 fail=1
