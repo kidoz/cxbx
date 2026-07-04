@@ -58,6 +58,7 @@ namespace NtDll
 };
 
 #include "Emu.h"
+#include "EmuDes.h"
 #include "EmuFS.h"
 #include "EmuFile.h"
 
@@ -1122,27 +1123,49 @@ extern "C" VOID NTAPI EmuXcDESKeyParity(PUCHAR Key, ULONG KeyLength)
 
 extern "C" VOID NTAPI EmuXcKeyTable(ULONG CipherSelector, PUCHAR KeyTable, PUCHAR Key)
 {
-    if(KeyTable == NULL)
+    if(KeyTable == NULL || Key == NULL)
         return;
 
-    const SIZE_T Length = (CipherSelector == 0) ? 128 : 384;
-    ZeroMemory(KeyTable, Length);
+    if(CipherSelector != 0)
+    {
+        mbedtls_des3_set3key_enc(reinterpret_cast<mbedtls_des3_context *>(KeyTable), Key);
+        return;
+    }
+
+    mbedtls_des_setkey_enc(reinterpret_cast<mbedtls_des_context *>(KeyTable), Key);
 }
 
 extern "C" VOID NTAPI EmuXcBlockCrypt(ULONG CipherSelector, PUCHAR Output, PUCHAR Input, PUCHAR KeyTable, ULONG Encrypt)
 {
-    if(Output == NULL || Input == NULL)
+    if(Output == NULL || Input == NULL || KeyTable == NULL)
         return;
 
-    memcpy(Output, Input, 8);
+    if(CipherSelector != 0)
+    {
+        const ULONG Mode = (Encrypt == MBEDTLS_DES_ENCRYPT) ? MBEDTLS_DES_ENCRYPT : MBEDTLS_DES_DECRYPT;
+        mbedtls_des3_crypt_ecb(reinterpret_cast<mbedtls_des3_context *>(KeyTable), Input, Output, Mode);
+        return;
+    }
+
+    const ULONG Mode = (Encrypt != 0) ? MBEDTLS_DES_ENCRYPT : MBEDTLS_DES_DECRYPT;
+    mbedtls_des_crypt_ecb(reinterpret_cast<mbedtls_des_context *>(KeyTable), Input, Output, Mode);
 }
 
 extern "C" VOID NTAPI EmuXcBlockCryptCBC(ULONG CipherSelector, ULONG InputLength, PUCHAR Output, PUCHAR Input, PUCHAR KeyTable, ULONG Encrypt, PUCHAR Feedback)
 {
-    if(Output == NULL || Input == NULL)
+    if(Output == NULL || Input == NULL || KeyTable == NULL || Feedback == NULL)
         return;
 
-    memcpy(Output, Input, InputLength);
+    const ULONG Mode = (Encrypt == MBEDTLS_DES_ENCRYPT) ? MBEDTLS_DES_ENCRYPT : MBEDTLS_DES_DECRYPT;
+    const ULONG CryptLength = (InputLength + 7) & ~7UL;
+
+    if(CipherSelector != 0)
+    {
+        mbedtls_des3_crypt_cbc(reinterpret_cast<mbedtls_des3_context *>(KeyTable), Mode, CryptLength, Feedback, Input, Output);
+        return;
+    }
+
+    mbedtls_des_crypt_cbc(reinterpret_cast<mbedtls_des_context *>(KeyTable), Mode, CryptLength, Feedback, Input, Output);
 }
 
 extern "C" ULONG NTAPI EmuXcCryptService(ULONG Service, PVOID Buffer)
