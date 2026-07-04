@@ -2516,6 +2516,13 @@ extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag)
 
     PVOID Memory = malloc(NumberOfBytes);
 
+    if(Memory == NULL)
+    {
+        printf("EmuKrnl (0x%lX): *ALLOC FAILED* ExAllocatePoolWithTag bytes=0x%lX tag=0x%.08lX\n",
+               GetCurrentThreadId(), NumberOfBytes, Tag);
+        fflush(stdout);
+    }
+
     EmuSwapFS();   // Xbox FS
 
     return Memory;
@@ -3985,6 +3992,19 @@ XBSYSAPI EXPORTNUM(167) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateSystemMemory
                 break;
             }
         }
+    }
+
+    if(pRet == NULL)
+    {
+        ULONG Used = 0;
+        for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
+            if(g_EmuSystemMemoryAllocations[i].Address != NULL)
+                Used++;
+        printf("EmuKrnl (0x%lX): *ALLOC FAILED* MmAllocateContiguousMemoryEx bytes=0x%lX protect=0x%lX "
+               "slots=%lu/128 next=0x%.08lX\n",
+               GetCurrentThreadId(), NumberOfBytes, Protect, Used,
+               (ULONG)g_EmuNextSystemMemoryAddress);
+        fflush(stdout);
     }
 
     EmuSwapFS();   // Xbox FS
