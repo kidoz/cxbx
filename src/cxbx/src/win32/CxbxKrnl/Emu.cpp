@@ -56,6 +56,11 @@ namespace XTL
 #include <clocale>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
+#include <io.h>
+#ifdef _DEBUG
+#include <crtdbg.h>
+#endif
 
 #include "EmuShared.h"
 #include "HLEDataBase.h"
@@ -79,7 +84,6 @@ static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, v
 static void  EmuXRefFailure();
 static int   ExitException(LPEXCEPTION_POINTERS e);
 static void  EmuConfigureLogFile();
-static void  EmuAppendLogLine(const char *szLine);
 
 static bool EmuGetLogFile(char *szLogFile, DWORD dwLogFileSize)
 {
@@ -88,38 +92,47 @@ static bool EmuGetLogFile(char *szLogFile, DWORD dwLogFileSize)
     return dwLogFile != 0 && dwLogFile < dwLogFileSize;
 }
 
-static void EmuAppendLogLine(const char *szLine)
+static void EmuRedirectStdStream(DWORD StdHandle, int FileDescriptor, FILE *Stream, const char *Path, DWORD CreationDisposition)
 {
-    char szLogFile[260];
-
-    if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
-        return;
-
-    HANDLE hFile = CreateFile(szLogFile, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFile(Path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CreationDisposition, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if(hFile == INVALID_HANDLE_VALUE)
         return;
 
-    DWORD dwWritten = 0;
-    WriteFile(hFile, szLine, (DWORD)strlen(szLine), &dwWritten, NULL);
-    WriteFile(hFile, "\r\n", 2, &dwWritten, NULL);
-    CloseHandle(hFile);
+    if(CreationDisposition == OPEN_ALWAYS)
+        SetFilePointer(hFile, 0, NULL, FILE_END);
+
+    int NewDescriptor = _open_osfhandle((intptr_t)hFile, _O_TEXT);
+
+    if(NewDescriptor < 0)
+    {
+        CloseHandle(hFile);
+        return;
+    }
+
+    if(_dup2(NewDescriptor, FileDescriptor) == 0)
+    {
+        SetStdHandle(StdHandle, (HANDLE)_get_osfhandle(FileDescriptor));
+        setvbuf(Stream, NULL, _IONBF, 0);
+    }
+
+    if(NewDescriptor != FileDescriptor)
+        _close(NewDescriptor);
 }
 
 static void EmuConfigureLogFile()
 {
     char szLogFile[260];
 
-    if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+    if(EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+    {
+        EmuRedirectStdStream(STD_OUTPUT_HANDLE, 1, stdout, szLogFile, OPEN_ALWAYS);
+        EmuRedirectStdStream(STD_ERROR_HANDLE, 2, stderr, szLogFile, OPEN_ALWAYS);
         return;
+    }
 
-    FILE *out = freopen(szLogFile, "a", stdout);
-    if(out != NULL)
-        setvbuf(out, NULL, _IONBF, 0);
-
-    FILE *err = freopen(szLogFile, "a", stderr);
-    if(err != NULL)
-        setvbuf(err, NULL, _IONBF, 0);
+    EmuRedirectStdStream(STD_OUTPUT_HANDLE, 1, stdout, "NUL", OPEN_EXISTING);
+    EmuRedirectStdStream(STD_ERROR_HANDLE, 2, stderr, "NUL", OPEN_EXISTING);
 }
 
 static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
@@ -211,11 +224,12 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
     if(fdwReason == DLL_PROCESS_ATTACH)
     {
-        EmuAppendLogLine("--- cxbx runtime process attach ---");
+#ifdef _DEBUG
+        _CrtSetReportMode(_CRT_ASSERT, 0);
+#endif
         EmuConfigureLogFile();
         printf("--- cxbx runtime attach ---\n");
         EmuShared::Init();
-        EmuAppendLogLine("--- cxbx runtime shared memory initialized ---");
     }
     
     if(fdwReason == DLL_PROCESS_DETACH)
