@@ -144,6 +144,41 @@ static const NTSTATUS EmuStatusObjectNameInvalid = (NTSTATUS)0xC0000033;
 static const NTSTATUS EmuStatusObjectPathNotFound = (NTSTATUS)0xC000003A;
 static const NTSTATUS EmuStatusSuspendCountExceeded = (NTSTATUS)0xC000004A;
 
+typedef int (__cdecl *EmuGuestExceptionHandler)(PEXCEPTION_RECORD ExceptionRecord, void *EstablisherFrame, PCONTEXT ContextRecord, void *DispatcherContext);
+
+static bool EmuRaiseGuestException(NTSTATUS Status, ULONG GuestEip, ULONG GuestEsp, ULONG GuestEbp)
+{
+    void *Registration = NULL;
+
+    __asm
+    {
+        mov eax, fs:[0]
+        mov Registration, eax
+    }
+
+    if(Registration == NULL || Registration == (void*)-1)
+        return false;
+
+    EmuGuestExceptionHandler Handler = *(EmuGuestExceptionHandler*)((uint08*)Registration + 4);
+    if(Handler == NULL)
+        return false;
+
+    EXCEPTION_RECORD ExceptionRecord;
+    ZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+    ExceptionRecord.ExceptionCode = Status;
+    ExceptionRecord.ExceptionAddress = (PVOID)GuestEip;
+
+    CONTEXT ContextRecord;
+    ZeroMemory(&ContextRecord, sizeof(ContextRecord));
+    ContextRecord.ContextFlags = CONTEXT_CONTROL;
+    ContextRecord.Eip = GuestEip;
+    ContextRecord.Esp = GuestEsp;
+    ContextRecord.Ebp = GuestEbp;
+
+    Handler(&ExceptionRecord, Registration, &ContextRecord, NULL);
+    return true;
+}
+
 static bool EmuObjectStringToStdString(xboxkrnl::PSTRING ObjectName, std::string *Value)
 {
     if(ObjectName == NULL || Value == NULL || ObjectName->Buffer == NULL)
@@ -848,6 +883,12 @@ extern "C" CHAR NTAPI EmuRtlUpperChar(CHAR Character)
         Value = '?';
 
     return (CHAR)Value;
+}
+
+extern "C" VOID NTAPI EmuRtlUnwind(PVOID TargetFrame, PVOID TargetIp, PEXCEPTION_RECORD ExceptionRecord, PVOID ReturnValue)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS();   // Xbox FS
 }
 
 extern "C" VOID NTAPI EmuRtlUpperString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString)
@@ -2542,7 +2583,22 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
 
     if(PreviousCount >= 0x7F)
     {
+        ULONG GuestEip;
+        ULONG GuestEsp;
+        ULONG GuestEbp;
+
+        __asm
+        {
+            mov eax, [ebp+4]
+            mov GuestEip, eax
+            lea eax, [ebp+12]
+            mov GuestEsp, eax
+            mov eax, [ebp]
+            mov GuestEbp, eax
+        }
+
         EmuSwapFS();   // Xbox FS
+        EmuRaiseGuestException(EmuStatusSuspendCountExceeded, GuestEip, GuestEsp, GuestEbp);
         return PreviousCount;
     }
 

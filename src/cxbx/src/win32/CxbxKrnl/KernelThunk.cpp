@@ -130,6 +130,7 @@ extern "C" CHAR NTAPI EmuRtlLowerChar(CHAR Character);
 extern "C" BOOLEAN NTAPI EmuRtlTimeFieldsToTime(const void *TimeFields, xboxkrnl::PLARGE_INTEGER Time);
 extern "C" VOID NTAPI EmuRtlTimeToTimeFields(const xboxkrnl::LARGE_INTEGER *Time, void *TimeFields);
 extern "C" ULONG NTAPI EmuRtlUlongByteSwap(ULONG Source);
+extern "C" VOID NTAPI EmuRtlUnwind(PVOID TargetFrame, PVOID TargetIp, PEXCEPTION_RECORD ExceptionRecord, PVOID ReturnValue);
 extern "C" CHAR NTAPI EmuRtlUpperChar(CHAR Character);
 extern "C" VOID NTAPI EmuRtlUpperString(xboxkrnl::PSTRING DestinationString, const xboxkrnl::STRING *SourceString);
 extern "C" USHORT NTAPI EmuRtlUshortByteSwap(USHORT Source);
@@ -498,7 +499,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0135),                          // 0x0135 (309)
     (uint32)PANIC(0x0136),                          // 0x0136 (310)
     (uint32)PANIC(0x0137),                          // 0x0137 (311)
-    (uint32)PANIC(0x0138),                          // 0x0138 (312)
+    (uint32)&EmuRtlUnwind,                          // 0x0138 (312)
     (uint32)PANIC(0x0139),                          // 0x0139 (313)
     (uint32)PANIC(0x013A),                          // 0x013A (314)
     (uint32)PANIC(0x013B),                          // 0x013B (315)
