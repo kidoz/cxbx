@@ -3625,7 +3625,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay
     // ******************************************************************
     if(g_bSupportsYUY2)
     {
-        RECT SourRect = {0, 0, g_dwOverlayW, g_dwOverlayH}, DestRect;
+        RECT SourRect = {0, 0, (LONG)g_dwOverlayW, (LONG)g_dwOverlayH}, DestRect;
 
         int nTitleHeight  = GetSystemMetrics(SM_CYCAPTION);
         int nBorderWidth  = GetSystemMetrics(SM_CXSIZEFRAME);

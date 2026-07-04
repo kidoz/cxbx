@@ -45,6 +45,12 @@ namespace XTL
 #define FIELD_OFFSET(type,field)  ((ULONG)&(((type *)0)->field))
 
 // ******************************************************************
+// * DirectInput enumeration callbacks (defined below, used before)
+// ******************************************************************
+BOOL CALLBACK WrapEnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi, LPVOID pvRef);
+BOOL CALLBACK WrapEnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi, LPVOID pvRef);
+
+// ******************************************************************
 // * func: XBController::XBController
 // ******************************************************************
 XBController::XBController()
@@ -350,7 +356,7 @@ bool XBController::ConfigPoll(char *szStatus)
             // ******************************************************************
             if(dwHow != -1)
             {
-                char *szDirection = (dwFlags & DEVICE_FLAG_AXIS) ? (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive " : "Negative " : "";
+                const char *szDirection = (dwFlags & DEVICE_FLAG_AXIS) ? (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive " : "Negative " : "";
 
                 m_InputDevice[v].m_Device->GetDeviceInfo(&DeviceInstance);
 
