@@ -33,16 +33,44 @@ cxbx_src = files(
   'src/win32/CxbxKrnl/KernelThunk.cpp',
 )
 
+cxbx_link_libs = [
+  libxboxkrnl,
+  libxgfx2d,
+  libxhal,
+  libxlibc,
+  libxvga,
+]
+
+if get_option('build_xusb')
+  cxbx_link_libs += [libxusb]
+endif
+
+dlltool = find_program('llvm-dlltool')
+d3d8_import_lib = custom_target(
+  'd3d8_import_lib',
+  input : 'd3d8.def',
+  output : 'd3d8.lib',
+  command : [dlltool, '-m', 'i386', '-d', '@INPUT@', '-l', '@OUTPUT@'],
+)
+cxbx_link_libs += [d3d8_import_lib]
+
+cxbx_link_args = [
+  '-lddraw',
+  '-ldinput8',
+  '-ldsound',
+  '-ldxguid',
+  '-lwinmm',
+  '-lws2_32',
+]
+
 executable(
   'cxbx',
   cxbx_src,
   include_directories : cxbx_inc,
-  link_with : [
-    libxboxkrnl,
-    libxgfx2d,
-    libxhal,
-    libxlibc,
-    libxusb,
-    libxvga,
+  link_with : cxbx_link_libs,
+  link_args : cxbx_link_args,
+  cpp_args : [
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
   ],
 )

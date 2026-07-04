@@ -110,6 +110,7 @@ static DWORD WINAPI PCSTProxy
     #endif
 
     EmuGenerateFS(g_pTLS, g_pTLSData);
+    void *CallComplete = &&callComplete;
 
     // ******************************************************************
     // * use the special calling convention
@@ -121,9 +122,10 @@ static DWORD WINAPI PCSTProxy
         __asm
         {
             mov         esi, StartRoutine
+            mov         eax, CallComplete
             push        StartContext2
             push        StartContext1
-            push        offset callComplete
+            push        eax
             lea         ebp, [esp-4]
             jmp near    esi
         }

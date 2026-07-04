@@ -1,0 +1,6 @@
+option(
+  'build_xusb',
+  type : 'boolean',
+  value : false,
+  description : 'Build and link the legacy open-xdk xusb OHCI stack.',
+)

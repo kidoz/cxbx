@@ -12,7 +12,7 @@
 #ifndef XBOXKRNL_H
 #define XBOXKRNL_H
 
-#if defined(__cplusplus)
+#if defined(__cplusplus) && !defined(XBOXKRNL_NO_EXTERN_C)
 extern "C"
 {
 #endif
@@ -918,10 +918,9 @@ static VOID WRITE_REGISTER_ULONG(PVOID Address, ULONG Value)
 // ******************************************************************
 #include "xbox.h"
 
-#if defined(__cplusplus)
+#if defined(__cplusplus) && !defined(XBOXKRNL_NO_EXTERN_C)
 }
 #endif
 
 #endif
-
 

@@ -51,7 +51,9 @@ subdir('src/open-xdk/src/xboxkrnl')
 subdir('src/open-xdk/src/xgfx2d')
 subdir('src/open-xdk/src/xhal')
 subdir('src/open-xdk/src/xlibc')
-subdir('src/open-xdk/src/xusb')
+if get_option('build_xusb')
+  subdir('src/open-xdk/src/xusb')
+endif
 subdir('src/open-xdk/src/xvga')
 
 # Emulator executable (links the libraries above).

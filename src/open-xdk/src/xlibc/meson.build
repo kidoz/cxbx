@@ -16,7 +16,8 @@ xlibc_src = files(
   'src/math/ldiv.c',
   'src/math/log.c',
   'src/math/ltoa.c',
-  'src/math/malloc.c',
+  # Use the host CRT allocator in the emulator build. xlibc's malloc/free
+  # collide with the MSVC runtime that the C++ executable links.
   'src/math/misc_vars.c',
   'src/math/pow.c',
   'src/math/rand.c',
