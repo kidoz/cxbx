@@ -209,7 +209,6 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
         if(NewFS == 0)
         {
             printf("EmuFS (0x%X): LDT unavailable; running without Xbox FS selector.\n", (uint32)GetCurrentThreadId());
-            delete[] (char*)NewPcr;
 
             if(g_pEmuHostStackBase == NULL)
                 g_pEmuHostStackBase = OrgNtTib->StackBase;
@@ -218,17 +217,34 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
             EmuSetCurrentThread(pNewTLS, pNewTLSAllocation);
 
             // Without an LDT selector the guest shares the host TEB as its KPCR.
-            // The host TIB (offsets 0x00-0x1C) already lines up, but the Xbox KPCR
-            // keeps PrcbData.CurrentThread at offset 0x28, where a 32-bit TEB has
-            // ActiveRpcHandle (0). XDK/XAPI thread prologues do `mov eax, fs:[0x28]`
-            // then dereference it (KTHREAD list init), so a 0 there is an instant
-            // crash. Publish the current thread pointer at fs:[0x28] so those
-            // prologues get a valid KTHREAD instead. (ActiveRpcHandle is unused by
-            // the titles this HLE runs, so overwriting it is safe in practice.)
+            // The host TIB (offsets 0x00-0x1C) already lines up, but the fields the
+            // Xbox KPCR keeps just past it do not: a 32-bit TEB has EnvironmentPtr
+            // at 0x1C, the PID at 0x20 and ActiveRpcHandle at 0x28, whereas the KPCR
+            // has SelfPcr/Prcb/PrcbData.CurrentThread. XDK/XAPI thread prologues read
+            // these straight off FS -- `mov eax, fs:[0x20]` (Prcb) then a Prcb-
+            // relative field, `mov eax, fs:[0x28]` (current KTHREAD) -- so the raw
+            // host values fault on the first dereference. Build a persistent KPCR
+            // and overlay each field at its KPCR offset onto the shared TEB so those
+            // prologues see valid pointers. The KPCR is intentionally leaked (one per
+            // Xbox thread, reclaimed at process exit); the overwritten TEB slots are
+            // unused by the titles this HLE runs.
+            memset(NewPcr, 0, sizeof(*NewPcr));
+            memcpy(&NewPcr->NtTib, OrgNtTib, sizeof(NT_TIB));
+            NewPcr->NtTib.Self             = &NewPcr->NtTib;
+            NewPcr->SelfPcr                = NewPcr;
+            NewPcr->PrcbData.CurrentThread = (xboxkrnl::KTHREAD*)g_pEmuCurrentThread;
+            NewPcr->Prcb                   = &NewPcr->PrcbData;
+
             {
-                xboxkrnl::ETHREAD *CurThread = g_pEmuCurrentThread;
+                void *SelfPcr   = NewPcr;
+                void *Prcb      = &NewPcr->PrcbData;
+                void *CurThread = g_pEmuCurrentThread;
                 __asm
                 {
+                    mov eax, SelfPcr
+                    mov fs:[0x1C], eax
+                    mov eax, Prcb
+                    mov fs:[0x20], eax
                     mov eax, CurThread
                     mov fs:[0x28], eax
                 }
