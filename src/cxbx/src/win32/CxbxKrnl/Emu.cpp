@@ -2911,6 +2911,17 @@ static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
                        GetCurrentThreadId(), Instruction[1], e->ContextRecord->Eax);
                 fflush(stdout);
                 return true;
+
+            // CLI / STI: the guest toggles the interrupt flag around kernel
+            // patches (e.g. the soft-mod launcher's atomic xchg into kernel code).
+            // The HLE has no real interrupt flag, so treat both as no-ops.
+            case 0xFA:
+                e->ContextRecord->Eip += 1;
+                return true;
+
+            case 0xFB:
+                e->ContextRecord->Eip += 1;
+                return true;
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
