@@ -3223,6 +3223,30 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
     return false;
 }
 
+// Heuristic: does Address look like a real return address, i.e. is it preceded
+// by a CALL instruction? Used to recover from calls/tail-jumps through NULL
+// function pointers by finding where control should resume. Recognises call
+// rel32 (E8) and the call r/m32 forms (FF /2), where the ModR/M reg field == 2.
+static bool EmuLooksLikeReturnAddress(ULONG Address)
+{
+    if(Address < 0x00010000 || Address >= 0x10000000)
+        return false;
+
+    __try
+    {
+        const BYTE *p = (const BYTE*)Address;
+        if(p[-5] == 0xE8)                                  return true; // call rel32
+        if(p[-6] == 0xFF && (p[-5] & 0x38) == 0x10)        return true; // call r/m32, disp32
+        if(p[-3] == 0xFF && (p[-2] & 0x38) == 0x10)        return true; // call r/m32, disp8
+        if(p[-2] == 0xFF && (p[-1] & 0x38) == 0x10)        return true; // call r/m32 / call reg
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return false;
+}
+
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
     bool WasXboxFS = EmuIsXboxFS();
@@ -3282,23 +3306,41 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     // native XDK left for a driver we don't fully model.
     if(e->ContextRecord->Eip < 0x00010000)
     {
-        ULONG ReturnAddress = 0;
-        __try
+        // Scan the top of stack for the first genuine return address (validated
+        // by a preceding CALL). A `call [null]` leaves it at [ESP]; a `jmp [null]`
+        // tail call leaves callee args at [ESP..] with the return address a few
+        // slots deeper. Resuming there (and discarding the intervening args)
+        // makes the missing callee behave like a no-op that returned 0.
+        ULONG ResumeAddress = 0;
+        ULONG ResumeEsp = 0;
+        for(ULONG Slot = 0; Slot < 8; Slot++)
         {
-            ReturnAddress = *(ULONG*)e->ContextRecord->Esp;
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER)
-        {
-            ReturnAddress = 0;
+            ULONG SlotAddr = e->ContextRecord->Esp + Slot * 4;
+            ULONG Candidate = 0;
+            __try
+            {
+                Candidate = *(ULONG*)SlotAddr;
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                break;
+            }
+
+            if(EmuLooksLikeReturnAddress(Candidate))
+            {
+                ResumeAddress = Candidate;
+                ResumeEsp = SlotAddr + 4;
+                break;
+            }
         }
 
-        if(ReturnAddress >= 0x00010000 && ReturnAddress < 0x10000000)
+        if(ResumeAddress != 0)
         {
-            printf("Emu (0x%lX): near-null call recovered -- returning to 0x%.08lX (stubbed callback).\n",
-                   GetCurrentThreadId(), ReturnAddress);
+            printf("Emu (0x%lX): near-null call recovered -- resuming at 0x%.08lX, ESP 0x%.08lX->0x%.08lX (stubbed callback).\n",
+                   GetCurrentThreadId(), ResumeAddress, e->ContextRecord->Esp, ResumeEsp);
             fflush(stdout);
-            e->ContextRecord->Eip = ReturnAddress;
-            e->ContextRecord->Esp += 4;
+            e->ContextRecord->Eip = ResumeAddress;
+            e->ContextRecord->Esp = ResumeEsp;
             e->ContextRecord->Eax = 0;   // callback "returned" 0/void
             if(WasXboxFS)
                 EmuSwapFS();
