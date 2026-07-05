@@ -2931,6 +2931,57 @@ static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
     return false;
 }
 
+// The soft-mod launcher acquires ring 0 by patching a GDT code-segment descriptor
+// (sgdt to find the GDT base, then `xchg` the 8-byte descriptor for selector 8)
+// and far-jumping to it. A user-mode process can neither write the real GDT nor
+// load a ring-0 selector -- and does not need to: this HLE services kernel calls
+// at the export level, so the patch changes nothing. Emulate the faulting steps
+// so the title proceeds: the `xchg` into the protected descriptor returns its
+// current value and drops the write; the far jump keeps the flat user CS and just
+// moves EIP to the target offset.
+static bool EmuTryEmulateGdtPatch(LPEXCEPTION_POINTERS e)
+{
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+        return false;
+
+    __try
+    {
+        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+
+        if(Instruction[0] == 0x87)   // xchg r/m32, r32
+        {
+            ULONG Address = 0, Length = 0;
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &Length))
+            {
+                // The descriptor lives in the real (no-access) GDT, so neither read
+                // nor write it: hand back 0 as the "old" descriptor and step over.
+                ULONG Reg = (Instruction[1] >> 3) & 0x07;
+                EmuSetContextRegister(e->ContextRecord, Reg, 0);
+                e->ContextRecord->Eip += Length;
+                printf("Emu (0x%lX): Emulated GDT-patch xchg [0x%.08lX] (skipped).\n",
+                       GetCurrentThreadId(), Address);
+                fflush(stdout);
+                return true;
+            }
+        }
+
+        if(Instruction[0] == 0xEA)   // ljmp ptr16:32
+        {
+            ULONG Target = *(ULONG*)&Instruction[1];
+            e->ContextRecord->Eip = Target;
+            printf("Emu (0x%lX): Emulated far jump to 0x%.08lX (flat CS).\n",
+                   GetCurrentThreadId(), Target);
+            fflush(stdout);
+            return true;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return false;
+}
+
 static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 {
     if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
@@ -3510,6 +3561,14 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     }
 
     if(EmuTryEmulateMmioAccess(e))
+    {
+        if(WasXboxFS)
+            EmuSwapFS();
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    if(EmuTryEmulateGdtPatch(e))
     {
         if(WasXboxFS)
             EmuSwapFS();
