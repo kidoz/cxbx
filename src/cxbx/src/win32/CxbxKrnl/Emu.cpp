@@ -2682,6 +2682,33 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        // 0x81 /7 = cmp r/m32, imm32 : same as 0x83 /7 but a full 32-bit immediate.
+        // Titles scan low physical memory for a dword signature (e.g. `cmp [eax],
+        // 'INIT'`) this way; without it the read faults unemulated.
+        if(AccessType == 0 && Instruction[0] == 0x81 && (Instruction[1] & 0x38) == 0x38)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = 0;
+                ULONG Right = *(ULONG*)&Instruction[OperandLength];
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Left))
+                    return false;
+
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 4;
+
+                printf("Emu (0x%lX): Emulated physical compare 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 1 && Instruction[0] == 0xA3 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
             ULONG Value = e->ContextRecord->Eax;
