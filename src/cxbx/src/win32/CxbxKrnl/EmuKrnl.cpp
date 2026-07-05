@@ -4891,6 +4891,24 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
         printf("  New:\"$CxbxPath\\CxbxCache\\%s\"\n", szBuffer);
         #endif
     }
+    // ******************************************************************
+    // * \Device\Harddisk0\PartitionN should map to the XBE directory too,
+    // * so titles that open the raw hard-disk partition (e.g. NestopiaX's ROM
+    // * browser enumerating the disk) find their content instead of failing
+    // * with ACCESS_DENIED and stalling before the UI ever renders.
+    // ******************************************************************
+    else if(_strnicmp(szBuffer, "\\Device\\Harddisk0\\Partition", 27) == 0 &&
+            szBuffer[27] >= '0' && szBuffer[27] <= '9')
+    {
+        szBuffer += 28;                 // skip "\Device\Harddisk0\PartitionN"
+        while(szBuffer[0] == '\\')
+            szBuffer += 1;              // skip separator(s) to leave a relative path
+
+        ObjectAttributes->RootDirectory = g_hCurDir;
+
+        printf("EmuKrnl (0x%X): NtCreateFile mapped hard-disk partition to XBE dir: \"%s\"\n",
+               GetCurrentThreadId(), szBuffer);
+    }
 
     // ******************************************************************
     // * TODO: Wildcards are not allowed??
