@@ -3037,6 +3037,41 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
     return Connected;
 }
 
+// ******************************************************************
+// * 0x0064 - KeDisconnectInterrupt
+// ******************************************************************
+// Detach a previously connected interrupt. Left a PANIC stub, nxdk pbkit's call
+// (with a 1-pointer __stdcall arg) fell through the argument-less unimplemented
+// trampoline, which cleaned zero stack args and left the caller's frame skewed
+// -- corrupting ESP so the caller returned to garbage. Implementing it with the
+// correct signature keeps the stack balanced (and actually detaches).
+extern "C" BOOLEAN NTAPI EmuKeDisconnectInterrupt(PVOID InterruptObject)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    BOOLEAN WasConnected = FALSE;
+    EmuKInterrupt *Interrupt = (EmuKInterrupt*)InterruptObject;
+
+    if(EmuIsWritableMemoryRange(Interrupt, sizeof(*Interrupt)) &&
+       Interrupt->BusInterruptLevel < sizeof(g_EmuInterruptList) / sizeof(g_EmuInterruptList[0]))
+    {
+        if(Interrupt->Connected)
+        {
+            Interrupt->Connected = FALSE;
+            if(g_EmuInterruptList[Interrupt->BusInterruptLevel] == Interrupt)
+                g_EmuInterruptList[Interrupt->BusInterruptLevel] = NULL;
+            WasConnected = TRUE;
+        }
+    }
+
+    printf("EmuKrnl (0x%lX): KeDisconnectInterrupt interrupt=0x%.08lX was=%lu.\n",
+           GetCurrentThreadId(), (ULONG)InterruptObject, (ULONG)WasConnected);
+
+    EmuSwapFS();   // Xbox FS
+
+    return WasConnected;
+}
+
 extern "C" VOID NTAPI EmuKeInitializeInterrupt(PVOID InterruptObject, PVOID ServiceRoutine, PVOID ServiceContext,
                                                ULONG Vector, ULONG Irql, ULONG InterruptMode, BOOLEAN ShareVector)
 {
