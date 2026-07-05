@@ -3173,6 +3173,41 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
     return PreviousCount;
 }
 
+// ******************************************************************
+// * 0x0091 - KeSetEvent
+// ******************************************************************
+// Signals a dispatcher event and returns its previous signal state. The XDK
+// present/vblank path calls this every frame to wake the render thread that
+// waits on the swap-done event; left as a PANIC stub, the event never signals
+// and the title spins forever in its vblank loop. Only SignalState is modelled
+// (the waiter polls it), which is enough to release the loop.
+extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    LONG PreviousState = 0;
+    xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Event;
+
+    if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)))
+    {
+        PreviousState = Header->SignalState;
+        Header->SignalState = 1;   // signaled
+    }
+
+    static ULONG s_LogCount = 0;
+    if(s_LogCount < 4)
+    {
+        printf("EmuKrnl (0x%lX): KeSetEvent(event=0x%.08lX increment=%ld wait=%u) previous=%ld.\n",
+               GetCurrentThreadId(), (ULONG)Event, Increment, (ULONG)Wait, PreviousState);
+        fflush(stdout);
+        s_LogCount++;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousState;
+}
+
 extern "C" UCHAR __fastcall EmuKfRaiseIrql(UCHAR NewIrql)
 {
     UCHAR PreviousIrql = g_EmuCurrentIrql;

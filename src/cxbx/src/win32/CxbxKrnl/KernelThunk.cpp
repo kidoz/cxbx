@@ -97,6 +97,7 @@ extern "C" BOOLEAN NTAPI EmuKeRemoveQueueDpc(xboxkrnl::PKDPC Dpc);
 extern "C" ULONG NTAPI EmuKeResumeThread(xboxkrnl::PKTHREAD Thread);
 extern "C" VOID NTAPI EmuKeStallExecutionProcessor(ULONG Microseconds);
 extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread);
+extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait);
 extern "C" UCHAR __fastcall EmuKfRaiseIrql(UCHAR NewIrql);
 extern "C" VOID __fastcall EmuKfLowerIrql(UCHAR NewIrql);
 extern "C" BOOLEAN NTAPI EmuMmIsAddressValid(PVOID VirtualAddress);
@@ -397,7 +398,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x008E),                          // 0x008E (142)
     (uint32)PANIC(0x008F),                          // 0x008F (143)
     (uint32)PANIC(0x0090),                          // 0x0090 (144)
-    (uint32)PANIC(0x0091),                          // 0x0091 (145)
+    (uint32)&EmuKeSetEvent,                         // 0x0091 (145)
     (uint32)PANIC(0x0092),                          // 0x0092 (146)
     (uint32)PANIC(0x0093),                          // 0x0093 (147)
     (uint32)PANIC(0x0094),                          // 0x0094 (148)
