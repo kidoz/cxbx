@@ -3668,20 +3668,12 @@ XBSYSAPI EXPORTNUM(49) VOID DECLSPEC_NORETURN xboxkrnl::HalReturnToFirmware
     RETURN_FIRMWARE Routine
 )
 {
+    void *CallerRet = __builtin_return_address(0);
     EmuSwapFS();   // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
-    {
-        printf("EmuKrnl (0x%X): HalReturnToFirmware\n"
-               "(\n"
-               "   Routine             : 0x%.08X\n"
-               ");\n",
-               GetCurrentThreadId(), Routine);
-    }
-    #endif
+    printf("EmuKrnl (0x%X): HalReturnToFirmware(%d) called from guest 0x%.08X.\n",
+           GetCurrentThreadId(), Routine, (uint32)CallerRet);
+    fflush(stdout);
 
     EmuCleanup("Xbe has rebooted : HalReturnToFirmware(%d)", Routine);
 
