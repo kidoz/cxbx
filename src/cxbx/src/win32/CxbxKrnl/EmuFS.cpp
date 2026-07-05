@@ -216,6 +216,23 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
 
             OrgNtTib->StackBase = pNewTLS;
             EmuSetCurrentThread(pNewTLS, pNewTLSAllocation);
+
+            // Without an LDT selector the guest shares the host TEB as its KPCR.
+            // The host TIB (offsets 0x00-0x1C) already lines up, but the Xbox KPCR
+            // keeps PrcbData.CurrentThread at offset 0x28, where a 32-bit TEB has
+            // ActiveRpcHandle (0). XDK/XAPI thread prologues do `mov eax, fs:[0x28]`
+            // then dereference it (KTHREAD list init), so a 0 there is an instant
+            // crash. Publish the current thread pointer at fs:[0x28] so those
+            // prologues get a valid KTHREAD instead. (ActiveRpcHandle is unused by
+            // the titles this HLE runs, so overwriting it is safe in practice.)
+            {
+                xboxkrnl::ETHREAD *CurThread = g_pEmuCurrentThread;
+                __asm
+                {
+                    mov eax, CurThread
+                    mov fs:[0x28], eax
+                }
+            }
             return;
         }
     }
