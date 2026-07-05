@@ -84,6 +84,7 @@ static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallAutoBootLaunchData();
+static void  EmuInstallFakeKernelImage();
 static void  EmuXRefFailure();
 static int   ExitException(LPEXCEPTION_POINTERS e);
 static void  EmuConfigureLogFile();
@@ -4045,6 +4046,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
         EmuInstallAutoBootLaunchData();
+        EmuInstallFakeKernelImage();
     }
 
 	// ******************************************************************
@@ -4267,6 +4269,63 @@ static void EmuInstallAutoBootLaunchData()
     printf("Emu (0x%lX): auto-boot launch data installed rom=\"%s\" page=0x%.08lX.\n",
            GetCurrentThreadId(), rom, (unsigned long)(uintptr_t)Page);
     fflush(stdout);
+}
+
+// Populate a minimal Xbox kernel PE image in the physical-map shadow at guest
+// 0x80010000 (the real kernel's fixed base). The soft-mod launcher framework
+// shared by FCEUltra/z26x/NestopiaX 2.2 parses the running kernel as a PE --
+// e_lfanew at +0x3C, IMAGE_FILE_HEADER at pe+4 (NumberOfSections at pe+6,
+// SizeOfOptionalHeader at pe+0x14), section table after the optional header --
+// and scans it for the 'INIT' section. Against this HLE's all-zero kernel the
+// scan finds nothing and the title QuickReboots before it ever runs; a
+// well-formed header + section table (including INIT) lets the parse succeed.
+static void EmuInstallFakeKernelImage()
+{
+    BYTE Image[0x400];
+    ZeroMemory(Image, sizeof(Image));
+
+    // IMAGE_DOS_HEADER
+    Image[0x00] = 'M'; Image[0x01] = 'Z';
+    *(ULONG*)(Image + 0x3C) = 0xF8;                 // e_lfanew -> IMAGE_NT_HEADERS
+
+    // IMAGE_NT_HEADERS at 0xF8
+    BYTE *Pe = Image + 0xF8;
+    *(ULONG*)(Pe + 0x00) = 0x00004550;              // "PE\0\0"
+    *(USHORT*)(Pe + 0x04) = 0x014C;                 // FileHeader.Machine = i386
+    *(USHORT*)(Pe + 0x06) = 6;                      // FileHeader.NumberOfSections
+    *(USHORT*)(Pe + 0x14) = 0xE0;                   // FileHeader.SizeOfOptionalHeader
+    *(USHORT*)(Pe + 0x18) = 0x010B;                 // OptionalHeader.Magic = PE32
+    *(ULONG*)(Pe + 0x18 + 0x1C) = 0x80010000;       // OptionalHeader.ImageBase
+
+    // IMAGE_SECTION_HEADERs after the optional header. The soft-mod scan only
+    // checks the LAST section's name == 'INIT' (real xboxkrnl keeps INIT last, as
+    // it is discarded after boot), so INIT must be the final entry.
+    BYTE *Sec = Pe + 0x18 + 0xE0;
+    struct { char Name[8]; ULONG VSize, VAddr; } Sects[6] =
+    {
+        { { '.','t','e','x','t', 0,0,0 }, 0x5D000, 0x00001000 },
+        { { '.','d','a','t','a', 0,0,0 }, 0x03000, 0x0005E000 },
+        { { 'P','A','G','E',  0, 0,0,0 }, 0x10000, 0x00061000 },
+        { { '.','r','d','a','t','a',0,0 }, 0x05000, 0x00071000 },
+        { { '.','e','d','a','t','a',0,0 }, 0x02000, 0x00076000 },
+        { { 'I','N','I','T',  0, 0,0,0 }, 0x0A000, 0x00078000 },
+    };
+    for(int i = 0; i < 6; i++)
+    {
+        BYTE *S = Sec + i * 0x28;
+        memcpy(S, Sects[i].Name, 8);
+        *(ULONG*)(S + 0x08) = Sects[i].VSize;       // VirtualSize
+        *(ULONG*)(S + 0x0C) = Sects[i].VAddr;       // VirtualAddress
+        *(ULONG*)(S + 0x10) = Sects[i].VSize;       // SizeOfRawData
+        *(ULONG*)(S + 0x14) = Sects[i].VAddr;       // PointerToRawData
+    }
+
+    if(EmuWritePhysicalMapBytes(EmuPhysicalMapBase + 0x00010000, Image, sizeof(Image)))
+    {
+        printf("Emu (0x%lX): fake Xbox kernel PE installed at 0x80010000 (INIT @ RVA 0x61000).\n",
+               GetCurrentThreadId());
+        fflush(stdout);
+    }
 }
 
 static DWORD WINAPI EmuNestopiaX13XLaunchNewImageA(LPCSTR lpTitlePath, PVOID pLaunchData)
