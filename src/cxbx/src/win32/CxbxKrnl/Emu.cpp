@@ -1114,6 +1114,21 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
             Value = EmuNv2aCachedRegister(EmuNv2aUserChannel0Put, 0);
             break;
 
+        // NV2A PRAMDAC clock-PLL coefficients. Software (e.g. nxdk pbkit) reads
+        // these to derive the GPU/memory/video clocks and DIVIDES by the M field
+        // (bits 0-7); a zero coefficient means M==0, so pbkit bails out of channel
+        // setup, leaves its DMA-context pointer null, and later crashes. Report
+        // realistic Xbox values: clock = N * 16.66MHz / (M << P).
+        case 0x680500:   // NVPLL_COEFF: GPU core ~233 MHz  (M=1, N=28, P=1)
+            Value = 0x00011C01;
+            break;
+        case 0x680504:   // MPLL_COEFF:  memory  ~200 MHz  (M=1, N=12, P=0)
+            Value = 0x00000C01;
+            break;
+        case 0x680508:   // VPLL_COEFF:  video   ~33 MHz   (M=1, N=2,  P=0)
+            Value = 0x00000201;
+            break;
+
         default:
             Value = EmuNv2aCachedRegister(Offset, 0);
             break;
