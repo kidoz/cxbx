@@ -2270,6 +2270,47 @@ static ULONG EmuQueryContiguousMemoryAllocationSize(PVOID Address)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Bridges for the NV2A model (Emu.cpp). In this HLE emulator the guest programs
+// the NV2A with raw host pointers into MmAllocateContiguousMemory blocks (the
+// pushbuffer PUT, texture offsets), so the NV2A pusher/texture code reads guest
+// data straight from host memory. These let it find the enclosing block base
+// (a pushbuffer's start, given its end) and reverse a fake "physical" address
+// back to its host pointer, for titles that go through MmGetPhysicalAddress.
+// ---------------------------------------------------------------------------
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize)
+{
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+    {
+        const ULONG Base = (ULONG)g_EmuContiguousMemoryAllocations[i].Address;
+        const ULONG Size = g_EmuContiguousMemoryAllocations[i].Size;
+
+        if(Base != 0 && HostAddress >= Base && HostAddress < Base + Size)
+        {
+            if(BlockSize != NULL)
+                *BlockSize = Size;
+            return Base;
+        }
+    }
+
+    return 0;
+}
+
+extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress)
+{
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) / sizeof(g_EmuContiguousMemoryAllocations[0]); i++)
+    {
+        const ULONG Base = (ULONG)g_EmuContiguousMemoryAllocations[i].Address;
+        const ULONG Phys = g_EmuContiguousMemoryAllocations[i].PhysicalAddress;
+        const ULONG Size = g_EmuContiguousMemoryAllocations[i].Size;
+
+        if(Base != 0 && PhysicalAddress >= Phys && PhysicalAddress < Phys + Size)
+            return Base + (PhysicalAddress - Phys);
+    }
+
+    return 0;
+}
+
 static ULONG EmuCommittedSystemMemoryBytes()
 {
     ULONG Total = 0;
