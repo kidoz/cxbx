@@ -83,6 +83,7 @@ HANDLE       g_hZDrive    = NULL;
 static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
+static void  EmuInstallAutoBootLaunchData();
 static void  EmuXRefFailure();
 static int   ExitException(LPEXCEPTION_POINTERS e);
 static void  EmuConfigureLogFile();
@@ -4043,6 +4044,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         printf("Emu (0x%X): Resolved %d cross reference(s)\n", GetCurrentThreadId(), OrigUnResolvedXRefs - UnResolvedXRefs);
 
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
+        EmuInstallAutoBootLaunchData();
     }
 
 	// ******************************************************************
@@ -4232,6 +4234,39 @@ static VOID WINAPI EmuNestopiaX13XapiInitProcess()
     EmuInstallNestopiaX13DSoundCounters(true);
 
     EmuSwapFS();   // XBox FS
+}
+
+// Optionally seed the kernel LaunchDataPage so a homebrew emulator auto-boots a
+// ROM instead of stalling at its menu for controller input we can't supply
+// headless. The guest ROM path (e.g. "d:\\nesroms\\Battle.nes", relative to the
+// title's D: = its own directory) comes from the CXBX_AUTOBOOT_ROM environment
+// variable. FCEUltra/z26x/etc. read this in XGetCustomLaunchData via XGetLaunchInfo,
+// which wants launch type LDT_TITLE (0) plus a CUSTOM_LAUNCH_DATA carrying magic
+// 0xEE456777 and szFilename. Page layout is the XDK's LAUNCH_DATA_PAGE:
+// Header.dwLaunchDataType at +0x000, the 3 KiB LaunchData blob at +0x400;
+// CUSTOM_LAUNCH_DATA is { DWORD magic; char szFilename[300]; ... }.
+static void EmuInstallAutoBootLaunchData()
+{
+    char rom[300] = {0};
+    if(GetEnvironmentVariableA("CXBX_AUTOBOOT_ROM", rom, sizeof(rom)) == 0 || rom[0] == '\0')
+        return;
+
+    unsigned char *Page = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if(Page == NULL)
+        return;
+    memset(Page, 0, 0x1000);
+
+    *(uint32*)(Page + 0x000) = 0;                    // Header.dwLaunchDataType = LDT_TITLE
+
+    unsigned char *LaunchData = Page + 0x400;
+    *(uint32*)(LaunchData + 0x000) = 0xEE456777;     // CUSTOM_LAUNCH_DATA.magic
+    strncpy((char*)(LaunchData + 0x004), rom, 299);  // CUSTOM_LAUNCH_DATA.szFilename[300]
+
+    xboxkrnl::LaunchDataPage = (xboxkrnl::DWORD)(uintptr_t)Page;
+
+    printf("Emu (0x%lX): auto-boot launch data installed rom=\"%s\" page=0x%.08lX.\n",
+           GetCurrentThreadId(), rom, (unsigned long)(uintptr_t)Page);
+    fflush(stdout);
 }
 
 static DWORD WINAPI EmuNestopiaX13XLaunchNewImageA(LPCSTR lpTitlePath, PVOID pLaunchData)
