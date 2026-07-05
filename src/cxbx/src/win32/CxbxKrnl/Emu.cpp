@@ -473,8 +473,11 @@ static const ULONG EmuNv2aRaminSize = 0x00100000;
 static const ULONG EmuNv2aRaminDwordCount = EmuNv2aRaminSize / sizeof(ULONG);
 static const ULONG EmuNv2aPmcIntrPfifo = 0x00000100;
 static const ULONG EmuNv2aPmcIntrPgraph = 0x00001000;
+static const ULONG EmuNv2aPmcIntrPcrtc = 0x01000000;
 static const ULONG EmuNv2aPmcEnablePfifo = 0x00000100;
 static const ULONG EmuNv2aPmcEnablePgraph = 0x00001000;
+static const ULONG NV_PCRTC_INTR_EN_0 = 0x600140;
+static const ULONG EmuNv2aPcrtcIntrVblank = 0x00000001;
 static const ULONG EmuNv2aPgraphFifoAccess = 0x00000001;
 static const ULONG EmuNv2aPfifoRunoutStatus = 0x002400;
 static const ULONG EmuNv2aPfifoCache1Push1 = 0x003204;
@@ -814,6 +817,8 @@ static ULONG EmuNv2aPendingPmcInterrupts()
     ULONG PfifoIntrEn = EmuNv2aCachedRegister(NV_PFIFO_INTR_EN_0, 0);
     ULONG PgraphIntr = EmuNv2aCachedRegister(NV_PGRAPH_INTR, 0);
     ULONG PgraphIntrEn = EmuNv2aCachedRegister(NV_PGRAPH_INTR_EN, 0);
+    ULONG PcrtcIntr = EmuNv2aCachedRegister(NV_PCRTC_INTR_0, 0);
+    ULONG PcrtcIntrEn = EmuNv2aCachedRegister(NV_PCRTC_INTR_EN_0, 0);
 
     if((PfifoIntr & PfifoIntrEn) != 0)
         Pending |= EmuNv2aPmcIntrPfifo;
@@ -821,7 +826,28 @@ static ULONG EmuNv2aPendingPmcInterrupts()
     if((PgraphIntr & PgraphIntrEn) != 0)
         Pending |= EmuNv2aPmcIntrPgraph;
 
+    if((PcrtcIntr & PcrtcIntrEn) != 0)
+        Pending |= EmuNv2aPmcIntrPcrtc;
+
     return Pending;
+}
+
+// Raise the CRTC vertical-blank interrupt in the NV2A model. The vblank thread
+// (EmuKrnl.cpp) calls this ~60x/second, then invokes the guest's connected
+// display ISR, which reads these pending bits, acks them, and queues the DPC
+// that unblocks D3D's BlockUntilVerticalBlank -- letting a natively-running XDK
+// title (e.g. NestopiaX 1.3) advance from render-state init into its frame loop.
+extern "C" void EmuNv2aRaiseVblank()
+{
+    ULONG Intr = EmuNv2aCachedRegister(NV_PCRTC_INTR_0, 0);
+    EmuNv2aStoreRegister(NV_PCRTC_INTR_0, Intr | EmuNv2aPcrtcIntrVblank);
+}
+
+// Report whether the guest has enabled CRTC vblank interrupts yet, so the vblank
+// thread can hold off firing the ISR until the title is actually listening.
+extern "C" int EmuNv2aVblankEnabled()
+{
+    return (EmuNv2aCachedRegister(NV_PCRTC_INTR_EN_0, 0) & EmuNv2aPcrtcIntrVblank) != 0 ? 1 : 0;
 }
 
 static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
@@ -1188,7 +1214,7 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
 
     if(Offset == NV_PMC_INTR_0)
         Value = EmuNv2aPendingPmcInterrupts() & ~Value;
-    else if(Offset == NV_PFIFO_INTR_0 || Offset == NV_PGRAPH_INTR)
+    else if(Offset == NV_PFIFO_INTR_0 || Offset == NV_PGRAPH_INTR || Offset == NV_PCRTC_INTR_0)
         Value = EmuReadMmioRegister32(Address) & ~Value;
     else if(Offset == EmuNv2aPfbWbc)
     {
