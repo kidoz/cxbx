@@ -2922,6 +2922,80 @@ extern "C" ULONG NTAPI EmuHalGetInterruptVector(ULONG BusInterruptLevel, PUCHAR 
     return Vector;
 }
 
+// ---------------------------------------------------------------------------
+// Vertical-blank interrupt delivery
+//
+// A natively-running XDK title programs the NV2A directly and blocks in D3D's
+// BlockUntilVerticalBlank until the display interrupt fires. Cxbx has no real
+// GPU generating vblanks, so this thread synthesizes them: ~60x/second it raises
+// the CRTC vblank in the NV2A model and invokes the guest's connected level-3
+// ISR (guest code, hence the FS dance from PCSTProxy). The ISR acks the source
+// and queues the DPC that signals the vblank event, releasing the render loop.
+// ---------------------------------------------------------------------------
+extern "C" void EmuNv2aRaiseVblank();
+extern "C" int EmuNv2aVblankEnabled();
+extern "C" int EmuNv2aRenderStarted();
+
+static const ULONG EmuDisplayInterruptLevel = 3;
+static volatile LONG g_EmuVblankThreadStarted = 0;
+
+static DWORD WINAPI EmuVblankThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): vblank thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    for(;;)
+    {
+        Sleep(16);   // ~60 Hz
+
+        EmuKInterrupt *Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuDisplayInterruptLevel];
+        if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
+            continue;
+
+        if(!EmuNv2aVblankEnabled())
+            continue;
+
+        // Hold off until render-state init is done (first pushbuffer submitted);
+        // firing the ISR during early GPU init races the main thread and crashes.
+        if(!EmuNv2aRenderStarted())
+            continue;
+
+        EmuNv2aRaiseVblank();
+
+        EmuSwapFS();   // Xbox FS
+        __try
+        {
+            Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        EmuSwapFS();   // Win2k/XP FS
+    }
+
+    return 0;
+}
+
+static void EmuStartVblankThread()
+{
+    // Opt-in: synthesizing vblanks lets a natively-running XDK title advance past
+    // BlockUntilVerticalBlank into its frame loop, but the native D3D8 display ISR
+    // still expects driver-side state this HLE does not fully provide, so firing it
+    // can destabilize the title. Off by default (clean stall, probes unaffected);
+    // set CXBX_ENABLE_VBLANK=1 to drive it while iterating on the ISR path.
+    if(getenv("CXBX_ENABLE_VBLANK") == NULL)
+        return;
+
+    if(InterlockedExchange(&g_EmuVblankThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting vblank delivery thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuVblankThread, NULL, 0, NULL);
+    }
+}
+
 extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 {
     EmuSwapFS();   // Win2k/XP FS
@@ -2942,6 +3016,9 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 
     printf("EmuKrnl (0x%lX): KeConnectInterrupt interrupt=0x%.08lX connected=%lu.\n",
            GetCurrentThreadId(), (ULONG)InterruptObject, (ULONG)Connected);
+
+    if(Connected && Interrupt->BusInterruptLevel == EmuDisplayInterruptLevel)
+        EmuStartVblankThread();
 
     EmuSwapFS();   // Xbox FS
 
