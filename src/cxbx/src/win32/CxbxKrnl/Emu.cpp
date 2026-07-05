@@ -3274,12 +3274,37 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     }
 
     // A near-null EIP means the guest executed a call/jump through a NULL or
-    // uninitialised function pointer (e.g. an un-HLE'd XDK callback slot). Say
-    // so explicitly and do NOT dereference it -- reading instruction bytes at a
-    // null EIP would fault the handler itself and print a confusing secondary
-    // "exception in EmuVectoredExceptionHandler" via the re-entrant vectored call.
+    // uninitialised function pointer (e.g. an un-HLE'd XDK callback slot). If the
+    // top of stack holds a plausible guest return address, this was a `call
+    // [null]`; simulate the missing callee as a no-op that returns (pop the
+    // return address, resume there) so a stubbed callback doesn't kill the title.
+    // This is what lets the synthesized display ISR survive callback slots the
+    // native XDK left for a driver we don't fully model.
     if(e->ContextRecord->Eip < 0x00010000)
     {
+        ULONG ReturnAddress = 0;
+        __try
+        {
+            ReturnAddress = *(ULONG*)e->ContextRecord->Esp;
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            ReturnAddress = 0;
+        }
+
+        if(ReturnAddress >= 0x00010000 && ReturnAddress < 0x10000000)
+        {
+            printf("Emu (0x%lX): near-null call recovered -- returning to 0x%.08lX (stubbed callback).\n",
+                   GetCurrentThreadId(), ReturnAddress);
+            fflush(stdout);
+            e->ContextRecord->Eip = ReturnAddress;
+            e->ContextRecord->Esp += 4;
+            e->ContextRecord->Eax = 0;   // callback "returned" 0/void
+            if(WasXboxFS)
+                EmuSwapFS();
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
         printf("Emu (0x%lX): Vectored EIP is near-null (0x%.08lX) -- guest called/jumped "
                "through a NULL or uninitialised function pointer.\n",
                GetCurrentThreadId(), e->ContextRecord->Eip);
