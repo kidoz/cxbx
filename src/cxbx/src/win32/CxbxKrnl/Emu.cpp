@@ -1102,6 +1102,12 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
             break;
 
         case NV_PFB_CFG0:
+            // Framebuffer memory config. The low two bits report the RAM type/
+            // config; nxdk pbkit requires them set (CFG0 & 3 == 3) to proceed with
+            // channel setup and otherwise bails into a cleanup path that crashes.
+            Value = EmuNv2aCachedRegister(Offset, 0) | 0x00000003;
+            break;
+
         case 0x100240:
             Value = EmuNv2aCachedRegister(Offset, 0);
             break;
@@ -2776,6 +2782,20 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             e->ContextRecord->Eip += 5;
 
             printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
+        // 0xA0 = mov AL, moffs8 : 8-bit read from an absolute address (used by the
+        // VGA/CRTC access in nxdk pbkit, e.g. reading PRMCIO 0xFD6013D5).
+        if(AccessType == 0 && Instruction[0] == 0xA0 && *(ULONG*)&Instruction[1] == FaultAddress)
+        {
+            ULONG Value = EmuReadMmio(FaultAddress, 1);
+            e->ContextRecord->Eax = (e->ContextRecord->Eax & ~0xFFul) | (Value & 0xFF);
+            e->ContextRecord->Eip += 5;
+
+            printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
             fflush(stdout);
 
             return true;
