@@ -62,6 +62,7 @@ extern "C" NTSTATUS NTAPI EmuNtOpenSymbolicLinkObject(PHANDLE LinkHandle, xboxkr
 extern "C" NTSTATUS NTAPI EmuNtCreateIoCompletion(PHANDLE IoCompletionHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, ULONG Count);
 extern "C" ULONG NTAPI EmuHalGetInterruptVector(ULONG BusInterruptLevel, PUCHAR Irql);
 extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject);
+extern "C" BOOLEAN NTAPI EmuKeDisconnectInterrupt(PVOID InterruptObject);
 extern "C" VOID NTAPI EmuKeInitializeInterrupt(PVOID InterruptObject, PVOID ServiceRoutine, PVOID ServiceContext,
                                                ULONG Vector, ULONG Irql, ULONG InterruptMode, BOOLEAN ShareVector);
 extern "C" NTSTATUS NTAPI EmuNtCreateSemaphore(PHANDLE SemaphoreHandle, PVOID ObjectAttributes, LONG InitialCount, LONG MaximumCount);
@@ -353,7 +354,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)PANIC(0x0061),                          // 0x0061 (97)
     (uint32)&EmuKeConnectInterrupt,                 // 0x0062 (98)
     (uint32)&xboxkrnl::KeDelayExecutionThread,      // 0x0063 (99)
-    (uint32)PANIC(0x0064),                          // 0x0064 (100)
+    (uint32)&EmuKeDisconnectInterrupt,              // 0x0064 (100)
     (uint32)&EmuKeEnterCriticalRegion,              // 0x0065 (101)
     (uint32)PANIC(0x0066),                          // 0x0066 (102)
     (uint32)&EmuKeGetCurrentIrql,                   // 0x0067 (103)
