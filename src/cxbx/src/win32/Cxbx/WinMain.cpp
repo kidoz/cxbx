@@ -215,28 +215,56 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     char szWorkingDirectory[260];
     BuildXbeDirectory(szAbsoluteXbePath, szWorkingDirectory);
 
-    SHELLEXECUTEINFO sei;
-    memset(&sei, 0, sizeof(sei));
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = "open";
-    sei.lpFile = szExePath;
-    sei.lpDirectory = szWorkingDirectory;
-    sei.nShow = SW_SHOWDEFAULT;
+    // Spawn suspended so the low Xbox-RAM window (< 0x04000000) can be reserved
+    // in the child before its loader/CRT fragments it. Contiguous ("physical")
+    // guest memory is committed from that window, which keeps host==physical in
+    // the low 28 address bits -- required by the NV2A DMA (nxdk pbkit and titles
+    // that program the pushbuffer with masked-physical addresses).
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
 
-    if(!ShellExecuteEx(&sei))
+    if(!CreateProcessA(szExePath, NULL, NULL, NULL, FALSE, CREATE_SUSPENDED,
+                       NULL, szWorkingDirectory, &si, &pi))
     {
         printf("cxbx: failed to launch %s (error=%lu).\n", szExePath, GetLastError());
         return 1;
     }
 
+    // Xbox RAM window for contiguous memory: 0x01000000..0x04000000 (48 MiB),
+    // above the XBE image (loads at 0x00010000) and below the 64 MiB boundary.
+    // Reserve as much of the free region at 0x01000000 as is contiguously free
+    // (it typically runs to ~0x02000000). Guest contiguous memory is committed
+    // from it, keeping those "physical" pointers below the 64 MiB Xbox RAM line.
+    MEMORY_BASIC_INFORMATION mbi;
+    memset(&mbi, 0, sizeof(mbi));
+    void *pReserved = NULL;
+    ULONG reserveSize = 0;
+    if(VirtualQueryEx(pi.hProcess, (void*)(uintptr_t)0x01000000, &mbi, sizeof(mbi)) != 0 &&
+       mbi.State == MEM_FREE && (uintptr_t)mbi.BaseAddress == 0x01000000)
+    {
+        reserveSize = (ULONG)mbi.RegionSize & ~0xFFFFul;   // 64 KiB granularity
+        if(reserveSize > 0x03000000)
+            reserveSize = 0x03000000;                      // cap at the 64 MiB line
+        if(reserveSize >= 0x00100000)
+            pReserved = VirtualAllocEx(pi.hProcess, (void*)(uintptr_t)0x01000000,
+                                       reserveSize, MEM_RESERVE, PAGE_READWRITE);
+    }
+    printf("cxbx: child Xbox-RAM window 0x01000000 size 0x%lX (%s).\n",
+           reserveSize, pReserved ? "ok" : "failed");
+
+    ResumeThread(pi.hThread);
+
     printf("cxbx: batch launched %s.\n", szExePath);
 
-    WaitForSingleObject(sei.hProcess, INFINITE);
+    WaitForSingleObject(pi.hProcess, INFINITE);
 
     DWORD dwExitCode = 0;
-    GetExitCodeProcess(sei.hProcess, &dwExitCode);
-    CloseHandle(sei.hProcess);
+    GetExitCodeProcess(pi.hProcess, &dwExitCode);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
 
     printf("cxbx: batch process exited with code %lu.\n", dwExitCode);
 

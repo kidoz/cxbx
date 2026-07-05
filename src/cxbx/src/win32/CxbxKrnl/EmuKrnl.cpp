@@ -2205,6 +2205,46 @@ static void EmuTrackContiguousMemoryAllocation(PVOID Address, ULONG Size)
     }
 }
 
+// Allocate contiguous "physical" memory from the low Xbox-RAM window the launcher
+// reserved in this process (0x01000000..0x04000000). Keeping these below 64 MiB
+// makes the host pointer equal the Xbox physical address in its low 28 bits --
+// the invariant the NV2A DMA engine and nxdk pbkit assume when they program and
+// then poll pushbuffer/surface addresses. Bump-allocate and commit on demand;
+// return NULL (caller falls back to the heap) if the window is exhausted or was
+// never reserved (e.g. an oversized image).
+static const ULONG g_EmuXboxRamLimit = 0x04000000;
+static ULONG g_EmuXboxRamNext = 0x01000000;
+
+static void *EmuAllocateContiguousLow(ULONG Size, ULONG Alignment)
+{
+    if(Alignment < 0x1000)
+        Alignment = 0x1000;
+
+    ULONG Base = (g_EmuXboxRamNext + (Alignment - 1)) & ~(Alignment - 1);
+    if(Base < g_EmuXboxRamNext || Base + Size > g_EmuXboxRamLimit || Base + Size < Base)
+        return NULL;
+
+    void *p = VirtualAlloc((void*)(uintptr_t)Base, Size, MEM_COMMIT, PAGE_READWRITE);
+    if(p == NULL)
+    {
+        // Ran past the launcher's reservation (or it was never made); stop trying.
+        g_EmuXboxRamNext = g_EmuXboxRamLimit;
+        return NULL;
+    }
+
+    g_EmuXboxRamNext = Base + Size;
+    return p;
+}
+
+// True for blocks handed out by EmuAllocateContiguousLow (VirtualAlloc-backed);
+// those must not be released with delete[]. The bump allocator has no free list,
+// so freeing simply decommits the pages back to the reservation.
+static bool EmuIsLowXboxRam(PVOID Address)
+{
+    const ULONG Value = (ULONG)Address;
+    return Value >= 0x01000000 && Value < g_EmuXboxRamLimit;
+}
+
 static void EmuUntrackContiguousMemoryAllocation(PVOID Address)
 {
     if(Address == NULL)
@@ -4166,7 +4206,13 @@ XBSYSAPI EXPORTNUM(165) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
     // TODO: Make this much more efficient and correct if necessary!
     // HACK: Should be aligned!!
     const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
-    PVOID pRet = (AllocationSize != 0) ? (PVOID)new unsigned char[AllocationSize] : NULL;
+    PVOID pRet = NULL;
+    if(AllocationSize != 0)
+    {
+        pRet = EmuAllocateContiguousLow(AllocationSize, 0x4000);   // low Xbox-RAM window
+        if(pRet == NULL)
+            pRet = (PVOID)new unsigned char[AllocationSize];       // window exhausted -> heap
+    }
     EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
 
     // Large contiguous blocks are display/render surfaces (D3D8 front/back
@@ -4227,7 +4273,13 @@ XBSYSAPI EXPORTNUM(166) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
     // TODO: Make this much more efficient and correct if necessary!
     // HACK: Should be aligned!!
     const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
-    PVOID pRet = (AllocationSize != 0) ? (PVOID)new unsigned char[AllocationSize] : NULL;
+    PVOID pRet = NULL;
+    if(AllocationSize != 0)
+    {
+        pRet = EmuAllocateContiguousLow(AllocationSize, 0x4000);   // low Xbox-RAM window
+        if(pRet == NULL)
+            pRet = (PVOID)new unsigned char[AllocationSize];       // window exhausted -> heap
+    }
     EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
 
     // Large contiguous blocks are display/render surfaces (D3D8 front/back
@@ -4387,7 +4439,10 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
     #endif
 
     EmuUntrackContiguousMemoryAllocation(BaseAddress);
-    delete[] (unsigned char *)BaseAddress;
+    if(EmuIsLowXboxRam(BaseAddress))
+        VirtualFree(BaseAddress, 0, MEM_DECOMMIT);   // low Xbox-RAM window (VirtualAlloc-backed)
+    else
+        delete[] (unsigned char *)BaseAddress;
 
     EmuSwapFS();   // Xbox FS
 
