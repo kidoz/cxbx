@@ -1,0 +1,7 @@
+#suite xbox-conformance v1
+#probe gfx_draw
+CHK gfx_draw.pb_init PASS
+CHK gfx_draw.tex_alloc PASS
+CHK gfx_draw.vbuf_alloc PASS
+CHK gfx_draw.submitted PASS
+#result gfx_draw verdict=PASS checks=4 fail=0
