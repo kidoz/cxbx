@@ -875,6 +875,40 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// NV2A source-texture interception (path 1)
+//
+// The register-level model does not rasterize, so titles that draw through the
+// KELVIN 3D pipeline (e.g. NestopiaX) never leave a finished frame in a CPU
+// framebuffer. But the *source* image a title uploads -- the NES picture, a UI
+// atlas -- is a plain texture in guest memory before it enters that pipeline.
+// By decoding the KELVIN SET_TEXTURE_* methods we recover the texture offset +
+// format and dump the bytes directly, giving "the picture the title drew"
+// without a GPU. Triggered on SET_BEGIN_END (a primitive batch) when a stage-0
+// texture is bound.
+// ---------------------------------------------------------------------------
+#define NV097_SET_CONTEXT_DMA_A        0x1A60u
+#define NV097_SET_BEGIN_END            0x17FCu
+#define NV097_SET_TEXTURE_OFFSET_0     0x1B00u
+#define NV097_SET_TEXTURE_FORMAT_0     0x1B04u
+#define NV097_SET_TEXTURE_IMAGE_RECT_0 0x1B1Cu
+#define EmuNv2aTextureStageStride      0x40u
+#define EmuNv2aTextureStageCount       4u
+
+struct EmuNv2aTextureState
+{
+    ULONG Offset;
+    ULONG Format;
+    ULONG ImageRect;
+};
+
+static EmuNv2aTextureState g_EmuNv2aTexture[EmuNv2aTextureStageCount] = {};
+static ULONG g_EmuNv2aContextDmaAHandle = 0;
+static ULONG g_EmuNv2aTextureDumpIndex = 0;
+static ULONG g_EmuNv2aTextureMethodLogCount = 0;
+
+static void EmuNv2aDumpSourceTexture(ULONG Stage);
+
 static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data)
 {
     ULONG Class = g_EmuNv2aSubchannelClass[Subchannel & 0x07];
@@ -902,6 +936,51 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
 
         if(EmuNv2aRamhtLookup(Data, &Instance, &ObjectClass))
             Data = Instance;
+    }
+
+    if(g_EmuNv2aTextureMethodLogCount < 64 && Method != 0)
+    {
+        printf("Emu (0x%lX): PGRAPH method class=0x%.04lX m=0x%.04lX data=0x%.08lX\n",
+               GetCurrentThreadId(), Class, Method, Data);
+        fflush(stdout);
+        g_EmuNv2aTextureMethodLogCount++;
+    }
+
+    // Source-texture interception: capture the KELVIN texture descriptors as
+    // they stream past, and snapshot the bound stage-0 texture whenever a
+    // primitive batch begins.
+    if(Class == NV_CLASS_KELVIN)
+    {
+        if(Method == NV097_SET_CONTEXT_DMA_A)
+        {
+            g_EmuNv2aContextDmaAHandle = Data;
+        }
+        else if(Method >= NV097_SET_TEXTURE_OFFSET_0 &&
+                Method < NV097_SET_TEXTURE_OFFSET_0 + EmuNv2aTextureStageStride * EmuNv2aTextureStageCount)
+        {
+            ULONG Stage = (Method - NV097_SET_TEXTURE_OFFSET_0) / EmuNv2aTextureStageStride;
+            ULONG StageMethod = NV097_SET_TEXTURE_OFFSET_0 + Stage * EmuNv2aTextureStageStride;
+
+            if(Method == StageMethod)
+                g_EmuNv2aTexture[Stage].Offset = Data;
+            else if(Method == StageMethod + 4)
+                g_EmuNv2aTexture[Stage].Format = Data;
+            else if(Method == StageMethod + (NV097_SET_TEXTURE_IMAGE_RECT_0 - NV097_SET_TEXTURE_OFFSET_0))
+                g_EmuNv2aTexture[Stage].ImageRect = Data;
+
+            if(g_EmuNv2aTextureMethodLogCount < 32)
+            {
+                printf("Emu (0x%lX): KELVIN texture[%lu] method 0x%.04lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), Stage, Method, Data);
+                fflush(stdout);
+                g_EmuNv2aTextureMethodLogCount++;
+            }
+        }
+        else if(Method == NV097_SET_BEGIN_END && Data != 0)
+        {
+            if(g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0)
+                EmuNv2aDumpSourceTexture(0);
+        }
     }
 
     EmuNv2aStoreRegister(NV_PGRAPH + (Method & 0x1FFC), Data);
@@ -1119,6 +1198,13 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
 
     EmuNv2aStoreRegister(Offset, Value);
     NV2A_TRACE_REG("wr", Offset, Value);
+
+    // The Xbox pushbuffer kickoff is a write to the per-channel USER PUT register
+    // (NV_USER + 0x40). Hardware mirrors that into the PFIFO CACHE1 DMA_PUT that
+    // the pusher actually advances against, so mirror it here before running the
+    // pusher; otherwise DMA_GET==DMA_PUT stays stale and no methods dispatch.
+    if(Offset == EmuNv2aUserChannel0Put)
+        EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_PUT, Value);
 
     if(Offset == NV_PFIFO_CACHE1_DMA_PUT || Offset == NV_PFIFO_CACHE1_DMA_PUSH ||
        Offset == NV_PFIFO_CACHE1_PUSH0 || Offset == EmuNv2aUserChannel0Put)
@@ -1393,6 +1479,302 @@ static bool EmuCopyToPhysicalMapRepeated(ULONG DestinationAddress, ULONG SourceA
     return true;
 }
 
+// Bridges into the kernel's contiguous-memory tracker (defined in EmuKrnl.cpp).
+// Used to reach guest data the NV2A references by raw host pointer.
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize);
+extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
+
+// SEH-guarded read of guest data straight from host memory. In this HLE model
+// the guest hands the NV2A real host pointers (pushbuffer PUT, texture offsets),
+// so the payload is directly addressable -- but a bad pointer must not crash the
+// emulator, hence the guard.
+static bool EmuTryReadHost(ULONG Address, void *Dst, ULONG Size)
+{
+    if(Address == 0 || Dst == NULL || Size == 0)
+        return false;
+
+    __try
+    {
+        memcpy(Dst, (const void *)Address, Size);
+        return true;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+// Resolve a value the guest programmed into the NV2A (pushbuffer/texture pointer)
+// to a directly-readable host address. It is usually already a host pointer into
+// a contiguous block; titles that route through MmGetPhysicalAddress instead
+// program a fake physical address, which reverse-maps back to its host block.
+static ULONG EmuNv2aHostPointer(ULONG GuestAddress)
+{
+    ULONG BlockSize = 0;
+    if(EmuContiguousBlockBase(GuestAddress, &BlockSize) != 0)
+        return GuestAddress;
+
+    ULONG Host = EmuContiguousHostFromPhysical(GuestAddress);
+    if(Host != 0)
+        return Host;
+
+    return 0;
+}
+
+// Bulk-read a contiguous span from the physical-map shadow, walking one page at
+// a time (byte-at-a-time via EmuReadPhysicalMap would be ~1e9 ops for a 256 KiB
+// texture). Unbacked pages read as zero.
+static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
+{
+    ULONG End = Address + Size - 1;
+    if(Size == 0 || Dst == NULL || End < Address ||
+       !EmuIsPhysicalMapAddress(Address) || !EmuIsPhysicalMapAddress(End))
+    {
+        return false;
+    }
+
+    ULONG Copied = 0;
+    while(Copied < Size)
+    {
+        ULONG Cur = Address + Copied;
+        ULONG PageOffset = Cur & (EmuPhysicalPageSize - 1);
+        ULONG Chunk = EmuPhysicalPageSize - PageOffset;
+        if(Chunk > Size - Copied)
+            Chunk = Size - Copied;
+
+        BYTE *Page = EmuGetPhysicalPage(Cur, false);
+        if(Page != NULL)
+            memcpy(Dst + Copied, Page + PageOffset, Chunk);
+        else
+            ZeroMemory(Dst + Copied, Chunk);
+
+        Copied += Chunk;
+    }
+
+    return true;
+}
+
+// Resolve a texture's context-DMA object handle to its physical base frame, so
+// SET_TEXTURE_OFFSET (which is relative to that DMA object) becomes an absolute
+// guest physical address. Returns 0 when the handle is unbound/unknown, which is
+// the common Xbox case where the texture offset is already a physical address.
+static ULONG EmuNv2aResolveDmaBase(ULONG Handle)
+{
+    if(Handle == 0)
+        return 0;
+
+    ULONG Instance = 0;
+    ULONG Class = 0;
+    if(!EmuNv2aRamhtLookup(Handle, &Instance, &Class))
+        return 0;
+
+    if(Instance + 12 > EmuNv2aRaminSize)
+        return 0;
+
+    ULONG Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance);
+    ULONG Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 8);
+    return (Frame & 0x07FFFFFF) | (Flags & 0x00000FFF);
+}
+
+// Interleave the low bits of x and y (Morton / Z-order) to locate a texel inside
+// an NV2A swizzled texture. Handles non-square by consuming each axis until it
+// runs out of bits, then appending the remainder of the longer axis.
+static ULONG EmuNv2aSwizzleTexelIndex(ULONG X, ULONG Y, ULONG LogW, ULONG LogH)
+{
+    ULONG Result = 0, Out = 0, Bx = 0, By = 0;
+
+    while(Bx < LogW || By < LogH)
+    {
+        if(Bx < LogW) { Result |= ((X >> Bx) & 1u) << Out; Out++; Bx++; }
+        if(By < LogH) { Result |= ((Y >> By) & 1u) << Out; Out++; By++; }
+    }
+
+    return Result;
+}
+
+static ULONG EmuNv2aLog2(ULONG Value)
+{
+    ULONG Log = 0;
+    while((1ul << Log) < Value && Log < 31)
+        Log++;
+    return Log;
+}
+
+// Decode a bound KELVIN texture from guest memory and write it to a BMP. This is
+// the payload of path 1: it reproduces the source image the title uploaded,
+// independent of any rasterization.
+static void EmuNv2aDumpSourceTexture(ULONG Stage)
+{
+    if(Stage >= EmuNv2aTextureStageCount || g_EmuNv2aTextureDumpIndex >= 16)
+        return;
+
+    ULONG Format = g_EmuNv2aTexture[Stage].Format;
+    ULONG Color = (Format >> 8) & 0xFF;
+    ULONG SizeU = (Format >> 20) & 0xF;
+    ULONG SizeV = (Format >> 24) & 0xF;
+    ULONG ImageRect = g_EmuNv2aTexture[Stage].ImageRect;
+
+    // Byte width and how each texel maps to RGB. kind: 0=A8R8G8B8/X8R8G8B8,
+    // 1=R5G6B5, 2=A1R5G5B5/X1R5G5B5, 3=A4R4G4B4, 4=Y8. Swizzled formats are the
+    // low color codes; the LU_IMAGE_* (>=0x10) formats are linear.
+    ULONG Bpp = 0, Kind = 0;
+    bool Swizzled = false;
+    switch(Color)
+    {
+        case 0x00: Bpp = 1; Kind = 4; Swizzled = true;  break; // SZ_Y8
+        case 0x13: Bpp = 1; Kind = 4; Swizzled = false; break; // LU_Y8
+        case 0x02: Bpp = 2; Kind = 2; Swizzled = true;  break; // SZ_A1R5G5B5
+        case 0x03: Bpp = 2; Kind = 2; Swizzled = true;  break; // SZ_X1R5G5B5
+        case 0x10: Bpp = 2; Kind = 2; Swizzled = false; break; // LU_A1R5G5B5
+        case 0x04: Bpp = 2; Kind = 3; Swizzled = true;  break; // SZ_A4R4G4B4
+        case 0x19: Bpp = 2; Kind = 3; Swizzled = false; break; // LU_A4R4G4B4
+        case 0x05: Bpp = 2; Kind = 1; Swizzled = true;  break; // SZ_R5G6B5
+        case 0x11: Bpp = 2; Kind = 1; Swizzled = false; break; // LU_R5G6B5
+        case 0x06: Bpp = 4; Kind = 0; Swizzled = true;  break; // SZ_A8R8G8B8
+        case 0x07: Bpp = 4; Kind = 0; Swizzled = true;  break; // SZ_X8R8G8B8
+        case 0x12: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_A8R8G8B8
+        case 0x1A: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_A8R8G8B8 (rect)
+        case 0x1C: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_X8R8G8B8
+        case 0x1E: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_A8B8G8R8 approx
+        default:
+            printf("Emu (0x%lX): KELVIN texture[%lu] unsupported color format 0x%.02lX (offset=0x%.08lX); skipping dump.\n",
+                   GetCurrentThreadId(), Stage, Color, g_EmuNv2aTexture[Stage].Offset);
+            fflush(stdout);
+            return;
+    }
+
+    // Dimensions: swizzled textures carry log2 sizes in the format word; linear
+    // (rect) textures carry pixel dimensions in SET_TEXTURE_IMAGE_RECT.
+    ULONG Width = 0, Height = 0;
+    if(Swizzled || ImageRect == 0)
+    {
+        Width = 1ul << SizeU;
+        Height = 1ul << SizeV;
+    }
+    else
+    {
+        Width = (ImageRect >> 16) & 0xFFFF;
+        Height = ImageRect & 0xFFFF;
+    }
+
+    if(Width == 0 || Height == 0 || Width > 4096 || Height > 4096)
+    {
+        printf("Emu (0x%lX): KELVIN texture[%lu] implausible size %lux%lu; skipping dump.\n",
+               GetCurrentThreadId(), Stage, Width, Height);
+        fflush(stdout);
+        return;
+    }
+
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaAHandle);
+    ULONG TextureAddress = Base + g_EmuNv2aTexture[Stage].Offset;
+    ULONG SourceSize = Width * Height * Bpp;
+    BYTE *Source = new BYTE[SourceSize];
+    const char *SourceKind = NULL;
+
+    // The texture is normally a raw host pointer into a contiguous block (or a
+    // fake-physical that reverse-maps to one); read it straight from host memory.
+    // Fall back to the physical-map shadow for the probe path.
+    ULONG HostAddress = EmuNv2aHostPointer(TextureAddress);
+    if(HostAddress != 0 && EmuTryReadHost(HostAddress, Source, SourceSize))
+    {
+        SourceKind = "host";
+    }
+    else
+    {
+        ULONG PhysicalAddress = TextureAddress;
+        if(!EmuIsPhysicalMapAddress(PhysicalAddress))
+            PhysicalAddress = EmuPhysicalMapBase + (PhysicalAddress & EmuPhysicalRamMirrorMask);
+
+        if(EmuReadPhysicalMapBlock(PhysicalAddress, Source, SourceSize))
+            SourceKind = "shadow";
+    }
+
+    if(SourceKind == NULL)
+    {
+        printf("Emu (0x%lX): KELVIN texture[%lu] source 0x%.08lX unreadable (host=0x%.08lX); skipping dump.\n",
+               GetCurrentThreadId(), Stage, TextureAddress, HostAddress);
+        fflush(stdout);
+        delete[] Source;
+        return;
+    }
+
+    ULONG LogW = EmuNv2aLog2(Width);
+    ULONG LogH = EmuNv2aLog2(Height);
+    ULONG *Pixels = new ULONG[Width * Height]; // BGRA, top-down
+
+    ULONG DistinctSample = 0;
+    ULONG FirstColor = 0;
+    for(ULONG Y = 0; Y < Height; Y++)
+    {
+        for(ULONG X = 0; X < Width; X++)
+        {
+            ULONG TexelIndex = Swizzled ? EmuNv2aSwizzleTexelIndex(X, Y, LogW, LogH)
+                                        : (Y * Width + X);
+            ULONG ByteOffset = TexelIndex * Bpp;
+            ULONG Raw = 0;
+            for(ULONG b = 0; b < Bpp && ByteOffset + b < SourceSize; b++)
+                Raw |= (ULONG)Source[ByteOffset + b] << (b * 8);
+
+            ULONG R = 0, G = 0, B = 0;
+            switch(Kind)
+            {
+                case 0: B = Raw & 0xFF; G = (Raw >> 8) & 0xFF; R = (Raw >> 16) & 0xFF; break;
+                case 1: R = ((Raw >> 11) & 0x1F) << 3; G = ((Raw >> 5) & 0x3F) << 2; B = (Raw & 0x1F) << 3; break;
+                case 2: R = ((Raw >> 10) & 0x1F) << 3; G = ((Raw >> 5) & 0x1F) << 3; B = (Raw & 0x1F) << 3; break;
+                case 3: R = ((Raw >> 8) & 0xF) << 4; G = ((Raw >> 4) & 0xF) << 4; B = (Raw & 0xF) << 4; break;
+                case 4: R = G = B = Raw & 0xFF; break;
+            }
+
+            ULONG Bgra = B | (G << 8) | (R << 16) | 0xFF000000;
+            Pixels[Y * Width + X] = Bgra;
+
+            if(X == 0 && Y == 0)
+                FirstColor = Bgra;
+            else if(Bgra != FirstColor && DistinctSample < 2)
+                DistinctSample = 2;
+        }
+    }
+
+    char dir[MAX_PATH] = {0};
+    GetTempPathA(sizeof(dir), dir);
+    char path[MAX_PATH];
+    sprintf(path, "%scxbx_tex%lu.bmp", dir, g_EmuNv2aTextureDumpIndex);
+
+    FILE *f = fopen(path, "wb");
+    if(f != NULL)
+    {
+        ULONG DataSize = Width * Height * 4;
+        unsigned char fh[14] = {0}, ih[40] = {0};
+        ULONG fileSize = 54 + DataSize;
+        fh[0] = 'B'; fh[1] = 'M';
+        fh[2] = (unsigned char)fileSize;         fh[3] = (unsigned char)(fileSize >> 8);
+        fh[4] = (unsigned char)(fileSize >> 16); fh[5] = (unsigned char)(fileSize >> 24);
+        fh[10] = 54;
+        ih[0] = 40;
+        ih[4] = (unsigned char)Width; ih[5] = (unsigned char)(Width >> 8);
+        LONG nh = -(LONG)Height; // negative height => top-down
+        ih[8]  = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
+        ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+        ih[12] = 1;
+        ih[14] = 32;
+        fwrite(fh, 1, 14, f);
+        fwrite(ih, 1, 40, f);
+        fwrite(Pixels, 1, DataSize, f);
+        fclose(f);
+
+        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s offset=0x%.08lX first=0x%.08lX distinct>=2:%s -> %s\n",
+               GetCurrentThreadId(), Stage, Width, Height, Color,
+               Swizzled ? "swizzled" : "linear", SourceKind,
+               g_EmuNv2aTexture[Stage].Offset, FirstColor,
+               DistinctSample >= 2 ? "yes" : "no", path);
+        fflush(stdout);
+        g_EmuNv2aTextureDumpIndex++;
+    }
+
+    delete[] Pixels;
+    delete[] Source;
+}
+
 static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)
 {
     ULONG Instance = (EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_INSTANCE, 0) & 0x0000FFFF) << 4;
@@ -1424,41 +1806,76 @@ static bool EmuNv2aReadDmaWord(ULONG BaseAddress, ULONG Offset, ULONG *Value)
     return EmuReadPhysicalMap(PhysicalAddress, 4, Value);
 }
 
+static ULONG g_EmuNv2aPusherRunCount = 0;
+// True once the guest has submitted at least one pushbuffer, i.e. it finished
+// render-state init and reached its frame loop. The vblank thread waits for this
+// before firing the display ISR, so synthetic vblanks never race early GPU init.
+extern "C" int EmuNv2aRenderStarted()
+{
+    return g_EmuNv2aPusherRunCount > 0 ? 1 : 0;
+}
+
+// Fetch a pushbuffer word. In host mode the pushbuffer lives in a host
+// contiguous block and Address is an absolute host pointer; otherwise it is an
+// offset into the DMA object read from the physical-map shadow (probe path).
+static bool EmuNv2aFetchPushWord(bool HostMode, ULONG BaseAddress, ULONG Address, ULONG *Value)
+{
+    if(HostMode)
+        return EmuTryReadHost(Address, Value, 4);
+
+    return EmuNv2aReadDmaWord(BaseAddress, Address, Value);
+}
+
 static void EmuNv2aRunPusher()
 {
     ULONG Push0 = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_PUSH0, 1);
     ULONG DmaPush = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUSH, 1);
+    ULONG Get = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_GET, 0);
+    ULONG Put = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUT, 0);
 
     if((Push0 & 1) == 0 || (DmaPush & 1) == 0)
         return;
 
-    ULONG Get = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_GET, 0);
-    ULONG Put = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUT, 0);
-
     if(Get == Put)
         return;
 
+    // If PUT points into a host contiguous block, the guest built the pushbuffer
+    // in host memory and programmed the NV2A with raw host pointers. Read it
+    // straight from host memory, anchoring GET at the block base (channel init is
+    // stubbed, so GET arrives uninitialized). The physical-map path is preserved
+    // for the self-checking probes, which submit through the shadow aperture.
+    ULONG BlockBase = EmuContiguousBlockBase(Put, NULL);
+    bool HostMode = BlockBase != 0;
     ULONG BaseAddress = 0;
-    ULONG Limit = 0;
+    ULONG Limit = 0xFFFFFFFF;
 
-    if(!EmuNv2aLoadDmaObject(&BaseAddress, &Limit))
+    if(HostMode)
     {
-        printf("Emu (0x%lX): NV2A PFIFO missing DMA object; advancing GET to PUT.\n",
-               GetCurrentThreadId());
-        fflush(stdout);
+        if(Get < BlockBase || Get >= Put)
+            Get = BlockBase;
+    }
+    else if(!EmuNv2aLoadDmaObject(&BaseAddress, &Limit))
+    {
         EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_GET, Put);
         return;
     }
 
-    for(ULONG Guard = 0; Guard < 4096 && Get != Put; Guard++)
+    if(g_EmuNv2aPusherRunCount < 4 || (g_EmuNv2aPusherRunCount % 500) == 0)
+    {
+        printf("Emu (0x%lX): NV2A pusher run #%lu %s base=0x%.08lX GET=0x%.08lX PUT=0x%.08lX.\n",
+               GetCurrentThreadId(), g_EmuNv2aPusherRunCount, HostMode ? "host" : "shadow",
+               HostMode ? BlockBase : BaseAddress, Get, Put);
+        fflush(stdout);
+    }
+    g_EmuNv2aPusherRunCount++;
+
+    ULONG GuardLimit = HostMode ? 0x100000 : 4096;
+    for(ULONG Guard = 0; Guard < GuardLimit && Get != Put; Guard++)
     {
         ULONG Word = 0;
 
-        if(Get > Limit || !EmuNv2aReadDmaWord(BaseAddress, Get, &Word))
+        if(Get > Limit || !EmuNv2aFetchPushWord(HostMode, BaseAddress, Get, &Word))
         {
-            printf("Emu (0x%lX): NV2A PFIFO cannot read pushbuffer at 0x%.08lX+0x%.08lX; advancing GET to PUT.\n",
-                   GetCurrentThreadId(), BaseAddress, Get);
-            fflush(stdout);
             Get = Put;
             break;
         }
@@ -1492,7 +1909,7 @@ static void EmuNv2aRunPusher()
             {
                 ULONG Data = 0;
 
-                if(Get > Limit || !EmuNv2aReadDmaWord(BaseAddress, Get, &Data))
+                if(Get > Limit || !EmuNv2aFetchPushWord(HostMode, BaseAddress, Get, &Data))
                 {
                     Get = Put;
                     break;
