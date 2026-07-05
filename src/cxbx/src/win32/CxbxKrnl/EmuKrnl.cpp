@@ -2933,6 +2933,8 @@ extern "C" ULONG NTAPI EmuHalGetInterruptVector(ULONG BusInterruptLevel, PUCHAR 
 // and queues the DPC that signals the vblank event, releasing the render loop.
 // ---------------------------------------------------------------------------
 extern "C" void EmuNv2aRaiseVblank();
+extern "C" void EmuNv2aAckVblank();
+extern "C" void EmuNv2aEnableGpuInterrupts();
 extern "C" int EmuNv2aVblankEnabled();
 extern "C" int EmuNv2aRenderStarted();
 
@@ -2973,6 +2975,16 @@ static DWORD WINAPI EmuVblankThread(LPVOID)
         {
         }
         EmuSwapFS();   // Win2k/XP FS
+
+        // The ISR acknowledges vblank out-of-band (legacy port I/O), so clear the
+        // pending bit here; otherwise PMC_INTR_0 stays PCRTC-pending forever and
+        // the title's interrupt state machine deadlocks.
+        EmuNv2aAckVblank();
+
+        // Re-enable PMC interrupts on the title's behalf: its vblank path masks
+        // them and re-enables via a callback slot that is null in this HLE, so
+        // without this its vblank-wait loop stays masked and never advances.
+        EmuNv2aEnableGpuInterrupts();
     }
 
     return 0;

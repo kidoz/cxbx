@@ -850,6 +850,30 @@ extern "C" int EmuNv2aVblankEnabled()
     return (EmuNv2aCachedRegister(NV_PCRTC_INTR_EN_0, 0) & EmuNv2aPcrtcIntrVblank) != 0 ? 1 : 0;
 }
 
+// Clear the CRTC vblank pending bit. The XDK display ISR acknowledges vblank via
+// legacy port I/O (in al, 0x80C0), not the PCRTC MMIO register, so nothing in the
+// guest ever clears the bit this model raises. Left set, PMC_INTR_0 reports an
+// unserviceable PCRTC interrupt forever and the title's kernel jams with
+// interrupts masked. The vblank thread calls this right after the ISR returns to
+// emulate the acknowledge the guest performed out-of-band.
+extern "C" void EmuNv2aAckVblank()
+{
+    ULONG Intr = EmuNv2aCachedRegister(NV_PCRTC_INTR_0, 0);
+    EmuNv2aStoreRegister(NV_PCRTC_INTR_0, Intr & ~EmuNv2aPcrtcIntrVblank);
+}
+
+// Re-enable master PMC interrupts. The XDK vblank path masks them (writes 0 to
+// PMC_INTR_EN) once a vblank is serviced and relies on its vblank callback to
+// re-enable them; that callback slot is null here (see the near-null recovery),
+// so without this the enable bit stays 0 and the title's vblank-wait -- which
+// only advances while PMC_INTR_EN != 0 -- deadlocks. The vblank thread restores
+// it each tick so the next synthesized vblank can be observed.
+extern "C" void EmuNv2aEnableGpuInterrupts()
+{
+    ULONG En = EmuNv2aCachedRegister(NV_PMC_INTR_EN_0, 0);
+    EmuNv2aStoreRegister(NV_PMC_INTR_EN_0, En | 0x00000001);
+}
+
 static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 {
     ULONG Ramht = EmuNv2aCachedRegister(NV_PFIFO_RAMHT, 0);
