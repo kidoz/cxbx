@@ -97,6 +97,7 @@ struct EmuObjectType
 extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag);
 extern "C" VOID NTAPI EmuExFreePool(PVOID P);
 extern "C" EmuObjectType g_EmuPsThreadObjectType;
+extern "C" ULONG g_EmuDisplayPitch;   // defined in Emu.cpp; scanout capture width
 
 struct EmuObjectHeader
 {
@@ -2598,6 +2599,10 @@ extern "C" ULONG NTAPI EmuAvSetDisplayMode(PVOID RegisterBase, ULONG Step, ULONG
            "pitch=0x%.08lX (%lu) framebuffer=0x%.08lX\n",
            GetCurrentThreadId(), Step, Mode, Format, Pitch, Pitch, FrameBuffer);
     fflush(stdout);
+    // Publish the scanline pitch so the NV2A scanout capture can recover the
+    // display width when the CRTC base is flipped. See Emu.cpp EmuNv2aDumpScanout.
+    if(Pitch != 0)
+        g_EmuDisplayPitch = Pitch;
     EmuSwapFS();   // Xbox FS
     return 0;
 }

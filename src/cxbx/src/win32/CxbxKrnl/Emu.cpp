@@ -477,6 +477,7 @@ static const ULONG EmuNv2aPmcIntrPcrtc = 0x01000000;
 static const ULONG EmuNv2aPmcEnablePfifo = 0x00000100;
 static const ULONG EmuNv2aPmcEnablePgraph = 0x00001000;
 static const ULONG NV_PCRTC_INTR_EN_0 = 0x600140;
+static const ULONG EmuNv2aPcrtcStart = 0x600800;   // CRTC scanout base (display flip)
 static const ULONG EmuNv2aPcrtcIntrVblank = 0x00000001;
 static const ULONG EmuNv2aPgraphFifoAccess = 0x00000001;
 static const ULONG EmuNv2aPfifoRunoutStatus = 0x002400;
@@ -956,8 +957,16 @@ static EmuNv2aTextureState g_EmuNv2aTexture[EmuNv2aTextureStageCount] = {};
 static ULONG g_EmuNv2aContextDmaAHandle = 0;
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
 static ULONG g_EmuNv2aTextureMethodLogCount = 0;
+static ULONG g_EmuNv2aScanoutDumpIndex = 0;
+
+// Bytes/scanline of the displayed surface, published by the video HAL's
+// AvSetDisplayMode (EmuKrnl.cpp). Lets the scanout capture recover the width
+// (pitch/4 at 32bpp); 0 until a mode is set, in which case a 640-wide default
+// is assumed. See EmuNv2aDumpScanout.
+extern "C" ULONG g_EmuDisplayPitch = 0;
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
+static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 
 static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data)
 {
@@ -1269,6 +1278,12 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
 
     EmuNv2aStoreRegister(Offset, Value);
     NV2A_TRACE_REG("wr", Offset, Value);
+
+    // A write to the CRTC scanout base flips the display to that surface; capture
+    // what the guest just put on screen (path 2). The programmed value is a
+    // masked physical address (low 28 bits).
+    if(Offset == EmuNv2aPcrtcStart)
+        EmuNv2aDumpScanout(Value & 0x0FFFFFFF);
 
     // The Xbox pushbuffer kickoff is a write to the per-channel USER PUT register
     // (NV_USER + 0x40). Hardware mirrors that into the PFIFO CACHE1 DMA_PUT that
@@ -1844,6 +1859,123 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
 
     delete[] Pixels;
     delete[] Source;
+}
+
+// Capture the displayed framebuffer ("path 2"). The CRTC scanout base register
+// (NV_PCRTC_START) is programmed with the physical address of the surface to put
+// on screen -- exactly what a title flips to at frame end (nxdk pbkit's
+// pb_show_front_screen / VBL swap, the XDK's D3D present). Snapshotting the
+// surface at that address reproduces the actual on-screen image, independent of
+// any rasterization: whatever the guest drew into that buffer (CPU or GPU) is
+// what we write to %TEMP%\cxbx_fbN.bmp.
+static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
+{
+    if(g_EmuNv2aScanoutDumpIndex >= 16 || PhysicalAddress == 0)
+        return;
+
+    // Geometry: pitch from the video HAL (else a 640-wide default); height from
+    // the contiguous surface's tracked size (a scanout buffer is width*height*4).
+    ULONG Pitch = g_EmuDisplayPitch != 0 ? g_EmuDisplayPitch : (640u * 4u);
+    ULONG Width = Pitch / 4u;
+    if(Width == 0 || Width > 4096)
+        return;
+
+    // Resolve the scanout physical address to a readable host pointer. With the
+    // framebuffer in the low Xbox-RAM window, host == physical in the low bits,
+    // so the masked PCRTC_START value maps straight back to the host surface.
+    ULONG BlockSize = 0;
+    ULONG Host = EmuNv2aHostPointer(PhysicalAddress);
+    if(Host != 0)
+        EmuContiguousBlockBase(Host, &BlockSize);
+
+    ULONG Height = (BlockSize != 0) ? (BlockSize / Pitch) : 480u;
+    if(Height == 0)
+        Height = 480u;
+    if(Height > 2048)
+        Height = 2048u;
+
+    ULONG SurfaceSize = Pitch * Height;
+    BYTE *Surface = new BYTE[SurfaceSize];
+    const char *SourceKind = NULL;
+
+    if(Host != 0 && EmuTryReadHost(Host, Surface, SurfaceSize))
+    {
+        SourceKind = "host";
+    }
+    else
+    {
+        ULONG Phys = PhysicalAddress;
+        if(!EmuIsPhysicalMapAddress(Phys))
+            Phys = EmuPhysicalMapBase + (Phys & EmuPhysicalRamMirrorMask);
+        if(EmuReadPhysicalMapBlock(Phys, Surface, SurfaceSize))
+            SourceKind = "shadow";
+    }
+
+    if(SourceKind == NULL)
+    {
+        printf("Emu (0x%lX): scanout 0x%.08lX unreadable (host=0x%.08lX); skipping dump.\n",
+               GetCurrentThreadId(), PhysicalAddress, Host);
+        fflush(stdout);
+        delete[] Surface;
+        return;
+    }
+
+    // Repack each X8R8G8B8 scanline to BGRA (drop any pitch padding beyond width)
+    // and force opaque alpha so the BMP renders solid.
+    ULONG *Pixels = new ULONG[Width * Height];
+    ULONG DistinctSample = 0, FirstColor = 0;
+    for(ULONG Y = 0; Y < Height; Y++)
+    {
+        const ULONG *Row = (const ULONG *)(Surface + (size_t)Y * Pitch);
+        for(ULONG X = 0; X < Width; X++)
+        {
+            ULONG Bgra = (Row[X] & 0x00FFFFFF) | 0xFF000000;
+            Pixels[Y * Width + X] = Bgra;
+            if(X == 0 && Y == 0)
+                FirstColor = Bgra;
+            else if(Bgra != FirstColor && DistinctSample < 2)
+                DistinctSample = 2;
+        }
+    }
+
+    char dir[MAX_PATH] = {0};
+    GetTempPathA(sizeof(dir), dir);
+    char path[MAX_PATH];
+    sprintf(path, "%scxbx_fb%lu.bmp", dir, g_EmuNv2aScanoutDumpIndex);
+
+    FILE *f = fopen(path, "wb");
+    if(f != NULL)
+    {
+        ULONG DataSize = Width * Height * 4;
+        unsigned char fh[14] = {0}, ih[40] = {0};
+        ULONG fileSize = 54 + DataSize;
+        fh[0] = 'B'; fh[1] = 'M';
+        fh[2] = (unsigned char)fileSize;         fh[3] = (unsigned char)(fileSize >> 8);
+        fh[4] = (unsigned char)(fileSize >> 16); fh[5] = (unsigned char)(fileSize >> 24);
+        fh[10] = 54;
+        ih[0] = 40;
+        ih[4] = (unsigned char)Width; ih[5] = (unsigned char)(Width >> 8);
+        ih[6] = (unsigned char)(Width >> 16); ih[7] = (unsigned char)(Width >> 24);
+        LONG nh = -(LONG)Height; // negative height => top-down
+        ih[8]  = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
+        ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+        ih[12] = 1;
+        ih[14] = 32;
+        fwrite(fh, 1, 14, f);
+        fwrite(ih, 1, 40, f);
+        fwrite(Pixels, 1, DataSize, f);
+        fclose(f);
+
+        printf("Emu (0x%lX): NV2A scanout dumped %lux%lu pitch=%lu %s phys=0x%.08lX host=0x%.08lX first=0x%.08lX distinct>=2:%s -> %s\n",
+               GetCurrentThreadId(), Width, Height, Pitch, SourceKind,
+               PhysicalAddress, Host, FirstColor,
+               DistinctSample >= 2 ? "yes" : "no", path);
+        fflush(stdout);
+        g_EmuNv2aScanoutDumpIndex++;
+    }
+
+    delete[] Pixels;
+    delete[] Surface;
 }
 
 static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)
