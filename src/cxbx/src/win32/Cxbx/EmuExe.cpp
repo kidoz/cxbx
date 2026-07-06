@@ -198,7 +198,15 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
                 {
                     // TODO: get this working such that m_sizeof_raw can be the actual raw size, not virtual size
                     uint32 RawSize = RoundUp(x_Xbe->m_SectionHeader[v].dwVirtualSize, PE_FILE_ALIGN);
-                    uint32 RawAddr = dwSectionCursor;
+
+                    // The section alignment is sub-page, so Windows maps the exe
+                    // flat -- file offset must equal the virtual address. Placing
+                    // sections at a running cursor instead only works when the XBE
+                    // has no virtual gaps; a title that does (e.g. CDX, whose first
+                    // section is at RVA 0x2000 while the packed cursor is 0x1000)
+                    // then loads with every section shifted and Windows rejects it
+                    // (ERROR_BAD_EXE_FORMAT). Anchor raw address to virtual address.
+                    uint32 RawAddr = m_SectionHeader[v].m_virtual_addr;
 
                     m_SectionHeader[v].m_sizeof_raw = RawSize;
                     m_SectionHeader[v].m_raw_addr   = RawAddr;
@@ -271,7 +279,7 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
                 uint32 raw_size = RoundUp(m_SectionHeader[i].m_virtual_size, PE_FILE_ALIGN);
 
                 m_SectionHeader[i].m_sizeof_raw  = raw_size;
-                m_SectionHeader[i].m_raw_addr    = dwSectionCursor;
+                m_SectionHeader[i].m_raw_addr    = m_SectionHeader[i].m_virtual_addr;   // flat map: raw == VA
 
                 dwSectionCursor += raw_size;
             }
@@ -340,7 +348,7 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
                 uint32 raw_size = RoundUp(m_SectionHeader[i].m_virtual_size, PE_FILE_ALIGN);
 
                 m_SectionHeader[i].m_sizeof_raw = raw_size;
-                m_SectionHeader[i].m_raw_addr   = dwSectionCursor;
+                m_SectionHeader[i].m_raw_addr   = m_SectionHeader[i].m_virtual_addr;   // flat map: raw == VA
 
                 dwSectionCursor += raw_size;
             }

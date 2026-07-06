@@ -363,6 +363,32 @@ void Exe::Export(const char *x_szExeFilename)
         }
     }
 
+    // ******************************************************************
+    // * pad file out to SizeOfImage
+    // *
+    // * The section alignment is smaller than a page (XBE-native), so Windows
+    // * maps the file flat -- the in-memory image is the file. A trailing section
+    // * whose virtual size exceeds its raw size (bss) then extends past the file,
+    // * and the loader rejects the exe with ERROR_BAD_EXE_FORMAT (e.g. the CDX
+    // * sample). Pad the file with zeros up to SizeOfImage so the mapped image is
+    // * fully backed.
+    // ******************************************************************
+    {
+        fseek(ExeFile, 0, SEEK_END);
+        long dwFileSize = ftell(ExeFile);
+        if(dwFileSize >= 0 && (uint32)dwFileSize < m_OptionalHeader.m_sizeof_image)
+        {
+            static const uint08 zbuf[4096] = {0};
+            uint32 dwPad = m_OptionalHeader.m_sizeof_image - (uint32)dwFileSize;
+            while(dwPad > 0)
+            {
+                uint32 chunk = dwPad > sizeof(zbuf) ? (uint32)sizeof(zbuf) : dwPad;
+                fwrite(zbuf, 1, chunk, ExeFile);
+                dwPad -= chunk;
+            }
+        }
+    }
+
 cleanup:
 
     if(GetError() != 0)
