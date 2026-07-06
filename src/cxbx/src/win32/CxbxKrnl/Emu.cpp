@@ -759,6 +759,18 @@ static void EmuAciWriteRegister32(ULONG Address, ULONG Value)
     fflush(stdout);
 }
 
+// Raise an AC97 PCM-out buffer-completion status in GLOB_STA. The audio ISR reads
+// GLOB_STA & 0x51 to decide whether a real interrupt is pending; with only the
+// Codec0Ready bit set it treats every synthesized interrupt as spurious and never
+// services audio. Set bit 0x40 (a masked status bit) so the ISR processes; the
+// guest clears it write-1-to-clear afterwards. Called from the audio delivery
+// thread (EmuKrnl.cpp) just before it fires the ISR.
+extern "C" void EmuAciSignalAudioInterrupt()
+{
+    ULONG Address = EmuAciMmioBase + EmuAciGlobSta;
+    EmuStoreMmioRegister(Address, EmuAciCachedRegister(Address, 0) | 0x40);
+}
+
 static void EmuAciWriteRegister(ULONG Address, ULONG Size, ULONG Value)
 {
     if(Size == 4)

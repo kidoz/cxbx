@@ -3060,6 +3060,8 @@ static void EmuStartVblankThread()
 static const ULONG EmuAudioInterruptLevels[2] = { 5, 6 };
 static volatile LONG g_EmuAudioThreadStarted = 0;
 
+extern "C" void EmuAciSignalAudioInterrupt();   // Emu.cpp: raise GLOB_STA PCM-out status
+
 static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
 {
     EmuGenerateFS(g_pTLS, g_pTLSData);
@@ -3076,6 +3078,10 @@ static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
             EmuKInterrupt *Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuAudioInterruptLevels[i]];
             if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
                 continue;
+
+            // Raise a buffer-completion status so the ISR treats this as a real
+            // interrupt (it masks GLOB_STA & 0x51 and ignores spurious ones).
+            EmuAciSignalAudioInterrupt();
 
             EmuSwapFS();   // Xbox FS
             __try
