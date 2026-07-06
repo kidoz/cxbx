@@ -247,6 +247,11 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
                     mov fs:[0x20], eax
                     mov eax, CurThread
                     mov fs:[0x28], eax
+                    // KPCR.Irql (byte at 0x24). XDK/XAPI code reads it as the
+                    // current IRQL and bug-checks when it looks >= DISPATCH_LEVEL;
+                    // the raw TEB has the thread-id low byte there. Force PASSIVE (0)
+                    // -- only the low byte, to leave the rest of ClientId intact.
+                    mov byte ptr fs:[0x24], 0
                 }
             }
             return;
