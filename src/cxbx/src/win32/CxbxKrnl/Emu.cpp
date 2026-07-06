@@ -4442,6 +4442,29 @@ static void EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader)
         printf("Emu (0x%lX): FCEUltra XLaunchNewImage signature NOT matched at 0x000AFCC4.\n",
                GetCurrentThreadId());
     }
+
+    // DSOUND tracks APU-heap usage through a pointer global at 0x00110E98 that the
+    // kernel/APU init would set; on this HLE DSOUND stores NULL there at runtime, so
+    // `mov eax,[0x110E98] ; mov ecx,[ebx+8] ; add [eax],ecx` (0x0010C1D7) faults.
+    // Rewrite that site to update a scratch counter directly (skipping the null
+    // pointer), leaving the accounting a harmless no-op.
+    static uint32 s_FceultraApuCounter = 0;
+    const uint08 ApuAccountSig[] = { 0xA1, 0x98, 0x0E, 0x11, 0x00, 0x8B, 0x4B, 0x08, 0x01, 0x08 };
+    if(EmuBytesMatch(0x0010C1D7, ApuAccountSig, sizeof(ApuAccountSig), pXbeHeader))
+    {
+        // mov ecx,[ebx+8] ; add [&scratch],ecx ; nop
+        uint08 ApuAccountPatch[10] = { 0x8B, 0x4B, 0x08, 0x01, 0x0D, 0, 0, 0, 0, 0x90 };
+        *(uint32*)&ApuAccountPatch[5] = (uint32)(uintptr_t)&s_FceultraApuCounter;
+        EmuWriteBytes(0x0010C1D7, ApuAccountPatch, sizeof(ApuAccountPatch));
+        printf("Emu (0x%lX): FCEUltra DSOUND APU accounting (0x0010C1D7) redirected to scratch.\n",
+               GetCurrentThreadId());
+    }
+    else
+    {
+        printf("Emu (0x%lX): FCEUltra DSOUND APU accounting signature NOT matched at 0x0010C1D7.\n",
+               GetCurrentThreadId());
+    }
+
     fflush(stdout);
 }
 
