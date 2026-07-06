@@ -3053,6 +3053,60 @@ static void EmuStartVblankThread()
     }
 }
 
+// The APU/audio interrupt (bus levels 5/6) is edge-driven by buffer completion on
+// real hardware; an audio-clocked title (e.g. FCEUltra) blocks in its init/main
+// loop until its audio ISR runs. This HLE has no APU DMA to raise it, so synthesize
+// it: once an audio-level interrupt is connected, fire its ServiceRoutine on a timer.
+static const ULONG EmuAudioInterruptLevels[2] = { 5, 6 };
+static volatile LONG g_EmuAudioThreadStarted = 0;
+
+static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): audio-interrupt thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    for(;;)
+    {
+        Sleep(8);   // ~125 Hz, roughly an APU buffer cadence
+
+        for(int i = 0; i < 2; i++)
+        {
+            EmuKInterrupt *Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuAudioInterruptLevels[i]];
+            if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
+                continue;
+
+            EmuSwapFS();   // Xbox FS
+            __try
+            {
+                Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            EmuSwapFS();   // Win2k/XP FS
+        }
+    }
+
+    return 0;
+}
+
+static void EmuStartAudioInterruptThread()
+{
+    // Only when auto-booting a real title headless; leaves the probes unaffected.
+    char rom[8] = {0};
+    if(GetEnvironmentVariableA("CXBX_AUTOBOOT_ROM", rom, sizeof(rom)) == 0)
+        return;
+
+    if(InterlockedExchange(&g_EmuAudioThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting audio-interrupt delivery thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuAudioInterruptThread, NULL, 0, NULL);
+    }
+}
+
 extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 {
     EmuSwapFS();   // Win2k/XP FS
@@ -3060,22 +3114,28 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
     BOOLEAN Connected = FALSE;
     EmuKInterrupt *Interrupt = (EmuKInterrupt*)InterruptObject;
 
-    if(EmuIsWritableMemoryRange(Interrupt, sizeof(*Interrupt)) &&
-       Interrupt->BusInterruptLevel < sizeof(g_EmuInterruptList) / sizeof(g_EmuInterruptList[0]))
+    bool Writable = EmuIsWritableMemoryRange(Interrupt, sizeof(*Interrupt));
+    ULONG Level = Writable ? Interrupt->BusInterruptLevel : 0xFFFFFFFF;
+    ULONG SlotCount = sizeof(g_EmuInterruptList) / sizeof(g_EmuInterruptList[0]);
+
+    if(Writable && Level < SlotCount)
     {
-        if(!Interrupt->Connected && g_EmuInterruptList[Interrupt->BusInterruptLevel] == NULL)
+        if(!Interrupt->Connected && g_EmuInterruptList[Level] == NULL)
         {
             Interrupt->Connected = TRUE;
-            g_EmuInterruptList[Interrupt->BusInterruptLevel] = Interrupt;
+            g_EmuInterruptList[Level] = Interrupt;
             Connected = TRUE;
         }
     }
 
-    printf("EmuKrnl (0x%lX): KeConnectInterrupt interrupt=0x%.08lX connected=%lu.\n",
-           GetCurrentThreadId(), (ULONG)InterruptObject, (ULONG)Connected);
+    printf("EmuKrnl (0x%lX): KeConnectInterrupt interrupt=0x%.08lX level=0x%lX connected=%lu.\n",
+           GetCurrentThreadId(), (ULONG)InterruptObject, Level, (ULONG)Connected);
 
     if(Connected && Interrupt->BusInterruptLevel == EmuDisplayInterruptLevel)
         EmuStartVblankThread();
+
+    if(Connected && (Level == EmuAudioInterruptLevels[0] || Level == EmuAudioInterruptLevels[1]))
+        EmuStartAudioInterruptThread();
 
     EmuSwapFS();   // Xbox FS
 
