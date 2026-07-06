@@ -83,6 +83,9 @@ HANDLE       g_hZDrive    = NULL;
 static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
+static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
+static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
+static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static void  EmuInstallAutoBootLaunchData();
 static void  EmuInstallFakeKernelImage();
 static void  EmuXRefFailure();
@@ -4115,6 +4118,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         printf("Emu (0x%X): Resolved %d cross reference(s)\n", GetCurrentThreadId(), OrigUnResolvedXRefs - UnResolvedXRefs);
 
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
+        EmuInstallFceultraBootstrap(pXbeHeader);
         EmuInstallAutoBootLaunchData();
         EmuInstallFakeKernelImage();
     }
@@ -4396,6 +4400,49 @@ static void EmuInstallFakeKernelImage()
                GetCurrentThreadId());
         fflush(stdout);
     }
+}
+
+// FCEUltra v17 (title id 0x10152007) is built with the XDK 5344 XAPI startup,
+// which acquires ring 0 (GDT descriptor 8 + far-jump to CS 8), verifies it, and
+// -- because a user-mode HLE can never satisfy the CS==8 check -- reboot-launches
+// itself forever via XLaunchNewImage (guest 0x000AFCC4). Neutralise that function
+// to a no-op return so the title stops rebooting and proceeds into its emulator.
+// This is the same targeted-patch approach as EmuInstallNestopiaX13Bootstrap.
+static bool EmuIsFceultra(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
+        return false;
+
+    Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
+    return pCertificate->dwTitleId == 0x10152007;
+}
+
+static void EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader)
+{
+    if(!EmuIsFceultra(pXbeHeader))
+        return;
+
+    // XLaunchNewImage prologue: push ebp / mov ebp,esp / sub esp,0xC00 / mov eax,[0x10118]
+    const uint08 XLaunchNewImageSig[] =
+    {
+        0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x00, 0x0C, 0x00,
+        0x00, 0xA1, 0x18, 0x01, 0x01, 0x00
+    };
+    // xor eax,eax ; ret 0x0C  (matches the function's own __stdcall ret 0xC)
+    const uint08 XLaunchNewImagePatch[] = { 0x33, 0xC0, 0xC2, 0x0C, 0x00 };
+
+    if(EmuBytesMatch(0x000AFCC4, XLaunchNewImageSig, sizeof(XLaunchNewImageSig), pXbeHeader))
+    {
+        EmuWriteBytes(0x000AFCC4, XLaunchNewImagePatch, sizeof(XLaunchNewImagePatch));
+        printf("Emu (0x%lX): FCEUltra XLaunchNewImage (0x000AFCC4) neutralised (no reboot-to-self).\n",
+               GetCurrentThreadId());
+    }
+    else
+    {
+        printf("Emu (0x%lX): FCEUltra XLaunchNewImage signature NOT matched at 0x000AFCC4.\n",
+               GetCurrentThreadId());
+    }
+    fflush(stdout);
 }
 
 static DWORD WINAPI EmuNestopiaX13XLaunchNewImageA(LPCSTR lpTitlePath, PVOID pLaunchData)
