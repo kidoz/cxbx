@@ -658,8 +658,21 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
 
             // ******************************************************************
             // * calculate size of image
+            // *
+            // * SizeOfImage must span the highest section's virtual extent
+            // * (rounded up to the section alignment). Summing code/data raw
+            // * sizes underestimates it -- it ignores sections that are neither
+            // * code nor initialized-data and the per-section virtual padding --
+            // * which leaves a trailing section beyond SizeOfImage and makes
+            // * Windows reject the exe with ERROR_BAD_EXE_FORMAT (e.g. the 44-
+            // * section CDX sample).
             // ******************************************************************
-            sizeof_image  = sizeof_undata + sizeof_data + sizeof_code + m_OptionalHeader.m_sizeof_headers;
+            for(uint32 v=0;v<m_Header.m_sections;v++)
+            {
+                uint32 end = m_SectionHeader[v].m_virtual_addr + m_SectionHeader[v].m_virtual_size;
+                if(end > sizeof_image)
+                    sizeof_image = end;
+            }
             sizeof_image  = RoundUp(sizeof_image, PE_SEGM_ALIGN);
 
             // ******************************************************************
