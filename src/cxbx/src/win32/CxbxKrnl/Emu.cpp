@@ -706,8 +706,15 @@ static ULONG EmuAciReadRegister32(ULONG Address)
             break;
 
         case EmuAciCas:
+            // Codec Access Semaphore: bit 0 = "codec access in progress"; on real
+            // hardware it is set for the (microsecond-scale) duration of a codec
+            // register access and cleared by hardware the moment it completes. Model
+            // that completion as immediate -- return the current value then auto-clear
+            // -- so a guest that spin-polls the semaphore waiting for it to read free
+            // (e.g. the FCEUltra DSOUND ISR looping on `test [0xFEC00134],1`) sees it
+            // free instead of latched busy forever.
             Value = EmuAciCachedRegister(Address, 0);
-            EmuStoreMmioRegister(Address, 1);
+            EmuStoreMmioRegister(Address, 0);
             break;
 
         default:
