@@ -110,6 +110,7 @@ struct EmuObjectHeader
 
 static const ULONG EmuGenericObjectMagic = 0x4F626A48;
 static const ULONG EmuThreadObjectMagic = 0x54687264;
+static const ULONG EmuObjectBodyOffset = 16;
 struct EmuThreadObjectHeader
 {
     LONG PointerCount;
@@ -140,11 +141,104 @@ static ULONG EmuProbeThreadSuspendCount(HANDLE ThreadHandle)
 
 static std::map<HANDLE, ULONG> g_EmuThreadSuspendCounts;
 static std::map<std::string, std::string> g_EmuSymbolicLinks;
+static std::map<PVOID, BYTE*> g_EmuObjectAllocations;
+static std::map<PVOID, HANDLE> g_EmuObjectHandles;
+static std::map<PVOID, std::string> g_EmuObjectNames;
+static std::map<std::string, PVOID> g_EmuNamedObjects;
+static PVOID g_EmuPsThreadNotifyRoutines[8] = {};
+static ULONG g_EmuPsThreadNotifyRoutineCount = 0;
+
+extern "C"
+{
+ULONG g_EmuObpObjectHandleTable[4] = {};
+ULONG g_EmuHalDiskCachePartitionCount = 2;
+CHAR g_EmuHalDiskModelNumber[32] = "Cxbx Virtual Disk";
+CHAR g_EmuHalDiskSerialNumber[32] = "CXBX000000000001";
+UCHAR g_EmuKdDebuggerEnabled = FALSE;
+UCHAR g_EmuKdDebuggerNotPresent = TRUE;
+UCHAR g_EmuXboxEEPROMKey[16] = {
+    0x43, 0x78, 0x62, 0x78, 0x45, 0x45, 0x50, 0x52,
+    0x4F, 0x4D, 0x4B, 0x65, 0x79, 0x30, 0x30, 0x31
+};
+UCHAR g_EmuXboxHDKey[16] = {
+    0x43, 0x78, 0x62, 0x78, 0x48, 0x44, 0x4B, 0x65,
+    0x79, 0x56, 0x69, 0x72, 0x74, 0x30, 0x30, 0x31
+};
+UCHAR g_EmuXboxLANKey[16] = {
+    0x43, 0x78, 0x62, 0x78, 0x4C, 0x41, 0x4E, 0x4B,
+    0x65, 0x79, 0x56, 0x69, 0x72, 0x74, 0x30, 0x31
+};
+UCHAR g_EmuXboxAlternateSignatureKeys[32] = {
+    0x43, 0x78, 0x62, 0x78, 0x41, 0x6C, 0x74, 0x53,
+    0x69, 0x67, 0x4B, 0x65, 0x79, 0x30, 0x30, 0x31,
+    0x43, 0x78, 0x62, 0x78, 0x41, 0x6C, 0x74, 0x53,
+    0x69, 0x67, 0x4B, 0x65, 0x79, 0x30, 0x30, 0x32
+};
+UCHAR g_EmuXePublicKeyData[160] = {
+    'R', 'S', 'A', '1',
+    0x88, 0x00, 0x00, 0x00,
+    0x00, 0x04, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x01, 0x00,
+    0xC7
+};
+ULONG g_EmuIdexChannelObject[16] = {};
+}
+
+static ULONG g_EmuHalTrayState = 0x10;
+static ULONG g_EmuHalTrayStateChangeCount = 0;
+static ULONG g_EmuHalDisabledInterruptMask = 0;
+static ULONG g_EmuHalSoftwareInterruptMask = 0;
+static BOOLEAN g_EmuSecureTrayEjectEnabled = FALSE;
+static BOOLEAN g_EmuResetOrShutdownPending = FALSE;
+static BOOLEAN g_EmuShutdownInitiated = FALSE;
+static ULONG g_EmuLastSmcScratchValue = 0;
+static ULONG g_EmuPhyInitialized = 0;
+static ULONG g_EmuPhyLinkState = 0;
+static ULONG g_EmuFscCachePages = 0;
 
 static const NTSTATUS EmuStatusInvalidParameter = (NTSTATUS)0xC000000D;
+static const NTSTATUS EmuStatusInvalidDeviceRequest = (NTSTATUS)0xC0000010;
 static const NTSTATUS EmuStatusObjectNameInvalid = (NTSTATUS)0xC0000033;
 static const NTSTATUS EmuStatusObjectPathNotFound = (NTSTATUS)0xC000003A;
+static const NTSTATUS EmuStatusObjectTypeMismatch = (NTSTATUS)0xC0000024;
 static const NTSTATUS EmuStatusSuspendCountExceeded = (NTSTATUS)0xC000004A;
+static const NTSTATUS EmuStatusInsufficientResources = (NTSTATUS)0xC000009A;
+static const NTSTATUS EmuStatusInvalidHandle = (NTSTATUS)0xC0000008;
+
+extern "C" VOID NTAPI EmuDbgBreakPoint()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): DbgBreakPoint ignored.\n", GetCurrentThreadId());
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuDbgBreakPointWithStatus(ULONG Status)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): DbgBreakPointWithStatus status=0x%.08lX ignored.\n",
+           GetCurrentThreadId(), Status);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" ULONG NTAPI EmuDbgPrompt(PCHAR Prompt, PCHAR Response, ULONG Length)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Prompt != NULL)
+        printf("EmuKrnl (0x%lX): DbgPrompt prompt=\"%s\".\n", GetCurrentThreadId(), Prompt);
+
+    if(Response != NULL && Length != 0)
+        Response[0] = '\0';
+
+    EmuSwapFS();   // Xbox FS
+
+    return 0;
+}
 
 static bool EmuIsWritableMemoryRange(PVOID Address, SIZE_T Size)
 {
@@ -371,6 +465,124 @@ static EmuThreadObjectHeader *EmuThreadHeaderFromThread(xboxkrnl::PKTHREAD Threa
     return Header;
 }
 
+static EmuObjectHeader *EmuObjectHeaderFromObject(PVOID Object)
+{
+    if(Object == NULL || Object == EmuGetCurrentThread())
+        return NULL;
+
+    EmuObjectHeader *Header = (EmuObjectHeader*)((BYTE*)Object - EmuObjectBodyOffset);
+    if(!EmuIsWritableMemoryRange(Header, sizeof(*Header)))
+        return NULL;
+
+    if(Header->Flags != EmuGenericObjectMagic && Header->Flags != EmuThreadObjectMagic)
+        return NULL;
+
+    return Header;
+}
+
+static bool EmuObjectTypeMatches(PVOID Object, PVOID ObjectType)
+{
+    if(ObjectType == NULL)
+        return true;
+
+    if(Object == EmuGetCurrentThread())
+        return EmuIsThreadObjectType(ObjectType);
+
+    EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+    if(Header == NULL)
+        return false;
+
+    return Header->Type == ObjectType || (Header->Flags == EmuThreadObjectMagic && EmuIsThreadObjectType(ObjectType));
+}
+
+static void EmuReleaseObjectStorage(PVOID Object, EmuObjectHeader *Header)
+{
+    g_EmuObjectHandles.erase(Object);
+
+    auto NameEntry = g_EmuObjectNames.find(Object);
+    if(NameEntry != g_EmuObjectNames.end())
+    {
+        g_EmuNamedObjects.erase(NameEntry->second);
+        g_EmuObjectNames.erase(NameEntry);
+    }
+
+    auto AllocationEntry = g_EmuObjectAllocations.find(Object);
+    if(AllocationEntry != g_EmuObjectAllocations.end())
+    {
+        BYTE *Allocation = AllocationEntry->second;
+        g_EmuObjectAllocations.erase(AllocationEntry);
+        delete[] Allocation;
+        return;
+    }
+
+    if(Header->Flags == EmuThreadObjectMagic)
+        delete (EmuThreadObjectHeader*)Header;
+    else
+        delete Header;
+}
+
+static NTSTATUS EmuOpenHandleForObject(PVOID Object, HANDLE *Handle)
+{
+    if(Handle == NULL)
+        return EmuStatusInvalidParameter;
+
+    *Handle = INVALID_HANDLE_VALUE;
+
+    if(Object == NULL)
+        return EmuStatusInvalidParameter;
+
+    HANDLE SourceHandle = NULL;
+    if(Object == EmuGetCurrentThread())
+        SourceHandle = GetCurrentThread();
+    else
+    {
+        auto ExistingHandle = g_EmuObjectHandles.find(Object);
+        if(ExistingHandle != g_EmuObjectHandles.end())
+            SourceHandle = ExistingHandle->second;
+
+        EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+        if(Header != NULL && Header->Flags == EmuThreadObjectMagic)
+            SourceHandle = ((EmuThreadObjectHeader*)Header)->HostHandle;
+    }
+
+    HANDLE NewHandle = NULL;
+    if(SourceHandle != NULL && SourceHandle != INVALID_HANDLE_VALUE &&
+       DuplicateHandle(GetCurrentProcess(), SourceHandle, GetCurrentProcess(), &NewHandle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+    {
+        *Handle = NewHandle;
+        return STATUS_SUCCESS;
+    }
+
+    NewHandle = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if(NewHandle == NULL)
+        return EmuStatusInsufficientResources;
+
+    *Handle = NewHandle;
+    g_EmuObjectHandles[Object] = NewHandle;
+
+    EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+    if(Header != NULL)
+        Header->HandleCount++;
+
+    return STATUS_SUCCESS;
+}
+
+static bool EmuObjectAttributesName(xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes, std::string *Name)
+{
+    return ObjectAttributes != NULL && EmuObjectStringToStdString(ObjectAttributes->ObjectName, Name);
+}
+
+static bool EmuObjectAttributesToHostPath(xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes, std::string *Path)
+{
+    if(!EmuObjectAttributesName(ObjectAttributes, Path))
+        return false;
+
+    if(Path->compare(0, 4, "\\??\\") == 0)
+        Path->erase(0, 4);
+
+    return !Path->empty();
+}
+
 extern "C" BOOLEAN NTAPI EmuMmIsAddressValid(PVOID VirtualAddress)
 {
     return VirtualAddress != NULL;
@@ -421,6 +633,148 @@ extern "C" NTSTATUS NTAPI EmuObReferenceObjectByHandle(HANDLE ObjectHandle, PVOI
     return STATUS_SUCCESS;
 }
 
+extern "C" NTSTATUS NTAPI EmuObCreateObject
+(
+    IN  PVOID ObjectType,
+    IN  xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
+    IN  ULONG ObjectSize,
+    OUT PVOID *Object
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Object == NULL || ObjectType == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    *Object = NULL;
+
+    const ULONG AllocationSize = EmuObjectBodyOffset + ((ObjectSize != 0) ? ObjectSize : sizeof(ULONGLONG));
+    BYTE *Allocation = new BYTE[AllocationSize];
+    if(Allocation == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInsufficientResources;
+    }
+
+    ZeroMemory(Allocation, AllocationSize);
+    EmuObjectHeader *Header = (EmuObjectHeader*)Allocation;
+    Header->PointerCount = 1;
+    Header->HandleCount = 0;
+    Header->Type = ObjectType;
+    Header->Flags = EmuGenericObjectMagic;
+
+    *Object = (PVOID)(Allocation + EmuObjectBodyOffset);
+    g_EmuObjectAllocations[*Object] = Allocation;
+
+    std::string Name;
+    if(EmuObjectAttributesName(ObjectAttributes, &Name))
+        g_EmuObjectNames[*Object] = Name;
+
+    printf("EmuKrnl (0x%lX): ObCreateObject type=%p size=0x%.08lX object=%p.\n",
+           GetCurrentThreadId(), ObjectType, ObjectSize, *Object);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuObInsertObject
+(
+    IN  PVOID Object,
+    IN  xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
+    IN  ULONG ObjectPointerBias,
+    OUT PHANDLE Handle
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+    if(Object == NULL || Header == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    std::string Name;
+    bool HasName = EmuObjectAttributesName(ObjectAttributes, &Name);
+    if(!HasName)
+    {
+        auto ExistingName = g_EmuObjectNames.find(Object);
+        if(ExistingName != g_EmuObjectNames.end())
+        {
+            Name = ExistingName->second;
+            HasName = !Name.empty();
+        }
+    }
+
+    if(HasName)
+    {
+        if(!EmuIsValidObjectName(Name) && !EmuIsValidSymbolicLinkName(Name))
+        {
+            EmuSwapFS();   // Xbox FS
+            return EmuStatusObjectNameInvalid;
+        }
+
+        if(g_EmuNamedObjects.find(Name) != g_EmuNamedObjects.end() && g_EmuNamedObjects[Name] != Object)
+        {
+            EmuSwapFS();   // Xbox FS
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+
+        g_EmuNamedObjects[Name] = Object;
+        g_EmuObjectNames[Object] = Name;
+    }
+
+    Header->PointerCount += 1 + (LONG)ObjectPointerBias;
+
+    NTSTATUS Status = STATUS_SUCCESS;
+    if(Handle != NULL)
+        Status = EmuOpenHandleForObject(Object, Handle);
+
+    printf("EmuKrnl (0x%lX): ObInsertObject object=%p name=\"%s\" handle=%p status=0x%.08lX.\n",
+           GetCurrentThreadId(), Object, HasName ? Name.c_str() : "", Handle != NULL ? *Handle : NULL, Status);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Status;
+}
+
+extern "C" VOID NTAPI EmuObMakeTemporaryObject(PVOID Object)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    auto NameEntry = g_EmuObjectNames.find(Object);
+    if(NameEntry != g_EmuObjectNames.end())
+    {
+        g_EmuNamedObjects.erase(NameEntry->second);
+        g_EmuObjectNames.erase(NameEntry);
+    }
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" NTSTATUS NTAPI EmuObOpenObjectByPointer(PVOID Object, PVOID ObjectType, PHANDLE Handle)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(!EmuObjectTypeMatches(Object, ObjectType))
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusObjectTypeMismatch;
+    }
+
+    NTSTATUS Status = EmuOpenHandleForObject(Object, Handle);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Status;
+}
+
+extern "C" NTSTATUS NTAPI EmuObReferenceObjectByPointer(PVOID Object, PVOID ObjectType);
+
 extern "C" VOID __fastcall EmuObfDereferenceObject(PVOID Object)
 {
     if(Object == NULL)
@@ -429,19 +783,100 @@ extern "C" VOID __fastcall EmuObfDereferenceObject(PVOID Object)
     if(Object == EmuGetCurrentThread())
         return;
 
-    EmuObjectHeader *Header = (EmuObjectHeader*)((BYTE*)Object - 16);
-    if(Header->Flags == EmuThreadObjectMagic)
-    {
-        delete (EmuThreadObjectHeader*)Header;
+    EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+    if(Header == NULL)
         return;
-    }
 
-    if(Header->Flags == EmuGenericObjectMagic)
-        delete Header;
+    if(Header->PointerCount > 0)
+        Header->PointerCount--;
+
+    if(Header->PointerCount == 0 && Header->HandleCount == 0)
+        EmuReleaseObjectStorage(Object, Header);
 }
 
 extern "C" VOID __fastcall EmuObfReferenceObject(PVOID Object)
 {
+    EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+    if(Header != NULL)
+        Header->PointerCount++;
+}
+
+extern "C" NTSTATUS NTAPI EmuObReferenceObjectByName
+(
+    IN  xboxkrnl::PSTRING ObjectName,
+    IN  ULONG Attributes,
+    IN  PVOID ObjectType,
+    IN  PVOID ParseContext OPTIONAL,
+    OUT PVOID *Object
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Object == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    *Object = NULL;
+
+    std::string Name;
+    if(!EmuObjectStringToStdString(ObjectName, &Name))
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusObjectNameInvalid;
+    }
+
+    auto Existing = g_EmuNamedObjects.find(Name);
+    if(Existing != g_EmuNamedObjects.end())
+    {
+        if(!EmuObjectTypeMatches(Existing->second, ObjectType))
+        {
+            EmuSwapFS();   // Xbox FS
+            return EmuStatusObjectTypeMismatch;
+        }
+
+        EmuObjectHeader *Header = EmuObjectHeaderFromObject(Existing->second);
+        if(Header != NULL)
+            Header->PointerCount++;
+
+        *Object = Existing->second;
+
+        EmuSwapFS();   // Xbox FS
+        return STATUS_SUCCESS;
+    }
+
+    printf("EmuKrnl (0x%lX): ObReferenceObjectByName name=\"%s\" not found.\n",
+           GetCurrentThreadId(), Name.c_str());
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
+extern "C" NTSTATUS NTAPI EmuObReferenceObjectByPointer(PVOID Object, PVOID ObjectType)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Object == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    if(!EmuObjectTypeMatches(Object, ObjectType))
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusObjectTypeMismatch;
+    }
+
+    EmuObjectHeader *Header = EmuObjectHeaderFromObject(Object);
+    if(Header != NULL)
+        Header->PointerCount++;
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
 }
 
 extern "C" __declspec(naked) VOID NTAPI EmuRtlCaptureContext(PVOID ContextRecord)
@@ -718,6 +1153,34 @@ extern "C" NTSTATUS NTAPI EmuRtlCharToInteger(const char *String, ULONG Base, PU
     return STATUS_SUCCESS;
 }
 
+extern "C" VOID NTAPI EmuRtlAssert(PVOID FailedAssertion, PVOID FileName, ULONG LineNumber, PCHAR Message)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): RtlAssert assertion=%s file=%s line=%lu message=%s.\n",
+           GetCurrentThreadId(),
+           FailedAssertion != NULL ? (const char*)FailedAssertion : "",
+           FileName != NULL ? (const char*)FileName : "",
+           LineNumber,
+           Message != NULL ? Message : "");
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuRtlRip(PVOID ApiName, PVOID Expression, PVOID Message, PVOID Address)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): RtlRip api=%s expression=%s message=%s address=%p.\n",
+           GetCurrentThreadId(),
+           ApiName != NULL ? (const char*)ApiName : "",
+           Expression != NULL ? (const char*)Expression : "",
+           Message != NULL ? (const char*)Message : "",
+           Address);
+
+    EmuSwapFS();   // Xbox FS
+}
+
 extern "C" SIZE_T NTAPI EmuRtlCompareMemory(const VOID *Source1, const VOID *Source2, SIZE_T Length)
 {
     if(Source1 == NULL || Source2 == NULL)
@@ -763,6 +1226,14 @@ static USHORT EmuRtlLowerUshort(USHORT Value)
 {
     if(Value >= 'A' && Value <= 'Z')
         return Value + ('a' - 'A');
+
+    return Value;
+}
+
+static USHORT EmuRtlUpperUshort(USHORT Value)
+{
+    if(Value >= 'a' && Value <= 'z')
+        return Value - ('a' - 'A');
 
     return Value;
 }
@@ -850,6 +1321,26 @@ extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuRtlExtendedLargeIntegerDivide(xboxkr
 
     if(Remainder != NULL)
         *Remainder = LocalRemainder;
+
+    return Result;
+}
+
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuRtlExtendedMagicDivide(xboxkrnl::LARGE_INTEGER Dividend,
+                                                                    xboxkrnl::LARGE_INTEGER MagicDivisor,
+                                                                    xboxkrnl::CCHAR ShiftCount)
+{
+    xboxkrnl::LARGE_INTEGER Result;
+
+#if defined(__SIZEOF_INT128__)
+    __int128 Product = (__int128)Dividend.QuadPart * (__int128)MagicDivisor.QuadPart;
+    Result.QuadPart = (LONGLONG)(Product >> 64);
+    if(ShiftCount > 0)
+        Result.QuadPart >>= ShiftCount;
+#else
+    Result.QuadPart = (MagicDivisor.QuadPart != 0) ? (Dividend.QuadPart / MagicDivisor.QuadPart) : 0;
+    if(ShiftCount > 0)
+        Result.QuadPart >>= ShiftCount;
+#endif
 
     return Result;
 }
@@ -943,6 +1434,274 @@ extern "C" CHAR NTAPI EmuRtlUpperChar(CHAR Character)
         Value = '?';
 
     return (CHAR)Value;
+}
+
+extern "C" VOID NTAPI EmuRtlMoveMemory(PVOID Destination, const VOID *Source, SIZE_T Length)
+{
+    if(Destination == NULL || Source == NULL || Length == 0)
+        return;
+
+    memmove(Destination, Source, Length);
+}
+
+extern "C" VOID NTAPI EmuRtlZeroMemory(PVOID Destination, SIZE_T Length)
+{
+    if(Destination == NULL || Length == 0)
+        return;
+
+    memset(Destination, 0, Length);
+}
+
+extern "C" LONG NTAPI EmuRtlVsnprintf(PCHAR Buffer, SIZE_T Count, const char *Format, va_list Args)
+{
+    if(Buffer == NULL || Count == 0 || Format == NULL)
+        return -1;
+
+    int Written = vsnprintf(Buffer, Count, Format, Args);
+    Buffer[Count - 1] = '\0';
+
+    return (Written < 0) ? -1 : (LONG)Written;
+}
+
+extern "C" LONG NTAPI EmuRtlVsprintf(PCHAR Buffer, const char *Format, va_list Args)
+{
+    if(Buffer == NULL || Format == NULL)
+        return -1;
+
+    int Written = vsprintf(Buffer, Format, Args);
+    return (Written < 0) ? -1 : (LONG)Written;
+}
+
+extern "C" LONG NTAPI EmuRtlSnprintf(PCHAR Buffer, SIZE_T Count, const char *Format, ...)
+{
+    va_list Args;
+    va_start(Args, Format);
+    LONG Written = EmuRtlVsnprintf(Buffer, Count, Format, Args);
+    va_end(Args);
+    return Written;
+}
+
+extern "C" LONG NTAPI EmuRtlSprintf(PCHAR Buffer, const char *Format, ...)
+{
+    va_list Args;
+    va_start(Args, Format);
+    LONG Written = EmuRtlVsprintf(Buffer, Format, Args);
+    va_end(Args);
+    return Written;
+}
+
+static bool EmuRtlFormatUnsignedInteger(ULONG Value, ULONG Base, char *Buffer, ULONG BufferLength)
+{
+    static const char Digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    if(Buffer == NULL || BufferLength == 0 || Base < 2 || Base > 36)
+        return false;
+
+    char Reversed[33];
+    ULONG Count = 0;
+
+    do
+    {
+        Reversed[Count++] = Digits[Value % Base];
+        Value /= Base;
+    } while(Value != 0 && Count < sizeof(Reversed));
+
+    if(Count + 1 > BufferLength)
+        return false;
+
+    for(ULONG i = 0; i < Count; i++)
+        Buffer[i] = Reversed[Count - i - 1];
+
+    Buffer[Count] = '\0';
+    return true;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlIntegerToChar(ULONG Value, ULONG Base, ULONG Length, PCHAR String)
+{
+    if(String == NULL)
+        return EmuStatusInvalidParameter;
+
+    if(Base == 0)
+        Base = 10;
+
+    if(Base != 2 && Base != 8 && Base != 10 && Base != 16)
+        return EmuStatusInvalidParameter;
+
+    char Buffer[33];
+    if(!EmuRtlFormatUnsignedInteger(Value, Base, Buffer, sizeof(Buffer)))
+        return EmuStatusInvalidParameter;
+
+    const ULONG RequiredLength = (ULONG)strlen(Buffer);
+    if(Length != 0 && RequiredLength > Length)
+        return 0xC0000023;
+
+    memcpy(String, Buffer, RequiredLength);
+    if(Length == 0 || RequiredLength < Length)
+        String[RequiredLength] = '\0';
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlIntegerToUnicodeString(ULONG Value, ULONG Base, xboxkrnl::PUNICODE_STRING String)
+{
+    if(String == NULL)
+        return EmuStatusInvalidParameter;
+
+    char Buffer[33];
+    NTSTATUS Status = EmuRtlIntegerToChar(Value, Base, sizeof(Buffer), Buffer);
+    if(Status != STATUS_SUCCESS)
+        return Status;
+
+    const ULONG RequiredLength = (ULONG)strlen(Buffer) * sizeof(USHORT);
+    if(RequiredLength > String->MaximumLength)
+        return 0xC0000023;
+
+    if(RequiredLength != 0 && String->Buffer == NULL)
+        return EmuStatusInvalidParameter;
+
+    for(ULONG i = 0; i < RequiredLength / sizeof(USHORT); i++)
+        String->Buffer[i] = (USHORT)(UCHAR)Buffer[i];
+
+    String->Length = (USHORT)RequiredLength;
+
+    if(String->Buffer != NULL && RequiredLength + sizeof(USHORT) <= String->MaximumLength)
+        String->Buffer[RequiredLength / sizeof(USHORT)] = 0;
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlUnicodeStringToInteger(xboxkrnl::PUNICODE_STRING String, ULONG Base, PULONG Value)
+{
+    if(String == NULL || Value == NULL)
+        return EmuStatusInvalidParameter;
+
+    char Buffer[128];
+    ULONG CharacterCount = String->Length / sizeof(USHORT);
+    if(CharacterCount >= sizeof(Buffer))
+        CharacterCount = sizeof(Buffer) - 1;
+
+    for(ULONG i = 0; i < CharacterCount; i++)
+    {
+        USHORT Character = String->Buffer[i];
+        Buffer[i] = (Character <= 0xFF) ? (CHAR)Character : '?';
+    }
+
+    Buffer[CharacterCount] = '\0';
+    return EmuRtlCharToInteger(Buffer, Base, Value);
+}
+
+extern "C" VOID NTAPI EmuRtlMapGenericMask(PACCESS_MASK AccessMask, PGENERIC_MAPPING GenericMapping)
+{
+    if(AccessMask == NULL || GenericMapping == NULL)
+        return;
+
+    ACCESS_MASK Mask = *AccessMask;
+
+    if((Mask & GENERIC_READ) != 0)
+        Mask |= GenericMapping->GenericRead;
+
+    if((Mask & GENERIC_WRITE) != 0)
+        Mask |= GenericMapping->GenericWrite;
+
+    if((Mask & GENERIC_EXECUTE) != 0)
+        Mask |= GenericMapping->GenericExecute;
+
+    if((Mask & GENERIC_ALL) != 0)
+        Mask |= GenericMapping->GenericAll;
+
+    Mask &= ~(GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL);
+    *AccessMask = Mask;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlMultiByteToUnicodeN(USHORT *UnicodeString,
+                                                    ULONG MaxBytesInUnicodeString,
+                                                    PULONG BytesInUnicodeString,
+                                                    const CHAR *MultiByteString,
+                                                    ULONG BytesInMultiByteString)
+{
+    ULONG CharacterCount = MaxBytesInUnicodeString / sizeof(USHORT);
+    if(CharacterCount > BytesInMultiByteString)
+        CharacterCount = BytesInMultiByteString;
+
+    if(BytesInUnicodeString != NULL)
+        *BytesInUnicodeString = CharacterCount * sizeof(USHORT);
+
+    if(UnicodeString != NULL && MultiByteString != NULL)
+    {
+        for(ULONG i = 0; i < CharacterCount; i++)
+            UnicodeString[i] = (USHORT)(UCHAR)MultiByteString[i];
+    }
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlMultiByteToUnicodeSize(PULONG BytesInUnicodeString,
+                                                       const CHAR *MultiByteString,
+                                                       ULONG BytesInMultiByteString)
+{
+    if(BytesInUnicodeString == NULL)
+        return EmuStatusInvalidParameter;
+
+    *BytesInUnicodeString = BytesInMultiByteString * sizeof(USHORT);
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlUnicodeToMultiByteN(CHAR *MultiByteString,
+                                                    ULONG MaxBytesInMultiByteString,
+                                                    PULONG BytesInMultiByteString,
+                                                    const USHORT *UnicodeString,
+                                                    ULONG BytesInUnicodeString)
+{
+    ULONG CharacterCount = BytesInUnicodeString / sizeof(USHORT);
+    if(CharacterCount > MaxBytesInMultiByteString)
+        CharacterCount = MaxBytesInMultiByteString;
+
+    if(BytesInMultiByteString != NULL)
+        *BytesInMultiByteString = CharacterCount;
+
+    if(MultiByteString != NULL && UnicodeString != NULL)
+    {
+        for(ULONG i = 0; i < CharacterCount; i++)
+            MultiByteString[i] = (UnicodeString[i] <= 0xFF) ? (CHAR)UnicodeString[i] : '?';
+    }
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlUnicodeToMultiByteSize(PULONG BytesInMultiByteString,
+                                                       const USHORT *UnicodeString,
+                                                       ULONG BytesInUnicodeString)
+{
+    if(BytesInMultiByteString == NULL)
+        return EmuStatusInvalidParameter;
+
+    *BytesInMultiByteString = BytesInUnicodeString / sizeof(USHORT);
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlUpcaseUnicodeToMultiByteN(CHAR *MultiByteString,
+                                                          ULONG MaxBytesInMultiByteString,
+                                                          PULONG BytesInMultiByteString,
+                                                          const USHORT *UnicodeString,
+                                                          ULONG BytesInUnicodeString)
+{
+    ULONG CharacterCount = BytesInUnicodeString / sizeof(USHORT);
+    if(CharacterCount > MaxBytesInMultiByteString)
+        CharacterCount = MaxBytesInMultiByteString;
+
+    if(BytesInMultiByteString != NULL)
+        *BytesInMultiByteString = CharacterCount;
+
+    if(MultiByteString != NULL && UnicodeString != NULL)
+    {
+        for(ULONG i = 0; i < CharacterCount; i++)
+        {
+            USHORT Character = EmuRtlUpperUshort(UnicodeString[i]);
+            MultiByteString[i] = (Character <= 0xFF) ? (CHAR)Character : '?';
+        }
+    }
+
+    return STATUS_SUCCESS;
 }
 
 extern "C" VOID NTAPI EmuRtlUnwind(PVOID TargetFrame, PVOID TargetIp, PEXCEPTION_RECORD ExceptionRecord, PVOID ReturnValue)
@@ -1172,6 +1931,113 @@ extern "C" VOID NTAPI EmuXcSHAFinal(UCHAR *SHAContext, UCHAR *Digest)
         Digest[i * 4 + 2] = (UCHAR)(Context->State[i] >> 8);
         Digest[i * 4 + 3] = (UCHAR)Context->State[i];
     }
+}
+
+extern "C" VOID NTAPI EmuXcRC4Key(PUCHAR KeyStruct, ULONG KeyLength, PUCHAR Key)
+{
+    if(KeyStruct == NULL)
+        return;
+
+    for(ULONG i = 0; i < 256; i++)
+        KeyStruct[i] = (UCHAR)i;
+
+    KeyStruct[256] = 0;
+    KeyStruct[257] = 0;
+
+    if(Key == NULL || KeyLength == 0)
+        return;
+
+    UCHAR J = 0;
+    for(ULONG i = 0; i < 256; i++)
+    {
+        J = (UCHAR)(J + KeyStruct[i] + Key[i % KeyLength]);
+
+        UCHAR Temp = KeyStruct[i];
+        KeyStruct[i] = KeyStruct[J];
+        KeyStruct[J] = Temp;
+    }
+}
+
+extern "C" VOID NTAPI EmuXcRC4Crypt(PUCHAR KeyStruct, ULONG InputLength, PUCHAR Input)
+{
+    if(KeyStruct == NULL || Input == NULL || InputLength == 0)
+        return;
+
+    UCHAR X = KeyStruct[256];
+    UCHAR Y = KeyStruct[257];
+
+    for(ULONG i = 0; i < InputLength; i++)
+    {
+        X = (UCHAR)(X + 1);
+        Y = (UCHAR)(Y + KeyStruct[X]);
+
+        UCHAR Temp = KeyStruct[X];
+        KeyStruct[X] = KeyStruct[Y];
+        KeyStruct[Y] = Temp;
+
+        const UCHAR K = KeyStruct[(UCHAR)(KeyStruct[X] + KeyStruct[Y])];
+        Input[i] ^= K;
+    }
+
+    KeyStruct[256] = X;
+    KeyStruct[257] = Y;
+}
+
+extern "C" VOID NTAPI EmuXcHMAC
+(
+    PUCHAR KeyMaterial,
+    ULONG KeyMaterialLength,
+    PUCHAR Data,
+    ULONG DataLength,
+    PUCHAR Data2,
+    ULONG Data2Length,
+    PUCHAR Digest
+)
+{
+    if(Digest == NULL)
+        return;
+
+    UCHAR KeyBlock[64] = {};
+    UCHAR HashedKey[20] = {};
+
+    if(KeyMaterial != NULL && KeyMaterialLength > 64)
+    {
+        EmuSha1Context KeyContext;
+        EmuXcSHAInit((UCHAR*)&KeyContext);
+        EmuXcSHAUpdate((UCHAR*)&KeyContext, KeyMaterial, KeyMaterialLength);
+        EmuXcSHAFinal((UCHAR*)&KeyContext, HashedKey);
+        memcpy(KeyBlock, HashedKey, sizeof(HashedKey));
+    }
+    else if(KeyMaterial != NULL && KeyMaterialLength != 0)
+    {
+        memcpy(KeyBlock, KeyMaterial, KeyMaterialLength);
+    }
+
+    UCHAR InnerPad[64];
+    UCHAR OuterPad[64];
+    for(ULONG i = 0; i < sizeof(KeyBlock); i++)
+    {
+        InnerPad[i] = (UCHAR)(KeyBlock[i] ^ 0x36);
+        OuterPad[i] = (UCHAR)(KeyBlock[i] ^ 0x5C);
+    }
+
+    UCHAR InnerDigest[20];
+    EmuSha1Context Context;
+    EmuXcSHAInit((UCHAR*)&Context);
+    EmuXcSHAUpdate((UCHAR*)&Context, InnerPad, sizeof(InnerPad));
+
+    if(Data != NULL && DataLength != 0)
+        EmuXcSHAUpdate((UCHAR*)&Context, Data, DataLength);
+
+    if(Data2 != NULL && Data2Length != 0)
+        EmuXcSHAUpdate((UCHAR*)&Context, Data2, Data2Length);
+
+    EmuXcSHAFinal((UCHAR*)&Context, InnerDigest);
+
+    EmuXcSHAInit((UCHAR*)&Context);
+    EmuXcSHAUpdate((UCHAR*)&Context, OuterPad, sizeof(OuterPad));
+    EmuXcSHAUpdate((UCHAR*)&Context, InnerDigest, sizeof(InnerDigest));
+    EmuXcSHAFinal((UCHAR*)&Context, Digest);
 }
 
 extern "C" ULONG NTAPI EmuXcPKGetKeyLen(PUCHAR Key)
@@ -1937,6 +2803,39 @@ extern "C" VOID NTAPI EmuRtlCopyUnicodeString(xboxkrnl::PUNICODE_STRING Destinat
     DestinationString->Length = Length;
 }
 
+extern "C" BOOLEAN NTAPI EmuRtlCreateUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString, const USHORT *SourceString)
+{
+    if(DestinationString == NULL)
+        return FALSE;
+
+    DestinationString->Length = 0;
+    DestinationString->MaximumLength = 0;
+    DestinationString->Buffer = NULL;
+
+    if(SourceString == NULL)
+        return TRUE;
+
+    USHORT Length = 0;
+    while(SourceString[Length / sizeof(USHORT)] != 0 && Length <= 0xFFFC)
+        Length += sizeof(USHORT);
+
+    DestinationString->MaximumLength = Length + sizeof(USHORT);
+    DestinationString->Buffer = (USHORT*)HeapAlloc(GetProcessHeap(), 0, DestinationString->MaximumLength);
+    if(DestinationString->Buffer == NULL)
+    {
+        DestinationString->MaximumLength = 0;
+        return FALSE;
+    }
+
+    if(Length != 0)
+        memcpy(DestinationString->Buffer, SourceString, Length);
+
+    DestinationString->Buffer[Length / sizeof(USHORT)] = 0;
+    DestinationString->Length = Length;
+
+    return TRUE;
+}
+
 extern "C" USHORT NTAPI EmuRtlDowncaseUnicodeChar(USHORT SourceCharacter)
 {
     return EmuRtlLowerUshort(SourceCharacter);
@@ -1969,6 +2868,43 @@ extern "C" NTSTATUS NTAPI EmuRtlDowncaseUnicodeString(xboxkrnl::PUNICODE_STRING 
     return STATUS_SUCCESS;
 }
 
+extern "C" USHORT NTAPI EmuRtlUpcaseUnicodeChar(USHORT SourceCharacter)
+{
+    return EmuRtlUpperUshort(SourceCharacter);
+}
+
+extern "C" NTSTATUS NTAPI EmuRtlUpcaseUnicodeString(xboxkrnl::PUNICODE_STRING DestinationString,
+                                                    xboxkrnl::PUNICODE_STRING SourceString,
+                                                    BOOLEAN AllocateDestinationString)
+{
+    if(DestinationString == NULL || SourceString == NULL)
+        return EmuStatusInvalidParameter;
+
+    USHORT Length = SourceString->Length;
+
+    if(AllocateDestinationString)
+    {
+        DestinationString->Buffer = (USHORT*)HeapAlloc(GetProcessHeap(), 0, Length);
+        if(DestinationString->Buffer == NULL && Length != 0)
+            return 0xC0000017;
+
+        DestinationString->MaximumLength = Length;
+    }
+    else if(Length > DestinationString->MaximumLength)
+    {
+        Length = DestinationString->MaximumLength;
+    }
+
+    if(Length != 0 && DestinationString->Buffer == NULL)
+        return EmuStatusInvalidParameter;
+
+    for(USHORT i = 0; i < Length / sizeof(USHORT); i++)
+        DestinationString->Buffer[i] = EmuRtlUpperUshort(SourceString->Buffer[i]);
+
+    DestinationString->Length = Length;
+    return STATUS_SUCCESS;
+}
+
 extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
 {
     if(CriticalSection == NULL)
@@ -1987,6 +2923,31 @@ extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SE
     CriticalSection->OwningThread = 0;
 }
 
+extern "C" BOOLEAN NTAPI EmuRtlTryEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    if(CriticalSection == NULL || !EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+        return FALSE;
+
+    ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
+
+    if(CriticalSection->RecursionCount == 0)
+    {
+        CriticalSection->LockCount = 0;
+        CriticalSection->RecursionCount = 1;
+        CriticalSection->OwningThread = CurrentThread;
+        return TRUE;
+    }
+
+    if(CriticalSection->OwningThread == CurrentThread)
+    {
+        CriticalSection->LockCount++;
+        CriticalSection->RecursionCount++;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
 {
     if(CriticalSection == NULL)
@@ -1999,7 +2960,7 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
         return;
     }
 
-    ULONG CurrentThread = (ULONG)EmuGetCurrentThread();
+    ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
 
     if(CriticalSection->RecursionCount == 0)
     {
@@ -2138,6 +3099,24 @@ struct EmuContiguousMemoryAllocation
     ULONG PhysicalAddress;
 };
 
+struct EmuIoSpaceMapping
+{
+    PVOID Address;
+    ULONG Size;
+    ULONG PhysicalAddress;
+    ULONG Protect;
+    bool OwnsAllocation;
+};
+
+struct EmuKernelStackAllocation
+{
+    PVOID BaseAddress;
+    PVOID StackBase;
+    PVOID StackLimit;
+    ULONG Size;
+    BOOLEAN DebuggerThread;
+};
+
 struct EmuMmStatistics
 {
     ULONG Length;
@@ -2153,10 +3132,13 @@ struct EmuMmStatistics
 
 static EmuSystemMemoryAllocation g_EmuSystemMemoryAllocations[128] = {};
 static EmuContiguousMemoryAllocation g_EmuContiguousMemoryAllocations[128] = {};
+static EmuIoSpaceMapping g_EmuIoSpaceMappings[64] = {};
+static EmuKernelStackAllocation g_EmuKernelStackAllocations[64] = {};
 static ULONG g_EmuNextSystemMemoryAddress = 0xD0000000;
 static ULONG g_EmuNextContiguousPhysicalAddress = 0x00100000;
 static const ULONG EmuPageSize = 0x1000;
 static const ULONG EmuXboxPhysicalMemoryBytes = 64 * 1024 * 1024;
+static const ULONG EmuMmioPassthroughBase = 0xF0000000;
 
 static bool EmuIsValidSystemMemoryProtect(ULONG Protect)
 {
@@ -2186,6 +3168,166 @@ static ULONG EmuSystemMemoryPages(ULONG NumberOfBytes)
 static ULONG EmuRoundToPageSize(ULONG NumberOfBytes)
 {
     return EmuSystemMemoryPages(NumberOfBytes) * EmuPageSize;
+}
+
+static void EmuTrackKernelStack(PVOID BaseAddress, PVOID StackBase, PVOID StackLimit, ULONG Size, BOOLEAN DebuggerThread)
+{
+    if(BaseAddress == NULL || StackBase == NULL || StackLimit == NULL || Size == 0)
+        return;
+
+    for(ULONG i = 0; i < sizeof(g_EmuKernelStackAllocations) / sizeof(g_EmuKernelStackAllocations[0]); i++)
+    {
+        if(g_EmuKernelStackAllocations[i].BaseAddress != NULL)
+            continue;
+
+        g_EmuKernelStackAllocations[i].BaseAddress = BaseAddress;
+        g_EmuKernelStackAllocations[i].StackBase = StackBase;
+        g_EmuKernelStackAllocations[i].StackLimit = StackLimit;
+        g_EmuKernelStackAllocations[i].Size = Size;
+        g_EmuKernelStackAllocations[i].DebuggerThread = DebuggerThread;
+        return;
+    }
+
+    printf("EmuKrnl (0x%lX): MmCreateKernelStack tracking table full for base=%p size=0x%.08lX.\n",
+           GetCurrentThreadId(), BaseAddress, Size);
+}
+
+static EmuKernelStackAllocation *EmuFindKernelStack(PVOID StackBase, PVOID StackLimit)
+{
+    const ULONG_PTR Limit = (ULONG_PTR)StackLimit;
+
+    for(ULONG i = 0; i < sizeof(g_EmuKernelStackAllocations) / sizeof(g_EmuKernelStackAllocations[0]); i++)
+    {
+        EmuKernelStackAllocation *Allocation = &g_EmuKernelStackAllocations[i];
+        if(Allocation->BaseAddress == NULL)
+            continue;
+
+        const ULONG_PTR Base = (ULONG_PTR)Allocation->BaseAddress;
+        const ULONG_PTR End = Base + Allocation->Size;
+
+        if(Allocation->StackBase == StackBase || Allocation->StackLimit == StackLimit ||
+           (Limit >= Base && Limit < End))
+            return Allocation;
+    }
+
+    return NULL;
+}
+
+static void EmuUntrackKernelStack(EmuKernelStackAllocation *Allocation)
+{
+    if(Allocation == NULL)
+        return;
+
+    Allocation->BaseAddress = NULL;
+    Allocation->StackBase = NULL;
+    Allocation->StackLimit = NULL;
+    Allocation->Size = 0;
+    Allocation->DebuggerThread = FALSE;
+}
+
+static ULONG EmuCommittedKernelStackBytes()
+{
+    ULONG Total = 0;
+
+    for(ULONG i = 0; i < sizeof(g_EmuKernelStackAllocations) / sizeof(g_EmuKernelStackAllocations[0]); i++)
+        Total += g_EmuKernelStackAllocations[i].Size;
+
+    return Total;
+}
+
+static bool EmuAddressRangeContains(PVOID BaseAddress, ULONG Size, PVOID Address)
+{
+    const ULONG_PTR Base = (ULONG_PTR)BaseAddress;
+    const ULONG_PTR End = Base + Size;
+    const ULONG_PTR Value = (ULONG_PTR)Address;
+
+    return Base != 0 && End >= Base && Value >= Base && Value < End;
+}
+
+static EmuIoSpaceMapping *EmuFindIoSpaceMapping(PVOID Address)
+{
+    for(ULONG i = 0; i < sizeof(g_EmuIoSpaceMappings) / sizeof(g_EmuIoSpaceMappings[0]); i++)
+    {
+        if(EmuAddressRangeContains(g_EmuIoSpaceMappings[i].Address, g_EmuIoSpaceMappings[i].Size, Address))
+            return &g_EmuIoSpaceMappings[i];
+    }
+
+    return NULL;
+}
+
+static void EmuTrackIoSpaceMapping(PVOID Address, ULONG Size, ULONG PhysicalAddress, ULONG Protect, bool OwnsAllocation)
+{
+    if(Address == NULL || Size == 0)
+        return;
+
+    for(ULONG i = 0; i < sizeof(g_EmuIoSpaceMappings) / sizeof(g_EmuIoSpaceMappings[0]); i++)
+    {
+        if(g_EmuIoSpaceMappings[i].Address != NULL)
+            continue;
+
+        g_EmuIoSpaceMappings[i].Address = Address;
+        g_EmuIoSpaceMappings[i].Size = EmuRoundToPageSize(Size);
+        g_EmuIoSpaceMappings[i].PhysicalAddress = PhysicalAddress;
+        g_EmuIoSpaceMappings[i].Protect = Protect;
+        g_EmuIoSpaceMappings[i].OwnsAllocation = OwnsAllocation;
+        return;
+    }
+
+    printf("EmuKrnl (0x%lX): MmMapIoSpace mapping table full for physical=0x%.08lX size=0x%.08lX.\n",
+           GetCurrentThreadId(), PhysicalAddress, Size);
+}
+
+static void EmuUntrackIoSpaceMapping(EmuIoSpaceMapping *Mapping)
+{
+    if(Mapping == NULL)
+        return;
+
+    Mapping->Address = NULL;
+    Mapping->Size = 0;
+    Mapping->PhysicalAddress = 0;
+    Mapping->Protect = 0;
+    Mapping->OwnsAllocation = false;
+}
+
+static NTSTATUS EmuProtectVirtualMemory(PVOID BaseAddress, ULONG NumberOfBytes, ULONG NewProtect, PULONG OldProtect)
+{
+    if(BaseAddress == NULL || NumberOfBytes == 0 || !EmuIsValidSystemMemoryProtect(NewProtect))
+        return EmuStatusInvalidParameter;
+
+    EmuIoSpaceMapping *Mapping = EmuFindIoSpaceMapping(BaseAddress);
+    if(Mapping != NULL && (ULONG_PTR)Mapping->Address >= EmuMmioPassthroughBase)
+    {
+        if(OldProtect != NULL)
+            *OldProtect = Mapping->Protect;
+
+        Mapping->Protect = NewProtect;
+        return STATUS_SUCCESS;
+    }
+
+    DWORD PreviousProtect = 0;
+    if(!VirtualProtect(BaseAddress, NumberOfBytes, NewProtect, &PreviousProtect))
+        return STATUS_UNSUCCESSFUL;
+
+    if(OldProtect != NULL)
+        *OldProtect = PreviousProtect;
+
+    if(Mapping != NULL)
+        Mapping->Protect = NewProtect;
+
+    return STATUS_SUCCESS;
+}
+
+static ULONG EmuQueryAddressProtect(PVOID VirtualAddress)
+{
+    EmuIoSpaceMapping *Mapping = EmuFindIoSpaceMapping(VirtualAddress);
+    if(Mapping != NULL)
+        return Mapping->Protect;
+
+    MEMORY_BASIC_INFORMATION MemoryInfo;
+    if(VirtualQuery(VirtualAddress, &MemoryInfo, sizeof(MemoryInfo)) != sizeof(MemoryInfo))
+        return 0;
+
+    return MemoryInfo.Protect;
 }
 
 static void EmuTrackContiguousMemoryAllocation(PVOID Address, ULONG Size)
@@ -2412,8 +3554,193 @@ struct EmuDeviceObject
     BOOLEAN DeletePending;
 };
 
+struct EmuIrp
+{
+    ULONG Magic;
+    USHORT Size;
+    xboxkrnl::CCHAR StackSize;
+    UCHAR MajorFunction;
+    BOOLEAN MustComplete;
+    PVOID DeviceObject;
+    PVOID UserBuffer;
+    ULONG Length;
+    xboxkrnl::PLARGE_INTEGER StartingOffset;
+    PVOID Event;
+    xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock;
+    ULONG IoControlCode;
+    PVOID InputBuffer;
+    ULONG InputBufferLength;
+    PVOID OutputBuffer;
+    ULONG OutputBufferLength;
+    BOOLEAN InternalDeviceIoControl;
+};
+
+static const ULONG EmuIrpMagic = 0x49727045;
+
 static std::string g_EmuDeviceObjectName;
 static EmuDeviceObject *g_EmuDeviceObject = NULL;
+
+static EmuIrp *EmuAllocateIrpObject(xboxkrnl::CCHAR StackSize)
+{
+    if(StackSize <= 0)
+        StackSize = 1;
+
+    EmuIrp *Irp = new EmuIrp;
+    ZeroMemory(Irp, sizeof(*Irp));
+    Irp->Magic = EmuIrpMagic;
+    Irp->Size = sizeof(*Irp);
+    Irp->StackSize = StackSize;
+    return Irp;
+}
+
+static EmuIrp *EmuGetIrp(PVOID Irp)
+{
+    EmuIrp *Object = (EmuIrp*)Irp;
+    if(Object == NULL || Object->Magic != EmuIrpMagic)
+        return NULL;
+
+    return Object;
+}
+
+static VOID EmuCompleteIrp(PVOID Irp, NTSTATUS Status, ULONG Information)
+{
+    EmuIrp *Object = EmuGetIrp(Irp);
+    if(Object != NULL && Object->IoStatusBlock != NULL)
+    {
+        Object->IoStatusBlock->u1.Status = Status;
+        Object->IoStatusBlock->Information = (xboxkrnl::ULONG_PTR)(::ULONG_PTR)Information;
+    }
+}
+
+extern "C" PVOID NTAPI EmuIoAllocateIrp
+(
+    IN xboxkrnl::CCHAR StackSize,
+    IN BOOLEAN ChargeQuota
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIrp *Irp = EmuAllocateIrpObject(StackSize);
+
+    printf("EmuKrnl (0x%lX): IoAllocateIrp stack=%d charge=%lu result=%p.\n",
+           GetCurrentThreadId(), (int)StackSize, (ULONG)ChargeQuota, Irp);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Irp;
+}
+
+extern "C" PVOID NTAPI EmuIoBuildAsynchronousFsdRequest
+(
+    IN ULONG MajorFunction,
+    IN PVOID DeviceObject,
+    IN PVOID Buffer,
+    IN ULONG Length,
+    IN xboxkrnl::PLARGE_INTEGER StartingOffset,
+    OUT xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIrp *Irp = EmuAllocateIrpObject(1);
+    Irp->MajorFunction = (UCHAR)MajorFunction;
+    Irp->DeviceObject = DeviceObject;
+    Irp->UserBuffer = Buffer;
+    Irp->Length = Length;
+    Irp->StartingOffset = StartingOffset;
+    Irp->IoStatusBlock = IoStatusBlock;
+
+    printf("EmuKrnl (0x%lX): IoBuildAsynchronousFsdRequest major=0x%.08lX device=%p length=0x%.08lX result=%p.\n",
+           GetCurrentThreadId(), MajorFunction, DeviceObject, Length, Irp);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Irp;
+}
+
+extern "C" PVOID NTAPI EmuIoBuildDeviceIoControlRequest
+(
+    IN ULONG IoControlCode,
+    IN PVOID DeviceObject,
+    IN PVOID InputBuffer,
+    IN ULONG InputBufferLength,
+    OUT PVOID OutputBuffer,
+    IN ULONG OutputBufferLength,
+    IN BOOLEAN InternalDeviceIoControl,
+    IN PVOID Event,
+    OUT xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIrp *Irp = EmuAllocateIrpObject(1);
+    Irp->MajorFunction = InternalDeviceIoControl ? 0x0F : 0x0E;
+    Irp->DeviceObject = DeviceObject;
+    Irp->IoControlCode = IoControlCode;
+    Irp->InputBuffer = InputBuffer;
+    Irp->InputBufferLength = InputBufferLength;
+    Irp->OutputBuffer = OutputBuffer;
+    Irp->OutputBufferLength = OutputBufferLength;
+    Irp->InternalDeviceIoControl = InternalDeviceIoControl;
+    Irp->Event = Event;
+    Irp->IoStatusBlock = IoStatusBlock;
+
+    printf("EmuKrnl (0x%lX): IoBuildDeviceIoControlRequest code=0x%.08lX device=%p in=0x%.08lX out=0x%.08lX result=%p.\n",
+           GetCurrentThreadId(), IoControlCode, DeviceObject, InputBufferLength, OutputBufferLength, Irp);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Irp;
+}
+
+extern "C" PVOID NTAPI EmuIoBuildSynchronousFsdRequest
+(
+    IN ULONG MajorFunction,
+    IN PVOID DeviceObject,
+    IN PVOID Buffer,
+    IN ULONG Length,
+    IN xboxkrnl::PLARGE_INTEGER StartingOffset,
+    IN PVOID Event,
+    OUT xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIrp *Irp = EmuAllocateIrpObject(1);
+    Irp->MajorFunction = (UCHAR)MajorFunction;
+    Irp->DeviceObject = DeviceObject;
+    Irp->UserBuffer = Buffer;
+    Irp->Length = Length;
+    Irp->StartingOffset = StartingOffset;
+    Irp->Event = Event;
+    Irp->IoStatusBlock = IoStatusBlock;
+
+    printf("EmuKrnl (0x%lX): IoBuildSynchronousFsdRequest major=0x%.08lX device=%p length=0x%.08lX event=%p result=%p.\n",
+           GetCurrentThreadId(), MajorFunction, DeviceObject, Length, Event, Irp);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Irp;
+}
+
+extern "C" NTSTATUS NTAPI EmuIoCheckShareAccess
+(
+    IN ACCESS_MASK DesiredAccess,
+    IN ULONG DesiredShareAccess,
+    IN PVOID FileObject,
+    IN PVOID ShareAccess,
+    IN BOOLEAN Update
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoCheckShareAccess access=0x%.08lX share=0x%.08lX file=%p update=%lu.\n",
+           GetCurrentThreadId(), DesiredAccess, DesiredShareAccess, FileObject, (ULONG)Update);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
 
 extern "C" NTSTATUS NTAPI EmuIoCreateDevice
 (
@@ -2556,7 +3883,7 @@ extern "C" NTSTATUS NTAPI EmuNtRemoveIoCompletion
         if(IoStatusBlock != NULL)
         {
             IoStatusBlock->u1.Status = STATUS_SUCCESS;
-            IoStatusBlock->Information = (xboxkrnl::ULONG_PTR)BytesTransferred;
+            IoStatusBlock->Information = (xboxkrnl::ULONG_PTR)(::ULONG_PTR)BytesTransferred;
         }
     }
 
@@ -2639,8 +3966,8 @@ extern "C" ULONG NTAPI EmuExQueryPoolBlockSize(PVOID PoolBlock)
     if(PoolBlock != NULL)
         Size = (ULONG)_msize(PoolBlock);
 
-    printf("EmuKrnl (0x%lX): ExQueryPoolBlockSize block=0x%.08lX size=0x%.08lX.\n",
-           GetCurrentThreadId(), (ULONG)PoolBlock, Size);
+    printf("EmuKrnl (0x%lX): ExQueryPoolBlockSize block=%p size=0x%.08lX.\n",
+           GetCurrentThreadId(), PoolBlock, Size);
 
     EmuSwapFS();   // Xbox FS
 
@@ -2760,6 +4087,31 @@ extern "C" VOID NTAPI EmuExReleaseReadWriteLock(PVOID Lock)
 }
 
 // ******************************************************************
+// * 0x0009 - HalReadSMCTrayState
+// ******************************************************************
+extern "C" ULONG NTAPI EmuHalReadSMCTrayState
+(
+    PULONG TrayState,
+    PULONG TrayStateChangeCount
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(TrayState != NULL && EmuIsWritableMemoryRange(TrayState, sizeof(*TrayState)))
+        *TrayState = g_EmuHalTrayState;
+
+    if(TrayStateChangeCount != NULL && EmuIsWritableMemoryRange(TrayStateChangeCount, sizeof(*TrayStateChangeCount)))
+        *TrayStateChangeCount = g_EmuHalTrayStateChangeCount;
+
+    printf("EmuKrnl (0x%lX): HalReadSMCTrayState state=0x%.08lX changes=0x%.08lX.\n",
+           GetCurrentThreadId(), g_EmuHalTrayState, g_EmuHalTrayStateChangeCount);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+// ******************************************************************
 // * 0x002D - HalReadSMBusValue
 // ******************************************************************
 extern "C" ULONG NTAPI EmuHalReadSMBusValue
@@ -2778,6 +4130,20 @@ extern "C" ULONG NTAPI EmuHalReadSMBusValue
     EmuSwapFS();   // Xbox FS
 
     return 0;
+}
+
+extern "C" ULONG NTAPI EmuHalWriteSMBusValueCompat(ULONG Value)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuLastSmcScratchValue = Value;
+
+    printf("EmuKrnl (0x%lX): HalWriteSMBusValue compat value=0x%.08lX.\n",
+           GetCurrentThreadId(), Value);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
 }
 
 // ******************************************************************
@@ -2816,6 +4182,51 @@ XBSYSAPI EXPORTNUM(50) ULONG NTAPI xboxkrnl::HalWriteSMBusValue
     EmuSwapFS();   // Xbox FS
 
     return 0;
+}
+
+extern "C" VOID NTAPI EmuREAD_PORT_BUFFER_UCHAR(PUCHAR Port, PUCHAR Buffer, ULONG Count)
+{
+    (void)Port;
+
+    if(Buffer != NULL && Count != 0)
+        ZeroMemory(Buffer, Count * sizeof(UCHAR));
+}
+
+extern "C" VOID NTAPI EmuREAD_PORT_BUFFER_USHORT(PUSHORT Port, PUSHORT Buffer, ULONG Count)
+{
+    (void)Port;
+
+    if(Buffer != NULL && Count != 0)
+        ZeroMemory(Buffer, Count * sizeof(USHORT));
+}
+
+extern "C" VOID NTAPI EmuREAD_PORT_BUFFER_ULONG(PULONG Port, PULONG Buffer, ULONG Count)
+{
+    (void)Port;
+
+    if(Buffer != NULL && Count != 0)
+        ZeroMemory(Buffer, Count * sizeof(ULONG));
+}
+
+extern "C" VOID NTAPI EmuWRITE_PORT_BUFFER_UCHAR(PUCHAR Port, PUCHAR Buffer, ULONG Count)
+{
+    (void)Port;
+    (void)Buffer;
+    (void)Count;
+}
+
+extern "C" VOID NTAPI EmuWRITE_PORT_BUFFER_USHORT(PUSHORT Port, PUSHORT Buffer, ULONG Count)
+{
+    (void)Port;
+    (void)Buffer;
+    (void)Count;
+}
+
+extern "C" VOID NTAPI EmuWRITE_PORT_BUFFER_ULONG(PULONG Port, PULONG Buffer, ULONG Count)
+{
+    (void)Port;
+    (void)Buffer;
+    (void)Count;
 }
 
 extern "C" LONG __fastcall EmuInterlockedCompareExchange
@@ -2862,8 +4273,451 @@ extern "C" LONG __fastcall EmuInterlockedExchangeAdd
     return ::InterlockedExchangeAdd((volatile LONG*)Addend, Value);
 }
 
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuExInterlockedAddLargeInteger
+(
+    IN OUT xboxkrnl::PLARGE_INTEGER Addend,
+    IN xboxkrnl::LARGE_INTEGER Increment,
+    IN PVOID Lock
+)
+{
+    (void)Lock;
+
+    xboxkrnl::LARGE_INTEGER Previous;
+    Previous.QuadPart = 0;
+
+    if(Addend == NULL)
+        return Previous;
+
+    LONGLONG OldValue;
+    LONGLONG NewValue;
+    do
+    {
+        OldValue = Addend->QuadPart;
+        NewValue = OldValue + Increment.QuadPart;
+    } while(::InterlockedCompareExchange64((volatile LONGLONG*)&Addend->QuadPart, NewValue, OldValue) != OldValue);
+
+    Previous.QuadPart = OldValue;
+    return Previous;
+}
+
+extern "C" VOID NTAPI EmuExInterlockedAddLargeStatistic
+(
+    IN OUT xboxkrnl::PLARGE_INTEGER Addend,
+    IN ULONG Increment
+)
+{
+    if(Addend == NULL)
+        return;
+
+    LONGLONG OldValue;
+    LONGLONG NewValue;
+    do
+    {
+        OldValue = Addend->QuadPart;
+        NewValue = OldValue + Increment;
+    } while(::InterlockedCompareExchange64((volatile LONGLONG*)&Addend->QuadPart, NewValue, OldValue) != OldValue);
+}
+
+extern "C" LONGLONG NTAPI EmuExInterlockedCompareExchange64
+(
+    IN OUT LONGLONG *Destination,
+    IN LONGLONG *Exchange,
+    IN LONGLONG *Comperand,
+    IN PVOID Lock
+)
+{
+    (void)Lock;
+
+    if(Destination == NULL || Exchange == NULL || Comperand == NULL)
+        return 0;
+
+    return ::InterlockedCompareExchange64((volatile LONGLONG*)Destination, *Exchange, *Comperand);
+}
+
+extern "C" LONG __fastcall EmuInterlockedDecrementExport(IN OUT PLONG Addend)
+{
+    return EmuInterlockedDecrement(Addend);
+}
+
+extern "C" LONG __fastcall EmuInterlockedExchangeExport(IN OUT PLONG Target, IN LONG Value)
+{
+    return EmuInterlockedExchange(Target, Value);
+}
+
+extern "C" LONG __fastcall EmuInterlockedExchangeAddExport(IN OUT PLONG Addend, IN LONG Value)
+{
+    return EmuInterlockedExchangeAdd(Addend, Value);
+}
+
+extern "C" LONG __fastcall EmuInterlockedIncrementExport(IN OUT PLONG Addend)
+{
+    return EmuInterlockedIncrement(Addend);
+}
+
+struct EmuSingleListEntry
+{
+    EmuSingleListEntry *Next;
+};
+
+extern "C" PVOID __fastcall EmuInterlockedFlushSList(PVOID ListHead)
+{
+    if(ListHead == NULL)
+        return NULL;
+
+    EmuSingleListEntry *Head = (EmuSingleListEntry*)ListHead;
+    EmuSingleListEntry *First;
+
+    do
+    {
+        First = Head->Next;
+    } while(::InterlockedCompareExchangePointer((volatile PVOID*)&Head->Next, NULL, First) != First);
+
+    return First;
+}
+
+extern "C" PVOID __fastcall EmuInterlockedPopEntrySList(PVOID ListHead)
+{
+    if(ListHead == NULL)
+        return NULL;
+
+    EmuSingleListEntry *Head = (EmuSingleListEntry*)ListHead;
+    EmuSingleListEntry *First;
+    EmuSingleListEntry *Next;
+
+    do
+    {
+        First = Head->Next;
+        if(First == NULL)
+            return NULL;
+
+        Next = First->Next;
+    } while(::InterlockedCompareExchangePointer((volatile PVOID*)&Head->Next, Next, First) != First);
+
+    return First;
+}
+
+extern "C" PVOID __fastcall EmuInterlockedPushEntrySList(PVOID ListHead, PVOID ListEntry)
+{
+    if(ListHead == NULL || ListEntry == NULL)
+        return NULL;
+
+    EmuSingleListEntry *Head = (EmuSingleListEntry*)ListHead;
+    EmuSingleListEntry *Entry = (EmuSingleListEntry*)ListEntry;
+    EmuSingleListEntry *First;
+
+    do
+    {
+        First = Head->Next;
+        Entry->Next = First;
+    } while(::InterlockedCompareExchangePointer((volatile PVOID*)&Head->Next, Entry, First) != First);
+
+    return First;
+}
+
+extern "C" xboxkrnl::PLIST_ENTRY __fastcall EmuExfInterlockedInsertHeadList
+(
+    IN OUT xboxkrnl::PLIST_ENTRY ListHead,
+    IN OUT xboxkrnl::PLIST_ENTRY ListEntry
+)
+{
+    if(ListHead == NULL || ListEntry == NULL)
+        return NULL;
+
+    xboxkrnl::PLIST_ENTRY First = ListHead->Flink;
+    if(First == NULL)
+        First = ListHead;
+
+    ListEntry->Flink = First;
+    ListEntry->Blink = ListHead;
+    First->Blink = ListEntry;
+    ListHead->Flink = ListEntry;
+
+    if(ListHead->Blink == NULL || ListHead->Blink == ListHead)
+        ListHead->Blink = ListEntry;
+
+    return (First == ListHead) ? NULL : First;
+}
+
+extern "C" xboxkrnl::PLIST_ENTRY __fastcall EmuExfInterlockedInsertTailList
+(
+    IN OUT xboxkrnl::PLIST_ENTRY ListHead,
+    IN OUT xboxkrnl::PLIST_ENTRY ListEntry
+)
+{
+    if(ListHead == NULL || ListEntry == NULL)
+        return NULL;
+
+    xboxkrnl::PLIST_ENTRY Last = ListHead->Blink;
+    if(Last == NULL)
+        Last = ListHead;
+
+    ListEntry->Flink = ListHead;
+    ListEntry->Blink = Last;
+    Last->Flink = ListEntry;
+    ListHead->Blink = ListEntry;
+
+    if(ListHead->Flink == NULL || ListHead->Flink == ListHead)
+        ListHead->Flink = ListEntry;
+
+    return (Last == ListHead) ? NULL : Last;
+}
+
+extern "C" xboxkrnl::PLIST_ENTRY __fastcall EmuExfInterlockedRemoveHeadList
+(
+    IN OUT xboxkrnl::PLIST_ENTRY ListHead
+)
+{
+    if(ListHead == NULL)
+        return NULL;
+
+    xboxkrnl::PLIST_ENTRY First = ListHead->Flink;
+    if(First == NULL || First == ListHead)
+        return NULL;
+
+    xboxkrnl::PLIST_ENTRY Next = First->Flink;
+    ListHead->Flink = Next;
+    if(Next != NULL)
+        Next->Blink = ListHead;
+
+    if(ListHead->Blink == First)
+        ListHead->Blink = ListHead;
+
+    First->Flink = NULL;
+    First->Blink = NULL;
+    return First;
+}
+
 static thread_local UCHAR g_EmuCurrentIrql = 0;
 static xboxkrnl::PKDPC g_EmuPendingDpc = NULL;
+extern "C"
+{
+ULONGLONG g_EmuKeInterruptTime = 0;
+ULONGLONG g_EmuKeSystemTime = 0;
+ULONG g_EmuKeTimeIncrement = 10000;
+ULONG g_EmuKiBugCheckData[5] = {};
+ULONG g_EmuMmGlobalData[4] = {};
+}
+
+struct EmuSimpleDispatcherObject
+{
+    xboxkrnl::DISPATCHER_HEADER Header;
+    LONG Limit;
+};
+
+struct EmuSimpleQueue
+{
+    xboxkrnl::DISPATCHER_HEADER Header;
+    xboxkrnl::LIST_ENTRY EntryListHead;
+    ULONG Count;
+};
+
+static void EmuInitializeListHead(xboxkrnl::LIST_ENTRY *List)
+{
+    if(List != NULL)
+    {
+        List->Flink = List;
+        List->Blink = List;
+    }
+}
+
+static void EmuInitializeDispatcherHeader(xboxkrnl::DISPATCHER_HEADER *Header, UCHAR Type, LONG SignalState)
+{
+    if(Header == NULL || !EmuIsWritableMemoryRange(Header, sizeof(*Header)))
+        return;
+
+    Header->Type = Type;
+    Header->Absolute = 0;
+    Header->Size = sizeof(*Header) / sizeof(ULONG);
+    Header->Inserted = 0;
+    Header->SignalState = SignalState;
+    EmuInitializeListHead(&Header->WaitListHead);
+}
+
+static void EmuRefreshKernelTimeGlobals()
+{
+    FILETIME FileTime;
+    GetSystemTimeAsFileTime(&FileTime);
+    g_EmuKeSystemTime = ((ULONGLONG)FileTime.dwHighDateTime << 32) | FileTime.dwLowDateTime;
+    g_EmuKeInterruptTime = (ULONGLONG)GetTickCount() * 10000;
+    xboxkrnl::KeTickCount = GetTickCount();
+}
+
+extern "C" BOOLEAN NTAPI EmuKeInsertDeviceQueue(PVOID DeviceQueue, PVOID DeviceQueueEntry);
+extern "C" LONG NTAPI EmuKeInsertQueue(PVOID QueueObject, PVOID Entry);
+extern "C" PVOID NTAPI EmuKeRemoveDeviceQueue(PVOID DeviceQueue);
+extern "C" VOID __fastcall EmuKfLowerIrql(UCHAR NewIrql);
+
+extern "C" VOID NTAPI EmuKeBugCheck(ULONG BugCheckCode)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuKiBugCheckData[0] = BugCheckCode;
+    printf("EmuKrnl (0x%lX): KeBugCheck code=0x%.08lX.\n", GetCurrentThreadId(), BugCheckCode);
+    EmuCleanup("Guest called KeBugCheck(0x%.08lX)", BugCheckCode);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuKeBugCheckEx(ULONG BugCheckCode, ULONG Parameter1, ULONG Parameter2, ULONG Parameter3, ULONG Parameter4)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuKiBugCheckData[0] = BugCheckCode;
+    g_EmuKiBugCheckData[1] = Parameter1;
+    g_EmuKiBugCheckData[2] = Parameter2;
+    g_EmuKiBugCheckData[3] = Parameter3;
+    g_EmuKiBugCheckData[4] = Parameter4;
+    printf("EmuKrnl (0x%lX): KeBugCheckEx code=0x%.08lX p1=0x%.08lX p2=0x%.08lX p3=0x%.08lX p4=0x%.08lX.\n",
+           GetCurrentThreadId(), BugCheckCode, Parameter1, Parameter2, Parameter3, Parameter4);
+    EmuCleanup("Guest called KeBugCheckEx(0x%.08lX)", BugCheckCode);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" BOOLEAN NTAPI EmuKeCancelTimer(xboxkrnl::PKTIMER Timer)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    BOOLEAN WasInserted = FALSE;
+    if(Timer != NULL && EmuIsWritableMemoryRange(Timer, sizeof(*Timer)))
+    {
+        WasInserted = Timer->Header.Inserted != 0;
+        Timer->Header.Inserted = 0;
+        Timer->Header.SignalState = 0;
+        Timer->Dpc = NULL;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return WasInserted;
+}
+
+extern "C" VOID NTAPI EmuKeInitializeApc(PVOID Apc, PVOID Thread, UCHAR ApcStateIndex, PVOID KernelRoutine,
+                                         PVOID RundownRoutine, PVOID NormalRoutine, UCHAR ApcMode, PVOID NormalContext)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Apc != NULL && EmuIsWritableMemoryRange(Apc, 0x30))
+        ZeroMemory(Apc, 0x30);
+
+    printf("EmuKrnl (0x%lX): KeInitializeApc apc=%p thread=%p kernel=%p normal=%p.\n",
+           GetCurrentThreadId(), Apc, Thread, KernelRoutine, NormalRoutine);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuKeInitializeDeviceQueue(PVOID DeviceQueue)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)DeviceQueue;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)))
+    {
+        EmuInitializeDispatcherHeader(&Queue->Header, 0x14, 0);
+        EmuInitializeListHead(&Queue->EntryListHead);
+        Queue->Count = 0;
+    }
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuKeInitializeEvent(PVOID Event, ULONG Type, BOOLEAN State)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    EmuInitializeDispatcherHeader((xboxkrnl::DISPATCHER_HEADER*)Event, (UCHAR)Type, State ? 1 : 0);
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuKeInitializeMutant(PVOID Mutant, BOOLEAN InitialOwner)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    EmuInitializeDispatcherHeader((xboxkrnl::DISPATCHER_HEADER*)Mutant, 0x02, InitialOwner ? 0 : 1);
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuKeInitializeQueue(PVOID QueueObject, ULONG Count)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)QueueObject;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)))
+    {
+        EmuInitializeDispatcherHeader(&Queue->Header, 0x04, 0);
+        EmuInitializeListHead(&Queue->EntryListHead);
+        Queue->Count = Count;
+    }
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuKeInitializeSemaphore(PVOID Semaphore, LONG Count, LONG Limit)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleDispatcherObject *Object = (EmuSimpleDispatcherObject*)Semaphore;
+    if(Object != NULL && EmuIsWritableMemoryRange(Object, sizeof(*Object)))
+    {
+        EmuInitializeDispatcherHeader(&Object->Header, 0x05, Count);
+        Object->Limit = Limit;
+    }
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" BOOLEAN NTAPI EmuKeInsertByKeyDeviceQueue(PVOID DeviceQueue, PVOID DeviceQueueEntry, ULONG SortKey)
+{
+    return EmuKeInsertDeviceQueue(DeviceQueue, DeviceQueueEntry);
+}
+
+extern "C" BOOLEAN NTAPI EmuKeInsertDeviceQueue(PVOID DeviceQueue, PVOID DeviceQueueEntry)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)DeviceQueue;
+    BOOLEAN WasBusy = FALSE;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)))
+    {
+        WasBusy = Queue->Count != 0;
+        Queue->Count++;
+        Queue->Header.SignalState = (Queue->Count != 0) ? 1 : 0;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return WasBusy;
+}
+
+extern "C" LONG NTAPI EmuKeInsertHeadQueue(PVOID QueueObject, PVOID Entry)
+{
+    return EmuKeInsertQueue(QueueObject, Entry);
+}
+
+extern "C" LONG NTAPI EmuKeInsertQueue(PVOID QueueObject, PVOID Entry)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)QueueObject;
+    LONG PreviousCount = 0;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)))
+    {
+        PreviousCount = Queue->Header.SignalState;
+        Queue->Count++;
+        Queue->Header.SignalState++;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousCount;
+}
+
+extern "C" BOOLEAN NTAPI EmuKeInsertQueueApc(PVOID Apc, PVOID SystemArgument1, PVOID SystemArgument2, UCHAR Increment)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    printf("EmuKrnl (0x%lX): KeInsertQueueApc apc=%p arg1=%p arg2=%p increment=%lu.\n",
+           GetCurrentThreadId(), Apc, SystemArgument1, SystemArgument2, (ULONG)Increment);
+    EmuSwapFS();   // Xbox FS
+    return TRUE;
+}
 
 extern "C" UCHAR NTAPI EmuKeGetCurrentIrql()
 {
@@ -2910,14 +4764,112 @@ static void EmuDispatchPendingDpc()
 
 extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request)
 {
+    if(Request < 32)
+        g_EmuHalSoftwareInterruptMask |= (1u << Request);
+}
+
+extern "C" VOID __fastcall EmuHalClearSoftwareInterrupt(UCHAR Request)
+{
+    if(Request < 32)
+        g_EmuHalSoftwareInterruptMask &= ~(1u << Request);
+}
+
+extern "C" VOID NTAPI EmuHalDisableSystemInterrupt(UCHAR BusInterruptLevel)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(BusInterruptLevel < 32)
+        g_EmuHalDisabledInterruptMask |= (1u << BusInterruptLevel);
+
+    printf("EmuKrnl (0x%lX): HalDisableSystemInterrupt level=0x%.02X mask=0x%.08lX.\n",
+           GetCurrentThreadId(), BusInterruptLevel, g_EmuHalDisabledInterruptMask);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuHalEnableSecureTrayEject(ULONG BusInterruptLevel, BOOLEAN Enable)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuSecureTrayEjectEnabled = Enable;
+
+    if(BusInterruptLevel < 32 && Enable)
+        g_EmuHalDisabledInterruptMask &= ~(1u << BusInterruptLevel);
+
+    printf("EmuKrnl (0x%lX): HalEnableSecureTrayEject level=0x%.08lX enable=%lu.\n",
+           GetCurrentThreadId(), BusInterruptLevel, (ULONG)Enable);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuHalEnableSecureTrayEjectCompat()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuSecureTrayEjectEnabled = TRUE;
+
+    printf("EmuKrnl (0x%lX): HalEnableSecureTrayEject compat enable=1.\n",
+           GetCurrentThreadId());
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" BOOLEAN NTAPI EmuHalIsResetOrShutdownPending()
+{
+    return (g_EmuResetOrShutdownPending || g_EmuShutdownInitiated) ? TRUE : FALSE;
+}
+
+extern "C" VOID NTAPI EmuHalInitiateShutdown()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuResetOrShutdownPending = TRUE;
+    g_EmuShutdownInitiated = TRUE;
+
+    printf("EmuKrnl (0x%lX): HalInitiateShutdown marked pending.\n",
+           GetCurrentThreadId());
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" ULONG NTAPI EmuPhyInitialize(ULONG ForceReset, ULONG Reserved)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuPhyInitialized = 1;
+    g_EmuPhyLinkState = 0;
+
+    printf("EmuKrnl (0x%lX): PhyInitialize force=0x%.08lX reserved=0x%.08lX link=0x%.08lX.\n",
+           GetCurrentThreadId(), ForceReset, Reserved, g_EmuPhyLinkState);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" ULONG NTAPI EmuPhyGetLinkState(ULONG ForceUpdate)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(!g_EmuPhyInitialized)
+        g_EmuPhyInitialized = 1;
+
+    ULONG LinkState = g_EmuPhyLinkState;
+
+    printf("EmuKrnl (0x%lX): PhyGetLinkState force=0x%.08lX link=0x%.08lX.\n",
+           GetCurrentThreadId(), ForceUpdate, LinkState);
+
+    EmuSwapFS();   // Xbox FS
+
+    return LinkState;
 }
 
 extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistration, BOOLEAN Register)
 {
     EmuSwapFS();   // Win2k/XP FS
 
-    printf("EmuKrnl (0x%lX): HalRegisterShutdownNotification registration=0x%.08lX register=%lu.\n",
-           GetCurrentThreadId(), (ULONG)ShutdownRegistration, (ULONG)Register);
+    printf("EmuKrnl (0x%lX): HalRegisterShutdownNotification registration=%p register=%lu.\n",
+           GetCurrentThreadId(), ShutdownRegistration, (ULONG)Register);
 
     EmuSwapFS();   // Xbox FS
 }
@@ -3299,6 +5251,7 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
         ULONG GuestEsp;
         ULONG GuestEbp;
 
+#if defined(_MSC_VER) && defined(_M_IX86)
         __asm
         {
             mov eax, [ebp+4]
@@ -3308,6 +5261,11 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
             mov eax, [ebp]
             mov GuestEbp, eax
         }
+#else
+        GuestEip = 0;
+        GuestEsp = 0;
+        GuestEbp = 0;
+#endif
 
         EmuSwapFS();   // Xbox FS
         EmuRaiseGuestException(EmuStatusSuspendCountExceeded, GuestEip, GuestEsp, GuestEbp);
@@ -3346,10 +5304,163 @@ extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait)
     static ULONG s_LogCount = 0;
     if(s_LogCount < 4)
     {
-        printf("EmuKrnl (0x%lX): KeSetEvent(event=0x%.08lX increment=%ld wait=%u) previous=%ld.\n",
-               GetCurrentThreadId(), (ULONG)Event, Increment, (ULONG)Wait, PreviousState);
+        printf("EmuKrnl (0x%lX): KeSetEvent(event=%p increment=%ld wait=%lu) previous=%ld.\n",
+               GetCurrentThreadId(), Event, Increment, (ULONG)Wait, PreviousState);
         fflush(stdout);
         s_LogCount++;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousState;
+}
+
+extern "C" VOID NTAPI EmuKeLowerIrql(UCHAR NewIrql)
+{
+    EmuKfLowerIrql(NewIrql);
+}
+
+extern "C" LONG NTAPI EmuKePulseEvent(PVOID Event, LONG Increment, BOOLEAN Wait)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    LONG PreviousState = 0;
+    xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Event;
+    if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)))
+    {
+        PreviousState = Header->SignalState;
+        Header->SignalState = 0;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousState;
+}
+
+extern "C" LONG NTAPI EmuKeQueryBasePriorityThread(xboxkrnl::PKTHREAD Thread)
+{
+    return 0;
+}
+
+extern "C" ULONGLONG NTAPI EmuKeQueryInterruptTime()
+{
+    EmuRefreshKernelTimeGlobals();
+    return g_EmuKeInterruptTime;
+}
+
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter(xboxkrnl::PLARGE_INTEGER Frequency)
+{
+    LARGE_INTEGER HostCounter;
+    LARGE_INTEGER HostFrequency;
+    QueryPerformanceCounter(&HostCounter);
+    QueryPerformanceFrequency(&HostFrequency);
+
+    if(Frequency != NULL)
+        Frequency->QuadPart = HostFrequency.QuadPart;
+
+    xboxkrnl::LARGE_INTEGER Counter;
+    Counter.QuadPart = HostCounter.QuadPart;
+    return Counter;
+}
+
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceFrequency()
+{
+    LARGE_INTEGER HostFrequency;
+    QueryPerformanceFrequency(&HostFrequency);
+
+    xboxkrnl::LARGE_INTEGER Frequency;
+    Frequency.QuadPart = HostFrequency.QuadPart;
+    return Frequency;
+}
+
+extern "C" LONG NTAPI EmuKeReleaseMutant(PVOID Mutant, LONG Increment, BOOLEAN Abandoned, BOOLEAN Wait)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    LONG PreviousState = 0;
+    xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Mutant;
+    if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)))
+    {
+        PreviousState = Header->SignalState;
+        Header->SignalState = 1;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousState;
+}
+
+extern "C" LONG NTAPI EmuKeReleaseSemaphore(PVOID Semaphore, LONG Increment, LONG Adjustment, BOOLEAN Wait)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    LONG PreviousState = 0;
+    EmuSimpleDispatcherObject *Object = (EmuSimpleDispatcherObject*)Semaphore;
+    if(Object != NULL && EmuIsWritableMemoryRange(Object, sizeof(*Object)))
+    {
+        PreviousState = Object->Header.SignalState;
+        Object->Header.SignalState += Adjustment;
+        if(Object->Limit != 0 && Object->Header.SignalState > Object->Limit)
+            Object->Header.SignalState = Object->Limit;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousState;
+}
+
+extern "C" PVOID NTAPI EmuKeRemoveByKeyDeviceQueue(PVOID DeviceQueue, ULONG SortKey)
+{
+    return EmuKeRemoveDeviceQueue(DeviceQueue);
+}
+
+extern "C" PVOID NTAPI EmuKeRemoveDeviceQueue(PVOID DeviceQueue)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)DeviceQueue;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)) && Queue->Count != 0)
+    {
+        Queue->Count--;
+        Queue->Header.SignalState = (Queue->Count != 0) ? 1 : 0;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return NULL;
+}
+
+extern "C" BOOLEAN NTAPI EmuKeRemoveEntryDeviceQueue(PVOID DeviceQueueEntry)
+{
+    return DeviceQueueEntry != NULL;
+}
+
+extern "C" PVOID NTAPI EmuKeRemoveQueue(PVOID QueueObject, UCHAR WaitMode, xboxkrnl::PLARGE_INTEGER Timeout)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)QueueObject;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)) && Queue->Count != 0)
+    {
+        Queue->Count--;
+        Queue->Header.SignalState--;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return NULL;
+}
+
+extern "C" LONG NTAPI EmuKeResetEvent(PVOID Event)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    LONG PreviousState = 0;
+    xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Event;
+    if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)))
+    {
+        PreviousState = Header->SignalState;
+        Header->SignalState = 0;
     }
 
     EmuSwapFS();   // Xbox FS
@@ -3434,6 +5545,366 @@ extern "C" NTSTATUS NTAPI EmuIoDeleteSymbolicLink
 )
 {
     return xboxkrnl::IoDeleteSymbolicLink(SymbolicLinkName);
+}
+
+extern "C" NTSTATUS NTAPI EmuIoDismountVolume
+(
+    IN PVOID DeviceObject
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoDismountVolume device=%p.\n",
+           GetCurrentThreadId(), DeviceObject);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuIoDismountVolumeByName
+(
+    IN xboxkrnl::PSTRING VolumeName
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoDismountVolumeByName name=%s.\n",
+           GetCurrentThreadId(), (VolumeName != NULL && VolumeName->Buffer != NULL) ? VolumeName->Buffer : "<null>");
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuIoDismountVolumeByFileHandle
+(
+    IN HANDLE FileHandle
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoDismountVolumeByFileHandle handle=%p.\n",
+           GetCurrentThreadId(), FileHandle);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" VOID NTAPI EmuIoFreeIrp
+(
+    IN PVOID Irp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIrp *Object = EmuGetIrp(Irp);
+    if(Object != NULL)
+    {
+        Object->Magic = 0;
+        delete Object;
+    }
+
+    printf("EmuKrnl (0x%lX): IoFreeIrp irp=%p owned=%lu.\n",
+           GetCurrentThreadId(), Irp, (ULONG)(Object != NULL));
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoInitializeIrp
+(
+    IN OUT PVOID Irp,
+    IN USHORT PacketSize,
+    IN xboxkrnl::CCHAR StackSize
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Irp != NULL && PacketSize >= sizeof(EmuIrp))
+    {
+        ZeroMemory(Irp, PacketSize);
+        EmuIrp *Object = (EmuIrp*)Irp;
+        Object->Magic = EmuIrpMagic;
+        Object->Size = PacketSize;
+        Object->StackSize = StackSize;
+    }
+
+    printf("EmuKrnl (0x%lX): IoInitializeIrp irp=%p size=0x%.04X stack=%d.\n",
+           GetCurrentThreadId(), Irp, PacketSize, (int)StackSize);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" NTSTATUS NTAPI EmuIoInvalidDeviceRequest
+(
+    IN PVOID DeviceObject,
+    IN PVOID Irp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuCompleteIrp(Irp, EmuStatusInvalidDeviceRequest, 0);
+
+    printf("EmuKrnl (0x%lX): IoInvalidDeviceRequest device=%p irp=%p.\n",
+           GetCurrentThreadId(), DeviceObject, Irp);
+
+    EmuSwapFS();   // Xbox FS
+
+    return EmuStatusInvalidDeviceRequest;
+}
+
+extern "C" NTSTATUS NTAPI EmuIoQueryFileInformation
+(
+    IN PVOID FileObject,
+    IN ULONG FileInformationClass,
+    IN ULONG Length,
+    OUT PVOID FileInformation,
+    OUT PULONG ReturnedLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnedLength != NULL)
+        *ReturnedLength = 0;
+    if(FileInformation != NULL && Length != 0)
+        ZeroMemory(FileInformation, Length);
+
+    printf("EmuKrnl (0x%lX): IoQueryFileInformation file=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), FileObject, FileInformationClass, Length);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuIoQueryVolumeInformation
+(
+    IN PVOID FileObject,
+    IN ULONG FsInformationClass,
+    IN ULONG Length,
+    OUT PVOID FsInformation,
+    OUT PULONG ReturnedLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnedLength != NULL)
+        *ReturnedLength = 0;
+    if(FsInformation != NULL && Length != 0)
+        ZeroMemory(FsInformation, Length);
+
+    printf("EmuKrnl (0x%lX): IoQueryVolumeInformation file=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), FileObject, FsInformationClass, Length);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" VOID NTAPI EmuIoQueueThreadIrp
+(
+    IN PVOID Irp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoQueueThreadIrp irp=%p.\n",
+           GetCurrentThreadId(), Irp);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoRemoveShareAccess
+(
+    IN PVOID FileObject,
+    IN PVOID ShareAccess
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ShareAccess != NULL)
+        ZeroMemory(ShareAccess, 16);
+
+    printf("EmuKrnl (0x%lX): IoRemoveShareAccess file=%p share=%p.\n",
+           GetCurrentThreadId(), FileObject, ShareAccess);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoSetIoCompletion
+(
+    IN HANDLE IoCompletionHandle,
+    IN PVOID KeyContext,
+    IN PVOID ApcContext,
+    IN NTSTATUS IoStatus,
+    IN ULONG IoStatusInformation
+)
+{
+    EmuNtSetIoCompletion(IoCompletionHandle, KeyContext, ApcContext, IoStatus, IoStatusInformation);
+}
+
+extern "C" VOID NTAPI EmuIoSetShareAccess
+(
+    IN ACCESS_MASK DesiredAccess,
+    IN ULONG DesiredShareAccess,
+    IN PVOID FileObject,
+    OUT PVOID ShareAccess
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ShareAccess != NULL)
+        ZeroMemory(ShareAccess, 16);
+
+    printf("EmuKrnl (0x%lX): IoSetShareAccess access=0x%.08lX share=0x%.08lX file=%p out=%p.\n",
+           GetCurrentThreadId(), DesiredAccess, DesiredShareAccess, FileObject, ShareAccess);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoStartNextPacket
+(
+    IN PVOID DeviceObject,
+    IN BOOLEAN Cancelable
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoStartNextPacket device=%p cancelable=%lu.\n",
+           GetCurrentThreadId(), DeviceObject, (ULONG)Cancelable);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoStartNextPacketByKey
+(
+    IN PVOID DeviceObject,
+    IN BOOLEAN Cancelable,
+    IN ULONG Key
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoStartNextPacketByKey device=%p cancelable=%lu key=0x%.08lX.\n",
+           GetCurrentThreadId(), DeviceObject, (ULONG)Cancelable, Key);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoStartPacket
+(
+    IN PVOID DeviceObject,
+    IN PVOID Irp,
+    IN PULONG Key,
+    IN PVOID CancelFunction
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuCompleteIrp(Irp, STATUS_SUCCESS, 0);
+
+    printf("EmuKrnl (0x%lX): IoStartPacket device=%p irp=%p key=%p cancel=%p.\n",
+           GetCurrentThreadId(), DeviceObject, Irp, Key, CancelFunction);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" NTSTATUS NTAPI EmuIoSynchronousDeviceIoControlRequest
+(
+    IN ULONG IoControlCode,
+    IN PVOID DeviceObject,
+    IN PVOID InputBuffer,
+    IN ULONG InputBufferLength,
+    OUT PVOID OutputBuffer,
+    IN ULONG OutputBufferLength,
+    OUT PULONG ReturnedOutputLength,
+    IN BOOLEAN InternalDeviceIoControl
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnedOutputLength != NULL)
+        *ReturnedOutputLength = 0;
+    if(OutputBuffer != NULL && OutputBufferLength != 0)
+        ZeroMemory(OutputBuffer, OutputBufferLength);
+
+    printf("EmuKrnl (0x%lX): IoSynchronousDeviceIoControlRequest code=0x%.08lX device=%p in=0x%.08lX out=0x%.08lX internal=%lu.\n",
+           GetCurrentThreadId(), IoControlCode, DeviceObject, InputBufferLength, OutputBufferLength, (ULONG)InternalDeviceIoControl);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuIoSynchronousFsdRequest
+(
+    IN ULONG MajorFunction,
+    IN PVOID DeviceObject,
+    IN PVOID Buffer,
+    IN ULONG Length,
+    IN xboxkrnl::PLARGE_INTEGER StartingOffset
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): IoSynchronousFsdRequest major=0x%.08lX device=%p buffer=%p length=0x%.08lX.\n",
+           GetCurrentThreadId(), MajorFunction, DeviceObject, Buffer, Length);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuIofCallDriver
+(
+    IN PVOID DeviceObject,
+    IN PVOID Irp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuCompleteIrp(Irp, STATUS_SUCCESS, 0);
+
+    printf("EmuKrnl (0x%lX): IofCallDriver device=%p irp=%p.\n",
+           GetCurrentThreadId(), DeviceObject, Irp);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" VOID NTAPI EmuIofCompleteRequest
+(
+    IN PVOID Irp,
+    IN xboxkrnl::CCHAR PriorityBoost
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuCompleteIrp(Irp, STATUS_SUCCESS, 0);
+
+    printf("EmuKrnl (0x%lX): IofCompleteRequest irp=%p boost=%d.\n",
+           GetCurrentThreadId(), Irp, (int)PriorityBoost);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+extern "C" VOID NTAPI EmuIoMarkIrpMustComplete
+(
+    IN PVOID Irp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIrp *Object = EmuGetIrp(Irp);
+    if(Object != NULL)
+        Object->MustComplete = TRUE;
+
+    printf("EmuKrnl (0x%lX): IoMarkIrpMustComplete irp=%p owned=%lu.\n",
+           GetCurrentThreadId(), Irp, (ULONG)(Object != NULL));
+
+    EmuSwapFS();   // Xbox FS
 }
 
 // ******************************************************************
@@ -3702,6 +6173,69 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
     return ret;
 }
 
+extern "C" NTSTATUS NTAPI EmuExReadWriteRefurbInfo(PVOID Buffer, ULONG BufferLength, BOOLEAN WriteMode)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Buffer == NULL && BufferLength != 0)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    if(!WriteMode && Buffer != NULL && BufferLength != 0)
+        ZeroMemory(Buffer, BufferLength);
+
+    printf("EmuKrnl (0x%lX): ExReadWriteRefurbInfo buffer=%p length=0x%.08lX write=%lu.\n",
+           GetCurrentThreadId(), Buffer, BufferLength, (ULONG)WriteMode);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuExSaveNonVolatileSetting
+(
+    IN DWORD ValueIndex,
+    IN DWORD Type,
+    IN PUCHAR Value,
+    IN xboxkrnl::SIZE_T ValueLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): ExSaveNonVolatileSetting index=0x%.08lX type=0x%.08lX value=%p length=0x%.08lX.\n",
+           GetCurrentThreadId(), ValueIndex, Type, Value, (ULONG)ValueLength);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" VOID NTAPI EmuExRaiseException(PEXCEPTION_RECORD ExceptionRecord)
+{
+    EmuRtlRaiseException(ExceptionRecord);
+}
+
+extern "C" VOID NTAPI EmuExRaiseStatus(NTSTATUS Status)
+{
+    EmuRtlRaiseStatus(Status);
+}
+
+extern "C" xboxkrnl::LONG NTAPI EmuFscGetCacheSize()
+{
+    return (xboxkrnl::LONG)g_EmuFscCachePages;
+}
+
+extern "C" VOID NTAPI EmuFscInvalidateIdleBlocks()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): FscInvalidateIdleBlocks ignored.\n", GetCurrentThreadId());
+
+    EmuSwapFS();   // Xbox FS
+}
+
 // ******************************************************************
 // * 0x0025 - FscSetCacheSize
 // ******************************************************************
@@ -3722,7 +6256,7 @@ XBSYSAPI EXPORTNUM(37) xboxkrnl::LONG NTAPI xboxkrnl::FscSetCacheSize(ULONG uCac
     }
     #endif
 
-    EmuWarning("FscSetCacheSize is being ignored");
+    g_EmuFscCachePages = uCachePages;
 
     EmuSwapFS();   // Xbox FS
 
@@ -3791,10 +6325,16 @@ XBSYSAPI EXPORTNUM(66) NTSTATUS NTAPI xboxkrnl::IoCreateFile
     }
     #endif
 
-    NTSTATUS ret = STATUS_SUCCESS;
+    EmuSwapFS();   // Xbox FS for nested thunk call
+    NTSTATUS ret = xboxkrnl::NtCreateFile
+    (
+        FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, AllocationSize,
+        FileAttributes, ShareAccess, Disposition, CreateOptions
+    );
+    EmuSwapFS();   // Win2k/XP FS
 
-    // TODO: Use NtCreateFile if necessary. If it will work, we're fine
-    EmuCleanup("IoCreateFile not implemented");
+    printf("EmuKrnl (0x%lX): IoCreateFile handle=%p status=0x%.08lX.\n",
+           GetCurrentThreadId(), (FileHandle != NULL) ? *FileHandle : NULL, ret);
 
     EmuSwapFS();   // Xbox FS
 
@@ -4129,6 +6669,128 @@ XBSYSAPI EXPORTNUM(149) xboxkrnl::BOOLEAN NTAPI xboxkrnl::KeSetTimer
     return WasInserted;
 }
 
+extern "C" NTSTATUS NTAPI EmuKeRestoreFloatingPointState(PVOID FloatingState)
+{
+    return STATUS_SUCCESS;
+}
+
+extern "C" PVOID NTAPI EmuKeRundownQueue(PVOID QueueObject)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuSimpleQueue *Queue = (EmuSimpleQueue*)QueueObject;
+    if(Queue != NULL && EmuIsWritableMemoryRange(Queue, sizeof(*Queue)))
+    {
+        Queue->Count = 0;
+        Queue->Header.SignalState = 0;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return NULL;
+}
+
+extern "C" NTSTATUS NTAPI EmuKeSaveFloatingPointState(PVOID FloatingState)
+{
+    if(FloatingState != NULL && EmuIsWritableMemoryRange(FloatingState, 0x20))
+        ZeroMemory(FloatingState, 0x20);
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" LONG NTAPI EmuKeSetBasePriorityThread(xboxkrnl::PKTHREAD Thread, LONG Increment)
+{
+    return 0;
+}
+
+extern "C" VOID NTAPI EmuKeSetDisableBoostThread(xboxkrnl::PKTHREAD Thread, BOOLEAN Disable)
+{
+}
+
+extern "C" LONG NTAPI EmuKeSetEventBoostPriority(PVOID Event, xboxkrnl::PKTHREAD Thread)
+{
+    return EmuKeSetEvent(Event, 0, FALSE);
+}
+
+extern "C" LONG NTAPI EmuKeSetPriorityProcess(PVOID Process, LONG BasePriority)
+{
+    return BasePriority;
+}
+
+extern "C" LONG NTAPI EmuKeSetPriorityThread(xboxkrnl::PKTHREAD Thread, LONG Priority)
+{
+    return Priority;
+}
+
+extern "C" xboxkrnl::BOOLEAN NTAPI EmuKeSetTimerEx
+(
+    IN xboxkrnl::PKTIMER Timer,
+    IN xboxkrnl::LARGE_INTEGER DueTime,
+    IN LONG Period,
+    IN xboxkrnl::PKDPC Dpc OPTIONAL
+)
+{
+    BOOLEAN WasInserted = xboxkrnl::KeSetTimer(Timer, DueTime, Dpc);
+    if(Timer != NULL && EmuIsWritableMemoryRange(Timer, sizeof(*Timer)))
+        Timer->Period = Period;
+
+    return WasInserted;
+}
+
+extern "C" BOOLEAN NTAPI EmuKeTestAlertThread(UCHAR AlertMode)
+{
+    return FALSE;
+}
+
+extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects
+(
+    IN ULONG Count,
+    IN PVOID Object[],
+    IN ULONG WaitType,
+    IN UCHAR WaitMode,
+    IN BOOLEAN Alertable,
+    IN xboxkrnl::PLARGE_INTEGER Timeout,
+    IN PVOID WaitBlockArray
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): KeWaitForMultipleObjects count=%lu waitType=0x%.08lX alertable=%lu.\n",
+           GetCurrentThreadId(), Count, WaitType, (ULONG)Alertable);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
+(
+    IN PVOID Object,
+    IN ULONG WaitReason,
+    IN UCHAR WaitMode,
+    IN BOOLEAN Alertable,
+    IN xboxkrnl::PLARGE_INTEGER Timeout
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Object;
+    if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)) && Header->SignalState > 0 &&
+       (Header->Type == 1 || Header->Type == 0x05))
+    {
+        Header->SignalState--;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" VOID NTAPI EmuKiUnlockDispatcherDatabase(UCHAR OldIrql)
+{
+    EmuKeLowerIrql(OldIrql);
+}
+
 // ******************************************************************
 // * 0x0097 - KeStallExecutionProcessor
 // ******************************************************************
@@ -4443,25 +7105,25 @@ XBSYSAPI EXPORTNUM(167) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateSystemMemory
 // ******************************************************************
 extern "C" PVOID NTAPI EmuMmClaimGpuInstanceMemory
 (
-    SIZE_T NumberOfBytes,
-    SIZE_T *NumberOfPaddingBytes
+    xboxkrnl::SIZE_T NumberOfBytes,
+    xboxkrnl::SIZE_T *NumberOfPaddingBytes
 )
 {
     EmuSwapFS();   // Win2k/XP FS
 
     static PVOID InstanceMemory = NULL;
-    static SIZE_T InstanceMemorySize = 0;
-    static const SIZE_T InstanceMemoryDefaultSize = 0x10000;
-    static const SIZE_T InstanceMemoryPadding = 0x10000;
+    static xboxkrnl::SIZE_T InstanceMemorySize = 0;
+    static const xboxkrnl::SIZE_T InstanceMemoryDefaultSize = 0x10000;
+    static const xboxkrnl::SIZE_T InstanceMemoryPadding = 0x10000;
 
     if(NumberOfPaddingBytes != NULL)
         *NumberOfPaddingBytes = InstanceMemoryPadding;
 
-    SIZE_T RequestedSize = InstanceMemoryDefaultSize;
-    if(NumberOfBytes != (SIZE_T)-1 && NumberOfBytes > RequestedSize)
+    xboxkrnl::SIZE_T RequestedSize = InstanceMemoryDefaultSize;
+    if(NumberOfBytes != (xboxkrnl::SIZE_T)-1 && NumberOfBytes > RequestedSize)
         RequestedSize = NumberOfBytes;
 
-    RequestedSize = (RequestedSize + EmuPageSize - 1) & ~(SIZE_T)(EmuPageSize - 1);
+    RequestedSize = (RequestedSize + EmuPageSize - 1) & ~(xboxkrnl::SIZE_T)(EmuPageSize - 1);
 
     if(InstanceMemory == NULL || InstanceMemorySize < RequestedSize)
     {
@@ -4479,6 +7141,70 @@ extern "C" PVOID NTAPI EmuMmClaimGpuInstanceMemory
     EmuSwapFS();   // Xbox FS
 
     return InstanceMemory;
+}
+
+// ******************************************************************
+// * 0x00A9 - MmCreateKernelStack
+// ******************************************************************
+extern "C" PVOID NTAPI EmuMmCreateKernelStack
+(
+    IN ULONG NumberOfBytes,
+    IN BOOLEAN DebuggerThread
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    PVOID StackBase = NULL;
+    const ULONG StackBytes = EmuRoundToPageSize(NumberOfBytes);
+
+    if(StackBytes != 0 && StackBytes + EmuPageSize >= StackBytes)
+    {
+        const ULONG AllocationSize = StackBytes + EmuPageSize;
+        PVOID AllocationBase = VirtualAlloc(NULL, AllocationSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if(AllocationBase != NULL)
+        {
+            DWORD OldProtect = 0;
+            VirtualProtect(AllocationBase, EmuPageSize, PAGE_NOACCESS, &OldProtect);
+
+            PVOID StackLimit = (PVOID)((unsigned char*)AllocationBase + EmuPageSize);
+            StackBase = (PVOID)((unsigned char*)AllocationBase + AllocationSize);
+            EmuTrackKernelStack(AllocationBase, StackBase, StackLimit, AllocationSize, DebuggerThread);
+        }
+    }
+
+    printf("EmuKrnl (0x%lX): MmCreateKernelStack bytes=0x%.08lX debugger=%lu result=%p.\n",
+           GetCurrentThreadId(), NumberOfBytes, (ULONG)DebuggerThread, StackBase);
+
+    EmuSwapFS();   // Xbox FS
+
+    return StackBase;
+}
+
+// ******************************************************************
+// * 0x00AA - MmDeleteKernelStack
+// ******************************************************************
+extern "C" VOID NTAPI EmuMmDeleteKernelStack
+(
+    IN PVOID StackBase,
+    IN PVOID StackLimit
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuKernelStackAllocation *Allocation = EmuFindKernelStack(StackBase, StackLimit);
+    bool Freed = false;
+
+    if(Allocation != NULL)
+    {
+        PVOID AllocationBase = Allocation->BaseAddress;
+        EmuUntrackKernelStack(Allocation);
+        Freed = VirtualFree(AllocationBase, 0, MEM_RELEASE) != 0;
+    }
+
+    printf("EmuKrnl (0x%lX): MmDeleteKernelStack stackBase=%p stackLimit=%p freed=%lu.\n",
+           GetCurrentThreadId(), StackBase, StackLimit, (ULONG)Freed);
+
+    EmuSwapFS();   // Xbox FS
 }
 
 // ******************************************************************
@@ -4572,10 +7298,10 @@ extern "C" PHYSICAL_ADDRESS NTAPI EmuMmGetPhysicalAddress
 
     PHYSICAL_ADDRESS PhysicalAddress = EmuQueryContiguousMemoryPhysicalAddress(BaseAddress);
     if(PhysicalAddress == 0)
-        PhysicalAddress = ((PHYSICAL_ADDRESS)BaseAddress) & (EmuXboxPhysicalMemoryBytes - 1);
+        PhysicalAddress = (PHYSICAL_ADDRESS)(((::ULONG_PTR)BaseAddress) & (EmuXboxPhysicalMemoryBytes - 1));
 
-    printf("EmuKrnl (0x%lX): MmGetPhysicalAddress base=0x%.08lX physical=0x%.08lX.\n",
-           GetCurrentThreadId(), (ULONG)BaseAddress, (ULONG)PhysicalAddress);
+    printf("EmuKrnl (0x%lX): MmGetPhysicalAddress base=%p physical=0x%.08lX.\n",
+           GetCurrentThreadId(), BaseAddress, (ULONG)PhysicalAddress);
 
     EmuSwapFS();   // Xbox FS
 
@@ -4588,14 +7314,14 @@ extern "C" PHYSICAL_ADDRESS NTAPI EmuMmGetPhysicalAddress
 extern "C" VOID NTAPI EmuMmLockUnlockBufferPages
 (
     IN PVOID BaseAddress,
-    IN SIZE_T NumberOfBytes,
+    IN xboxkrnl::SIZE_T NumberOfBytes,
     IN BOOLEAN UnlockPages
 )
 {
     EmuSwapFS();   // Win2k/XP FS
 
-    printf("EmuKrnl (0x%lX): MmLockUnlockBufferPages base=0x%.08lX bytes=0x%.08lX unlock=%lu.\n",
-           GetCurrentThreadId(), (ULONG)BaseAddress, (ULONG)NumberOfBytes, (ULONG)UnlockPages);
+    printf("EmuKrnl (0x%lX): MmLockUnlockBufferPages base=%p bytes=0x%.08lX unlock=%lu.\n",
+           GetCurrentThreadId(), BaseAddress, (ULONG)NumberOfBytes, (ULONG)UnlockPages);
 
     EmuSwapFS();   // Xbox FS
 }
@@ -4615,6 +7341,49 @@ extern "C" VOID NTAPI EmuMmLockUnlockPhysicalPage
            GetCurrentThreadId(), PhysicalAddress, (ULONG)UnlockPage);
 
     EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
+// * 0x00B1 - MmMapIoSpace
+// ******************************************************************
+extern "C" PVOID NTAPI EmuMmMapIoSpace
+(
+    IN PHYSICAL_ADDRESS PhysicalAddress,
+    IN ULONG NumberOfBytes,
+    IN ULONG Protect
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    PVOID Result = NULL;
+    bool OwnsAllocation = false;
+
+    if(NumberOfBytes != 0 && EmuIsValidSystemMemoryProtect(Protect))
+    {
+        ULONG HostAddress = EmuContiguousHostFromPhysical(PhysicalAddress);
+        if(HostAddress != 0)
+        {
+            Result = (PVOID)(::ULONG_PTR)HostAddress;
+        }
+        else if(PhysicalAddress >= EmuMmioPassthroughBase)
+        {
+            Result = (PVOID)(::ULONG_PTR)PhysicalAddress;
+        }
+        else
+        {
+            Result = VirtualAlloc(NULL, EmuRoundToPageSize(NumberOfBytes), MEM_COMMIT | MEM_RESERVE, Protect);
+            OwnsAllocation = Result != NULL;
+        }
+
+        EmuTrackIoSpaceMapping(Result, NumberOfBytes, PhysicalAddress, Protect, OwnsAllocation);
+    }
+
+    printf("EmuKrnl (0x%lX): MmMapIoSpace physical=0x%.08lX bytes=0x%.08lX protect=0x%.08lX result=%p owns=%lu.\n",
+           GetCurrentThreadId(), (ULONG)PhysicalAddress, NumberOfBytes, Protect, Result, (ULONG)OwnsAllocation);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Result;
 }
 
 // ******************************************************************
@@ -4651,6 +7420,26 @@ XBSYSAPI EXPORTNUM(178) VOID NTAPI xboxkrnl::MmPersistContiguousMemory
 }
 
 // ******************************************************************
+// * 0x00B3 - MmQueryAddressProtect
+// ******************************************************************
+extern "C" ULONG NTAPI EmuMmQueryAddressProtect
+(
+    IN PVOID VirtualAddress
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG Protect = EmuQueryAddressProtect(VirtualAddress);
+
+    printf("EmuKrnl (0x%lX): MmQueryAddressProtect base=%p protect=0x%.08lX.\n",
+           GetCurrentThreadId(), VirtualAddress, Protect);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Protect;
+}
+
+// ******************************************************************
 // * 0x00B4 - MmQueryAllocationSize
 // ******************************************************************
 extern "C" ULONG NTAPI EmuMmQueryAllocationSize
@@ -4664,8 +7453,8 @@ extern "C" ULONG NTAPI EmuMmQueryAllocationSize
     if(Size == 0)
         Size = EmuQueryContiguousMemoryAllocationSize(BaseAddress);
 
-    printf("EmuKrnl (0x%lX): MmQueryAllocationSize base=0x%.08lX size=0x%.08lX.\n",
-           GetCurrentThreadId(), (ULONG)BaseAddress, Size);
+    printf("EmuKrnl (0x%lX): MmQueryAllocationSize base=%p size=0x%.08lX.\n",
+           GetCurrentThreadId(), BaseAddress, Size);
 
     EmuSwapFS();   // Xbox FS
 
@@ -4692,7 +7481,8 @@ extern "C" NTSTATUS NTAPI EmuMmQueryStatistics
     {
         const ULONG SystemBytes = EmuCommittedSystemMemoryBytes();
         const ULONG ContiguousBytes = EmuCommittedContiguousMemoryBytes();
-        const ULONG CommittedBytes = SystemBytes + ContiguousBytes;
+        const ULONG StackBytes = EmuCommittedKernelStackBytes();
+        const ULONG CommittedBytes = SystemBytes + ContiguousBytes + StackBytes;
 
         MemoryStatistics->TotalPhysicalPages = EmuXboxPhysicalMemoryBytes / EmuPageSize;
         MemoryStatistics->AvailablePages = (CommittedBytes < EmuXboxPhysicalMemoryBytes) ?
@@ -4701,12 +7491,12 @@ extern "C" NTSTATUS NTAPI EmuMmQueryStatistics
         MemoryStatistics->VirtualMemoryBytesReserved = g_EmuNextSystemMemoryAddress - 0xD0000000;
         MemoryStatistics->CachePagesCommitted = 0;
         MemoryStatistics->PoolPagesCommitted = EmuSystemMemoryPages(ContiguousBytes);
-        MemoryStatistics->StackPagesCommitted = 0;
+        MemoryStatistics->StackPagesCommitted = EmuSystemMemoryPages(StackBytes);
         MemoryStatistics->ImagePagesCommitted = 0;
     }
 
-    printf("EmuKrnl (0x%lX): MmQueryStatistics stats=0x%.08lX ret=0x%.08lX.\n",
-           GetCurrentThreadId(), (ULONG)MemoryStatistics, ret);
+    printf("EmuKrnl (0x%lX): MmQueryStatistics stats=%p ret=0x%.08lX.\n",
+           GetCurrentThreadId(), MemoryStatistics, ret);
 
     EmuSwapFS();   // Xbox FS
 
@@ -4740,12 +7530,45 @@ XBSYSAPI EXPORTNUM(182) VOID NTAPI xboxkrnl::MmSetAddressProtect
     }
     #endif
 
-    // TODO: Actually set protection
-    EmuWarning("MmSetAddressProtect is being ignored\n");
+    ULONG OldProtect = 0;
+    NTSTATUS Status = EmuProtectVirtualMemory(BaseAddress, NumberOfBytes, NewProtect, &OldProtect);
+    if(Status != STATUS_SUCCESS)
+        EmuWarning("MmSetAddressProtect failed\n");
+
+    printf("EmuKrnl (0x%lX): MmSetAddressProtect base=%p bytes=0x%.08lX new=0x%.08lX old=0x%.08lX status=0x%.08lX.\n",
+           GetCurrentThreadId(), BaseAddress, NumberOfBytes, NewProtect, OldProtect, Status);
 
     EmuSwapFS();   // Xbox FS
 
     return;
+}
+
+// ******************************************************************
+// * 0x00B7 - MmUnmapIoSpace
+// ******************************************************************
+extern "C" VOID NTAPI EmuMmUnmapIoSpace
+(
+    IN PVOID BaseAddress,
+    IN ULONG NumberOfBytes
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuIoSpaceMapping *Mapping = EmuFindIoSpaceMapping(BaseAddress);
+    bool Freed = false;
+
+    if(Mapping != NULL)
+    {
+        if(Mapping->OwnsAllocation && Mapping->Address != NULL)
+            Freed = VirtualFree(Mapping->Address, 0, MEM_RELEASE) != 0;
+
+        EmuUntrackIoSpaceMapping(Mapping);
+    }
+
+    printf("EmuKrnl (0x%lX): MmUnmapIoSpace base=%p bytes=0x%.08lX freed=%lu.\n",
+           GetCurrentThreadId(), BaseAddress, NumberOfBytes, (ULONG)Freed);
+
+    EmuSwapFS();   // Xbox FS
 }
 
 // ******************************************************************
@@ -5231,6 +8054,270 @@ extern "C" NTSTATUS NTAPI EmuNtCreateTimer
     return (*TimerHandle != NULL) ? STATUS_SUCCESS : 0xC0000008;
 }
 
+extern "C" NTSTATUS NTAPI EmuNtCancelTimer
+(
+    IN HANDLE TimerHandle,
+    OUT PBOOLEAN CurrentState OPTIONAL
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    BOOL Canceled = CancelWaitableTimer(TimerHandle);
+    if(CurrentState != NULL)
+        *CurrentState = FALSE;
+
+    EmuSwapFS();   // Xbox FS
+
+    return Canceled ? STATUS_SUCCESS : EmuStatusInvalidHandle;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtCreateDirectoryObject
+(
+    OUT PHANDLE DirectoryHandle,
+    IN xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes
+)
+{
+    PVOID Object = NULL;
+    NTSTATUS Status = EmuObCreateObject(&g_EmuObDirectoryObjectType, ObjectAttributes, sizeof(ULONG), &Object);
+    if(Status != STATUS_SUCCESS)
+        return Status;
+
+    return EmuObInsertObject(Object, ObjectAttributes, 0, DirectoryHandle);
+}
+
+extern "C" NTSTATUS NTAPI EmuNtDeleteFile(IN xboxkrnl::POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    std::string Path;
+    NTSTATUS Status = EmuStatusObjectNameInvalid;
+    if(EmuObjectAttributesToHostPath(ObjectAttributes, &Path))
+    {
+        if(DeleteFileA(Path.c_str()))
+            Status = STATUS_SUCCESS;
+        else
+            Status = (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND) ?
+                     STATUS_OBJECT_NAME_NOT_FOUND : STATUS_UNSUCCESSFUL;
+    }
+
+    printf("EmuKrnl (0x%lX): NtDeleteFile path=\"%s\" status=0x%.08lX.\n",
+           GetCurrentThreadId(), Path.c_str(), Status);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Status;
+}
+
+static void EmuCompleteIoStatus(xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock, NTSTATUS Status, ::ULONG_PTR Information)
+{
+    if(IoStatusBlock == NULL)
+        return;
+
+    IoStatusBlock->u1.Status = Status;
+    IoStatusBlock->Information = (xboxkrnl::ULONG_PTR)(::ULONG_PTR)Information;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtDeviceIoControlFile
+(
+    IN HANDLE FileHandle,
+    IN HANDLE Event OPTIONAL,
+    IN PVOID ApcRoutine OPTIONAL,
+    IN PVOID ApcContext,
+    OUT xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock,
+    IN ULONG IoControlCode,
+    IN PVOID InputBuffer,
+    IN ULONG InputBufferLength,
+    OUT PVOID OutputBuffer,
+    IN ULONG OutputBufferLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    DWORD Returned = 0;
+    BOOL Ok = DeviceIoControl(FileHandle, IoControlCode, InputBuffer, InputBufferLength,
+                              OutputBuffer, OutputBufferLength, &Returned, NULL);
+    NTSTATUS Status = Ok ? STATUS_SUCCESS : EmuStatusInvalidDeviceRequest;
+
+    EmuCompleteIoStatus(IoStatusBlock, Status, Returned);
+    if(Event != NULL)
+        SetEvent(Event);
+    if(ApcRoutine != NULL)
+        QueueUserAPC((PAPCFUNC)ApcRoutine, GetCurrentThread(), (::ULONG_PTR)ApcContext);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Status;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtFlushBuffersFile
+(
+    IN HANDLE FileHandle,
+    OUT xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    BOOL Ok = FlushFileBuffers(FileHandle);
+    NTSTATUS Status = Ok ? STATUS_SUCCESS : EmuStatusInvalidHandle;
+    EmuCompleteIoStatus(IoStatusBlock, Status, 0);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Status;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtFsControlFile
+(
+    IN HANDLE FileHandle,
+    IN HANDLE Event OPTIONAL,
+    IN PVOID ApcRoutine OPTIONAL,
+    IN PVOID ApcContext,
+    OUT xboxkrnl::PIO_STATUS_BLOCK IoStatusBlock,
+    IN ULONG FsControlCode,
+    IN PVOID InputBuffer,
+    IN ULONG InputBufferLength,
+    OUT PVOID OutputBuffer,
+    IN ULONG OutputBufferLength
+)
+{
+    return EmuNtDeviceIoControlFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock,
+                                    FsControlCode, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength);
+}
+
+extern "C" NTSTATUS NTAPI EmuNtPulseEvent
+(
+    IN HANDLE EventHandle,
+    OUT PLONG PreviousState OPTIONAL
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(PreviousState != NULL)
+        *PreviousState = 0;
+
+    BOOL Ok = PulseEvent(EventHandle);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Ok ? STATUS_SUCCESS : EmuStatusInvalidHandle;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQueueApcThread
+(
+    IN HANDLE ThreadHandle,
+    IN PVOID ApcRoutine,
+    IN PVOID ApcArgument1,
+    IN PVOID ApcArgument2,
+    IN PVOID ApcArgument3
+)
+{
+    (void)ApcArgument2;
+    (void)ApcArgument3;
+
+    EmuSwapFS();   // Win2k/XP FS
+
+    BOOL Ok = (ThreadHandle != NULL && ApcRoutine != NULL) ?
+              QueueUserAPC((PAPCFUNC)ApcRoutine, ThreadHandle, (::ULONG_PTR)ApcArgument1) != 0 : FALSE;
+
+    EmuSwapFS();   // Xbox FS
+
+    return Ok ? STATUS_SUCCESS : EmuStatusInvalidParameter;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtSetSystemTime
+(
+    IN xboxkrnl::PLARGE_INTEGER SystemTime,
+    OUT xboxkrnl::PLARGE_INTEGER PreviousTime OPTIONAL
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuRefreshKernelTimeGlobals();
+    if(PreviousTime != NULL)
+        PreviousTime->QuadPart = (LONGLONG)g_EmuKeSystemTime;
+
+    if(SystemTime != NULL)
+        g_EmuKeSystemTime = (ULONGLONG)SystemTime->QuadPart;
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtSetTimerEx
+(
+    IN HANDLE TimerHandle,
+    IN xboxkrnl::PLARGE_INTEGER DueTime,
+    IN PVOID TimerApcRoutine OPTIONAL,
+    IN PVOID TimerContext OPTIONAL,
+    IN BOOLEAN ResumeTimer,
+    IN LONG Period,
+    OUT PBOOLEAN PreviousState OPTIONAL
+)
+{
+    (void)ResumeTimer;
+
+    EmuSwapFS();   // Win2k/XP FS
+
+    ::LARGE_INTEGER HostDueTime;
+    HostDueTime.QuadPart = (DueTime != NULL) ? DueTime->QuadPart : 0;
+
+    BOOL Ok = SetWaitableTimer(TimerHandle, &HostDueTime, Period, (PTIMERAPCROUTINE)TimerApcRoutine, TimerContext, FALSE);
+    if(PreviousState != NULL)
+        *PreviousState = FALSE;
+
+    EmuSwapFS();   // Xbox FS
+
+    return Ok ? STATUS_SUCCESS : EmuStatusInvalidHandle;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtSignalAndWaitForSingleObject
+(
+    IN HANDLE SignalHandle,
+    IN HANDLE WaitHandle,
+    IN BOOLEAN Alertable,
+    IN xboxkrnl::PLARGE_INTEGER Timeout OPTIONAL
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    DWORD Milliseconds = INFINITE;
+    if(Timeout != NULL && Timeout->QuadPart == 0)
+        Milliseconds = 0;
+
+    DWORD Wait = SignalObjectAndWait(SignalHandle, WaitHandle, Milliseconds, Alertable);
+
+    EmuSwapFS();   // Xbox FS
+
+    return (Wait == WAIT_OBJECT_0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtWaitForMultipleObjectsEx
+(
+    IN ULONG Count,
+    IN HANDLE Handles[],
+    IN ULONG WaitType,
+    IN ULONG WaitMode,
+    IN BOOLEAN Alertable,
+    IN xboxkrnl::PLARGE_INTEGER Timeout OPTIONAL
+)
+{
+    (void)WaitMode;
+
+    EmuSwapFS();   // Win2k/XP FS
+
+    DWORD Milliseconds = INFINITE;
+    if(Timeout != NULL && Timeout->QuadPart == 0)
+        Milliseconds = 0;
+
+    DWORD Wait = WaitForMultipleObjectsEx(Count, Handles, WaitType != 0, Milliseconds, Alertable);
+    NTSTATUS Status = (Wait >= WAIT_OBJECT_0 && Wait < WAIT_OBJECT_0 + Count) ? (NTSTATUS)(Wait - WAIT_OBJECT_0) : STATUS_UNSUCCESSFUL;
+
+    EmuSwapFS();   // Xbox FS
+
+    return Status;
+}
+
 // ******************************************************************
 // * 0x00C5 - NtDuplicateObject
 // ******************************************************************
@@ -5347,6 +8434,37 @@ XBSYSAPI EXPORTNUM(202) NTSTATUS NTAPI xboxkrnl::NtOpenFile
     #endif
 
     return NtCreateFile(FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, NULL, 0, ShareAccess, FILE_OPEN, OpenOptions);
+}
+
+// ******************************************************************
+// * 0x00CC - NtProtectVirtualMemory
+// ******************************************************************
+extern "C" NTSTATUS NTAPI EmuNtProtectVirtualMemory
+(
+    IN OUT PVOID *BaseAddress,
+    IN OUT PULONG RegionSize,
+    IN ULONG NewProtect,
+    OUT PULONG OldProtect
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    NTSTATUS ret = EmuStatusInvalidParameter;
+
+    if(BaseAddress != NULL && *BaseAddress != NULL && RegionSize != NULL && *RegionSize != 0 && OldProtect != NULL)
+        ret = EmuProtectVirtualMemory(*BaseAddress, *RegionSize, NewProtect, OldProtect);
+
+    printf("EmuKrnl (0x%lX): NtProtectVirtualMemory base=%p size=0x%.08lX new=0x%.08lX old=0x%.08lX ret=0x%.08lX.\n",
+           GetCurrentThreadId(),
+           (BaseAddress != NULL) ? *BaseAddress : NULL,
+           (ULONG)((RegionSize != NULL) ? *RegionSize : 0),
+           NewProtect,
+           (ULONG)((OldProtect != NULL) ? *OldProtect : 0),
+           ret);
+
+    EmuSwapFS();   // Xbox FS
+
+    return ret;
 }
 
 // ******************************************************************
@@ -5503,7 +8621,7 @@ XBSYSAPI EXPORTNUM(210) NTSTATUS NTAPI xboxkrnl::NtQueryFullAttributesFile
 // * 0x00D3 - NtQueryInformationFile
 // ******************************************************************
 XBSYSAPI EXPORTNUM(211) NTSTATUS NTAPI xboxkrnl::NtQueryInformationFile
-(   
+(
     IN  HANDLE                      FileHandle,
     OUT PIO_STATUS_BLOCK            IoStatusBlock,
     OUT PVOID                       FileInformation, 
@@ -5539,6 +8657,223 @@ XBSYSAPI EXPORTNUM(211) NTSTATUS NTAPI xboxkrnl::NtQueryInformationFile
 		Length,
         (NtDll::FILE_INFORMATION_CLASS)FileInfo
 	);
+
+    EmuSwapFS();   // Xbox FS
+
+    return ret;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQueryDirectoryObject
+(
+    IN HANDLE DirectoryHandle,
+    OUT PVOID Buffer,
+    IN ULONG Length,
+    IN BOOLEAN ReturnSingleEntry,
+    IN BOOLEAN RestartScan,
+    IN OUT PULONG Context,
+    OUT PULONG ReturnLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnLength != NULL)
+        *ReturnLength = 0;
+    if(Context != NULL)
+        *Context = 0;
+    if(Buffer != NULL && Length != 0)
+        ZeroMemory(Buffer, Length);
+
+    printf("EmuKrnl (0x%lX): NtQueryDirectoryObject handle=%p length=0x%.08lX single=%lu restart=%lu.\n",
+           GetCurrentThreadId(), DirectoryHandle, Length, (ULONG)ReturnSingleEntry, (ULONG)RestartScan);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQueryEvent
+(
+    IN HANDLE EventHandle,
+    IN ULONG EventInformationClass,
+    OUT PVOID EventInformation,
+    IN ULONG EventInformationLength,
+    OUT PULONG ReturnLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnLength != NULL)
+        *ReturnLength = EventInformationLength;
+    if(EventInformation != NULL && EventInformationLength != 0)
+        ZeroMemory(EventInformation, EventInformationLength);
+
+    printf("EmuKrnl (0x%lX): NtQueryEvent handle=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), EventHandle, EventInformationClass, EventInformationLength);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQueryIoCompletion
+(
+    IN HANDLE IoCompletionHandle,
+    IN ULONG IoCompletionInformationClass,
+    OUT PVOID IoCompletionInformation,
+    IN ULONG IoCompletionInformationLength,
+    OUT PULONG ReturnLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnLength != NULL)
+        *ReturnLength = IoCompletionInformationLength;
+    if(IoCompletionInformation != NULL && IoCompletionInformationLength != 0)
+        ZeroMemory(IoCompletionInformation, IoCompletionInformationLength);
+
+    printf("EmuKrnl (0x%lX): NtQueryIoCompletion handle=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), IoCompletionHandle, IoCompletionInformationClass, IoCompletionInformationLength);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQueryMutant
+(
+    IN HANDLE MutantHandle,
+    IN ULONG MutantInformationClass,
+    OUT PVOID MutantInformation,
+    IN ULONG MutantInformationLength,
+    OUT PULONG ReturnLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnLength != NULL)
+        *ReturnLength = MutantInformationLength;
+    if(MutantInformation != NULL && MutantInformationLength != 0)
+        ZeroMemory(MutantInformation, MutantInformationLength);
+
+    printf("EmuKrnl (0x%lX): NtQueryMutant handle=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), MutantHandle, MutantInformationClass, MutantInformationLength);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQuerySemaphore
+(
+    IN HANDLE SemaphoreHandle,
+    IN ULONG SemaphoreInformationClass,
+    OUT PVOID SemaphoreInformation,
+    IN ULONG SemaphoreInformationLength,
+    OUT PULONG ReturnLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnLength != NULL)
+        *ReturnLength = SemaphoreInformationLength;
+    if(SemaphoreInformation != NULL && SemaphoreInformationLength != 0)
+        ZeroMemory(SemaphoreInformation, SemaphoreInformationLength);
+
+    printf("EmuKrnl (0x%lX): NtQuerySemaphore handle=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), SemaphoreHandle, SemaphoreInformationClass, SemaphoreInformationLength);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQuerySymbolicLinkObject
+(
+    IN HANDLE LinkHandle,
+    IN OUT xboxkrnl::PSTRING LinkTarget,
+    OUT PULONG ReturnedLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnedLength != NULL)
+        *ReturnedLength = 0;
+    if(LinkTarget != NULL && LinkTarget->Buffer != NULL && LinkTarget->MaximumLength != 0)
+        LinkTarget->Buffer[0] = '\0';
+
+    printf("EmuKrnl (0x%lX): NtQuerySymbolicLinkObject handle=%p target=%p.\n",
+           GetCurrentThreadId(), LinkHandle, LinkTarget);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtQueryTimer
+(
+    IN HANDLE TimerHandle,
+    IN ULONG TimerInformationClass,
+    OUT PVOID TimerInformation,
+    IN ULONG TimerInformationLength,
+    OUT PULONG ReturnLength
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(ReturnLength != NULL)
+        *ReturnLength = TimerInformationLength;
+    if(TimerInformation != NULL && TimerInformationLength != 0)
+        ZeroMemory(TimerInformation, TimerInformationLength);
+
+    printf("EmuKrnl (0x%lX): NtQueryTimer handle=%p class=0x%.08lX length=0x%.08lX.\n",
+           GetCurrentThreadId(), TimerHandle, TimerInformationClass, TimerInformationLength);
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+// ******************************************************************
+// * 0x00D9 - NtQueryVirtualMemory
+// ******************************************************************
+extern "C" NTSTATUS NTAPI EmuNtQueryVirtualMemory
+(
+    IN PVOID BaseAddress,
+    OUT MEMORY_BASIC_INFORMATION *Buffer
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    NTSTATUS ret = EmuStatusInvalidParameter;
+
+    if(Buffer != NULL)
+    {
+        ZeroMemory(Buffer, sizeof(*Buffer));
+
+        EmuIoSpaceMapping *Mapping = EmuFindIoSpaceMapping(BaseAddress);
+        if(Mapping != NULL)
+        {
+            Buffer->BaseAddress = Mapping->Address;
+            Buffer->AllocationBase = Mapping->Address;
+            Buffer->AllocationProtect = Mapping->Protect;
+            Buffer->RegionSize = Mapping->Size;
+            Buffer->State = MEM_COMMIT;
+            Buffer->Protect = Mapping->Protect;
+            Buffer->Type = MEM_PRIVATE;
+            ret = STATUS_SUCCESS;
+        }
+        else if(VirtualQuery(BaseAddress, Buffer, sizeof(*Buffer)) == sizeof(*Buffer))
+        {
+            ret = STATUS_SUCCESS;
+        }
+        else
+        {
+            ret = STATUS_UNSUCCESSFUL;
+        }
+    }
+
+    printf("EmuKrnl (0x%lX): NtQueryVirtualMemory base=%p buffer=%p ret=0x%.08lX.\n",
+           GetCurrentThreadId(), BaseAddress, Buffer, ret);
 
     EmuSwapFS();   // Xbox FS
 
@@ -5651,6 +8986,25 @@ XBSYSAPI EXPORTNUM(219) NTSTATUS NTAPI xboxkrnl::NtReadFile
     EmuSwapFS();   // Xbox FS
 
     return ret;
+}
+
+extern "C" NTSTATUS NTAPI EmuNtReadFileScatter
+(
+    IN HANDLE FileHandle,
+    IN HANDLE Event OPTIONAL,
+    IN PVOID ApcRoutine OPTIONAL,
+    IN PVOID ApcContext,
+    OUT PVOID IoStatusBlock,
+    OUT PVOID SegmentArray,
+    IN ULONG Length,
+    IN xboxkrnl::PLARGE_INTEGER ByteOffset OPTIONAL
+)
+{
+    PVOID Buffer = NULL;
+    if(SegmentArray != NULL)
+        Buffer = *(PVOID*)SegmentArray;
+
+    return xboxkrnl::NtReadFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset);
 }
 
 extern "C" NTSTATUS NTAPI EmuNtReleaseMutant
@@ -6055,6 +9409,25 @@ XBSYSAPI EXPORTNUM(236) NTSTATUS NTAPI xboxkrnl::NtWriteFile
     return ret;
 }
 
+extern "C" NTSTATUS NTAPI EmuNtWriteFileGather
+(
+    IN HANDLE FileHandle,
+    IN PVOID Event,
+    IN PVOID ApcRoutine,
+    IN PVOID ApcContext,
+    OUT PVOID IoStatusBlock,
+    IN PVOID SegmentArray,
+    IN ULONG Length,
+    IN PVOID ByteOffset
+)
+{
+    PVOID Buffer = NULL;
+    if(SegmentArray != NULL)
+        Buffer = *(PVOID*)SegmentArray;
+
+    return xboxkrnl::NtWriteFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset);
+}
+
 // ******************************************************************
 // * 0x00EE - NtYieldExecution
 // ******************************************************************
@@ -6093,6 +9466,63 @@ extern "C" NTSTATUS NTAPI EmuPsCreateSystemThread
 {
     return xboxkrnl::PsCreateSystemThreadEx(ThreadHandle, ThreadExtraSize, 0, 0, NULL,
                                             StartContext, NULL, CreateSuspended, FALSE, StartRoutine);
+}
+
+extern "C" NTSTATUS NTAPI EmuPsQueryStatistics(PULONG Statistics)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Statistics == NULL || !EmuIsWritableMemoryRange(Statistics, sizeof(ULONG) * 3) || Statistics[0] != sizeof(ULONG) * 3)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    Statistics[1] = GetCurrentThreadId();
+    Statistics[2] = (ULONG)g_EmuThreadSuspendCounts.size();
+
+    EmuSwapFS();   // Xbox FS
+
+    return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS NTAPI EmuPsSetCreateThreadNotifyRoutine(PVOID NotifyRoutine)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(NotifyRoutine == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusInvalidParameter;
+    }
+
+    for(ULONG i = 0; i < sizeof(g_EmuPsThreadNotifyRoutines) / sizeof(g_EmuPsThreadNotifyRoutines[0]); i++)
+    {
+        if(g_EmuPsThreadNotifyRoutines[i] == NotifyRoutine)
+        {
+            EmuSwapFS();   // Xbox FS
+            return STATUS_SUCCESS;
+        }
+    }
+
+    for(ULONG i = 0; i < sizeof(g_EmuPsThreadNotifyRoutines) / sizeof(g_EmuPsThreadNotifyRoutines[0]); i++)
+    {
+        if(g_EmuPsThreadNotifyRoutines[i] != NULL)
+            continue;
+
+        g_EmuPsThreadNotifyRoutines[i] = NotifyRoutine;
+        g_EmuPsThreadNotifyRoutineCount++;
+
+        printf("EmuKrnl (0x%lX): PsSetCreateThreadNotifyRoutine routine=%p count=%lu.\n",
+               GetCurrentThreadId(), NotifyRoutine, g_EmuPsThreadNotifyRoutineCount);
+
+        EmuSwapFS();   // Xbox FS
+        return STATUS_SUCCESS;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return EmuStatusInsufficientResources;
 }
 
 // ******************************************************************
@@ -6189,6 +9619,30 @@ XBSYSAPI EXPORTNUM(258) VOID NTAPI xboxkrnl::PsTerminateSystemThread(IN NTSTATUS
     EmuSwapFS();   // Xbox FS
 
     return;
+}
+
+extern "C" NTSTATUS NTAPI EmuXeLoadSection(PVOID Section)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): XeLoadSection section=%p compatibility no-op.\n",
+           GetCurrentThreadId(), Section);
+
+    EmuSwapFS();   // Xbox FS
+
+    return (Section != NULL) ? STATUS_SUCCESS : EmuStatusInvalidParameter;
+}
+
+extern "C" NTSTATUS NTAPI EmuXeUnloadSection(PVOID Section)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): XeUnloadSection section=%p compatibility no-op.\n",
+           GetCurrentThreadId(), Section);
+
+    EmuSwapFS();   // Xbox FS
+
+    return (Section != NULL) ? STATUS_SUCCESS : EmuStatusInvalidParameter;
 }
 
 // ******************************************************************
