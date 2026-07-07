@@ -1,0 +1,2 @@
+# Requires a target with a USB0/OHCI host-controller model (traps 0xFED00000 MMIO).
+tags = ["usb0"]
