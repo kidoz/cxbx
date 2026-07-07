@@ -7912,6 +7912,18 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
     char ReplaceChar  = '\0';
     int  ReplaceIndex = -1;
 
+    // Reject a malformed OBJECT_ATTRIBUTES instead of dereferencing a null/garbage
+    // ObjectName->Buffer: a title (or a soft-mod launcher running post-reboot) can
+    // pass one, and the path parsing below would crash the emulator on it.
+    if(ObjectAttributes == NULL || ObjectAttributes->ObjectName == NULL ||
+       ObjectAttributes->ObjectName->Buffer == NULL ||
+       IsBadReadPtr(ObjectAttributes->ObjectName->Buffer, 4))
+    {
+        printf("EmuKrnl (0x%X): NtCreateFile rejected malformed ObjectAttributes.\n", GetCurrentThreadId());
+        EmuSwapFS();   // Xbox FS
+        return EmuStatusObjectNameInvalid;
+    }
+
     char *szBuffer = ObjectAttributes->ObjectName->Buffer;
     char *szOriginalBuffer = szBuffer;
 
