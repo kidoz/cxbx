@@ -121,7 +121,14 @@ extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistrat
 extern "C" VOID __fastcall EmuHalRequestSoftwareInterrupt(UCHAR Request);
 extern "C" VOID __fastcall EmuHalClearSoftwareInterrupt(UCHAR Request);
 extern "C" VOID NTAPI EmuHalDisableSystemInterrupt(UCHAR BusInterruptLevel);
+extern "C" VOID NTAPI EmuHalEnableSystemInterrupt(UCHAR BusInterruptLevel, UCHAR InterruptMode);
+extern "C" VOID NTAPI EmuHalWriteSMCScratchRegister(ULONG ScratchRegister);
 extern "C" VOID NTAPI EmuHalEnableSecureTrayEject(ULONG BusInterruptLevel, BOOLEAN Enable);
+extern "C" ULONG NTAPI EmuKeAlertResumeThread(xboxkrnl::PKTHREAD Thread);
+extern "C" BOOLEAN NTAPI EmuKeAlertThread(xboxkrnl::PKTHREAD Thread, UCHAR AlertMode);
+extern "C" VOID NTAPI EmuKeBoostPriorityThread(xboxkrnl::PKTHREAD Thread, LONG Increment);
+extern "C" xboxkrnl::BOOLEAN NTAPI EmuKeSynchronizeExecution(PVOID Interrupt, PVOID SynchronizeRoutine, PVOID SynchronizeContext);
+extern "C" NTSTATUS NTAPI EmuNtSignalAndWaitForSingleObjectEx(HANDLE SignalHandle, HANDLE WaitHandle, UCHAR WaitMode, BOOLEAN Alertable, xboxkrnl::PLARGE_INTEGER Timeout);
 extern "C" VOID NTAPI EmuHalEnableSecureTrayEjectCompat();
 extern "C" BOOLEAN NTAPI EmuHalIsResetOrShutdownPending();
 extern "C" VOID NTAPI EmuHalInitiateShutdown();
@@ -482,7 +489,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&g_EmuHalDiskCachePartitionCount,       // 0x0028 (40)
     (uint32)&g_EmuHalDiskModelNumber,               // 0x0029 (41)
     (uint32)&g_EmuHalDiskSerialNumber,              // 0x002A (42)
-    (uint32)PANIC(0x002B),                          // 0x002B (43)
+    (uint32)&EmuHalEnableSystemInterrupt,           // 0x002B (43)
     (uint32)&EmuHalGetInterruptVector,              // 0x002C (44)
     (uint32)&EmuHalReadSMBusValue,                  // 0x002D (45)
     (uint32)&xboxkrnl::HalReadWritePCISpace,        // 0x002E (46)
@@ -531,9 +538,9 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&g_EmuKdDebuggerNotPresent,             // 0x0059 (89)
     (uint32)&EmuIoDismountVolume,                   // 0x005A (90)
     (uint32)&EmuIoDismountVolumeByName,             // 0x005B (91)
-    (uint32)PANIC(0x005C),                          // 0x005C (92)
-    (uint32)PANIC(0x005D),                          // 0x005D (93)
-    (uint32)PANIC(0x005E),                          // 0x005E (94)
+    (uint32)&EmuKeAlertResumeThread,                // 0x005C (92)
+    (uint32)&EmuKeAlertThread,                      // 0x005D (93)
+    (uint32)&EmuKeBoostPriorityThread,              // 0x005E (94)
     (uint32)&EmuKeBugCheck,                         // 0x005F (95)
     (uint32)&EmuKeBugCheckEx,                       // 0x0060 (96)
     (uint32)&EmuKeCancelTimer,                      // 0x0061 (97)
@@ -592,7 +599,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuKeSetTimerEx,                       // 0x0096 (150)
     (uint32)&EmuKeStallExecutionProcessor,          // 0x0097 (151)
     (uint32)&EmuKeSuspendThread,                    // 0x0098 (152)
-    (uint32)PANIC(0x0099),                          // 0x0099 (153)
+    (uint32)&EmuKeSynchronizeExecution,             // 0x0099 (153)
     (uint32)&g_EmuKeSystemTime,                     // 0x009A (154)
     (uint32)&EmuKeTestAlertThread,                  // 0x009B (155)
     (uint32)&xboxkrnl::KeTickCount,                 // 0x009C (156)
@@ -669,7 +676,7 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuNtSetIoCompletion,                  // 0x00E3 (227)
     (uint32)&EmuNtSetSystemTime,                    // 0x00E4 (228)
     (uint32)&EmuNtSetTimerEx,                       // 0x00E5 (229)
-    (uint32)PANIC(0x00E6),                          // 0x00E6 (230)
+    (uint32)&EmuNtSignalAndWaitForSingleObjectEx,   // 0x00E6 (230)
     (uint32)&EmuNtSuspendThread,                    // 0x00E7 (231)
     (uint32)&xboxkrnl::NtUserIoApcDispatcher,       // 0x00E8 (232)
     (uint32)&xboxkrnl::NtWaitForSingleObject,       // 0x00E9 (233)
@@ -805,5 +812,5 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367] =
     (uint32)&EmuRtlVsnprintf,                       // 0x016B (363)
     (uint32)&EmuRtlVsprintf,                        // 0x016C (364)
     (uint32)&EmuHalEnableSecureTrayEject,           // 0x016D (365)
-    (uint32)PANIC(0x016E),                          // 0x016E (366)
+    (uint32)&EmuHalWriteSMCScratchRegister,         // 0x016E (366)
 };

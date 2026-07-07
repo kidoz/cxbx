@@ -4787,6 +4787,37 @@ extern "C" VOID NTAPI EmuHalDisableSystemInterrupt(UCHAR BusInterruptLevel)
     EmuSwapFS();   // Xbox FS
 }
 
+// 0x002B - HalEnableSystemInterrupt: the complement of HalDisableSystemInterrupt;
+// clear the interrupt's mask bit so it is delivered again.
+extern "C" VOID NTAPI EmuHalEnableSystemInterrupt(UCHAR BusInterruptLevel, UCHAR InterruptMode)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(BusInterruptLevel < 32)
+        g_EmuHalDisabledInterruptMask &= ~(1u << BusInterruptLevel);
+
+    printf("EmuKrnl (0x%lX): HalEnableSystemInterrupt level=0x%.02X mode=0x%.02X mask=0x%.08lX.\n",
+           GetCurrentThreadId(), BusInterruptLevel, InterruptMode, g_EmuHalDisabledInterruptMask);
+
+    EmuSwapFS();   // Xbox FS
+}
+
+// 0x016E - HalWriteSMCScratchRegister: the SMC scratch dword carries reboot/quick-
+// boot flags across a warm reset. No SMC hardware here; retain the value so a
+// subsequent read (were one wired) is consistent.
+static ULONG g_EmuSmcScratchRegister = 0;
+extern "C" VOID NTAPI EmuHalWriteSMCScratchRegister(ULONG ScratchRegister)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    g_EmuSmcScratchRegister = ScratchRegister;
+
+    printf("EmuKrnl (0x%lX): HalWriteSMCScratchRegister value=0x%.08lX.\n",
+           GetCurrentThreadId(), ScratchRegister);
+
+    EmuSwapFS();   // Xbox FS
+}
+
 extern "C" VOID NTAPI EmuHalEnableSecureTrayEject(ULONG BusInterruptLevel, BOOLEAN Enable)
 {
     EmuSwapFS();   // Win2k/XP FS
@@ -5236,6 +5267,43 @@ extern "C" ULONG NTAPI EmuKeResumeThread(xboxkrnl::PKTHREAD Thread)
     EmuSwapFS();   // Xbox FS
 
     return PreviousCount;
+}
+
+// 0x005C - KeAlertResumeThread: alert the thread's alertable wait (a no-op here,
+// as our waits are not alert-driven) and decrement its suspend count, returning
+// the previous count -- same resume path as KeResumeThread.
+extern "C" ULONG NTAPI EmuKeAlertResumeThread(xboxkrnl::PKTHREAD Thread)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    ULONG PreviousCount = 0;
+    EmuThreadObjectHeader *ThreadHeader = EmuThreadHeaderFromThread(Thread);
+    if(ThreadHeader != NULL)
+    {
+        PreviousCount = ThreadHeader->SuspendCount;
+        if(PreviousCount != 0)
+        {
+            ResumeThread(ThreadHeader->HostHandle);
+            ThreadHeader->SuspendCount--;
+        }
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return PreviousCount;
+}
+
+// 0x005D - KeAlertThread: mark a thread alerted for the given mode. Our waits are
+// not alert-driven, so report "was not previously alerted".
+extern "C" BOOLEAN NTAPI EmuKeAlertThread(xboxkrnl::PKTHREAD Thread, UCHAR AlertMode)
+{
+    return FALSE;
+}
+
+// 0x005E - KeBoostPriorityThread: a transient scheduler priority boost. The host
+// scheduler owns thread priorities here, so this is advisory only.
+extern "C" VOID NTAPI EmuKeBoostPriorityThread(xboxkrnl::PKTHREAD Thread, LONG Increment)
+{
 }
 
 extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
@@ -6720,6 +6788,34 @@ extern "C" LONG NTAPI EmuKeSetPriorityProcess(PVOID Process, LONG BasePriority)
 extern "C" LONG NTAPI EmuKeSetPriorityThread(xboxkrnl::PKTHREAD Thread, LONG Priority)
 {
     return Priority;
+}
+
+// 0x0099 - KeSynchronizeExecution: run SynchronizeRoutine mutually exclusive with
+// the interrupt's ISR. The routine is guest code and is entered with the Xbox FS
+// still active (the guest called us that way), so invoke it directly and return
+// its result. Full ISR exclusion would raise to the interrupt's SynchronizeIrql;
+// our synthesized ISR delivery already defers while a guest holds a raised IRQL.
+typedef xboxkrnl::BOOLEAN (NTAPI *EmuSynchronizeRoutine)(PVOID SynchronizeContext);
+extern "C" xboxkrnl::BOOLEAN NTAPI EmuKeSynchronizeExecution
+(
+    PVOID Interrupt,
+    PVOID SynchronizeRoutine,
+    PVOID SynchronizeContext
+)
+{
+    if(SynchronizeRoutine == NULL)
+        return FALSE;
+
+    xboxkrnl::BOOLEAN Result = FALSE;
+    __try
+    {
+        Result = ((EmuSynchronizeRoutine)SynchronizeRoutine)(SynchronizeContext);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    return Result;
 }
 
 extern "C" xboxkrnl::BOOLEAN NTAPI EmuKeSetTimerEx
@@ -8275,6 +8371,30 @@ extern "C" NTSTATUS NTAPI EmuNtSignalAndWaitForSingleObject
 (
     IN HANDLE SignalHandle,
     IN HANDLE WaitHandle,
+    IN BOOLEAN Alertable,
+    IN xboxkrnl::PLARGE_INTEGER Timeout OPTIONAL
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    DWORD Milliseconds = INFINITE;
+    if(Timeout != NULL && Timeout->QuadPart == 0)
+        Milliseconds = 0;
+
+    DWORD Wait = SignalObjectAndWait(SignalHandle, WaitHandle, Milliseconds, Alertable);
+
+    EmuSwapFS();   // Xbox FS
+
+    return (Wait == WAIT_OBJECT_0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+}
+
+// 0x00E6 - NtSignalAndWaitForSingleObjectEx: as NtSignalAndWaitForSingleObject but
+// with an explicit wait mode; atomically signals one object then waits on another.
+extern "C" NTSTATUS NTAPI EmuNtSignalAndWaitForSingleObjectEx
+(
+    IN HANDLE SignalHandle,
+    IN HANDLE WaitHandle,
+    IN UCHAR WaitMode,
     IN BOOLEAN Alertable,
     IN xboxkrnl::PLARGE_INTEGER Timeout OPTIONAL
 )
