@@ -6346,6 +6346,21 @@ XBSYSAPI EXPORTNUM(49) VOID DECLSPEC_NORETURN xboxkrnl::HalReturnToFirmware
            GetCurrentThreadId(), Routine, (uint32)CallerRet);
     fflush(stdout);
 
+    // Soft-mod bypass (opt-in): the launcher framework shared by the XDK samples /
+    // z26x reboots (QuickReboot=2) to apply a kernel patch and re-run the app. A
+    // user-mode HLE can't persist that patch, so the reboot just loops/exits. When
+    // CXBX_SOFTMOD_BYPASS is set, return to the guest instead of terminating so the
+    // caller falls through to its post-reboot (run-the-app) path.
+    char bypass[8] = {0};
+    if(Routine == 2 && GetEnvironmentVariableA("CXBX_SOFTMOD_BYPASS", bypass, sizeof(bypass)) != 0)
+    {
+        printf("EmuKrnl (0x%X): HalReturnToFirmware(2) BYPASSED -- returning to guest.\n",
+               GetCurrentThreadId());
+        fflush(stdout);
+        EmuSwapFS();   // Xbox FS
+        return;
+    }
+
     EmuCleanup("Xbe has rebooted : HalReturnToFirmware(%d)", Routine);
 
     EmuSwapFS();   // Xbox FS
