@@ -1,0 +1,6 @@
+#suite xbox-conformance v1
+#probe apu
+CHK apu.xgscnt_monotonic PASS
+CHK apu.vp_pio_free PASS
+CHK apu.register_latch PASS
+#result apu verdict=PASS checks=3 fail=0
