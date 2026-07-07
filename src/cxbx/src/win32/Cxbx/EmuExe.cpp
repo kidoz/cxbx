@@ -329,9 +329,14 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
             // * generate .cxbxplg section virtual size / addr
             // ******************************************************************
             {
+                // an XBE without a TLS directory (hand-written titles, e.g. the
+                // EvolutionX dashboard) has m_TLS == 0; the section body and the
+                // entry plug already handle that (pTLS/pTLSData = 0)
+                uint32 tls_data_size = (x_Xbe->m_TLS != 0) ? (x_Xbe->m_TLS->dwDataEndAddr - x_Xbe->m_TLS->dwDataStartAddr) : 0;
+
                 uint32 virt_size = RoundUp(m_OptionalHeader.m_image_base + 0x100 + x_Xbe->m_Header.dwSizeofHeaders + 260
                                         + sizeof(Xbe::LibraryVersion) * x_Xbe->m_Header.dwLibraryVersions + sizeof(Xbe::TLS)
-                                        + (x_Xbe->m_TLS->dwDataEndAddr - x_Xbe->m_TLS->dwDataStartAddr), 0x1000);
+                                        + tls_data_size, 0x1000);
                 uint32 virt_addr = RoundUp(m_SectionHeader[i-1].m_virtual_addr + m_SectionHeader[i-1].m_virtual_size, PE_SEGM_ALIGN);
 
                 m_SectionHeader[i].m_virtual_size = virt_size;
