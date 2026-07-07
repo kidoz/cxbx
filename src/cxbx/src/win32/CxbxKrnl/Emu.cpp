@@ -3046,6 +3046,22 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             return true;
         }
 
+        // 0x66 0xA1 = mov AX, moffs16 : 16-bit read from an absolute address (what
+        // a C `uint16_t` volatile load of a fixed MMIO address compiles to, e.g.
+        // reading an AC97 channel status register at 0xFEC00116).
+        if(AccessType == 0 && Instruction[0] == 0x66 && Instruction[1] == 0xA1 &&
+           *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            ULONG Value = EmuReadMmio(FaultAddress, 2);
+            e->ContextRecord->Eax = (e->ContextRecord->Eax & ~0xFFFFul) | (Value & 0xFFFF);
+            e->ContextRecord->Eip += 6;
+
+            printf("Emu (0x%lX): Emulated MMIO word read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+            fflush(stdout);
+
+            return true;
+        }
+
         if(AccessType == 0 && Instruction[0] == 0x8B)
         {
             ULONG Address = 0;
