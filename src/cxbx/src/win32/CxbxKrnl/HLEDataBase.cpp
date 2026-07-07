@@ -61,6 +61,7 @@ namespace XTL
 #include "D3D8.1.0.4134.inl"
 #include "D3D8.1.0.4361.inl"
 #include "D3D8.1.0.4627.inl"
+#include "D3D8.1.0.5849.inl"
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
@@ -143,6 +144,13 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         D3D8_1_0_4627,
         D3D8_1_0_4627_SIZE
+    },
+    // D3D8 Version 1.0.5849 (generated from XDK 5849 d3d8.lib; unlocks z26x + 5849 samples)
+    {
+        "D3D8",
+        1, 0, 5849,
+        D3D8_1_0_5849,
+        D3D8_1_0_5849_SIZE
     },
     // DSound Version 1.0.3936
     {
