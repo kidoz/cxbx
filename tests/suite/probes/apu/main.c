@@ -10,11 +10,13 @@
 
 #define APU_BASE     0xFE800000u
 #define REG32(off)   (*(volatile uint32_t *)(APU_BASE + (uint32_t)(off)))
+#define REG16(off)   (*(volatile uint16_t *)(APU_BASE + (uint32_t)(off)))
 
 #define XGSCNT              0x0000200Cu   // global sample counter (free-running)
 #define VP_PIO_FREE         0x00020010u   // voice-processor PIO-free status
 #define VP_PIO_QUEUE_EMPTY  0x00000080u
 #define SCRATCH             0x00000100u   // a plain (non-special) register
+#define SCRATCH16           0x00000104u   // a plain register for 16-bit access
 
 int main(void)
 {
@@ -41,6 +43,15 @@ int main(void)
     uint32_t rb = REG32(SCRATCH);
     xt_ev("scratch reg readback = 0x%08lX", (unsigned long)rb);
     xt_check_u32("apu.register_latch", 0xABCD1234u, rb);
+
+    // The same latch at 16-bit access width (a 16-bit store to an absolute MMIO
+    // address then a 16-bit read-back). Use a runtime-sourced value so the store
+    // is register- rather than immediate-encoded, exercising that decode path.
+    uint16_t v16 = (uint16_t)(vp ^ 0xBEEFu);
+    REG16(SCRATCH16) = v16;
+    uint16_t rb16 = REG16(SCRATCH16);
+    xt_ev("scratch reg 16-bit readback = 0x%04X (wrote 0x%04X)", (unsigned)rb16, (unsigned)v16);
+    xt_check_u32("apu.register_latch16", v16, rb16);
 
     return xt_end();
 }
