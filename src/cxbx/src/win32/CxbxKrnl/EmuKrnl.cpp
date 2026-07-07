@@ -3100,9 +3100,12 @@ static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
 
 static void EmuStartAudioInterruptThread()
 {
-    // Only when auto-booting a real title headless; leaves the probes unaffected.
-    char rom[8] = {0};
-    if(GetEnvironmentVariableA("CXBX_AUTOBOOT_ROM", rom, sizeof(rom)) == 0)
+    // Opt-in only: the synthesized APU interrupt fires an ISR asynchronously and
+    // can deadlock a title against a DSOUND critical section (see the FCEUltra
+    // trace). Gate it on its own env var, decoupled from CXBX_AUTOBOOT_ROM, so a
+    // title can auto-boot a ROM without the async ISR. Leaves the probes alone.
+    char enabled[8] = {0};
+    if(GetEnvironmentVariableA("CXBX_APU_IRQ", enabled, sizeof(enabled)) == 0)
         return;
 
     if(InterlockedExchange(&g_EmuAudioThreadStarted, 1) == 0)
