@@ -1,0 +1,7 @@
+#suite xbox-conformance v1
+#probe ac97_nabm
+CHK ac97.nabm_ctrl_mask PASS
+CHK ac97.nabm_halt_sets_dmahalt PASS
+CHK ac97.nabm_reset_clears_ctrl PASS
+CHK ac97.nabm_reset_halts PASS
+#result ac97_nabm verdict=PASS checks=4 fail=0
