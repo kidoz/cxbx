@@ -2178,6 +2178,19 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
     {
         BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
 
+        // Reboot-decision trace (opt-in via CXBX_REBOOT_TRACE): log the guest EIP
+        // that performed each kernel/physical read so the read sequence can be
+        // correlated back to the exact guest instructions and their branch.
+        static bool s_RebootTrace = getenv("CXBX_REBOOT_TRACE") != NULL;
+        if(s_RebootTrace)
+        {
+            printf("Emu (0x%lX): PHYSFAULT eip=0x%.08lX access=%lu addr=0x%.08lX bytes=%02X %02X %02X %02X %02X %02X %02X\n",
+                   GetCurrentThreadId(), (ULONG)Instruction, AccessType, FaultAddress,
+                   Instruction[0], Instruction[1], Instruction[2], Instruction[3],
+                   Instruction[4], Instruction[5], Instruction[6]);
+            fflush(stdout);
+        }
+
         if(AccessType == 1 && Instruction[0] == 0xF3 &&
            (Instruction[1] == 0xAB || Instruction[1] == 0xAA) &&
            FaultAddress == e->ContextRecord->Edi)
@@ -4492,9 +4505,17 @@ static void EmuInstallFakeKernelImage()
     *(ULONG*)(Pe + 0x18 + 0x60) = ExportDirRva;
     *(ULONG*)(Pe + 0x18 + 0x64) = 0x28 + ExportFunctionCount * 4;
 
-    // IMAGE_SECTION_HEADERs after the optional header. The soft-mod scan only
-    // checks the LAST section's name == 'INIT' (real xboxkrnl keeps INIT last, as
-    // it is discarded after boot), so INIT must be the final entry.
+    // IMAGE_SECTION_HEADERs after the optional header. The XDK XAPI startup scans
+    // for the LAST section named 'INIT' (real xboxkrnl keeps INIT last, as it is
+    // discarded after boot). Finding it, the title builds a ring-0 code descriptor
+    // over INIT, far-jumps to CS 8, verifies CS==8 -- which a user-mode HLE can
+    // never satisfy -- and QuickReboots forever. Presenting a kernel whose last
+    // section is NOT 'INIT' models the *post-patch* kernel (INIT already discarded):
+    // the title's `cmpl [last],'INIT'` fails, it skips the whole ring-0 acquisition,
+    // and proceeds straight into the app -- no reboot, valid state, no per-title
+    // bootstrap patch needed. Opt-in via CXBX_KERNEL_SKIP_INIT while it is proven
+    // out against the title set.
+    const bool SkipInit = getenv("CXBX_KERNEL_SKIP_INIT") != NULL;
     BYTE *Sec = Pe + 0x18 + 0xE0;
     struct { char Name[8]; ULONG VSize, VAddr; } Sects[6] =
     {
@@ -4505,6 +4526,8 @@ static void EmuInstallFakeKernelImage()
         { { '.','e','d','a','t','a',0,0 }, 0x02000, 0x00076000 },
         { { 'I','N','I','T',  0, 0,0,0 }, 0x0A000, 0x00078000 },
     };
+    if(SkipInit)
+        memcpy(Sects[5].Name, ".init\0\0\0", 8);   // not 'INIT' -> title skips the ring-0 patch+reboot
     for(int i = 0; i < 6; i++)
     {
         BYTE *S = Sec + i * 0x28;
