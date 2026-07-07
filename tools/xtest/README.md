@@ -12,6 +12,7 @@ python xtest.py build [probe ...]                      # build XBEs only
 python xtest.py run [--emulator cxbx] [--probe NAME]   # build (unless --no-build) + run
 python xtest.py run --update-golden                    # snapshot current results as baseline
 python xtest.py run --emulator custom --cmd "emu {xbe} {rundir}"
+python xtest.py gate                                   # CI gate: emulator + probes + full suite
 ```
 
 Options: `--no-build`, `--timeout N`, `--probe NAME` (repeatable),
@@ -26,8 +27,26 @@ each probe's complete trace after the report for deeper inspection.
 
 - `paths.suite_dir` / `nxdk_dir` / `msys2_bash` — build toolchain locations.
 - `emulator.cxbx` — the built-in adapter: `exe`, `run_args` (with `{xbe}`/`{log}`),
-  `timeout`, `d_drive` (where the guest `D:` maps, relative to the XBE dir), and
-  `kill_names` (processes to kill if a run times out).
+  `timeout`, `d_drive` (where the guest `D:` maps, relative to the XBE dir),
+  `kill_names` (processes to kill if a run times out), and `build_dir` (the
+  emulator's meson/ninja build directory, used by `gate`).
+
+## CI — the `gate` command
+
+`python xtest.py gate` is the one-command regression gate, wired into
+`.github/workflows/conformance.yml`:
+
+1. Configures the emulator build (`meson setup`, defaults) if `build_dir` has no
+   `build.ninja`, then rebuilds it with ninja.
+2. Builds every probe XBE.
+3. Runs the full suite (`--all`, capability filter bypassed) against the target.
+4. Exits non-zero if any step — emulator build, probe build, probe verdict, or
+   golden diff — fails.
+
+The gate needs the full local toolchain (meson/ninja + a C++ compiler for the
+emulator; MSYS2 make + clang + nxdk for the probe XBEs) with paths set in
+`config.toml`, so the workflow targets a self-hosted Windows runner. GitHub-hosted
+runners do not have the nxdk toolchain.
 
 ## How a run works
 

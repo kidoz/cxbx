@@ -12,6 +12,10 @@ msys2_bash = "C:/msys2/usr/bin/bash.exe"
 exe        = "build/src/cxbx/cxbx.exe"
 run_args   = ["--run", "{xbe}", "--log", "{log}"]
 timeout    = 25
+# Meson/ninja build directory for the emulator itself; the `gate` command
+# configures it (plain `meson setup`, all defaults) if missing and rebuilds it
+# before running the suite.
+build_dir  = "build"
 # Capabilities this target advertises. A probe tagged (probe.toml `tags`) with a
 # capability not listed here is skipped. This Cxbx build has the NV2A MMIO model
 # the AC97 audio-controller (ACI) model, the APU audio-processor model, and the

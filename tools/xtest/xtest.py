@@ -440,6 +440,41 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_gate(cfg: Config, args: argparse.Namespace) -> int:
+    """One-command CI gate: (re)build the emulator, build every probe, run the
+    full suite. Exit 0 only if every probe passes and matches its golden."""
+    ecfg = cfg["emulator"].get(args.emulator, {})
+    build_dir = ecfg.get("build_dir")
+    if build_dir:
+        if not (Path(build_dir) / "build.ninja").exists():
+            print(f"[gate] configuring emulator build ({build_dir}) ...", flush=True)
+            r = subprocess.run(["meson", "setup", build_dir], capture_output=True, text=True)
+            if r.returncode != 0:
+                print((r.stdout + r.stderr)[-2000:])
+                print("[gate] emulator configure FAILED")
+                return 1
+        print(f"[gate] building emulator ({build_dir}) ...", flush=True)
+        r = subprocess.run(["ninja", "-C", build_dir], capture_output=True, text=True)
+        if r.returncode != 0:
+            print((r.stdout + r.stderr)[-2000:])
+            print("[gate] emulator build FAILED")
+            return 1
+        print("[gate] emulator build OK")
+
+    run_args = argparse.Namespace(
+        emulator=args.emulator,
+        cmd=args.cmd,
+        probe=None,
+        timeout=args.timeout,
+        no_build=False,
+        capability=None,
+        all=True,
+        update_golden=False,
+        show_trace=False,
+    )
+    return cmd_run(cfg, run_args)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Xbox conformance suite runner")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -469,6 +504,14 @@ def main() -> int:
         "--show-trace", action="store_true", help="print each probe's full trace after the report"
     )
     r.set_defaults(func=cmd_run)
+
+    g = sub.add_parser(
+        "gate", help="CI gate: build emulator + every probe, run the full suite"
+    )
+    g.add_argument("--emulator", default="cxbx", help="cxbx | custom")
+    g.add_argument("--cmd", help="custom emulator command template")
+    g.add_argument("--timeout", type=int, help="per-probe timeout seconds")
+    g.set_defaults(func=cmd_gate)
 
     args = ap.parse_args()
     cfg = load_config()
