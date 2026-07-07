@@ -3,4 +3,5 @@
 CHK apu.xgscnt_monotonic PASS
 CHK apu.vp_pio_free PASS
 CHK apu.register_latch PASS
-#result apu verdict=PASS checks=3 fail=0
+CHK apu.register_latch16 PASS
+#result apu verdict=PASS checks=4 fail=0
