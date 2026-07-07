@@ -4200,8 +4200,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
         EmuInstallFceultraBootstrap(pXbeHeader);
         EmuInstallAutoBootLaunchData();
-        EmuInstallFakeKernelImage();
     }
+
+    // The fake kernel PE image at 0x80010000 is title-agnostic: OpenXDK-style
+    // titles that link no XDK libraries (e.g. the EvolutionX dashboard) parse
+    // the kernel image at startup just like XDK soft-mod titles do.
+    EmuInstallFakeKernelImage();
 
 	// ******************************************************************
     // * Initialize FS Emulation
