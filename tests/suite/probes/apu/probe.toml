@@ -1,0 +1,2 @@
+# Requires a target with an APU audio-processor model (traps 0xFE800000 MMIO).
+tags = ["apu"]
