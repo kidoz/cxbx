@@ -49,12 +49,15 @@ namespace xboxkrnl
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
 #include <cstdio>
+#include <cstdlib>
 
 // ******************************************************************
 // * data: EmuAutoSleepRate
 // ******************************************************************
 uint32 EmuAutoSleepRate = -1;
 bool g_bEmuFSUnavailable = false;
+bool g_bEmuFSContentSwap = false;
+thread_local EmuFsSwapState g_EmuFsSwap = {};
 
 static thread_local xboxkrnl::ETHREAD *g_pEmuCurrentThread = NULL;
 static thread_local uint08 *g_pEmuCurrentTLS = NULL;
@@ -94,6 +97,10 @@ void EmuAdjustCurrentThreadKernelApcDisable(long Delta)
 // ******************************************************************
 void EmuInitFS()
 {
+    g_bEmuFSContentSwap = (getenv("CXBX_FS_SWAP") != NULL);
+    if(g_bEmuFSContentSwap)
+        printf("EmuFS: LDT-less FS content-swap ENABLED (CXBX_FS_SWAP).\n");
+
     EmuInitLDT();
 }
 
@@ -239,19 +246,56 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
                 void *SelfPcr   = NewPcr;
                 void *Prcb      = &NewPcr->PrcbData;
                 void *CurThread = g_pEmuCurrentThread;
-                __asm
+
+                if(g_bEmuFSContentSwap)
                 {
-                    mov eax, SelfPcr
-                    mov fs:[0x1C], eax
-                    mov eax, Prcb
-                    mov fs:[0x20], eax
-                    mov eax, CurThread
-                    mov fs:[0x28], eax
-                    // KPCR.Irql (byte at 0x24). XDK/XAPI code reads it as the
-                    // current IRQL and bug-checks when it looks >= DISPATCH_LEVEL;
-                    // the raw TEB has the thread-id low byte there. Force PASSIVE (0)
-                    // -- only the low byte, to leave the rest of ClientId intact.
-                    mov byte ptr fs:[0x24], 0
+                    // Record this thread's host-TEB originals and the Xbox KPCR
+                    // values so EmuSwapFS can exchange the four slots at each
+                    // host<->guest boundary. Per the caller convention EmuGenerateFS
+                    // leaves FS in the HOST role: host code (e.g. D3DInit) runs next
+                    // and reads the real TEB; the caller's explicit "// Xbox FS"
+                    // EmuSwapFS then loads the KPCR before entering the guest. So we
+                    // leave the host values in the slots and start IsXbox=false.
+                    unsigned long h0, h1, h2, h3;
+                    __asm
+                    {
+                        mov eax, fs:[0x1C]
+                        mov h0, eax
+                        mov eax, fs:[0x20]
+                        mov h1, eax
+                        mov eax, fs:[0x24]
+                        mov h2, eax
+                        mov eax, fs:[0x28]
+                        mov h3, eax
+                    }
+                    g_EmuFsSwap.Host[0] = h0;
+                    g_EmuFsSwap.Host[1] = h1;
+                    g_EmuFsSwap.Host[2] = h2;
+                    g_EmuFsSwap.Host[3] = h3;
+                    g_EmuFsSwap.Xbox[0] = (unsigned long)SelfPcr;
+                    g_EmuFsSwap.Xbox[1] = (unsigned long)Prcb;
+                    g_EmuFsSwap.Xbox[2] = h2 & 0xFFFFFF00;   // KPCR.Irql byte = PASSIVE (0)
+                    g_EmuFsSwap.Xbox[3] = (unsigned long)CurThread;
+                    g_EmuFsSwap.IsXbox  = false;
+                    g_EmuFsSwap.Active  = true;
+                }
+                else
+                {
+                    __asm
+                    {
+                        mov eax, SelfPcr
+                        mov fs:[0x1C], eax
+                        mov eax, Prcb
+                        mov fs:[0x20], eax
+                        mov eax, CurThread
+                        mov fs:[0x28], eax
+                        // KPCR.Irql (byte at 0x24). XDK/XAPI code reads it as the
+                        // current IRQL and bug-checks when it looks >= DISPATCH_LEVEL;
+                        // the raw TEB has the thread-id low byte there. Force PASSIVE
+                        // (0) -- only the low byte, to leave the rest of ClientId
+                        // intact.
+                        mov byte ptr fs:[0x24], 0
+                    }
                 }
             }
             return;

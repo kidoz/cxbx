@@ -63,6 +63,28 @@ extern void EmuInitFS();
 extern bool g_bEmuFSUnavailable;
 
 // ******************************************************************
+// * LDT-less FS content-swap (opt-in via CXBX_FS_SWAP)
+// ******************************************************************
+// * On 64-bit Windows NtSetLdtEntries is unavailable, so there is no
+// * separate Xbox FS selector and EmuSwapFS cannot swap selectors. The
+// * default fallback shares one selector (the host TEB) with the Xbox KPCR
+// * fields overlaid permanently at fs:[0x1C/0x20/0x24/0x28] -- which corrupts
+// * those slots for host code (the CRT / ntdll / Cxbx.dll read the host TEB's
+// * EnvironmentPointer/PID/TID there). When enabled, EmuSwapFS instead SAVES
+// * the current 4 slots and LOADS the other role's values on each swap, so
+// * host code sees the host TEB and guest code sees the Xbox KPCR -- emulating
+// * the selector swap with the one shared selector.
+struct EmuFsSwapState
+{
+    bool          Active;    // this thread installed the swap (via EmuGenerateFS)
+    bool          IsXbox;    // true: slots hold the Xbox KPCR; false: the host TEB
+    unsigned long Xbox[4];   // SelfPcr(0x1C), Prcb(0x20), Irql/ClientId(0x24), CurrentThread(0x28)
+    unsigned long Host[4];   // original host TEB values at those offsets
+};
+extern bool g_bEmuFSContentSwap;
+extern thread_local EmuFsSwapState g_EmuFsSwap;
+
+// ******************************************************************
 // * func: EmuGetCurrentThread
 // ******************************************************************
 extern void *EmuGetCurrentThread();
@@ -84,7 +106,7 @@ extern void EmuAdjustCurrentThreadKernelApcDisable(long Delta);
 static inline bool EmuIsXboxFS()
 {
     if(g_bEmuFSUnavailable)
-        return false;
+        return (g_bEmuFSContentSwap && g_EmuFsSwap.Active) ? g_EmuFsSwap.IsXbox : false;
 
     unsigned char chk;
 
@@ -126,7 +148,42 @@ extern uint32 EmuAutoSleepRate;
 static inline void EmuSwapFS()
 {
     if(g_bEmuFSUnavailable)
+    {
+        // LDT-less content-swap: exchange the 4 overlaid KPCR/TEB slots so the
+        // side about to run (host after this call, or guest) sees its own values.
+        if(g_bEmuFSContentSwap && g_EmuFsSwap.Active)
+        {
+            unsigned long s0, s1, s2, s3;
+            __asm
+            {
+                mov eax, fs:[0x1C]
+                mov s0, eax
+                mov eax, fs:[0x20]
+                mov s1, eax
+                mov eax, fs:[0x24]
+                mov s2, eax
+                mov eax, fs:[0x28]
+                mov s3, eax
+            }
+            unsigned long *save = g_EmuFsSwap.IsXbox ? g_EmuFsSwap.Xbox : g_EmuFsSwap.Host;
+            unsigned long *load = g_EmuFsSwap.IsXbox ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
+            save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3;
+            s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3];
+            __asm
+            {
+                mov eax, s0
+                mov fs:[0x1C], eax
+                mov eax, s1
+                mov fs:[0x20], eax
+                mov eax, s2
+                mov fs:[0x24], eax
+                mov eax, s3
+                mov fs:[0x28], eax
+            }
+            g_EmuFsSwap.IsXbox = !g_EmuFsSwap.IsXbox;
+        }
         return;
+    }
 
     // Note that this is only the *approximate* interception count,
     // because not all interceptions swap the FS register, and some
