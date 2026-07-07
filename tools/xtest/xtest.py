@@ -441,8 +441,21 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_gate(cfg: Config, args: argparse.Namespace) -> int:
-    """One-command CI gate: (re)build the emulator, build every probe, run the
-    full suite. Exit 0 only if every probe passes and matches its golden."""
+    """One-command CI gate: audit the kernel thunk table, (re)build the emulator,
+    build every probe, run the full suite. Exit 0 only if the audit passes and
+    every probe passes and matches its golden."""
+    # Fail-fast source check: the kernel thunk table must match the Xbox ABI
+    # ordinals (a shift there crashes every title at startup with no obvious cause).
+    audit = Path(__file__).resolve().parents[1] / "kernelaudit" / "check_kernel_thunks.py"
+    if audit.exists():
+        print("[gate] auditing kernel thunk ordinals ...", flush=True)
+        r = subprocess.run([sys.executable, str(audit)], capture_output=True, text=True)
+        sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            sys.stdout.write(r.stderr)
+            print("[gate] kernel-thunk audit FAILED")
+            return 1
+
     ecfg = cfg["emulator"].get(args.emulator, {})
     build_dir = ecfg.get("build_dir")
     if build_dir:
