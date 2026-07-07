@@ -3358,6 +3358,23 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             return true;
         }
 
+        // 0x66 0xA3 = mov moffs16, AX : 16-bit store to an absolute address (what a
+        // C `uint16_t` volatile store of a register value to a fixed MMIO address
+        // compiles to; the write counterpart of the 0x66 0xA1 read above).
+        if(AccessType == 1 && Instruction[0] == 0x66 && Instruction[1] == 0xA3 &&
+           *(ULONG*)&Instruction[2] == FaultAddress)
+        {
+            ULONG Value = e->ContextRecord->Eax & 0xFFFF;
+            EmuWriteMmio(FaultAddress, 2, Value);
+            e->ContextRecord->Eip += 6;
+
+            printf("Emu (0x%lX): Emulated MMIO word write 0x%.08lX = 0x%.04lX.\n",
+                   GetCurrentThreadId(), FaultAddress, Value);
+            fflush(stdout);
+
+            return true;
+        }
+
         if(AccessType == 1 && Instruction[0] == 0x89 && Instruction[1] == 0x01 &&
            e->ContextRecord->Ecx == FaultAddress)
         {
