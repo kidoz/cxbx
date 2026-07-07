@@ -2733,6 +2733,34 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        // 0x66 0x81 /7 = cmp r/m16, imm16 : the word form of the compare above.
+        // The EvolutionX dashboard checks the kernel image's DOS magic this way
+        // (`cmp word ptr [ecx], 'MZ'` at 0x80010000).
+        if(AccessType == 0 && Instruction[0] == 0x66 && Instruction[1] == 0x81 &&
+           (Instruction[2] & 0x38) == 0x38)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = 0;
+                ULONG Right = *(WORD*)&Instruction[1 + OperandLength];
+                if(!EmuReadPhysicalMap(FaultAddress, 2, &Left))
+                    return false;
+
+                EmuSetSubtractFlags(e->ContextRecord, Left & 0xFFFF, Right, (Left & 0xFFFF) - Right, 0x8000);
+                e->ContextRecord->Eip += 1 + OperandLength + 2;
+
+                printf("Emu (0x%lX): Emulated physical word compare 0x%.08lX with 0x%.04lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Right);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 1 && Instruction[0] == 0xA3 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
             ULONG Value = e->ContextRecord->Eax;
