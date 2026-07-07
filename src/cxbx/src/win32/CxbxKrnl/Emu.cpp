@@ -4482,6 +4482,15 @@ static void EmuInstallFakeKernelImage()
     *(USHORT*)(Pe + 0x14) = 0xE0;                   // FileHeader.SizeOfOptionalHeader
     *(USHORT*)(Pe + 0x18) = 0x010B;                 // OptionalHeader.Magic = PE32
     *(ULONG*)(Pe + 0x18 + 0x1C) = 0x80010000;       // OptionalHeader.ImageBase
+    *(ULONG*)(Pe + 0x18 + 0x38) = 0x00082000;       // OptionalHeader.SizeOfImage
+    *(ULONG*)(Pe + 0x18 + 0x5C) = 0x10;             // OptionalHeader.NumberOfRvaAndSizes
+
+    // Data directory 0: the export directory (lives in .edata, RVA 0x76000).
+    const ULONG ExportDirRva = 0x00076000;
+    const ULONG ExportOrdinalBase = 1;
+    const ULONG ExportFunctionCount = 366;          // real xboxkrnl exports ordinals 1..366
+    *(ULONG*)(Pe + 0x18 + 0x60) = ExportDirRva;
+    *(ULONG*)(Pe + 0x18 + 0x64) = 0x28 + ExportFunctionCount * 4;
 
     // IMAGE_SECTION_HEADERs after the optional header. The soft-mod scan only
     // checks the LAST section's name == 'INIT' (real xboxkrnl keeps INIT last, as
@@ -4506,10 +4515,27 @@ static void EmuInstallFakeKernelImage()
         *(ULONG*)(S + 0x14) = Sects[i].VAddr;       // PointerToRawData
     }
 
-    if(EmuWritePhysicalMapBytes(EmuPhysicalMapBase + 0x00010000, Image, sizeof(Image)))
+    // IMAGE_EXPORT_DIRECTORY + AddressOfFunctions in .edata. The Xbox kernel
+    // exports by ordinal only (no name table). Each function "RVA" is chosen so
+    // that ImageBase + RVA wraps (mod 2^32) to the host EmuKrnl implementation
+    // in KernelThunkTable -- an ordinal-resolving guest loader (the EvolutionX
+    // dashboard patches its own kernel-thunk markers this way) then calls our
+    // kernel functions directly, exactly like the launcher-patched XBE thunks.
+    BYTE Edata[0x28 + ExportFunctionCount * 4];
+    ZeroMemory(Edata, sizeof(Edata));
+    *(ULONG*)(Edata + 0x10) = ExportOrdinalBase;                // Base
+    *(ULONG*)(Edata + 0x14) = ExportFunctionCount;              // NumberOfFunctions
+    *(ULONG*)(Edata + 0x1C) = ExportDirRva + 0x28;              // AddressOfFunctions
+
+    ULONG *FunctionRvas = (ULONG*)(Edata + 0x28);
+    for(ULONG Ordinal = ExportOrdinalBase; Ordinal < ExportOrdinalBase + ExportFunctionCount; Ordinal++)
+        FunctionRvas[Ordinal - ExportOrdinalBase] = KernelThunkTable[Ordinal] - 0x80010000;
+
+    if(EmuWritePhysicalMapBytes(EmuPhysicalMapBase + 0x00010000, Image, sizeof(Image)) &&
+       EmuWritePhysicalMapBytes(EmuPhysicalMapBase + 0x00010000 + ExportDirRva, Edata, sizeof(Edata)))
     {
-        printf("Emu (0x%lX): fake Xbox kernel PE installed at 0x80010000 (INIT @ RVA 0x61000).\n",
-               GetCurrentThreadId());
+        printf("Emu (0x%lX): fake Xbox kernel PE installed at 0x80010000 (INIT @ RVA 0x61000, %lu exports).\n",
+               GetCurrentThreadId(), ExportFunctionCount);
         fflush(stdout);
     }
 }
