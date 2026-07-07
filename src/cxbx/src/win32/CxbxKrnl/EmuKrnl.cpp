@@ -6346,6 +6346,26 @@ XBSYSAPI EXPORTNUM(49) VOID DECLSPEC_NORETURN xboxkrnl::HalReturnToFirmware
            GetCurrentThreadId(), Routine, (uint32)CallerRet);
     fflush(stdout);
 
+    // Reboot-decision trace (opt-in via CXBX_REBOOT_TRACE): walk the guest stack and
+    // report every return-address-looking value inside the loaded XBE image, so the
+    // call chain that led to the reboot can be reconstructed and disassembled.
+    if(getenv("CXBX_REBOOT_TRACE") != NULL)
+    {
+        ULONG GuestEsp = 0;
+        __asm { mov GuestEsp, esp }
+        ULONG *Stk = (ULONG*)GuestEsp;
+        printf("EmuKrnl (0x%X): REBOOT stack walk (esp=0x%.08X):\n", GetCurrentThreadId(), GuestEsp);
+        for(int i = 0; i < 64; i++)
+        {
+            if(IsBadReadPtr(&Stk[i], 4))
+                break;
+            ULONG v = Stk[i];
+            if(v >= 0x00010000 && v < 0x00080000)   // loaded XBE image range
+                printf("  [esp+%03X] = 0x%.08X\n", i * 4, v);
+        }
+        fflush(stdout);
+    }
+
     // Soft-mod bypass (opt-in): the launcher framework shared by the XDK samples /
     // z26x reboots (QuickReboot=2) to apply a kernel patch and re-run the app. A
     // user-mode HLE can't persist that patch, so the reboot just loops/exits. When
