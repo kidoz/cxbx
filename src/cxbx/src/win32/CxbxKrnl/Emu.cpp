@@ -2661,6 +2661,34 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        // 0x2B /r = sub r32, r/m32 : like the register compare above but the
+        // difference is written back (ordinal - export->Base in the EvolutionX
+        // kernel-export resolver).
+        if(AccessType == 0 && Instruction[0] == 0x2B)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Left = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
+                ULONG Right = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, 4, &Right))
+                    return false;
+
+                EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
+                EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, Left - Right);
+                e->ContextRecord->Eip += OperandLength;
+
+                printf("Emu (0x%lX): Emulated physical subtract 0x%.08lX - [0x%.08lX].\n",
+                       GetCurrentThreadId(), Left, FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 0 && Instruction[0] == 0x3B)
         {
             ULONG Address = 0;
