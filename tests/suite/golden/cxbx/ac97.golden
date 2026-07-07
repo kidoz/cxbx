@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe ac97
+CHK ac97.globsta_codec0_ready PASS
+CHK ac97.globcnt_latch PASS
+CHK ac97.globcnt_reset_not_latched PASS
+CHK ac97.globsta_w1c_keeps_codec_ready PASS
+CHK ac97.cas_free_after_access PASS
+CHK ac97.cas_poll_terminates PASS
+#result ac97 verdict=PASS checks=6 fail=0
