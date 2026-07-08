@@ -2471,6 +2471,162 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
 }
 
 // ******************************************************************
+// * Immediate-mode drawing (D3DDevice_Begin / SetVertexData* / End)
+// ******************************************************************
+// * The Xbox immediate mode streams per-vertex attributes into the push
+// * buffer; a vertex is emitted whenever the position register (0, or the
+// * -1 "vertex" pseudo-register) is written. Collect the vertices host-side
+// * and draw them with DrawPrimitiveUP on End -- pretransformed UI quads
+// * (menus, text) are the main users of this path.
+// ******************************************************************
+struct EmuImVertex
+{
+    FLOAT x, y, z, rhw;
+    DWORD Diffuse;
+    FLOAT u, v;
+};
+
+#define EMU_IM_FVF       (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1)
+#define EMU_IM_MAXVERTS  8192
+
+static EmuImVertex g_EmuImVerts[EMU_IM_MAXVERTS];
+static EmuImVertex g_EmuImCur = { 0, 0, 0, 1.0f, 0xFFFFFFFF, 0, 0 };
+static DWORD g_EmuImPrim = 0;
+static int   g_EmuImCount = 0;
+static BOOL  g_EmuImActive = FALSE;
+
+VOID WINAPI XTL::EmuIDirect3DDevice8_Begin
+(
+    X_D3DPRIMITIVETYPE PrimitiveType
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_Begin(%d)\n", GetCurrentThreadId(), PrimitiveType);
+    #endif
+
+    g_EmuImPrim = (DWORD)PrimitiveType;
+    g_EmuImCount = 0;
+    g_EmuImActive = TRUE;
+    g_EmuImCur.rhw = 1.0f;
+    g_EmuImCur.Diffuse = 0xFFFFFFFF;
+
+    EmuSwapFS();   // XBox FS
+}
+
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexData4f
+(
+    INT     Register,
+    FLOAT   a,
+    FLOAT   b,
+    FLOAT   c,
+    FLOAT   d
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    switch(Register)
+    {
+        case -1:   // D3DVSDE_VERTEX: final position write, emits the vertex
+        case 0:    // D3DVSDE_POSITION
+            g_EmuImCur.x = a;
+            g_EmuImCur.y = b;
+            g_EmuImCur.z = c;
+            g_EmuImCur.rhw = (d == 0.0f) ? 1.0f : d;
+            if(g_EmuImActive && g_EmuImCount < EMU_IM_MAXVERTS)
+                g_EmuImVerts[g_EmuImCount++] = g_EmuImCur;
+            break;
+
+        case 3:    // D3DVSDE_DIFFUSE as floats
+        {
+            DWORD r = (DWORD)(a * 255.0f) & 0xFF;
+            DWORD g = (DWORD)(b * 255.0f) & 0xFF;
+            DWORD bl = (DWORD)(c * 255.0f) & 0xFF;
+            DWORD al = (DWORD)(d * 255.0f) & 0xFF;
+            g_EmuImCur.Diffuse = (al << 24) | (r << 16) | (g << 8) | bl;
+            break;
+        }
+
+        case 9:    // D3DVSDE_TEXCOORD0
+            g_EmuImCur.u = a;
+            g_EmuImCur.v = b;
+            break;
+
+        default:
+            // other attribute registers (normal, specular, tex1..3) are not
+            // part of the pretransformed-UI vertex; ignore
+            break;
+    }
+
+    EmuSwapFS();   // XBox FS
+}
+
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexData2f
+(
+    INT     Register,
+    FLOAT   a,
+    FLOAT   b
+)
+{
+    // 2f writes to the position register leave z=0, w=1
+    XTL::EmuIDirect3DDevice8_SetVertexData4f(Register, a, b, 0.0f, 1.0f);
+}
+
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexDataColor
+(
+    INT     Register,
+    DWORD   Color
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(Register == 3)
+        g_EmuImCur.Diffuse = Color;
+
+    EmuSwapFS();   // XBox FS
+}
+
+VOID WINAPI XTL::EmuIDirect3DDevice8_End()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_End() verts=%d\n", GetCurrentThreadId(), g_EmuImCount);
+    #endif
+
+    if(g_EmuImActive && g_EmuImCount >= 3 && g_pD3DDevice8 != 0)
+    {
+        g_pD3DDevice8->SetVertexShader(EMU_IM_FVF);
+
+        if(g_EmuImPrim == 8)   // X_D3DPT_QUADLIST: expand each quad to two triangles
+        {
+            static EmuImVertex Tris[EMU_IM_MAXVERTS + (EMU_IM_MAXVERTS / 2)];
+            int Quads = g_EmuImCount / 4;
+            int n = 0;
+            for(int q = 0; q < Quads; q++)
+            {
+                EmuImVertex *v = &g_EmuImVerts[q * 4];
+                Tris[n++] = v[0]; Tris[n++] = v[1]; Tris[n++] = v[2];
+                Tris[n++] = v[0]; Tris[n++] = v[2]; Tris[n++] = v[3];
+            }
+            g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+        }
+        else
+        {
+            D3DPRIMITIVETYPE PCPrim = EmuPrimitiveType((X_D3DPRIMITIVETYPE)g_EmuImPrim);
+            UINT PrimCount = EmuD3DVertex2PrimitiveCount((X_D3DPRIMITIVETYPE)g_EmuImPrim, g_EmuImCount);
+            g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+        }
+    }
+
+    g_EmuImActive = FALSE;
+    g_EmuImCount = 0;
+
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_MakeSpace
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()

@@ -568,6 +568,105 @@ SOOVPA<7> IDirect3DDevice8_MakeSpace_1_0_5849 =
     }
 };
 
+// Immediate-mode family (D3DDevice_Begin / SetVertexData* / End), hand-authored
+// from the placed NestopiaX 1.3 (5933) image; each is a tiny push-buffer writer
+// whose embedded NV2A method immediate (SET_VERTEX_DATA2F 0x1880*, 4F 0x1A00*,
+// 4UB 0x1940*, SET_BEGIN_END 0x17FC) makes the signature distinctive. Verified
+// unique in the image; the same code shape is expected across 58xx-59xx builds.
+SOOVPA<11> IDirect3DDevice8_SetVertexData2f_1_0_5849 =
+{
+    0, 11, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x08, 0x06 },
+        { 0x13, 0x8B },
+        { 0x17, 0x8D },
+        { 0x19, 0xCD },
+        { 0x1A, 0x80 },
+        { 0x1B, 0x18 },
+        { 0x1C, 0x08 },
+        { 0x34, 0xC2 },
+        { 0x35, 0x0C }
+    }
+};
+
+SOOVPA<14> IDirect3DDevice8_SetVertexData4f_1_0_5849 =
+{
+    0, 14, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x08, 0x06 },
+        { 0x17, 0x83 },
+        { 0x18, 0xF9 },
+        { 0x19, 0xFF },
+        { 0x1C, 0xB9 },
+        { 0x1D, 0x18 },
+        { 0x1E, 0x15 },
+        { 0x29, 0xC1 },
+        { 0x2A, 0xE1 },
+        { 0x2B, 0x04 },
+        { 0x56, 0xC2 },
+        { 0x57, 0x14 }
+    }
+};
+
+SOOVPA<11> IDirect3DDevice8_SetVertexDataColor_1_0_5849 =
+{
+    0, 11, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x08, 0x06 },
+        { 0x0C, 0x57 },
+        { 0x18, 0x8D },
+        { 0x1A, 0x8D },
+        { 0x1B, 0x40 },
+        { 0x1C, 0x19 },
+        { 0x1D, 0x04 },
+        { 0x49, 0xC2 },
+        { 0x4A, 0x08 }
+    }
+};
+
+SOOVPA<11> IDirect3DDevice8_Begin_1_0_5849 =
+{
+    0, 11, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0C, 0x8B },
+        { 0x0D, 0x06 },
+        { 0x1C, 0xC7 },
+        { 0x1E, 0xFC },
+        { 0x1F, 0x17 },
+        { 0x20, 0x04 },
+        { 0x2A, 0x81 },
+        { 0x2C, 0x08 },
+        { 0x32, 0xC2 },
+        { 0x33, 0x04 }
+    }
+};
+
+SOOVPA<12> IDirect3DDevice8_End_1_0_5849 =
+{
+    0, 12, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x08, 0x06 },
+        { 0x13, 0xC7 },
+        { 0x15, 0xFC },
+        { 0x16, 0x17 },
+        { 0x17, 0x04 },
+        { 0x19, 0xC7 },
+        { 0x2A, 0x81 },
+        { 0x2C, 0xFF },
+        { 0x2D, 0xE7 },
+        { 0x40, 0xC3 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // IDirect3D8::CreateDevice
@@ -776,6 +875,46 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_MakeSpace,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_MakeSpace"
+        #endif
+    },
+    // IDirect3DDevice8::Begin
+    {
+        (OOVPA*)&IDirect3DDevice8_Begin_1_0_5849,
+        XTL::EmuIDirect3DDevice8_Begin,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_Begin"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexData2f
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexData2f_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexData2f,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexData2f"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexData4f
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexData4f_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexData4f,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexData4f"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexDataColor
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexDataColor_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexDataColor,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexDataColor"
+        #endif
+    },
+    // IDirect3DDevice8::End
+    {
+        (OOVPA*)&IDirect3DDevice8_End_1_0_5849,
+        XTL::EmuIDirect3DDevice8_End,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_End"
         #endif
     },
     // IDirect3DDevice8::EnableOverlay (* unchanged since 4361 *)
