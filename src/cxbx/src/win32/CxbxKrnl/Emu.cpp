@@ -86,6 +86,7 @@ static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
+extern "C" void EmuAciStartDmaThread();   // EmuKrnl.cpp: AC97 DMA delivery thread
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
 static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static void  EmuInstallAutoBootLaunchData();
@@ -778,6 +779,84 @@ extern "C" void EmuAciSignalAudioInterrupt()
 {
     ULONG Address = EmuAciMmioBase + EmuAciGlobSta;
     EmuStoreMmioRegister(Address, EmuAciCachedRegister(Address, 0) | 0x40);
+}
+
+// ---------------------------------------------------------------------------
+// AC97 bus-master DMA engine
+//
+// A title programs a channel by writing a buffer-descriptor-list base (BDBAR),
+// a last-valid index (LVI) and then setting the channel Control run bit; real
+// hardware then consumes descriptors, advancing the current index (CIV) and
+// raising buffer-completion statuses/interrupts the title's audio path blocks
+// on. Model that state machine: each tick consumes the current buffer of every
+// running channel -- PICB drains, CIV advances, SR latches BCIS (and
+// CELV/LVBCI + halt on the last valid buffer), GLOB_STA latches the channel's
+// interrupt status. Buffer CONTENT is not consumed (no host audio device);
+// every completion is treated as interrupt-on-completion since the descriptor
+// entries hold guest-physical addresses this HLE cannot translate back.
+// ---------------------------------------------------------------------------
+static const ULONG EmuAciDmaChannels[3] = { 0x100, 0x110, 0x170 };   // PCM-in, PCM-out, SPDIF
+static const ULONG EmuAciDmaGlobStaBits[3] = { 0x10, 0x40, 0x01 };   // ISR mask GLOB_STA & 0x51
+static const ULONG EmuAciStatusCelv = 0x02;    // current equals last valid
+static const ULONG EmuAciStatusLvbci = 0x04;   // last valid buffer completed
+static const ULONG EmuAciStatusBcis = 0x08;    // buffer completion status
+static const ULONG EmuAciControlIoce = 0x10;   // interrupt-on-completion enable
+
+// Advance every running channel by one buffer. Returns the number of
+// completions that want an interrupt delivered (caller fires the audio ISR).
+extern "C" int EmuAciDmaAdvance()
+{
+    int Fired = 0;
+
+    for(int i = 0; i < 3; i++)
+    {
+        ULONG Channel = EmuAciMmioBase + EmuAciDmaChannels[i];
+
+        ULONG Control = (EmuAciCachedRegister(Channel + 0x08, 0) >> 24) & 0xFF;   // CR at +0x0B
+        if((Control & EmuAciBusMasterControlRun) == 0)
+            continue;
+
+        ULONG IndexWord = EmuAciCachedRegister(Channel + 0x04, 0);
+        ULONG Civ = IndexWord & 0x1F;                                             // CIV at +0x04
+        ULONG Lvi = (IndexWord >> 8) & 0x1F;                                      // LVI at +0x05
+        ULONG Status = (IndexWord >> 16) & 0xFFFF;                                // SR at +0x06
+
+        if((Status & EmuAciStatusDmaHalted) != 0)
+        {
+            // Halted on the last valid buffer; resume only once the title
+            // moves LVI ahead again.
+            if(Civ == Lvi)
+                continue;
+            Status &= ~(EmuAciStatusDmaHalted | EmuAciStatusCelv);
+        }
+
+        // Current buffer consumed: drain PICB.
+        EmuAciStorePartialRegister(Channel + 0x08, 2, 0);
+
+        if(Civ == Lvi)
+        {
+            // Last valid buffer completed: latch and halt until LVI advances.
+            Status |= EmuAciStatusLvbci | EmuAciStatusCelv | EmuAciStatusDmaHalted;
+        }
+        else
+        {
+            Civ = (Civ + 1) & 0x1F;
+            EmuAciStorePartialRegister(Channel + 0x04, 1, Civ);
+            EmuAciStorePartialRegister(Channel + 0x0A, 1, (Civ + 1) & 0x1F);   // prefetch index
+        }
+
+        Status |= EmuAciStatusBcis;
+        EmuAciStorePartialRegister(Channel + 0x06, 2, Status);
+
+        ULONG GlobStaAddress = EmuAciMmioBase + EmuAciGlobSta;
+        EmuStoreMmioRegister(GlobStaAddress,
+                             EmuAciCachedRegister(GlobStaAddress, 0) | EmuAciDmaGlobStaBits[i]);
+
+        if((Control & EmuAciControlIoce) != 0)
+            Fired++;
+    }
+
+    return Fired;
 }
 
 static void EmuAciWriteRegister(ULONG Address, ULONG Size, ULONG Value)
@@ -4316,6 +4395,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
         printf("Emu (0x%X): FS emulation initialized.\n", GetCurrentThreadId());
     }
+
+    // Start the AC97 bus-master DMA engine (EmuKrnl.cpp). It idles until a
+    // title sets a channel run bit; started here (not from the MMIO trap
+    // handler) because CreateThread inside the vectored-exception path wedges
+    // the faulting thread.
+    EmuAciStartDmaThread();
 
     printf("Emu (0x%X): Initializing Direct3D.\n", GetCurrentThreadId());
 

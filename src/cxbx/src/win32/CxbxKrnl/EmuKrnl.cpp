@@ -5081,6 +5081,60 @@ static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
     return 0;
 }
 
+// AC97 bus-master DMA delivery: once a title sets a channel's run bit, tick the
+// register-side DMA model (EmuAciDmaAdvance in Emu.cpp -- CIV/PICB/SR/GLOB_STA
+// advancement) and deliver the buffer-completion interrupt to the connected
+// audio-level ISR. Unlike the timer-based CXBX_APU_IRQ thread this only fires
+// when the title actually programmed and ran a buffer queue, matching the
+// edge-driven hardware behavior.
+extern "C" int EmuAciDmaAdvance();
+static volatile LONG g_EmuAciDmaThreadStarted = 0;
+
+static DWORD WINAPI EmuAciDmaThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): AC97 DMA thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    for(;;)
+    {
+        Sleep(5);   // ~200 Hz buffer cadence
+
+        if(EmuAciDmaAdvance() == 0)
+            continue;
+
+        for(int i = 0; i < 2; i++)
+        {
+            EmuKInterrupt *Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuAudioInterruptLevels[i]];
+            if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
+                continue;
+
+            EmuSwapFS();   // Xbox FS
+            __try
+            {
+                Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            EmuSwapFS();   // Win2k/XP FS
+        }
+    }
+
+    return 0;
+}
+
+extern "C" void EmuAciStartDmaThread()
+{
+    if(InterlockedExchange(&g_EmuAciDmaThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting AC97 DMA thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuAciDmaThread, NULL, 0, NULL);
+    }
+}
+
 static void EmuStartAudioInterruptThread()
 {
     // Opt-in only: the synthesized APU interrupt fires an ISR asynchronously and
