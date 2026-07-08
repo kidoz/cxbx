@@ -496,6 +496,60 @@ SOOVPA<6> IDirect3DDevice8_SetMaterial_1_0_5849 =
     }
 };
 
+// Hand-authored from the placed 5849 dolphin image (fn @ guest 0x26650,
+// present.obj _D3DDevice_Swap@4): reads D3D__pDevice, defaults Flags 0->5,
+// tests the device's swap-mode bits. Offsets avoid the relocated global
+// (+0x03) and call rel32s (+0x1C, +0x3F); verified unique in the image.
+SOOVPA<15> IDirect3DDevice8_Swap_1_0_5849 =
+{
+    0, 15, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x09, 0xD4 },
+        { 0x0A, 0x08 },
+        { 0x11, 0x8B },
+        { 0x13, 0xD8 },
+        { 0x20, 0x53 },
+        { 0x2A, 0xBB },
+        { 0x2B, 0x05 },
+        { 0x32, 0xF6 },
+        { 0x34, 0x40 },
+        { 0x43, 0x8B },
+        { 0x45, 0x78 },
+        { 0x46, 0x24 },
+        { 0x4D, 0x8B }
+    }
+};
+
+// Hand-authored from the placed 5849 dolphin image (fn @ guest 0x23A60,
+// d3dbase.obj _D3DDevice_SetRenderTarget@8): swaps the device's current
+// render-target/zbuffer pointers (device+0x1A04/0x1A08) with push-buffer
+// flushes. Offsets avoid the relocated D3D__pDevice load (+0x11) and call
+// rel32s (+0x25, +0x4A); verified unique in the image.
+SOOVPA<16> IDirect3DDevice8_SetRenderTarget_1_0_5849 =
+{
+    0, 16, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x01, 0xEC },
+        { 0x02, 0x0C },
+        { 0x05, 0x8B },
+        { 0x08, 0x18 },
+        { 0x0A, 0x33 },
+        { 0x17, 0x8B },
+        { 0x19, 0x04 },
+        { 0x1A, 0x1A },
+        { 0x21, 0x8B },
+        { 0x33, 0x8B },
+        { 0x35, 0x14 },
+        { 0x3C, 0x8B },
+        { 0x3E, 0x2C },
+        { 0x4E, 0x8B },
+        { 0x56, 0x89 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // IDirect3D8::CreateDevice
@@ -684,10 +738,18 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3DDevice8::Swap
     {
-        (OOVPA*)&IDirect3DDevice8_Swap_1_0_4627,
+        (OOVPA*)&IDirect3DDevice8_Swap_1_0_5849,
         XTL::EmuIDirect3DDevice8_Swap,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_Swap"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderTarget
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderTarget_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderTarget,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderTarget"
         #endif
     },
     // IDirect3DDevice8::EnableOverlay (* unchanged since 4361 *)
