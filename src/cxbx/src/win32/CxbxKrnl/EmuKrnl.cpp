@@ -5166,7 +5166,12 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 
     if(Writable && Level < SlotCount)
     {
-        if(!Interrupt->Connected && g_EmuInterruptList[Level] == NULL)
+        // A slot occupied by the SAME interrupt object is re-connectable: a
+        // title's audio init may tear down and re-run (KeInitializeInterrupt
+        // rewrites the object, clearing its Connected flag) and then connect
+        // again -- z26x loops its whole audio setup on this succeeding.
+        if(!Interrupt->Connected &&
+           (g_EmuInterruptList[Level] == NULL || g_EmuInterruptList[Level] == Interrupt))
         {
             Interrupt->Connected = TRUE;
             g_EmuInterruptList[Level] = Interrupt;
