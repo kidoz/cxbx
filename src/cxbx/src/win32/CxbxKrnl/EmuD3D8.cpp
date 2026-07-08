@@ -2709,12 +2709,29 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                     &pResource->EmuVertexBuffer8
                 );
 
+                // A zero / unknown allocation size (common when a partial-HLE
+                // title registers a resource whose backing size can't be
+                // determined) makes CreateVertexBuffer fail and leaves
+                // EmuVertexBuffer8 NULL; locking it then crashes the render
+                // thread. Warn and leave the resource unbacked instead.
+                if(FAILED(hRet) || pResource->EmuVertexBuffer8 == 0)
+                {
+                    EmuWarning("EmuIDirect3DResource8_Register: CreateVertexBuffer(%u) failed (0x%.08X) -- resource left unbacked",
+                               dwSize, hRet);
+                    pResource->EmuVertexBuffer8 = 0;
+                    pResource->Data = 0;
+                    break;
+                }
+
                 BYTE *pData = 0;
 
                 hRet = pResource->EmuVertexBuffer8->Lock(0, 0, &pData, 0);
 
-                if(FAILED(hRet))
-                    EmuCleanup("VertexBuffer Lock failed");
+                if(FAILED(hRet) || pData == 0)
+                {
+                    EmuWarning("EmuIDirect3DResource8_Register: VertexBuffer Lock failed -- resource left unbacked");
+                    break;
+                }
 
                 memcpy(pData, (void*)pBase, dwSize);
 
@@ -5112,6 +5129,22 @@ uint32 EmuQuadHackA(uint32 PrimitiveCount, XTL::IDirect3DVertexBuffer8 *&pOrigVe
     {
         g_pD3DDevice8->GetStreamSource(0, &pOrigVertexBuffer8, &uiStride);
 
+        // No usable bound stream source: a title can feed quads through the
+        // immediate-mode path (no vertex buffer), or a partial-HLE title can
+        // leave GetStreamSource returning an inconsistently-wrapped buffer.
+        // Reject a NULL / unreadable stream source and skip the expansion
+        // instead of dereferencing it and tearing down the render thread.
+        if(pOrigVertexBuffer8 == 0 || IsBadReadPtr(pOrigVertexBuffer8, 4) ||
+           IsBadCodePtr((FARPROC)*(void**)pOrigVertexBuffer8))
+        {
+            EmuWarning("EmuQuadHackA: no usable stream source (0x%.08X) -- skipping quad expansion",
+                       pOrigVertexBuffer8);
+            if(pOrigVertexBuffer8 != 0)
+                pOrigVertexBuffer8->Release();
+            pOrigVertexBuffer8 = 0;
+            return 0;
+        }
+
         // This is a list of sqares/rectangles, so we convert it to a list of triangles
         dwOriginalSize  = PrimitiveCount*uiStride*2;
         dwNewSize       = PrimitiveCount*uiStride*3;
@@ -5120,7 +5153,7 @@ uint32 EmuQuadHackA(uint32 PrimitiveCount, XTL::IDirect3DVertexBuffer8 *&pOrigVe
         {
             XTL::D3DVERTEXBUFFER_DESC Desc;
 
-            if(FAILED(pOrigVertexBuffer8->GetDesc(&Desc))) 
+            if(FAILED(pOrigVertexBuffer8->GetDesc(&Desc)))
                 EmuCleanup("Could not retrieve buffer size");
 
             // Here we save the full buffer size
@@ -5131,13 +5164,30 @@ uint32 EmuQuadHackA(uint32 PrimitiveCount, XTL::IDirect3DVertexBuffer8 *&pOrigVe
             dwNewSizeWR = dwNewSize + dwOriginalSizeWR - dwOriginalSize;
         }
 
-        g_pD3DDevice8->CreateVertexBuffer(dwNewSizeWR, 0, 0, XTL::D3DPOOL_MANAGED, &pHackVertexBuffer8);
+        if(FAILED(g_pD3DDevice8->CreateVertexBuffer(dwNewSizeWR, 0, 0, XTL::D3DPOOL_MANAGED, &pHackVertexBuffer8)) ||
+           pHackVertexBuffer8 == 0)
+        {
+            EmuWarning("EmuQuadHackA: CreateVertexBuffer(%u) failed -- skipping quad expansion", dwNewSizeWR);
+            pOrigVertexBuffer8->Release();
+            pOrigVertexBuffer8 = 0;
+            pHackVertexBuffer8 = 0;
+            return 0;
+        }
 
-        if(pOrigVertexBuffer8 != 0)
-            pOrigVertexBuffer8->Lock(0, 0, &pOrigVertexData, 0);
+        pOrigVertexBuffer8->Lock(0, 0, &pOrigVertexData, 0);
+        pHackVertexBuffer8->Lock(0, 0, &pHackVertexData, 0);
 
-        if(pHackVertexBuffer8 != 0)
-            pHackVertexBuffer8->Lock(0, 0, &pHackVertexData, 0);
+        if(pOrigVertexData == 0 || pHackVertexData == 0)
+        {
+            EmuWarning("EmuQuadHackA: buffer Lock returned NULL -- skipping quad expansion");
+            if(pOrigVertexData != 0) pOrigVertexBuffer8->Unlock();
+            if(pHackVertexData != 0) pHackVertexBuffer8->Unlock();
+            pOrigVertexBuffer8->Release();
+            pHackVertexBuffer8->Release();
+            pOrigVertexBuffer8 = 0;
+            pHackVertexBuffer8 = 0;
+            return 0;
+        }
     }
     else
     {
