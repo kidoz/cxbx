@@ -65,6 +65,7 @@ namespace XTL
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
+#include "DSound.1.0.5849.inl"
 #include "XG.1.0.4361.inl"
 #include "XG.1.0.4627.inl"
 #include "XNet.1.0.3911.inl"
@@ -181,6 +182,21 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         DSound_1_0_4627,
         DSound_1_0_4627_SIZE
+    },
+    // DSound Version 1.0.5849 (generated from XDK 5849 dsound.lib; distinct
+    // functions only -- see DSound.1.0.5849.inl for the identical-wrapper
+    // limitation). Deliberately NOT reused for 5933: a 4-function table is
+    // not a coherent HLE boundary, and on NestopiaX 1.3 the byte-identical
+    // DirectSoundCreate match replaced the guest's internal CDirectSound
+    // state while the rest of its dsound code ran un-HLE'd -> NULL-deref at
+    // guest 0x0017C2DE far earlier than its known audio crash. Extend the
+    // table (XRef signatures for the identical wrappers + buffer/stream
+    // methods) before considering a 5933 reuse.
+    {
+        "DSOUND",
+        1, 0, 5849,
+        DSound_1_0_5849,
+        DSound_1_0_5849_SIZE
     },
     // XG Version 1.0.4361
     {
