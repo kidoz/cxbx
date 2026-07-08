@@ -4210,6 +4210,16 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     {
         printf("Emu (0x%X): Detected Microsoft XDK application...\n", GetCurrentThreadId());
 
+        // Install the pattern-scanned bootstraps BEFORE the HLE pass: the OOVPA
+        // engine overwrites located functions' prologues (e.g. D3DDevice_Swap,
+        // whose first bytes carry the D3D__pDevice address the CDX bootstrap
+        // extracts), which destroys the signatures these scans look for.
+        EmuInstallNestopiaX13Bootstrap(pXbeHeader);
+        EmuInstallFceultraBootstrap(pXbeHeader);
+        EmuInstallCdxLaunchBootstrap(pXbeHeader);
+        EmuInstallDsoundApuAccountingPatch(pXbeHeader);
+        EmuInstallAutoBootLaunchData();
+
         uint32 dwLibraryVersions = pXbeHeader->dwLibraryVersions;
         uint32 dwHLEEntries      = HLEDataBaseSize/sizeof(HLEData);
 
@@ -4368,12 +4378,6 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         // * Display XRef Summary
         // ******************************************************************
         printf("Emu (0x%X): Resolved %d cross reference(s)\n", GetCurrentThreadId(), OrigUnResolvedXRefs - UnResolvedXRefs);
-
-        EmuInstallNestopiaX13Bootstrap(pXbeHeader);
-        EmuInstallFceultraBootstrap(pXbeHeader);
-        EmuInstallCdxLaunchBootstrap(pXbeHeader);
-        EmuInstallDsoundApuAccountingPatch(pXbeHeader);
-        EmuInstallAutoBootLaunchData();
     }
 
     // The fake kernel PE image at 0x80010000 is title-agnostic: OpenXDK-style
@@ -4892,6 +4896,7 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
 
     uint32 Base = pXbeHeader->dwBaseAddr;
     uint32 End = Base + pXbeHeader->dwSizeofImage;
+    bool DeviceGlobalFound = false;
     for(uint32 Address = Base; Address + 15 <= End; Address++)
     {
         if(IsBadReadPtr((void*)Address, 15))
@@ -4908,12 +4913,22 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
             {
                 static uint08 s_CdxFakeD3DDevice[0x4000];
                 *(uint32*)DeviceGlobal = (uint32)(uintptr_t)s_CdxFakeD3DDevice;
+                DeviceGlobalFound = true;
                 printf("Emu (0x%lX): CDX D3D__pDevice (0x%.08lX) pointed at a scratch device.\n",
                        GetCurrentThreadId(), DeviceGlobal);
+            }
+            else
+            {
+                printf("Emu (0x%lX): CDX D3D__pDevice candidate at 0x%.08lX rejected (global 0x%.08lX out of image).\n",
+                       GetCurrentThreadId(), Address, DeviceGlobal);
             }
             break;
         }
     }
+
+    if(!DeviceGlobalFound)
+        printf("Emu (0x%lX): CDX D3D__pDevice prologue not located in the image.\n",
+               GetCurrentThreadId());
 
     fflush(stdout);
 }
