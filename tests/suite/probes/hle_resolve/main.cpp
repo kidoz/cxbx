@@ -204,6 +204,14 @@ static const XFUNC k_dsound[] = {
     XF(IDirectSoundBuffer_SetVolume, 1),
     XF(IDirectSoundBuffer_SetCurrentPosition, 1),
     XF(IDirectSoundBuffer_GetCurrentPosition, 1),
+    // Ring-buffer surface (the NestopiaX soundNES.cpp pattern). Unlock stays
+    // 0: ~20 bytes of mostly relocations with a byte-identical twin in real
+    // title images and no call to discriminate by -- unhookable; the guest
+    // implementation is call-free (a validated no-op), tolerated un-HLE'd.
+    XF(IDirectSoundBuffer_Lock, 1),
+    XF(IDirectSoundBuffer_Unlock, 0),
+    XF(IDirectSoundBuffer_SetMixBins, 1),
+    XF(IDirectSoundBuffer_GetStatus, 1),
 };
 
 // XAPI input family (Xapi.1.0.5849.inl). These are the functions a title's

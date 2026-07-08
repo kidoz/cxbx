@@ -565,6 +565,51 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_Play
 );
 
 // ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Lock
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_Lock
+(
+    X_CDirectSoundBuffer   *pThis,
+    DWORD                   dwOffset,
+    DWORD                   dwBytes,
+    LPVOID                 *ppvAudioPtr1,
+    LPDWORD                 pdwAudioBytes1,
+    LPVOID                 *ppvAudioPtr2,
+    LPDWORD                 pdwAudioBytes2,
+    DWORD                   dwFlags
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Unlock
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_Unlock
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPVOID                  pvLock1,
+    DWORD                   dwLockSize1,
+    LPVOID                  pvLock2,
+    DWORD                   dwLockSize2
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetMixBins
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetMixBins
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPVOID                  pMixBins
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_GetStatus
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_GetStatus
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPDWORD                 pdwStatus
+);
+
+// ******************************************************************
 // * func: EmuCDirectSound_CommitDeferredSettings
 // ******************************************************************
 HRESULT WINAPI EmuCDirectSound_CommitDeferredSettings

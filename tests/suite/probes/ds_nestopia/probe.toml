@@ -1,0 +1,9 @@
+# XDK-toolchain probe (see xdk_smoke): NestopiaX's audio lifecycle
+# transcribed API-for-API from its released source (soundNES.cpp) --
+# dual CreateSoundBuffer, SetMixBins, Lock/Unlock ring updates against a
+# looping buffer, GetStatus, Stop.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

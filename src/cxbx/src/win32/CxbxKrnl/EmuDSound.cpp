@@ -1611,6 +1611,201 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Stop
 }
 
 // ******************************************************************
+// * EmuBufferLockRecord
+// ******************************************************************
+// Xbox buffer memory is CPU-visible, so the guest-side IDirectSoundBuffer::
+// Unlock is a call-free no-op we cannot signature (see DSound.1.0.5849.inl)
+// -- the host lock from a previous EmuIDirectSoundBuffer8_Lock is therefore
+// never released by the title. Mirror the surface/texture LockRect pattern:
+// remember each buffer's outstanding host lock and release it on the NEXT
+// Lock of that buffer (the data commits one cycle late, which host DSound
+// tolerates for the ring-update pattern titles use).
+struct EmuBufferLockRecord
+{
+    XTL::IDirectSoundBuffer *pBuffer;
+    PVOID pv1; DWORD cb1;
+    PVOID pv2; DWORD cb2;
+};
+static EmuBufferLockRecord g_EmuBufferLocks[16] = {0};
+
+static void EmuBufferUnlockPrevious(XTL::IDirectSoundBuffer *pBuffer)
+{
+    for(int i=0;i<16;i++)
+    {
+        if(g_EmuBufferLocks[i].pBuffer == pBuffer)
+        {
+            pBuffer->Unlock(g_EmuBufferLocks[i].pv1, g_EmuBufferLocks[i].cb1,
+                            g_EmuBufferLocks[i].pv2, g_EmuBufferLocks[i].cb2);
+            g_EmuBufferLocks[i].pBuffer = 0;
+            return;
+        }
+    }
+}
+
+static void EmuBufferRecordLock(XTL::IDirectSoundBuffer *pBuffer, PVOID pv1, DWORD cb1, PVOID pv2, DWORD cb2)
+{
+    for(int i=0;i<16;i++)
+    {
+        if(g_EmuBufferLocks[i].pBuffer == 0)
+        {
+            g_EmuBufferLocks[i].pBuffer = pBuffer;
+            g_EmuBufferLocks[i].pv1 = pv1; g_EmuBufferLocks[i].cb1 = cb1;
+            g_EmuBufferLocks[i].pv2 = pv2; g_EmuBufferLocks[i].cb2 = cb2;
+            return;
+        }
+    }
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Lock
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Lock
+(
+    X_CDirectSoundBuffer   *pThis,
+    DWORD                   dwOffset,
+    DWORD                   dwBytes,
+    LPVOID                 *ppvAudioPtr1,
+    LPDWORD                 pdwAudioBytes1,
+    LPVOID                 *ppvAudioPtr2,
+    LPDWORD                 pdwAudioBytes2,
+    DWORD                   dwFlags
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_Lock\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   dwOffset                  : 0x%.08X\n"
+               "   dwBytes                   : 0x%.08X\n"
+               "   dwFlags                   : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, dwOffset, dwBytes, dwFlags);
+    }
+    #endif
+
+    // Release the previous host lock on this buffer (guest Unlock is an
+    // un-hookable no-op; see EmuBufferLockRecord above).
+    EmuBufferUnlockPrevious(pThis->EmuDirectSoundBuffer8);
+
+    // The Xbox and PC lock semantics line up (offset/bytes -> up to two
+    // wrap-around regions); flags pass through (FROMWRITECURSOR/ENTIREBUFFER
+    // share values).
+    HRESULT hRet = pThis->EmuDirectSoundBuffer8->Lock(dwOffset, dwBytes,
+                                                      ppvAudioPtr1, pdwAudioBytes1,
+                                                      ppvAudioPtr2, pdwAudioBytes2,
+                                                      dwFlags);
+
+    if(SUCCEEDED(hRet))
+        EmuBufferRecordLock(pThis->EmuDirectSoundBuffer8,
+                            *ppvAudioPtr1, *pdwAudioBytes1,
+                            ppvAudioPtr2 ? *ppvAudioPtr2 : 0,
+                            pdwAudioBytes2 ? *pdwAudioBytes2 : 0);
+    else
+        EmuWarning("Buffer Lock FAILED");
+
+    EmuSwapFS();   // XBox FS
+
+    return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Unlock
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Unlock
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPVOID                  pvLock1,
+    DWORD                   dwLockSize1,
+    LPVOID                  pvLock2,
+    DWORD                   dwLockSize2
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_Unlock\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   pvLock1                   : 0x%.08X\n"
+               "   dwLockSize1               : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, pvLock1, dwLockSize1);
+    }
+    #endif
+
+    HRESULT hRet = pThis->EmuDirectSoundBuffer8->Unlock(pvLock1, dwLockSize1,
+                                                        pvLock2, dwLockSize2);
+
+    EmuSwapFS();   // XBox FS
+
+    return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetMixBins
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetMixBins
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPVOID                  pMixBins
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_SetMixBins\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   pMixBins                  : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, pMixBins);
+    }
+    #endif
+
+    // Xbox-only speaker-routing matrix; the host stereo path has no
+    // equivalent, so accept and ignore.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_GetStatus
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_GetStatus
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPDWORD                 pdwStatus
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_GetStatus\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   pdwStatus                 : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, pdwStatus);
+    }
+    #endif
+
+    // PLAYING (0x1) and LOOPING (0x4) share values between Xbox and PC.
+    HRESULT hRet = pThis->EmuDirectSoundBuffer8->GetStatus(pdwStatus);
+
+    EmuSwapFS();   // XBox FS
+
+    return hRet;
+}
+
+// ******************************************************************
 // * func: EmuCDirectSound_CommitDeferredSettings
 // ******************************************************************
 HRESULT WINAPI XTL::EmuCDirectSound_CommitDeferredSettings

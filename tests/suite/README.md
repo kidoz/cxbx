@@ -186,6 +186,7 @@ after locking the backbuffer.
 | `d3d_tex_swizzle` | D3D8 HLE fidelity | documents the swizzled-texture gap: Morton-order uploads render linear (expectations flip when unswizzle lands) |
 | `ds_buffer`  | DSOUND HLE (host audio) | create → PCM upload → Play → play cursor advances in real time → Stop |
 | `xinput_state` | XAPI input HLE      | device enumeration + XInputGetState returns the CXBX_INPUT_STATE-injected pad state (headless input) |
+| `ds_nestopia`| DSOUND HLE (title pattern) | NestopiaX's soundNES.cpp lifecycle API-for-API: dual buffers, SetMixBins, Lock/Unlock ring updates, GetStatus |
 
 The `nv2a_*` probes reach the GPU through the `0xFD000000` MMIO aperture (and, for
 `nv2a_pfifo`, guest physical memory at `0x80000000`), which CXBX trap-and-emulates

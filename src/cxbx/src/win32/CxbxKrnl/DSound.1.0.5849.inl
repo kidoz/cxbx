@@ -751,6 +751,144 @@ SOOVPA<9> IDirectSoundBuffer8_GetCurrentPosition_1_0_5849 =
     }
 };
 
+// ?Lock@CDirectSoundBuffer@DirectSound@@QAGJKKPAPAXPAK01K@Z (dsound.lib, 226 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_Lock_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_LOCK, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x20, 0x74 },
+        { 0x40, 0x12 },
+        { 0x60, 0x00 },
+        { 0x80, 0x00 },
+        { 0xA0, 0x18 },
+        { 0xC0, 0x06 },
+        { 0xE1, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_Lock@32 (dsound.lib, 48 bytes; call@0x28 -> XREF_DS5849_BUF_LOCK)
+SOOVPA<9> IDirectSoundBuffer8_Lock_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x28, XREF_DS5849_BUF_LOCK },
+        { 0x00, 0x55 },
+        { 0x06, 0x8B },
+        { 0x0D, 0xC8 },
+        { 0x14, 0xFF },
+        { 0x1A, 0x75 },
+        { 0x21, 0x23 },
+        { 0x27, 0xE8 },
+        { 0x2F, 0x00 }
+    }
+};
+
+// ?SetMixBins@CDirectSoundVoice@DirectSound@@QAGJPBU_DSMIXBINS@@@Z (dsound.lib, 29 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_SetMixBinsT_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_SETMIXBINS_T, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x04, 0x08 },
+        { 0x08, 0x0C },
+        { 0x0C, 0xE8 },
+        { 0x11, 0x8B },
+        { 0x14, 0xE8 },
+        { 0x19, 0x5E },
+        { 0x1C, 0x00 }
+    }
+};
+
+// ?SetMixBins@CDirectSoundBuffer@DirectSound@@QAGJPBU_DSMIXBINS@@@Z (dsound.lib, 78 bytes; call@0x32 ?SetMixBins@CDirectSoundVoice@DirectSound@@QAGJPBU_DSMIXBINS@@@Z -> XREF_DS5849_BUF_SETMIXBINS_T)
+// XRef chain level: saved to XREF_DS5849_BUF_SETMIXBINS, discriminated by callee.
+SOOVPA<9> CDirectSoundBuffer_SetMixBins_1_0_5849 =
+{
+    0, 9, XREF_DS5849_BUF_SETMIXBINS, 1,
+    {
+        { 0x32, XREF_DS5849_BUF_SETMIXBINS_T },
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x21, 0xB8 },
+        { 0x2C, 0x10 },
+        { 0x37, 0xF6 },
+        { 0x42, 0x15 },
+        { 0x4D, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetMixBins@8 (dsound.lib, 28 bytes; call@0x15 -> XREF_DS5849_BUF_SETMIXBINS)
+SOOVPA<9> IDirectSoundBuffer8_SetMixBins_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x15, XREF_DS5849_BUF_SETMIXBINS },
+        { 0x00, 0x8B },
+        { 0x03, 0x04 },
+        { 0x07, 0x08 },
+        { 0x0B, 0xC0 },
+        { 0x0F, 0x1B },
+        { 0x13, 0x51 },
+        { 0x19, 0xC2 },
+        { 0x1B, 0x00 }
+    }
+};
+
+// ?GetStatus@CMcpxBuffer@DirectSound@@QAEJPAK@Z (dsound.lib, 66 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_GetStatusT_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_GETSTATUS_T, 0,
+    {
+        { 0x00, 0x0F },
+        { 0x09, 0x80 },
+        { 0x12, 0x66 },
+        { 0x1B, 0xC2 },
+        { 0x25, 0x09 },
+        { 0x2E, 0x23 },
+        { 0x37, 0xD8 },
+        { 0x41, 0x00 }
+    }
+};
+
+// ?GetStatus@CDirectSoundBuffer@DirectSound@@QAGJPAK@Z (dsound.lib, 81 bytes; call@0x35 ?GetStatus@CMcpxBuffer@DirectSound@@QAEJPAK@Z -> XREF_DS5849_BUF_GETSTATUS_T)
+// XRef chain level: saved to XREF_DS5849_BUF_GETSTATUS, discriminated by callee.
+SOOVPA<9> CDirectSoundBuffer_GetStatus_1_0_5849 =
+{
+    0, 9, XREF_DS5849_BUF_GETSTATUS, 1,
+    {
+        { 0x35, XREF_DS5849_BUF_GETSTATUS_T },
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x22, 0x05 },
+        { 0x2D, 0x48 },
+        { 0x39, 0x85 },
+        { 0x44, 0xFF },
+        { 0x50, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_GetStatus@8 (dsound.lib, 28 bytes; call@0x15 -> XREF_DS5849_BUF_GETSTATUS)
+SOOVPA<9> IDirectSoundBuffer8_GetStatus_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x15, XREF_DS5849_BUF_GETSTATUS },
+        { 0x00, 0x8B },
+        { 0x03, 0x04 },
+        { 0x07, 0x08 },
+        { 0x0B, 0xC0 },
+        { 0x0F, 0x1B },
+        { 0x13, 0x51 },
+        { 0x19, 0xC2 },
+        { 0x1B, 0x00 }
+    }
+};
+
 OOVPATable DSound_1_0_5849[] =
 {
     // DirectSoundCreate
@@ -1074,6 +1212,65 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuIDirectSoundBuffer8_GetCurrentPosition,
         #ifdef _DEBUG_TRACE
         "EmuIDirectSoundBuffer8_GetCurrentPosition"
+        #endif
+    },
+    // CDirectSoundBuffer::Lock (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_Lock_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::Lock (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::Lock
+    {
+        (OOVPA*)&IDirectSoundBuffer8_Lock_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_Lock,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_Lock"
+        #endif
+    },
+    // CDirectSoundBuffer::SetMixBins chain leaf (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetMixBinsT_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetMixBins leaf (XREF)"
+        #endif
+    },
+    // CDirectSoundBuffer::SetMixBins (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetMixBins_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetMixBins (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetMixBins
+    {
+        (OOVPA*)&IDirectSoundBuffer8_SetMixBins_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_SetMixBins,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetMixBins"
+        #endif
+    },
+    // CDirectSoundBuffer::GetStatus chain leaf (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_GetStatusT_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::GetStatus leaf (XREF)"
+        #endif
+    },
+    // CDirectSoundBuffer::GetStatus (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_GetStatus_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::GetStatus (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::GetStatus
+    {
+        (OOVPA*)&IDirectSoundBuffer8_GetStatus_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_GetStatus,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_GetStatus"
         #endif
     },
 };
