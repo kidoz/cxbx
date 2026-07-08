@@ -497,6 +497,27 @@ static const ULONG EmuNv2aUserChannel0Get = 0x800044;
 static const ULONG EmuUsb0MmioBase = PCI_USB0_REGISTER_BASE;
 static const ULONG EmuUsb0MmioEnd = PCI_USB0_REGISTER_BASE + 0x00000FFF;
 static const ULONG EmuUsbOhciRevision = 0x00000010;
+// OHCI host-controller registers the root-hub model reacts to (offsets from the
+// USB0 MMIO base). HcCommandStatus's reset bit self-clears; the four
+// HcRhPortStatus registers implement real read/write-to-clear semantics so the
+// guest's port poll terminates instead of spinning on stale change bits.
+static const ULONG EmuUsbHcCommandStatus = 0x00000008;
+static const ULONG EmuUsbHcCommandStatusReset = 0x00000001; // HCR (self-clearing)
+static const ULONG EmuUsbHcRhPortStatus0 = 0x00000054;
+static const ULONG EmuUsbPortCount = 4;
+// HcRhPortStatus bit fields.
+static const ULONG EmuUsbPortCCS  = 1u << 0;   // CurrentConnectStatus
+static const ULONG EmuUsbPortPES  = 1u << 1;   // PortEnableStatus
+static const ULONG EmuUsbPortPRS  = 1u << 4;   // PortResetStatus
+static const ULONG EmuUsbPortPPS  = 1u << 8;   // PortPowerStatus
+static const ULONG EmuUsbPortCSC  = 1u << 16;  // ConnectStatusChange
+static const ULONG EmuUsbPortPESC = 1u << 17;  // PortEnableStatusChange
+static const ULONG EmuUsbPortPSSC = 1u << 18;  // PortSuspendStatusChange
+static const ULONG EmuUsbPortOCIC = 1u << 19;  // OverCurrentIndicatorChange
+static const ULONG EmuUsbPortPRSC = 1u << 20;  // PortResetStatusChange
+static const ULONG EmuUsbPortChangeMask =
+    EmuUsbPortCSC | EmuUsbPortPESC | EmuUsbPortPSSC | EmuUsbPortOCIC | EmuUsbPortPRSC;
+static ULONG g_EmuUsb0PortStatus[EmuUsbPortCount] = { 0, 0, 0, 0 };
 static const ULONG EmuApuMmioBase = 0xFE800000;
 static const ULONG EmuApuMmioEnd = EmuApuMmioBase + 0x0007FFFF;
 static const ULONG EmuApuXgscnt = 0x0000200C;
@@ -640,10 +661,38 @@ static void EmuAciSetBusMasterStatus(ULONG StreamBase, ULONG Status)
     EmuAciStorePartialRegister(EmuAciMmioBase + StreamBase + EmuAciBusMasterStatusOffset, 2, Status);
 }
 
+static bool EmuUsb0IsPortStatus(ULONG Offset, ULONG *PortIndex)
+{
+    if(Offset < EmuUsbHcRhPortStatus0 ||
+       Offset >= EmuUsbHcRhPortStatus0 + EmuUsbPortCount * 4 || (Offset & 3) != 0)
+        return false;
+    *PortIndex = (Offset - EmuUsbHcRhPortStatus0) / 4;
+    return true;
+}
+
 static ULONG EmuUsb0ReadRegister32(ULONG Address)
 {
     ULONG Offset = EmuUsb0Offset(Address);
-    ULONG Value = Offset == 0 ? EmuUsbOhciRevision : EmuUsb0CachedRegister(Address, 0);
+    ULONG PortIndex = 0;
+    ULONG Value;
+
+    if(Offset == 0)
+    {
+        Value = EmuUsbOhciRevision;
+    }
+    else if(EmuUsb0IsPortStatus(Offset, &PortIndex))
+    {
+        Value = g_EmuUsb0PortStatus[PortIndex];
+    }
+    else if(Offset == EmuUsbHcCommandStatus)
+    {
+        // The controller reset bit self-clears once the reset completes.
+        Value = EmuUsb0CachedRegister(Address, 0) & ~EmuUsbHcCommandStatusReset;
+    }
+    else
+    {
+        Value = EmuUsb0CachedRegister(Address, 0);
+    }
 
     printf("Emu (0x%lX): USB0 MMIO read 0x%.08lX = 0x%.08lX.\n",
            GetCurrentThreadId(), Address, Value);
@@ -652,9 +701,38 @@ static ULONG EmuUsb0ReadRegister32(ULONG Address)
     return Value;
 }
 
+// Apply OHCI HcRhPortStatus write semantics: set/clear enable, power and reset,
+// and write-1-to-clear the change bits. With no device attached (CCS clear) the
+// enable/reset writes are no-ops and the change bits simply clear, so the
+// guest's "clear change, re-read" hub poll terminates.
+static void EmuUsb0WritePortStatus(ULONG PortIndex, ULONG Value)
+{
+    ULONG Status = g_EmuUsb0PortStatus[PortIndex];
+
+    if(Value & (1u << 0))                       // ClearPortEnable
+        Status &= ~EmuUsbPortPES;
+    if((Value & (1u << 1)) && (Status & EmuUsbPortCCS)) // SetPortEnable
+        Status |= EmuUsbPortPES;
+    if((Value & (1u << 4)) && (Status & EmuUsbPortCCS)) // SetPortReset -> completes
+        Status = (Status | EmuUsbPortPES | EmuUsbPortPRSC) & ~EmuUsbPortPRS;
+    if(Value & (1u << 8))                       // SetPortPower
+        Status |= EmuUsbPortPPS;
+    if(Value & (1u << 9))                       // ClearPortPower
+        Status &= ~EmuUsbPortPPS;
+
+    Status &= ~(Value & EmuUsbPortChangeMask);  // write-1-to-clear change bits
+    g_EmuUsb0PortStatus[PortIndex] = Status;
+}
+
 static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
 {
-    EmuStoreMmioRegister(Address, Value);
+    ULONG Offset = EmuUsb0Offset(Address);
+    ULONG PortIndex = 0;
+
+    if(EmuUsb0IsPortStatus(Offset, &PortIndex))
+        EmuUsb0WritePortStatus(PortIndex, Value);
+    else
+        EmuStoreMmioRegister(Address, Value);
 
     printf("Emu (0x%lX): USB0 MMIO write 0x%.08lX = 0x%.08lX.\n",
            GetCurrentThreadId(), Address, Value);
