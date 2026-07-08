@@ -84,6 +84,7 @@ static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
+static void  EmuInstallDolphinDemoBootstrap(Xbe::Header *pXbeHeader);
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
 static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static void  EmuInstallAutoBootLaunchData();
@@ -4274,6 +4275,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
         EmuInstallFceultraBootstrap(pXbeHeader);
+        EmuInstallDolphinDemoBootstrap(pXbeHeader);
         EmuInstallAutoBootLaunchData();
     }
 
@@ -4657,6 +4659,63 @@ static void EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader)
     else
     {
         printf("Emu (0x%lX): FCEUltra DSOUND APU accounting signature NOT matched at 0x0010C1D7.\n",
+               GetCurrentThreadId());
+    }
+
+    fflush(stdout);
+}
+
+// The XDK 5849 dolphin demo ("Dolphin Demos", title id 0, cdx\sample\demos) is a
+// CDX demo-disc title: its startup relaunches via an XLaunchNewImage wrapper
+// (guest 0x00015E1C) whose success path QuickReboots (HalReturnToFirmware(2)) --
+// on real hardware the reboot re-runs the image with the launch applied. A
+// user-mode HLE can't persist that, and letting the reboot return sends the
+// framework down an error path that dereferences uninitialised framework globals.
+// Neutralise the wrapper to a no-op return so the title skips the relaunch and
+// proceeds -- the same targeted-patch approach as EmuInstallFceultraBootstrap.
+static bool EmuIsDolphinDemo(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
+        return false;
+
+    Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
+    return wcsncmp(pCertificate->wszTitleName, L"Dolphin Demos", 14) == 0;
+}
+
+static void EmuInstallDolphinDemoBootstrap(Xbe::Header *pXbeHeader)
+{
+    if(!EmuIsDolphinDemo(pXbeHeader))
+        return;
+
+    // XLaunchNewImage wrapper prologue: push ebp / mov ebp,esp / push args / push 1
+    const uint08 LaunchWrapperSig[] =
+    {
+        0x55, 0x8B, 0xEC, 0xFF, 0x75, 0x18, 0xFF, 0x75, 0x14,
+        0xFF, 0x75, 0x10, 0x6A, 0x01, 0xFF, 0x75, 0x0C, 0xFF, 0x75, 0x08
+    };
+    // xor eax,eax ; ret 0x14  (matches the wrapper's own __stdcall ret 0x14)
+    const uint08 LaunchWrapperPatch[] = { 0x33, 0xC0, 0xC2, 0x14, 0x00 };
+
+    if(EmuBytesMatch(0x00015E1C, LaunchWrapperSig, sizeof(LaunchWrapperSig), pXbeHeader))
+    {
+        EmuWriteBytes(0x00015E1C, LaunchWrapperPatch, sizeof(LaunchWrapperPatch));
+        printf("Emu (0x%lX): Dolphin demo XLaunchNewImage wrapper (0x00015E1C) neutralised (no reboot-to-self).\n",
+               GetCurrentThreadId());
+
+        // The HLE replaces the D3D8 library code that would set its internal
+        // device global D3D__pDevice (guest .data 0x000314D8), so un-patched
+        // library internals (e.g. present.obj helpers) dereference NULL. Point
+        // the global at a zeroed scratch device: those internals then read
+        // benign state and skip their raw-hardware work, while the patched
+        // API surface (Clear/Swap/...) renders through the host device.
+        static uint08 s_DolphinFakeD3DDevice[0x4000];
+        *(uint32*)0x000314D8 = (uint32)(uintptr_t)s_DolphinFakeD3DDevice;
+        printf("Emu (0x%lX): Dolphin demo D3D__pDevice (0x000314D8) pointed at a scratch device.\n",
+               GetCurrentThreadId());
+    }
+    else
+    {
+        printf("Emu (0x%lX): Dolphin demo XLaunchNewImage wrapper signature NOT matched at 0x00015E1C.\n",
                GetCurrentThreadId());
     }
 
