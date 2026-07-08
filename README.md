@@ -14,6 +14,8 @@ This is the classic caustik CXBX codebase, not Cxbx-Reloaded. It is currently
 being brought forward as a 32-bit Windows/x86 HLE emulator with reproducible
 build files, structured debug traces, and an emulator conformance suite.
 
+![CXBX emulating Dolphin demos](docs/screenshots/dolphin-demo.png)
+
 ## Current Status
 
 This repository is for development and emulator bring-up. It is not a polished
