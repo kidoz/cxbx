@@ -532,3 +532,270 @@ int XTL::EmuVshTranslateXboxDeclaration(const DWORD *pXboxDecl, DWORD *pPcDecl, 
     EmuWarning("VshDecoder: declaration exceeded %d tokens; truncated", MaxTokens);
     return n;
 }
+
+// ******************************************************************
+// * EmuVshExecuteProgram - CPU vertex-program interpreter (Phase 2)
+// ******************************************************************
+// * Execute NV2A vertex-program microcode on the host to transform one
+// * vertex for the software rasterizer. Where EmuVshRecompileXboxFunction
+// * re-emits the microcode for a host GPU, this runs it directly: 16 input
+// * attribute registers in, clip-space oPos + oD0 diffuse out. Constants are
+// * indexed straight by the microcode CONST field (hardware constant memory
+// * 0..191); the readable R12/oPos alias, dual MAC+ILU issue, swizzles,
+// * negation, write masks and A0-relative constant addressing are honored.
+// ******************************************************************
+
+// Read a source operand: select register bank by mux, apply swizzle + negate.
+static void VshExecReadSrc(const DWORD *I, const VshSrc *S, DWORD Vfield, bool Relative,
+                           int A0, const float Reg[13][4], const float *Const,
+                           const float *Input, float Out[4])
+{
+    float Tmp[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    switch(S->Mux)
+    {
+        case PARAM_R:
+        {
+            DWORD r = S->R > 12 ? 12 : S->R;
+            Tmp[0] = Reg[r][0]; Tmp[1] = Reg[r][1]; Tmp[2] = Reg[r][2]; Tmp[3] = Reg[r][3];
+            break;
+        }
+        case PARAM_V:
+        {
+            DWORD v = Vfield & 15;
+            const float *in = &Input[v * 4];
+            Tmp[0] = in[0]; Tmp[1] = in[1]; Tmp[2] = in[2]; Tmp[3] = in[3];
+            break;
+        }
+        case PARAM_C:
+        {
+            int idx = (int)VshGetField(I, FLD_CONST);
+            if(Relative) idx += A0;
+            if(idx < 0) idx = 0;
+            if(idx > 191) idx = 191;
+            const float *c = &Const[idx * 4];
+            Tmp[0] = c[0]; Tmp[1] = c[1]; Tmp[2] = c[2]; Tmp[3] = c[3];
+            break;
+        }
+        default:
+            break;
+    }
+
+    for(int c = 0; c < 4; c++)
+        Out[c] = Tmp[S->Swz[c] & 3];
+    if(S->Neg)
+        for(int c = 0; c < 4; c++)
+            Out[c] = -Out[c];
+}
+
+// NV2A write mask: bit3=X bit2=Y bit1=Z bit0=W.
+static void VshExecWriteMasked(float Dst[4], const float Src[4], DWORD NvMask)
+{
+    if(NvMask & 0x8) Dst[0] = Src[0];
+    if(NvMask & 0x4) Dst[1] = Src[1];
+    if(NvMask & 0x2) Dst[2] = Src[2];
+    if(NvMask & 0x1) Dst[3] = Src[3];
+}
+
+static void VshExecMac(DWORD Op, const float A[4], const float B[4], const float C[4], float R[4])
+{
+    switch(Op)
+    {
+        case MAC_MOV: R[0]=A[0]; R[1]=A[1]; R[2]=A[2]; R[3]=A[3]; break;
+        case MAC_MUL: for(int i=0;i<4;i++) R[i]=A[i]*B[i]; break;
+        case MAC_ADD: for(int i=0;i<4;i++) R[i]=A[i]+C[i]; break;
+        case MAC_MAD: for(int i=0;i<4;i++) R[i]=A[i]*B[i]+C[i]; break;
+        case MAC_DP3: { float d=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]; R[0]=R[1]=R[2]=R[3]=d; } break;
+        case MAC_DP4: { float d=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]+A[3]*B[3]; R[0]=R[1]=R[2]=R[3]=d; } break;
+        case MAC_DPH: { float d=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]+B[3]; R[0]=R[1]=R[2]=R[3]=d; } break;
+        case MAC_DST: R[0]=1.0f; R[1]=A[1]*B[1]; R[2]=A[2]; R[3]=B[3]; break;
+        case MAC_MIN: for(int i=0;i<4;i++) R[i]=A[i]<B[i]?A[i]:B[i]; break;
+        case MAC_MAX: for(int i=0;i<4;i++) R[i]=A[i]>B[i]?A[i]:B[i]; break;
+        case MAC_SLT: for(int i=0;i<4;i++) R[i]=A[i]<B[i]?1.0f:0.0f; break;
+        case MAC_SGE: for(int i=0;i<4;i++) R[i]=A[i]>=B[i]?1.0f:0.0f; break;
+        default: R[0]=R[1]=R[2]=R[3]=0.0f; break;
+    }
+}
+
+// Freestanding float math: this old Cxbx links against a CRT whose libm float
+// symbols (sqrtf/powf/logf) collide at link time, so the interpreter carries its
+// own approximations. Accuracy is ample for the rare ILU transcendentals; the
+// hot path (DP4/MUL/MAD/RCP) uses none of these.
+static int VshFloorI(float x)
+{
+    int i = (int)x;
+    if((float)i > x) i--;
+    return i;
+}
+
+static float VshInvSqrt(float x)
+{
+    if(x <= 0.0f) return 0.0f;
+    float xhalf = 0.5f * x;
+    int i; memcpy(&i, &x, 4);
+    i = 0x5f3759df - (i >> 1);           // fast inverse-sqrt seed
+    float y; memcpy(&y, &i, 4);
+    y = y * (1.5f - xhalf * y * y);      // Newton refine x3 -> ~1e-6 rel error
+    y = y * (1.5f - xhalf * y * y);
+    y = y * (1.5f - xhalf * y * y);
+    return y;
+}
+
+static float VshLog2(float x)
+{
+    if(x <= 0.0f) return 0.0f;
+    int bits; memcpy(&bits, &x, 4);
+    int e = ((bits >> 23) & 0xFF) - 127;
+    bits = (bits & 0x807FFFFF) | 0x3F800000; // mantissa m in [1,2)
+    float m; memcpy(&m, &bits, 4);
+    float p = -1.7417939f + (2.8212026f + (-1.4699568f + (0.4471900f - 0.0568825f * m) * m) * m) * m;
+    return p + (float)e;
+}
+
+static float VshExp2(float x)
+{
+    if(x < -126.0f) return 0.0f;
+    if(x >  126.0f) return 3.4e38f;
+    int xi = VshFloorI(x);
+    float f = x - (float)xi;
+    float p = 1.0f + f * (0.6931472f + f * (0.2402265f + f * (0.0555041f + f * 0.0096181f)));
+    int bits = (xi + 127) << 23;
+    float scale; memcpy(&scale, &bits, 4);
+    return p * scale;
+}
+
+// ILU scalar op on the C source (already swizzled). LIT writes a full vec4.
+static void VshExecIlu(DWORD Op, const float C[4], float R[4])
+{
+    float s = C[0];
+    float r = 0.0f;
+    switch(Op)
+    {
+        case ILU_MOV: R[0]=C[0]; R[1]=C[1]; R[2]=C[2]; R[3]=C[3]; return;
+        case ILU_RCP: r = (s != 0.0f) ? 1.0f / s : 0.0f; break;
+        case ILU_RCC:
+        {
+            float a = s;
+            if(a >= 0.0f) { if(a < 5.42101e-20f) a = 5.42101e-20f; }
+            else          { if(a > -5.42101e-20f) a = -5.42101e-20f; }
+            r = 1.0f / a;
+            break;
+        }
+        case ILU_RSQ: { float a = s < 0.0f ? -s : s; r = VshInvSqrt(a); } break;
+        case ILU_EXP: r = VshExp2(s); break;
+        case ILU_LOG: r = VshLog2(s); break;
+        case ILU_LIT:
+        {
+            float diffuse = C[0], specular = C[1], power = C[3];
+            if(power < -127.9961f) power = -127.9961f;
+            if(power >  127.9961f) power =  127.9961f;
+            R[0] = 1.0f;
+            R[1] = diffuse > 0.0f ? diffuse : 0.0f;
+            R[2] = (diffuse > 0.0f && specular > 0.0f) ? VshExp2(power * VshLog2(specular)) : 0.0f;
+            R[3] = 1.0f;
+            return;
+        }
+        default: break;
+    }
+    R[0] = R[1] = R[2] = R[3] = r;
+}
+
+// Destination vector for an output-register address (NV2A HardwareOutputRegisters
+// order). oPos is the R12 alias so later instructions can read it back.
+static float *VshExecOutputDst(DWORD Addr, float Reg[13][4], float Col[2][4],
+                               float Tex[4][4], float Fog[4], float Pts[4])
+{
+    switch(Addr)
+    {
+        case 0:  return Reg[12];      // oPos (R12 alias)
+        case 3:  return Col[0];       // oD0
+        case 4:  return Col[1];       // oD1
+        case 5:  return Fog;          // oFog
+        case 6:  return Pts;          // oPts
+        case 9: case 10: case 11: case 12: return Tex[Addr - 9]; // oT0..3
+        default: return NULL;
+    }
+}
+
+extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
+                                     const float *Const, const float *Input,
+                                     float *OutPos, float *OutCol0)
+{
+    if(Program == NULL || InstrCount <= 0)
+        return false;
+
+    float Reg[13][4];
+    for(int r = 0; r < 13; r++)
+        Reg[r][0] = Reg[r][1] = Reg[r][2] = Reg[r][3] = 0.0f;
+    float Col[2][4] = {{0,0,0,1},{0,0,0,1}};
+    float Tex[4][4] = {{0}};
+    float Fog[4] = {0,0,0,0};
+    float Pts[4] = {0,0,0,0};
+    int A0 = 0;
+
+    if(Start < 0) Start = 0;
+    for(int pc = Start; pc < InstrCount; pc++)
+    {
+        const DWORD *I = &Program[pc * 4];
+
+        DWORD Mac     = VshGetField(I, FLD_MAC);
+        DWORD Ilu     = VshGetField(I, FLD_ILU);
+        DWORD MacMask = VshGetField(I, FLD_OUT_MAC_MASK);
+        DWORD IluMask = VshGetField(I, FLD_OUT_ILU_MASK);
+        DWORD OMask   = VshGetField(I, FLD_OUT_O_MASK);
+        DWORD OutR    = VshGetField(I, FLD_OUT_R);
+        DWORD Orb     = VshGetField(I, FLD_OUT_ORB);
+        DWORD OutAddr = VshGetField(I, FLD_OUT_ADDRESS);
+        DWORD OutMux  = VshGetField(I, FLD_OUT_MUX);
+        bool  Relative= VshGetField(I, FLD_A0X) != 0;
+        DWORD Vfield  = VshGetField(I, FLD_V);
+        bool  Final   = VshGetField(I, FLD_FINAL) != 0;
+
+        VshSrc SA, SB, SC;
+        VshDecodeSrc(I, 0, &SA);
+        VshDecodeSrc(I, 1, &SB);
+        VshDecodeSrc(I, 2, &SC);
+        float A[4], B[4], C[4];
+        VshExecReadSrc(I, &SA, Vfield, Relative, A0, Reg, Const, Input, A);
+        VshExecReadSrc(I, &SB, Vfield, Relative, A0, Reg, Const, Input, B);
+        VshExecReadSrc(I, &SC, Vfield, Relative, A0, Reg, Const, Input, C);
+
+        if(Mac == MAC_ARL)
+        {
+            A0 = VshFloorI(A[0]);
+        }
+        else if(Mac != MAC_NOP)
+        {
+            float Rm[4];
+            VshExecMac(Mac, A, B, C, Rm);
+            if(MacMask != 0)
+                VshExecWriteMasked(Reg[OutR > 12 ? 12 : OutR], Rm, MacMask);
+            if(OMask != 0 && OutMux == OMUX_MAC && Orb == OUTPUT_O)
+            {
+                float *d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
+                if(d) VshExecWriteMasked(d, Rm, OMask);
+            }
+        }
+
+        if(Ilu != ILU_NOP)
+        {
+            float Ri[4];
+            VshExecIlu(Ilu, C, Ri);
+            DWORD IluR = (Mac != MAC_NOP && MacMask != 0) ? 1 : OutR;
+            if(IluMask != 0)
+                VshExecWriteMasked(Reg[IluR > 12 ? 12 : IluR], Ri, IluMask);
+            if(OMask != 0 && OutMux == OMUX_ILU && Orb == OUTPUT_O)
+            {
+                float *d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
+                if(d) VshExecWriteMasked(d, Ri, OMask);
+            }
+        }
+
+        if(Final)
+            break;
+    }
+
+    // oPos lives in the R12 alias; diffuse in oD0.
+    OutPos[0] = Reg[12][0]; OutPos[1] = Reg[12][1]; OutPos[2] = Reg[12][2]; OutPos[3] = Reg[12][3];
+    OutCol0[0] = Col[0][0]; OutCol0[1] = Col[0][1]; OutCol0[2] = Col[0][2]; OutCol0[3] = Col[0][3];
+    return true;
+}

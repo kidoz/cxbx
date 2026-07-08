@@ -1088,12 +1088,27 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
 #define NV097_SET_VIEWPORT_OFFSET           0x0A20u
 #define NV097_SET_VIEWPORT_SCALE            0x0AF0u
+#define NV097_SET_TRANSFORM_PROGRAM         0x0B00u
+#define NV097_SET_TRANSFORM_CONSTANT        0x0B80u
+#define NV097_SET_TRANSFORM_EXECUTION_MODE  0x1E94u
+#define NV097_SET_TRANSFORM_PROGRAM_LOAD    0x1E9Cu
+#define NV097_SET_TRANSFORM_PROGRAM_START   0x1EA0u
+#define NV097_SET_TRANSFORM_CONSTANT_LOAD   0x1EA4u
 #define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
 #define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
 #define NV097_DRAW_ARRAYS                   0x1810u
 #define EmuNv2aVertexAttrCount              16u
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
+#define EmuNv2aVpMaxInstr                   136u
+
+// CPU vertex-program interpreter (implemented in EmuVshDecoder.cpp): transform
+// one vertex through the loaded NV2A microcode. Inputs are the 16 attribute
+// registers (16*4 floats), constants the 192-entry constant memory (192*4
+// floats), outputs clip-space oPos + oD0 diffuse.
+extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
+                                     const float *Const, const float *Input,
+                                     float *OutPos, float *OutCol0);
 
 struct EmuNv2aVertexArrayState
 {
@@ -1116,6 +1131,16 @@ static bool  g_bEmuNv2aRasterChecked = false;
 // screen coordinates; a title that programs a real viewport gets it applied.
 static float g_EmuNv2aViewportOffset[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 static float g_EmuNv2aViewportScale[4]  = { 1.0f, 1.0f, 1.0f, 1.0f };
+// Vertex-program state (Phase 2): uploaded microcode + constant memory. The
+// interpreter runs when execution mode is PROGRAM and a program is loaded;
+// otherwise the raw position/diffuse arrays feed the transform back-end.
+static DWORD g_EmuNv2aVpProgram[EmuNv2aVpMaxInstr * 4] = {};
+static ULONG g_EmuNv2aVpWriteDword = 0;   // SET_TRANSFORM_PROGRAM upload cursor
+static ULONG g_EmuNv2aVpInstrCount = 0;   // highest loaded instruction slot + 1
+static ULONG g_EmuNv2aVpStart = 0;        // SET_TRANSFORM_PROGRAM_START
+static ULONG g_EmuNv2aVpExecMode = 0;     // SET_TRANSFORM_EXECUTION_MODE & 3
+static float g_EmuNv2aTransformConstant[192 * 4] = {};
+static ULONG g_EmuNv2aConstWriteFloat = 0; // SET_TRANSFORM_CONSTANT upload cursor
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
@@ -1208,8 +1233,31 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_DRAW_ARRAYS:
                 EmuNv2aRasterizeDrawArrays(Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
                 break;
+            case NV097_SET_TRANSFORM_EXECUTION_MODE: g_EmuNv2aVpExecMode = Data & 0x3; break;
+            case NV097_SET_TRANSFORM_PROGRAM_LOAD:   g_EmuNv2aVpWriteDword = Data * 4; break;
+            case NV097_SET_TRANSFORM_PROGRAM_START:  g_EmuNv2aVpStart = Data; break;
+            case NV097_SET_TRANSFORM_CONSTANT_LOAD:  g_EmuNv2aConstWriteFloat = Data * 4; break;
             default:
-                if(Method >= NV097_SET_VERTEX_DATA_ARRAY_OFFSET &&
+                if(Method >= NV097_SET_TRANSFORM_PROGRAM &&
+                   Method < NV097_SET_TRANSFORM_PROGRAM + 0x80)
+                {
+                    // Microcode upload: append one 32-bit word at the load cursor.
+                    if(g_EmuNv2aVpWriteDword < EmuNv2aVpMaxInstr * 4)
+                    {
+                        g_EmuNv2aVpProgram[g_EmuNv2aVpWriteDword++] = Data;
+                        ULONG Instrs = (g_EmuNv2aVpWriteDword + 3) / 4;
+                        if(Instrs > g_EmuNv2aVpInstrCount)
+                            g_EmuNv2aVpInstrCount = Instrs;
+                    }
+                }
+                else if(Method >= NV097_SET_TRANSFORM_CONSTANT &&
+                        Method < NV097_SET_TRANSFORM_CONSTANT + 0x80)
+                {
+                    // Constant memory upload: one float per word at the load cursor.
+                    if(g_EmuNv2aConstWriteFloat < 192 * 4)
+                        memcpy(&g_EmuNv2aTransformConstant[g_EmuNv2aConstWriteFloat++], &Data, 4);
+                }
+                else if(Method >= NV097_SET_VERTEX_DATA_ARRAY_OFFSET &&
                    Method < NV097_SET_VERTEX_DATA_ARRAY_OFFSET + EmuNv2aVertexAttrCount * 4)
                 {
                     g_EmuNv2aVertexArray[(Method - NV097_SET_VERTEX_DATA_ARRAY_OFFSET) / 4].Offset = Data;
@@ -2305,7 +2353,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     ULONG PosType   = Pos->Format & 0x0F;
     ULONG DifStride = (Dif->Format >> 8) & 0xFF;
     ULONG DifType   = Dif->Format & 0x0F;
-    if(PosStride == 0 || PosType != 2 /* TYPE_F */)
+    // Phase 2: run the loaded vertex program when execution mode is PROGRAM.
+    // Otherwise the position/diffuse arrays are consumed directly (Phase 0/1),
+    // which needs a float position array.
+    bool VpActive = (g_EmuNv2aVpExecMode == 2 /* PROGRAM */) && (g_EmuNv2aVpInstrCount > 0);
+    if(!VpActive && (PosStride == 0 || PosType != 2 /* TYPE_F */))
     {
         if(g_EmuNv2aRasterLogCount < 16)
         {
@@ -2327,39 +2379,90 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     for(ULONG i = 0; i < Count; i++)
     {
         ULONG Index = Start + i;
-        ULONG PosHost = EmuNv2aHostPointer(VertexBase + Pos->Offset + Index * PosStride);
-        float X = EmuNv2aReadHostFloat(PosHost);
-        float Y = EmuNv2aReadHostFloat(PosHost + 4);
-        // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
-        // size<4 the position carries no w, so w=1 and this is a straight map;
-        // combined with the identity viewport default it reproduces Phase 0.
-        float W = (PosSize >= 4) ? EmuNv2aReadHostFloat(PosHost + 12) : 1.0f;
-        float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
-        VX[i] = (X * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
-        VY[i] = (Y * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
-
+        float Xc, Yc, W;
         ULONG Color = 0xFFFFFFFF;
-        if(DifStride != 0)
+
+        if(VpActive)
         {
-            ULONG DifHost = EmuNv2aHostPointer(VertexBase + Dif->Offset + Index * DifStride);
-            if(DifHost != 0)
+            // Gather all bound attribute arrays into the 16 vertex-program input
+            // registers (x,y,z default 0, w default 1), then transform on the CPU.
+            float Input[16 * 4];
+            for(int a = 0; a < 16; a++)
             {
-                if(DifType == 2 /* TYPE_F, float4 RGBA */)
+                Input[a * 4 + 0] = 0.0f; Input[a * 4 + 1] = 0.0f;
+                Input[a * 4 + 2] = 0.0f; Input[a * 4 + 3] = 1.0f;
+                EmuNv2aVertexArrayState *Arr = &g_EmuNv2aVertexArray[a];
+                ULONG Stride = (Arr->Format >> 8) & 0xFF;
+                ULONG Size   = (Arr->Format >> 4) & 0x0F;
+                ULONG Type   = Arr->Format & 0x0F;
+                if(Stride == 0 || Size == 0)
+                    continue;
+                ULONG Host = EmuNv2aHostPointer(VertexBase + Arr->Offset + Index * Stride);
+                if(Host == 0)
+                    continue;
+                if(Type == 2 /* TYPE_F */)
                 {
-                    ULONG R = (ULONG)(EmuNv2aReadHostFloat(DifHost + 0) * 255.0f + 0.5f) & 0xFF;
-                    ULONG G = (ULONG)(EmuNv2aReadHostFloat(DifHost + 4) * 255.0f + 0.5f) & 0xFF;
-                    ULONG B = (ULONG)(EmuNv2aReadHostFloat(DifHost + 8) * 255.0f + 0.5f) & 0xFF;
-                    ULONG A = (ULONG)(EmuNv2aReadHostFloat(DifHost + 12) * 255.0f + 0.5f) & 0xFF;
-                    Color = (A << 24) | (R << 16) | (G << 8) | B;
+                    for(ULONG c = 0; c < Size && c < 4; c++)
+                        Input[a * 4 + c] = EmuNv2aReadHostFloat(Host + c * 4);
                 }
-                else
+                else /* UB_D3D packed color -> normalized RGBA */
                 {
-                    ULONG Raw = 0xFFFFFFFF;
-                    EmuTryReadHost(DifHost, &Raw, sizeof(Raw)); // D3DCOLOR 0xAARRGGBB
-                    Color = Raw;
+                    ULONG Raw = 0;
+                    EmuTryReadHost(Host, &Raw, sizeof(Raw));
+                    Input[a * 4 + 0] = (float)((Raw >> 16) & 0xFF) / 255.0f;
+                    Input[a * 4 + 1] = (float)((Raw >>  8) & 0xFF) / 255.0f;
+                    Input[a * 4 + 2] = (float)( Raw        & 0xFF) / 255.0f;
+                    Input[a * 4 + 3] = (float)((Raw >> 24) & 0xFF) / 255.0f;
+                }
+            }
+
+            float OutPos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            float OutCol[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            EmuVshExecuteProgram(g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
+                                 (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
+                                 Input, OutPos, OutCol);
+            Xc = OutPos[0]; Yc = OutPos[1]; W = OutPos[3];
+            ULONG R = EmuNv2aClampByte(OutCol[0] * 255.0f);
+            ULONG G = EmuNv2aClampByte(OutCol[1] * 255.0f);
+            ULONG B = EmuNv2aClampByte(OutCol[2] * 255.0f);
+            ULONG A = EmuNv2aClampByte(OutCol[3] * 255.0f);
+            Color = (A << 24) | (R << 16) | (G << 8) | B;
+        }
+        else
+        {
+            ULONG PosHost = EmuNv2aHostPointer(VertexBase + Pos->Offset + Index * PosStride);
+            Xc = EmuNv2aReadHostFloat(PosHost);
+            Yc = EmuNv2aReadHostFloat(PosHost + 4);
+            W  = (PosSize >= 4) ? EmuNv2aReadHostFloat(PosHost + 12) : 1.0f;
+
+            if(DifStride != 0)
+            {
+                ULONG DifHost = EmuNv2aHostPointer(VertexBase + Dif->Offset + Index * DifStride);
+                if(DifHost != 0)
+                {
+                    if(DifType == 2 /* TYPE_F, float4 RGBA */)
+                    {
+                        ULONG R = (ULONG)(EmuNv2aReadHostFloat(DifHost + 0) * 255.0f + 0.5f) & 0xFF;
+                        ULONG G = (ULONG)(EmuNv2aReadHostFloat(DifHost + 4) * 255.0f + 0.5f) & 0xFF;
+                        ULONG B = (ULONG)(EmuNv2aReadHostFloat(DifHost + 8) * 255.0f + 0.5f) & 0xFF;
+                        ULONG A = (ULONG)(EmuNv2aReadHostFloat(DifHost + 12) * 255.0f + 0.5f) & 0xFF;
+                        Color = (A << 24) | (R << 16) | (G << 8) | B;
+                    }
+                    else
+                    {
+                        ULONG Raw = 0xFFFFFFFF;
+                        EmuTryReadHost(DifHost, &Raw, sizeof(Raw)); // D3DCOLOR 0xAARRGGBB
+                        Color = Raw;
+                    }
                 }
             }
         }
+
+        // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
+        // w==1 and the identity viewport default this reproduces Phase 0/1.
+        float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
+        VX[i] = (Xc * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
+        VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
         VC[i] = Color;
     }
 
@@ -2433,9 +2536,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     if(g_EmuNv2aRasterLogCount < 32)
     {
-        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
+        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu) vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
+               VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount,
                g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
                g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
                VX[0], VY[0], VC[0]);

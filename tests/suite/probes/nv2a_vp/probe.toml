@@ -1,0 +1,7 @@
+# Requires a target with an NV2A GPU model AND a CPU vertex-program interpreter
+# (Phase 2): the microcode transforms object-space vertices to clip space before
+# the Phase 1 back-end. On Cxbx the raster path is gated behind CXBX_NV2A_RASTER.
+tags = ["nv2a"]
+
+[env]
+CXBX_NV2A_RASTER = "1"
