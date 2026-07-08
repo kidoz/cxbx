@@ -549,6 +549,53 @@ DWORD WINAPI XTL::EmuXInputGetCapabilities
 }
 
 // ******************************************************************
+// * EmuXInputInjectState
+// ******************************************************************
+// Headless input injection: when CXBX_INPUT_STATE is set, XInputGetState
+// returns a synthetic pad state instead of polling host DirectInput -- the
+// hook that lets conformance probes (and eventually scripted menu
+// navigation) run without a physical controller. Format:
+//   CXBX_INPUT_STATE="0x<wButtons>[,A,B,X,Y,Black,White,LT,RT]"
+// (wButtons hex word, then up to 8 decimal analog-button bytes.)
+static bool EmuXInputInjectState(XTL::PXINPUT_STATE pState)
+{
+    static int  nMode = 0; // 0 = unchecked, 1 = off, 2 = injecting
+    static WORD wButtons = 0;
+    static BYTE bAnalog[8] = {0};
+    static DWORD dwPacket = 0;
+
+    if(nMode == 0)
+    {
+        char szBuf[128];
+        DWORD dwLen = GetEnvironmentVariableA("CXBX_INPUT_STATE", szBuf, sizeof(szBuf));
+        if(dwLen == 0 || dwLen >= sizeof(szBuf))
+            nMode = 1;
+        else
+        {
+            wButtons = (WORD)strtoul(szBuf, 0, 0);
+            char *p = strchr(szBuf, ',');
+            for(int i=0;i<8 && p != 0;i++)
+            {
+                bAnalog[i] = (BYTE)strtoul(p+1, 0, 10);
+                p = strchr(p+1, ',');
+            }
+            nMode = 2;
+            printf("EmuXapi: input injection active (wButtons=0x%04X)\n", wButtons);
+        }
+    }
+
+    if(nMode != 2)
+        return false;
+
+    ZeroMemory(pState, sizeof(*pState));
+    pState->dwPacketNumber = ++dwPacket;
+    pState->Gamepad.wButtons = wButtons;
+    memcpy(pState->Gamepad.bAnalogButtons, bAnalog, sizeof(bAnalog));
+
+    return true;
+}
+
+// ******************************************************************
 // * func: EmuInputGetState
 // ******************************************************************
 DWORD WINAPI XTL::EmuXInputGetState
@@ -581,7 +628,8 @@ DWORD WINAPI XTL::EmuXInputGetState
     {
         if((int)hDevice == 1)
         {
-            EmuDInputPoll(pState);
+            if(!EmuXInputInjectState(pState))
+                EmuDInputPoll(pState);
             ret = ERROR_SUCCESS;
         }
     }

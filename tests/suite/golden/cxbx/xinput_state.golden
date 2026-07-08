@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xinput_state
+#result xinput_state verdict=PASS checks=9 fail=0
