@@ -152,6 +152,15 @@ HLEData HLEDataBase[] =
         D3D8_1_0_5849,
         D3D8_1_0_5849_SIZE
     },
+    // D3D8 Version 1.0.5933 (NestopiaX 1.3): adjacent build to 5849 -- reuse its
+    // table; each OOVPA still has to byte-match, so only genuinely unchanged
+    // functions resolve.
+    {
+        "D3D8",
+        1, 0, 5933,
+        D3D8_1_0_5849,
+        D3D8_1_0_5849_SIZE
+    },
     // DSound Version 1.0.3936
     {
         "DSOUND",
