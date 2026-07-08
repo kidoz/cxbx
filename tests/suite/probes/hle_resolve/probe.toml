@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): built with the real XDK 5849 compiler,
+# links genuine d3d8.lib/dsound.lib, and asserts the OOVPA/HLE pass patched
+# the expected functions. Needs a target that boots real-XDK images headless.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
