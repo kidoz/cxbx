@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): documents the swizzled-texture
+# fidelity gap (Morton-order uploads are not unswizzled by the HLE).
+# Expectations encode current behavior; implementing unswizzle flips them.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
