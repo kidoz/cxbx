@@ -1,0 +1,13 @@
+#suite xbox-conformance v1
+#probe nv2a_transform
+CHK nv2a_transform.pb_init PASS
+CHK nv2a_transform.back_buffer PASS
+CHK nv2a_transform.vbuf_alloc PASS
+CHK nv2a_transform.centroid_filled PASS
+CHK nv2a_transform.above_clear PASS
+CHK nv2a_transform.corner_clear PASS
+CHK nv2a_transform.nearA_red PASS
+CHK nv2a_transform.nearB_green PASS
+CHK nv2a_transform.nearC_blue PASS
+CHK nv2a_transform.centroid_balanced PASS
+#result nv2a_transform verdict=PASS checks=10 fail=0
