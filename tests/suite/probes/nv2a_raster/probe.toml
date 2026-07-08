@@ -1,0 +1,8 @@
+# Requires a target with an NV2A GPU model AND a Phase 0 software rasterizer
+# (surface bind + pre-transformed vertex fetch + flat triangle raster). On Cxbx
+# the raster path is gated behind CXBX_NV2A_RASTER so it cannot perturb the
+# HLE-D3D8 titles; this probe turns it on for its own run.
+tags = ["nv2a"]
+
+[env]
+CXBX_NV2A_RASTER = "1"
