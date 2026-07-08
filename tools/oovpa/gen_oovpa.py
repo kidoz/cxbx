@@ -261,8 +261,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Generate Cxbx OOVPA signatures from an XDK .lib")
     ap.add_argument("--lib", required=True, help="XDK static library (e.g. d3d8.lib)")
     ap.add_argument(
-        "--func", action="append", required=True, metavar="SYMBOL=SIGNAME",
+        "--func", action="append", default=[], metavar="SYMBOL=SIGNAME",
         help="decorated symbol and the OOVPA variable name to emit (repeatable)",
+    )
+    ap.add_argument(
+        "--xref-func", action="append", default=[],
+        metavar="SYMBOL=WRAPSIG:INTSIG:XREF_ENUM",
+        help="thin-wrapper symbol whose body is byte-identical to its siblings: "
+             "auto-discovers the internal function it calls (single REL32), "
+             "emits an XRef-save signature for the internal (INTSIG, saved to "
+             "XREF_ENUM) plus an XRef-consuming signature for the wrapper "
+             "(WRAPSIG, first pair = rel32 operand vs XREF_ENUM) (repeatable)",
     )
     ap.add_argument(
         "--verify-one", action="append", default=[],
@@ -285,6 +294,9 @@ def main() -> int:
     may = [Path(p) for g in args.verify for p in glob.glob(g, recursive=True)]
     must_imgs = [(p, flat_image(p)) for p in must]
     may_imgs = [(p, flat_image(p)) for p in may]
+
+    if not args.func and not args.xref_func:
+        sys.exit("need at least one --func or --xref-func")
 
     snippets = []
     failed = False
@@ -312,6 +324,67 @@ def main() -> int:
             print(f"OK   {signame}: {sym} ({len(fn.data)} bytes, "
                   f"{len(fn.reloc_offsets)} relocs, unique in {len(must_imgs) + len(may_imgs)} images)")
             snippets.append(f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n" + render(signame, pairs))
+
+    for spec in args.xref_func:
+        sym, _, rest = spec.partition("=")
+        parts = rest.split(":")
+        if len(parts) not in (3, 4):
+            sys.exit(f"--xref-func needs SYMBOL=WRAPSIG:INTSIG:XREF_ENUM[:TARGETMATCH], got: {spec}")
+        wrapsig, intsig, xref_enum = parts[:3]
+        target_match = parts[3] if len(parts) == 4 else None
+
+        wrapper = extract_function(lib, symbols, sym)
+        calls = wrapper.rel32_calls
+        if target_match is not None:
+            calls = [c for c in calls if target_match in c[1]]
+        if len(calls) != 1:
+            sys.exit(f"{sym}: need exactly 1 discriminating REL32 call"
+                     f"{f' matching {target_match!r}' if target_match else ''}, found "
+                     f"{len(calls)}: {calls or wrapper.rel32_calls}")
+        xref_off, internal_sym = calls[0]
+        internal = extract_function(lib, symbols, internal_sym)
+
+        int_pairs = pick_pairs(internal, args.pairs, args.max_offset)
+        wrap_pairs = pick_pairs(wrapper, args.pairs, args.max_offset)
+
+        ok = True
+        for p, img in must_imgs:
+            hits = find_matches(img, int_pairs, limit=2)
+            if len(hits) != 1:
+                print(f"FAIL {intsig}: {len(hits)} matches in {p.name} (need exactly 1)")
+                ok = False
+                failed = True
+                continue
+            n = count_xref_matches(img, wrap_pairs, xref_off, hits[0])
+            if n != 1:
+                print(f"FAIL {wrapsig}: {n} xref-qualified matches in {p.name} (need exactly 1)")
+                ok = False
+                failed = True
+        for p, img in may_imgs:
+            hits = find_matches(img, int_pairs, limit=2)
+            if len(hits) > 1:
+                print(f"FAIL {intsig}: {len(hits)} matches in {p.name} (collision)")
+                ok = False
+                failed = True
+            elif len(hits) == 1:
+                n = count_xref_matches(img, wrap_pairs, xref_off, hits[0])
+                if n > 1:
+                    print(f"FAIL {wrapsig}: {n} xref-qualified matches in {p.name} (collision)")
+                    ok = False
+                    failed = True
+        if ok:
+            print(f"OK   {wrapsig}: {sym} ({len(wrapper.data)} bytes) "
+                  f"-> call@0x{xref_off:02X} {internal_sym} "
+                  f"({len(internal.data)} bytes) [{xref_enum}]")
+            snippets.append(
+                f"// {internal_sym} ({Path(args.lib).name}, {len(internal.data)} bytes)\n"
+                f"// XRef-save signature: locates the internal so the identical\n"
+                f"// thin wrappers below can be told apart by their call target.\n"
+                + render(intsig, int_pairs, save_index=xref_enum))
+            snippets.append(
+                f"// {sym} ({Path(args.lib).name}, {len(wrapper.data)} bytes; "
+                f"call@0x{xref_off:02X} -> {xref_enum})\n"
+                + render(wrapsig, wrap_pairs, xref_pairs=[(xref_off, xref_enum)]))
 
     text = "\n".join(snippets)
     if args.out:
