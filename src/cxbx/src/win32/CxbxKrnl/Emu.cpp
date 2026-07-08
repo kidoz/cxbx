@@ -1166,6 +1166,12 @@ static ULONG g_EmuNv2aContextDmaAHandle = 0;
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
 static ULONG g_EmuNv2aTextureMethodLogCount = 0;
 static ULONG g_EmuNv2aScanoutDumpIndex = 0;
+// Last physical address the guest programmed into the CRTC scanout base
+// (NV_PCRTC_START). Used as the render-target fallback for raw-NV2A titles whose
+// color-surface DMA object this HLE does not model (the kernel-created
+// framebuffer DMA object is absent, so SET_SURFACE_COLOR_OFFSET's DMA cannot be
+// resolved); the displayed surface is the best available target.
+static ULONG g_EmuNv2aScanoutAddress = 0;
 
 // Bytes/scanline of the displayed surface, published by the video HAL's
 // AvSetDisplayMode (EmuKrnl.cpp). Lets the scanout capture recover the width
@@ -1648,7 +1654,10 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
     // what the guest just put on screen (path 2). The programmed value is a
     // masked physical address (low 28 bits).
     if(Offset == EmuNv2aPcrtcStart)
+    {
+        g_EmuNv2aScanoutAddress = Value & 0x0FFFFFFF;
         EmuNv2aDumpScanout(Value & 0x0FFFFFFF);
+    }
 
     // The Xbox pushbuffer kickoff is a write to the per-channel USER PUT register
     // (NV_USER + 0x40). Hardware mirrors that into the PFIFO CACHE1 DMA_PUT that
@@ -2649,6 +2658,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     // common Xbox case) when the color DMA base did not land on mapped memory.
     if(SurfaceHost == 0 && SurfaceBase != 0 && g_EmuNv2aSurfaceColorOffset != 0)
         SurfaceHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceColorOffset);
+    // Last resort for a real pbkit title whose color-surface DMA object this HLE
+    // does not model: render into the displayed framebuffer (the surface the
+    // guest last flipped to via NV_PCRTC_START).
+    if(SurfaceHost == 0 && g_EmuNv2aScanoutAddress != 0)
+        SurfaceHost = EmuNv2aHostPointer(g_EmuNv2aScanoutAddress);
     if(SurfaceHost == 0)
     {
         if(g_EmuNv2aRasterLogCount < 16)
