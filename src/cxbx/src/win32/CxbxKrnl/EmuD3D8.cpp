@@ -2410,9 +2410,12 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     }
     #endif
 
-    // TODO: Ensure this flag is always the same across library versions
+    // 4627-era titles always pass 0; the 5849 library swaps with real flag
+    // bits (0 means D3DSWAP default 5 inside the library). All of them still
+    // reduce to presenting the frame on the host, so warn instead of killing
+    // the emulation.
     if(Flags != 0)
-        EmuCleanup("XTL::EmuIDirect3DDevice8_Swap: Flags != 0");
+        EmuWarning("EmuIDirect3DDevice8_Swap: Flags = 0x%.08X (ignored)", Flags);
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
 
