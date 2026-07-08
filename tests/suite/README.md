@@ -172,6 +172,7 @@ template.
 | `nv2a_intr`  | NV2A interrupts      | `INTR_EN` latch, `PMC_INTR_0` aggregation, write-1-to-clear |
 | `nv2a_pfifo` | NV2A PFIFO / PGRAPH  | DMA object + pushbuffer → pusher → PGRAPH method dispatch   |
 | `xdk_smoke`  | XDK runtime (HLE)    | XDK-5849-built XBE boots via xapilib, file I/O, clean exit  |
+| `hle_resolve`| OOVPA/HLE database   | per-function: the HLE pass patched this real d3d8/dsound.lib function (expect=0 entries = documented signature debt) |
 
 The `nv2a_*` probes reach the GPU through the `0xFD000000` MMIO aperture (and, for
 `nv2a_pfifo`, guest physical memory at `0x80000000`), which CXBX trap-and-emulates

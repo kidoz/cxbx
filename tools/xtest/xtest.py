@@ -25,6 +25,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
 import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
@@ -142,6 +144,29 @@ class RunResult:
 def _kill(names: Sequence[str]) -> None:
     for n in names:
         subprocess.run(["taskkill", "/IM", n, "/F"], capture_output=True, text=True)
+    # Wait for the kills to complete: a still-dying guest holds %TEMP% files
+    # locked and destabilizes the next probe's launch.
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        r = subprocess.run(["tasklist", "/NH"], capture_output=True, text=True)
+        if not any(n.lower() in r.stdout.lower() for n in names):
+            break
+        time.sleep(0.1)
+
+
+def _wait_temp_unlock(names: Sequence[str], seconds: float = 3.0) -> None:
+    """Cxbx reconstructs the title as %TEMP%\\<name> and a just-killed guest can
+    hold the file locked briefly; launching the next probe then fails with
+    'Could not open .exe file' and shows up as a spurious TIMEOUT. Delete the
+    leftover (retrying through the lock) before starting a new run."""
+    for n in names:
+        p = Path(tempfile.gettempdir()) / n
+        deadline = time.time() + seconds
+        while p.exists() and time.time() < deadline:
+            try:
+                p.unlink()
+            except OSError:
+                time.sleep(0.1)
 
 
 class CxbxAdapter:
@@ -170,6 +195,7 @@ class CxbxAdapter:
         timed_out = False
         code = None
         env = dict(os.environ, **extra_env) if extra_env else None
+        _wait_temp_unlock(self.ecfg.get("kill_names", []))
         p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         try:
             code = p.wait(timeout=timeout)
@@ -441,15 +467,24 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     results = []
     for name in names:
         print(f"[run] {name} ...", end=" ", flush=True)
-        rr = adapter.run(name, timeout, probe_env(suite_dir, name))
-        res = ProbeResult(name)
-        res.timed_out = rr.timed_out
-        if rr.trace_path and Path(rr.trace_path).exists():
-            res.trace_text = Path(rr.trace_path).read_text(encoding="utf-8", errors="replace")
-            parse_trace(res.trace_text, res)
+        # One retry for environmental no-runs (stale guest process / locked
+        # %TEMP% exe left by the previous probe): a genuinely broken probe
+        # fails identically twice, so the retry cannot mask a real regression.
+        for attempt in range(2):
+            rr = adapter.run(name, timeout, probe_env(suite_dir, name))
+            res = ProbeResult(name)
+            res.timed_out = rr.timed_out
+            if rr.trace_path and Path(rr.trace_path).exists():
+                res.trace_text = Path(rr.trace_path).read_text(encoding="utf-8", errors="replace")
+                parse_trace(res.trace_text, res)
+            elif rr.timed_out:
+                res.verdict = "TIMEOUT"
+            if res.verdict not in ("TIMEOUT", "NOTRACE", "PARTIAL"):
+                break
+            if attempt == 0:
+                print(f"{res.verdict}, retrying ...", end=" ", flush=True)
+        if res.trace_text:
             golden_compare(suite_dir, args.emulator, res, args.update_golden)
-        elif rr.timed_out:
-            res.verdict = "TIMEOUT"
         print(res.verdict + (f" ({res.golden})" if res.golden not in ("-",) else ""))
         results.append(res)
 
