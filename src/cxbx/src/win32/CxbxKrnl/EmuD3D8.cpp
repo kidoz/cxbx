@@ -1547,34 +1547,65 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // ******************************************************************
     // * create emulated shader struct
     // ******************************************************************
-    // NOTE: pFunction is Xbox-native (version token low word 0x2078 followed by
-    // 128-bit NV2A microcode) and pDeclaration uses Xbox-extended vertex types;
-    // the host runtime accepts them without validation but the resulting shader
-    // is garbage. Running these for real needs an NV2A -> vs.1.1 recompiler
-    // (Cxbx-Reloaded's VshDecoder approach).
     X_D3DVertexShader *pD3DVertexShader = new X_D3DVertexShader();
 
     // Todo: Intelligently fill out these fields as necessary
     ZeroMemory(pD3DVertexShader, sizeof(X_D3DVertexShader));
+
+    // An Xbox function blob (version token low word 0x2078) is 128-bit NV2A
+    // vertex-program microcode, and the Xbox declaration carries extended
+    // data-type codes -- neither is host-consumable. Recompile the microcode
+    // into vs.1.1 bytecode and rewrite the declaration types (EmuVshDecoder).
+    extern DWORD *EmuVshRecompileXboxFunction(const CONST DWORD *pXboxFunction);
+    extern int    EmuVshTranslateXboxDeclaration(const CONST DWORD *pXboxDecl, DWORD *pPcDecl, int MaxTokens);
+
+    DWORD *pRecompiled = NULL;
+    const DWORD *pHostFunction = pFunction;
+    if(pFunction != NULL && (pFunction[0] & 0xFFFF) == 0x2078)
+    {
+        pRecompiled = EmuVshRecompileXboxFunction(pFunction);
+        pHostFunction = pRecompiled;
+        if(pRecompiled == NULL)
+            EmuWarning("VshDecoder: recompilation failed; creating a declaration-only shader");
+    }
+
+    DWORD  TranslatedDecl[128];
+    const DWORD *pHostDeclaration = pDeclaration;
+    if(pDeclaration != NULL)
+    {
+        EmuVshTranslateXboxDeclaration(pDeclaration, TranslatedDecl, 128);
+        pHostDeclaration = TranslatedDecl;
+    }
 
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
     HRESULT hRet = g_pD3DDevice8->CreateVertexShader
     (
-        pDeclaration,
-        pFunction,
+        pHostDeclaration,
+        pHostFunction,
         &pD3DVertexShader->Handle,
         g_dwVertexShaderUsage   // TODO: HACK: Xbox has extensions!
     );
+
+    delete[] pRecompiled;
 
     *pHandle = (DWORD)pD3DVertexShader;
 
     if(FAILED(hRet))
     {
-        EmuWarning("VertexShader was not really created!");
+        printf("EmuD3D8 (0x%X): CreateVertexShader FAILED on the host (hr=0x%.08X)%s.\n",
+               GetCurrentThreadId(), hRet,
+               pRecompiled != NULL ? " for a recompiled Xbox shader" : "");
+        fflush(stdout);
 
         hRet = D3D_OK;
+    }
+    else if(pRecompiled != NULL)
+    {
+        printf("EmuD3D8 (0x%X): CreateVertexShader OK, host handle 0x%.08X (recompiled Xbox shader).\n",
+               GetCurrentThreadId(), pD3DVertexShader->Handle);
+        fflush(stdout);
     }
 
     EmuSwapFS();   // XBox FS
