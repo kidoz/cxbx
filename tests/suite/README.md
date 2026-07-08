@@ -11,7 +11,7 @@ tests/suite/
   common/      xtrace.{h,c}  xtest.{h,c}  probe.mk   # trace harness + build glue
   probes/      smoke cpu_flags memory fileio kernel_cov kernel_trap
   golden/<emulator>/*.golden                          # per-target regression baselines
-  build-probe.sh                                       # build one probe (MSYS2 + scoop clang)
+  build_probe.py                                       # build one probe (MSYS2 + scoop clang; paths from tools/config.toml)
 tools/xtest/   xtest.py                                # the runner (build / run / diff / JUnit)
 tools/config.toml                                      # local machine config (gitignored; copy config.toml.example)
 ```

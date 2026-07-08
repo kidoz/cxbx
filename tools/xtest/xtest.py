@@ -73,13 +73,6 @@ def load_config() -> Config:
     return cfg
 
 
-def win_to_posix(p: str | Path) -> str:
-    """Convert a Windows drive path to an MSYS2-style path."""
-    p = str(p).replace("\\", "/")
-    m = re.match(r"^([A-Za-z]):/(.*)$", p)
-    return f"/{m.group(1).lower()}/{m.group(2)}" if m else p
-
-
 def discover_probes(suite_dir: Path) -> list[str]:
     """Every subdir of probes/ that has a build entry point, sorted by name.
     A Makefile means an nxdk probe; a build.ps1 means an XDK-toolchain probe
@@ -138,12 +131,11 @@ def build_probe(cfg: Config, name: str) -> tuple[bool, str]:
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)]
         r = subprocess.run(cmd, capture_output=True, text=True)
     else:
-        bash = cfg["paths"]["msys2_bash"]
-        probe_posix = win_to_posix(probe_dir)
-        script_posix = win_to_posix(suite_dir / "build-probe.sh")
-        env = dict(os.environ, MSYSTEM="MINGW64")
-        cmd = [bash, "-lc", f"sh {script_posix} {probe_posix} -j4"]
-        r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        # build_probe.py reads the toolchain paths from tools/config.toml and
+        # runs make inside MSYS2 bash itself.
+        script = suite_dir / "build_probe.py"
+        cmd = [sys.executable, str(script), str(probe_dir), "-j4"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
     xbe = probe_dir / "bin" / "default.xbe"
     ok = r.returncode == 0 and xbe.exists()
     tail = (r.stdout + r.stderr).strip().splitlines()[-4:]

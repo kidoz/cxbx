@@ -7,6 +7,9 @@
 suite_dir = "tests/suite"
 nxdk_dir = "REPLACE_WITH_NXDK_DIR"
 msys2_bash = "REPLACE_WITH_MSYS2_BASH"
+# scoop root holding the clang/lld + g++ toolchain, used by build_probe.py
+# (it adds <scoop>/apps/llvm/current/bin, /apps/gcc/current/bin and /shims).
+scoop = "REPLACE_WITH_SCOOP_DIR"
 
 [emulator.cxbx]
 exe = "build-min/src/cxbx/cxbx.exe"
