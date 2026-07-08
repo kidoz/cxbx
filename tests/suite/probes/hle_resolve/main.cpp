@@ -96,12 +96,15 @@ typedef struct {
 
 #define XF(f, e) { #f, (const void *)(f), (e) }
 
-// Every entry below has an OOVPA registered in D3D8.1.0.5849.inl. The
-// expect=0 entries are SIGNATURE DEBT (observed 2026-07-08): their table
-// entries reuse 4627-era signatures that do not byte-match the 5849 library
-// code, so they never resolve on real 5849 titles either. Fixing one
-// (regenerating its 5849 signature) flips its check to FAIL -- update the
-// expectation to 1 and refresh the golden.
+// Every entry below has an OOVPA registered in D3D8.1.0.5849.inl. An
+// expect=0 entry is SIGNATURE DEBT: its table entry's signature does not
+// byte-match the 5849 library code, so it never resolves on real 5849 titles
+// either. Fixing one (tools/oovpa/gen_oovpa.py) flips its check to FAIL --
+// update the expectation to 1 and refresh the golden. 2026-07-08: the original
+// nine-entry debt list was regenerated down to one; SetRenderStateNotInline
+// stays 0 deliberately (the "SetRenderState_Simple" OOVPA matches an internal
+// __fastcall(Method, Value) helper, not the stdcall D3DRS-enum entry point,
+// so a fresh signature for it must wait for a matching Emu impl).
 static const XFUNC k_d3d[] = {
     // core render path + the hand-authored 5849/5933 signatures
     XF(Direct3D_CreateDevice, 1),
@@ -115,13 +118,13 @@ static const XFUNC k_d3d[] = {
     XF(D3DDevice_SetVertexDataColor, 1),
     XF(D3DDevice_End, 1),
     // generated 5849 signature set
-    XF(Direct3D_GetAdapterDisplayMode, 0),
+    XF(Direct3D_GetAdapterDisplayMode, 1),
     XF(D3DDevice_GetBackBuffer2, 1),
     XF(D3DDevice_SetViewport, 1),
     XF(D3DDevice_SetShaderConstantMode, 1),
     XF(D3DDevice_GetRenderTarget2, 1),
     XF(D3DDevice_GetDepthStencilSurface2, 1),
-    XF(D3DDevice_GetTile, 0),
+    XF(D3DDevice_GetTile, 1),
     XF(D3DDevice_CreateVertexShader, 1),
     XF(D3DDevice_CreatePixelShader, 1),
     XF(D3DDevice_SetPixelShader, 1),
@@ -131,10 +134,10 @@ static const XFUNC k_d3d[] = {
     XF(D3DDevice_GetDisplayMode, 1),
     XF(D3DDevice_EnableOverlay, 1),
     XF(D3DDevice_CreateVertexBuffer2, 1),
-    XF(D3DDevice_UpdateOverlay, 0),
-    XF(D3DDevice_GetOverlayUpdateStatus, 0),
+    XF(D3DDevice_UpdateOverlay, 1),
+    XF(D3DDevice_GetOverlayUpdateStatus, 1),
     XF(D3DDevice_BlockUntilVerticalBlank, 1),
-    XF(D3DDevice_SetVerticalBlankCallback, 0),
+    XF(D3DDevice_SetVerticalBlankCallback, 1),
     XF(D3DDevice_SetTextureState_TexCoordIndex, 1),
     XF(D3DDevice_SetRenderState_CullMode, 1),
     XF(D3DDevice_SetRenderState_NormalizeNormals, 1),
@@ -155,11 +158,11 @@ static const XFUNC k_d3d[] = {
     XF(D3DDevice_SetStreamSource, 1),
     XF(D3DDevice_SetVertexShader, 1),
     XF(D3DDevice_DrawVertices, 1),
-    XF(D3DDevice_DrawVerticesUP, 0),
-    XF(D3DDevice_SetLight, 0),
+    XF(D3DDevice_DrawVerticesUP, 1),
+    XF(D3DDevice_SetLight, 1),
     XF(D3DDevice_DrawIndexedVertices, 1),
     XF(D3DDevice_SetMaterial, 1),
-    XF(D3DDevice_LightEnable, 0),
+    XF(D3DDevice_LightEnable, 1),
     XF(D3DVertexBuffer_Lock2, 1),
     XF(D3DResource_Register, 1),
     XF(D3DResource_Release, 1),

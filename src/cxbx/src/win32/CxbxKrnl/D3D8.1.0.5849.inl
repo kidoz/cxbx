@@ -667,6 +667,139 @@ SOOVPA<12> IDirect3DDevice8_End_1_0_5849 =
     }
 };
 
+// Fresh 5849 signatures (tools/oovpa/gen_oovpa.py from XDK 5849 d3d8.lib) for
+// entries that previously reused 4627/4361 signatures that do not byte-match
+// the 5849 library code -- the hle_resolve probe measured them as unresolved.
+// Each is verified unique across the probe image and every title XBE in-repo.
+
+// _Direct3D_GetAdapterDisplayMode@8 (d3d8.lib 5849, 185 bytes)
+SOOVPA<8> IDirect3D8_GetAdapterDisplayMode_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x1A, 0x18 },
+        { 0x34, 0x8E },
+        { 0x4E, 0xD3 },
+        { 0x69, 0xC0 },
+        { 0x83, 0x00 },
+        { 0x9D, 0xB6 },
+        { 0xB8, 0x00 }
+    }
+};
+
+// _D3DDevice_GetTile@8 (d3d8.lib 5849, 61 bytes)
+SOOVPA<8> IDirect3DDevice8_GetTile_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x08, 0x24 },
+        { 0x11, 0x1A },
+        { 0x19, 0x08 },
+        { 0x22, 0x8B },
+        { 0x2A, 0x0C },
+        { 0x33, 0x10 },
+        { 0x3C, 0x00 }
+    }
+};
+
+// _D3DDevice_UpdateOverlay@20 (d3d8.lib 5849, 374 bytes)
+SOOVPA<8> IDirect3DDevice8_UpdateOverlay_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0x09 },
+        { 0x48, 0x0C },
+        { 0x6D, 0x51 },
+        { 0x91, 0x10 },
+        { 0xB6, 0x0B },
+        { 0xDA, 0x33 },
+        { 0xFF, 0x33 }
+    }
+};
+
+// _D3DDevice_GetOverlayUpdateStatus@0 (d3d8.lib 5849, 29 bytes)
+SOOVPA<8> IDirect3DDevice8_GetOverlayUpdateStatus_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x8B },
+        { 0x08, 0x24 },
+        { 0x0C, 0x8B },
+        { 0x10, 0x00 },
+        { 0x14, 0x3B },
+        { 0x18, 0xC2 },
+        { 0x1C, 0xC3 }
+    }
+};
+
+// _D3DDevice_SetVerticalBlankCallback@4 (d3d8.lib 5849, 19 bytes)
+SOOVPA<8> IDirect3DDevice8_SetVerticalBlankCallback_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x01, 0x44 },
+        { 0x02, 0x24 },
+        { 0x05, 0x0D },
+        { 0x0A, 0x89 },
+        { 0x0C, 0xB8 },
+        { 0x0F, 0x00 },
+        { 0x12, 0x00 }
+    }
+};
+
+// _D3DDevice_DrawVerticesUP@16 (d3d8.lib 5849, 357 bytes)
+SOOVPA<8> IDirect3DDevice8_DrawVerticesUP_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x25, 0x8B },
+        { 0x48, 0x00 },
+        { 0x6D, 0xFC },
+        { 0x91, 0x8B },
+        { 0xB6, 0xC1 },
+        { 0xDA, 0x85 },
+        { 0xFF, 0x10 }
+    }
+};
+
+// _D3DDevice_SetLight@8 (d3d8.lib 5849, 691 bytes)
+SOOVPA<8> IDirect3DDevice8_SetLight_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x24, 0xF0 },
+        { 0x48, 0x0E },
+        { 0x6D, 0x00 },
+        { 0x91, 0x00 },
+        { 0xB6, 0x00 },
+        { 0xDA, 0x00 },
+        { 0xFF, 0xE9 }
+    }
+};
+
+// _D3DDevice_LightEnable@8 (d3d8.lib 5849, 337 bytes)
+SOOVPA<8> IDirect3DDevice8_LightEnable_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0xF6 },
+        { 0x48, 0x24 },
+        { 0x6D, 0x0F },
+        { 0x91, 0xCF },
+        { 0xB6, 0xF6 },
+        { 0xDA, 0x07 },
+        { 0xFF, 0xF9 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // IDirect3D8::CreateDevice
@@ -687,7 +820,7 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3D8::GetAdapterDisplayMode
     {
-        (OOVPA*)&IDirect3D8_GetAdapterDisplayMode_1_0_4627,
+        (OOVPA*)&IDirect3D8_GetAdapterDisplayMode_1_0_5849,
         XTL::EmuIDirect3D8_GetAdapterDisplayMode,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3D8_GetAdapterDisplayMode"
@@ -759,7 +892,7 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3DDevice8::GetTile
     {
-        (OOVPA*)&IDirect3DDevice8_GetTile_1_0_4627,
+        (OOVPA*)&IDirect3DDevice8_GetTile_1_0_5849,
         XTL::EmuIDirect3DDevice8_GetTile,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_GetTile"
@@ -935,7 +1068,7 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3DDevice8::UpdateOverlay
     {
-        (OOVPA*)&IDirect3DDevice8_UpdateOverlay_1_0_4627,
+        (OOVPA*)&IDirect3DDevice8_UpdateOverlay_1_0_5849,
         XTL::EmuIDirect3DDevice8_UpdateOverlay,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_UpdateOverlay"
@@ -943,7 +1076,7 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3DDevice8::GetOverlayUpdateStatus
     {
-        (OOVPA*)&IDirect3DDevice8_GetOverlayUpdateStatus_1_0_4627,
+        (OOVPA*)&IDirect3DDevice8_GetOverlayUpdateStatus_1_0_5849,
         XTL::EmuIDirect3DDevice8_GetOverlayUpdateStatus,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_GetOverlayUpdateStatus"
@@ -959,7 +1092,7 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3DDevice8::SetVerticalBlankCallback
     {
-        (OOVPA*)&IDirect3DDevice8_SetVerticalBlankCallback_1_0_4627,
+        (OOVPA*)&IDirect3DDevice8_SetVerticalBlankCallback_1_0_5849,
         XTL::EmuIDirect3DDevice8_SetVerticalBlankCallback,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetVerticalBlankCallback"
@@ -1127,15 +1260,15 @@ OOVPATable D3D8_1_0_5849[] =
     },
     // IDirect3DDevice8::DrawVerticesUP
     {
-        (OOVPA*)&IDirect3DDevice8_DrawVerticesUP_1_0_4627,
+        (OOVPA*)&IDirect3DDevice8_DrawVerticesUP_1_0_5849,
         XTL::EmuIDirect3DDevice8_DrawVerticesUP,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_DrawVerticesUP"
         #endif
     },
-    // IDirect3DDevice8::SetLight (* unchanged since 4361 *)
+    // IDirect3DDevice8::SetLight
     {
-        (OOVPA*)&IDirect3DDevice8_SetLight_1_0_4361,
+        (OOVPA*)&IDirect3DDevice8_SetLight_1_0_5849,
         XTL::EmuIDirect3DDevice8_SetLight,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetLight"
@@ -1157,9 +1290,9 @@ OOVPATable D3D8_1_0_5849[] =
         "EmuIDirect3DDevice8_SetMaterial"
         #endif
     },
-    // IDirect3DDevice8::LightEnable (* unchanged since 4361 *)
+    // IDirect3DDevice8::LightEnable
     {
-        (OOVPA*)&IDirect3DDevice8_LightEnable_1_0_4361,
+        (OOVPA*)&IDirect3DDevice8_LightEnable_1_0_5849,
         XTL::EmuIDirect3DDevice8_LightEnable,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_LightEnable"
