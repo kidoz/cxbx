@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe nv2a_demo
+CHK nv2a_demo.pb_init PASS
+CHK nv2a_demo.fb PASS
+CHK nv2a_demo.vbuf_alloc PASS
+CHK nv2a_demo.triangle_drawn PASS
+CHK nv2a_demo.quad_orange PASS
+CHK nv2a_demo.bg_blue PASS
+#result nv2a_demo verdict=PASS checks=6 fail=0
