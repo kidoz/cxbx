@@ -1082,10 +1082,16 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // cannot perturb the working HLE-D3D8 titles or the conformance suite.
 #define NV097_SET_CONTEXT_DMA_COLOR         0x0194u
 #define NV097_SET_CONTEXT_DMA_VERTEX_A      0x019Cu
+#define NV097_SET_CONTEXT_DMA_ZETA          0x0198u
 #define NV097_SET_SURFACE_CLIP_HORIZONTAL   0x0200u
 #define NV097_SET_SURFACE_CLIP_VERTICAL     0x0204u
+#define NV097_SET_SURFACE_FORMAT            0x0208u
 #define NV097_SET_SURFACE_PITCH             0x020Cu
 #define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
+#define NV097_SET_SURFACE_ZETA_OFFSET       0x0214u
+#define NV097_SET_DEPTH_TEST_ENABLE         0x030Cu
+#define NV097_SET_DEPTH_FUNC                0x0354u
+#define NV097_SET_DEPTH_MASK                0x035Cu
 #define NV097_SET_VIEWPORT_OFFSET           0x0A20u
 #define NV097_SET_VIEWPORT_SCALE            0x0AF0u
 #define NV097_SET_TRANSFORM_PROGRAM         0x0B00u
@@ -1141,6 +1147,15 @@ static ULONG g_EmuNv2aVpStart = 0;        // SET_TRANSFORM_PROGRAM_START
 static ULONG g_EmuNv2aVpExecMode = 0;     // SET_TRANSFORM_EXECUTION_MODE & 3
 static float g_EmuNv2aTransformConstant[192 * 4] = {};
 static ULONG g_EmuNv2aConstWriteFloat = 0; // SET_TRANSFORM_CONSTANT upload cursor
+// Depth buffer (Phase 3): bound zeta surface + the depth-test state. Testing is
+// off by default so Phase 0-2 titles (which never enable it) are unaffected.
+static ULONG g_EmuNv2aContextDmaZeta = 0;
+static ULONG g_EmuNv2aSurfaceZetaOffset = 0;
+static ULONG g_EmuNv2aSurfacePitchZeta = 0;
+static ULONG g_EmuNv2aSurfaceZetaFormat = 0; // 1=Z16, 2=Z24S8
+static bool  g_EmuNv2aDepthTest = false;
+static bool  g_EmuNv2aDepthWrite = true;
+static ULONG g_EmuNv2aDepthFunc = 0x0201;    // LESS
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
@@ -1225,10 +1240,19 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         {
             case NV097_SET_CONTEXT_DMA_COLOR:    g_EmuNv2aContextDmaColor = Data; break;
             case NV097_SET_CONTEXT_DMA_VERTEX_A: g_EmuNv2aContextDmaVertex = Data; break;
+            case NV097_SET_CONTEXT_DMA_ZETA:     g_EmuNv2aContextDmaZeta = Data; break;
             case NV097_SET_SURFACE_CLIP_HORIZONTAL: g_EmuNv2aSurfaceClipW = (Data >> 16) & 0xFFFF; break;
             case NV097_SET_SURFACE_CLIP_VERTICAL:   g_EmuNv2aSurfaceClipH = (Data >> 16) & 0xFFFF; break;
-            case NV097_SET_SURFACE_PITCH:        g_EmuNv2aSurfacePitchColor = Data & 0xFFFF; break;
+            case NV097_SET_SURFACE_FORMAT:       g_EmuNv2aSurfaceZetaFormat = (Data >> 4) & 0xF; break;
+            case NV097_SET_SURFACE_PITCH:
+                g_EmuNv2aSurfacePitchColor = Data & 0xFFFF;
+                g_EmuNv2aSurfacePitchZeta = (Data >> 16) & 0xFFFF;
+                break;
             case NV097_SET_SURFACE_COLOR_OFFSET: g_EmuNv2aSurfaceColorOffset = Data; break;
+            case NV097_SET_SURFACE_ZETA_OFFSET:  g_EmuNv2aSurfaceZetaOffset = Data; break;
+            case NV097_SET_DEPTH_TEST_ENABLE:    g_EmuNv2aDepthTest = (Data != 0); break;
+            case NV097_SET_DEPTH_FUNC:           g_EmuNv2aDepthFunc = Data; break;
+            case NV097_SET_DEPTH_MASK:           g_EmuNv2aDepthWrite = (Data != 0); break;
             case NV097_SET_BEGIN_END:            g_EmuNv2aBeginOp = Data; break;
             case NV097_DRAW_ARRAYS:
                 EmuNv2aRasterizeDrawArrays(Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
@@ -2244,14 +2268,46 @@ static ULONG EmuNv2aClampByte(float v)
     return (ULONG)(v + 0.5f);
 }
 
+// Where the current draw's pixels land: color surface + optional bound depth
+// (zeta) surface and the depth-test state. Populated once per DRAW_ARRAYS.
+struct EmuNv2aRasterTarget
+{
+    ULONG *Color;
+    int    PitchPx;
+    int    Width;
+    int    Height;
+    void  *Depth;        // NULL when no depth test this draw
+    int    DepthPitchB;
+    ULONG  DepthFormat;  // 1=Z16, 2=Z24S8
+    ULONG  DepthFunc;    // NV097_SET_DEPTH_FUNC value (0x200..0x207)
+    bool   DepthWrite;
+};
+
+static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
+{
+    switch(Func)
+    {
+        case 0x200: return false;        // NEVER
+        case 0x201: return Src < Dst;    // LESS
+        case 0x202: return Src == Dst;   // EQUAL
+        case 0x203: return Src <= Dst;   // LEQUAL
+        case 0x204: return Src > Dst;    // GREATER
+        case 0x205: return Src != Dst;   // NOTEQUAL
+        case 0x206: return Src >= Dst;   // GEQUAL
+        default:    return true;         // ALWAYS
+    }
+}
+
 // Gouraud-fill one screen-space triangle into a 32bpp surface with the edge-
 // function (half-plane) test. Barycentric weights (normalized by the signed
-// area, so winding is handled either way) both cover the triangle and blend the
-// three vertex diffuse colors per pixel; when the vertices share a color this
-// collapses to a flat fill. Clipped to the surface rectangle.
-static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Height,
-                                float ax, float ay, float bx, float by,
-                                float cx, float cy, ULONG Ca, ULONG Cb, ULONG Cc)
+// area, so winding is handled either way) cover the triangle and blend the three
+// vertex diffuse colors per pixel; uniform-colored vertices collapse to a flat
+// fill. When a depth surface is bound, the screen-space z (already the correct
+// hyperbolic value after the viewport z map) is interpolated linearly, tested
+// against the stored depth, and written back on pass. Clipped to the surface.
+static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
+                                float ax, float ay, float az, float bx, float by, float bz,
+                                float cx, float cy, float cz, ULONG Ca, ULONG Cb, ULONG Cc)
 {
     float Area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
     if(Area > -1e-3f && Area < 1e-3f)
@@ -2267,8 +2323,8 @@ static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Heig
     int MaxX = (int)HiXf + 1;   int MaxY = (int)HiYf + 1;
     if(MinX < 0) MinX = 0;
     if(MinY < 0) MinY = 0;
-    if(MaxX > Width)  MaxX = Width;
-    if(MaxY > Height) MaxY = Height;
+    if(MaxX > T->Width)  MaxX = T->Width;
+    if(MaxY > T->Height) MaxY = T->Height;
 
     bool Uniform = (Ca == Cb && Cb == Cc);
     float Aa = (float)((Ca >> 24) & 0xFF), Ra = (float)((Ca >> 16) & 0xFF);
@@ -2277,6 +2333,11 @@ static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Heig
     float Gb = (float)((Cb >>  8) & 0xFF), Bvb = (float)(Cb & 0xFF);
     float Ac = (float)((Cc >> 24) & 0xFF), Rc = (float)((Cc >> 16) & 0xFF);
     float Gc = (float)((Cc >>  8) & 0xFF), Bvc = (float)(Cc & 0xFF);
+
+    bool  UseDepth   = (T->Depth != NULL);
+    bool  Depth24    = (T->DepthFormat == 2);
+    float DepthMaxF  = Depth24 ? 16777215.0f : 65535.0f;
+    int   DepthPitchElem = Depth24 ? (T->DepthPitchB / 4) : (T->DepthPitchB / 2);
 
     for(int Y = MinY; Y < MaxY; Y++)
     {
@@ -2289,6 +2350,33 @@ static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Heig
             float lc = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * InvArea;
             if(la < -1e-4f || lb < -1e-4f || lc < -1e-4f)
                 continue;
+
+            if(UseDepth)
+            {
+                float zf = la * az + lb * bz + lc * cz;
+                if(zf < 0.0f) zf = 0.0f;
+                if(zf > DepthMaxF) zf = DepthMaxF;
+                ULONG Src = (ULONG)(zf + 0.5f);
+
+                if(Depth24)
+                {
+                    ULONG *Slot = (ULONG *)T->Depth + Y * DepthPitchElem + X;
+                    ULONG Dst = (*Slot) >> 8;             // 24-bit depth in high bits
+                    if(!EmuNv2aDepthPass(T->DepthFunc, Src, Dst))
+                        continue;
+                    if(T->DepthWrite)
+                        *Slot = (Src << 8) | (*Slot & 0xFF); // preserve stencil
+                }
+                else
+                {
+                    unsigned short *Slot = (unsigned short *)T->Depth + Y * DepthPitchElem + X;
+                    ULONG Dst = *Slot;
+                    if(!EmuNv2aDepthPass(T->DepthFunc, Src, Dst))
+                        continue;
+                    if(T->DepthWrite)
+                        *Slot = (unsigned short)Src;
+                }
+            }
 
             ULONG Color;
             if(Uniform)
@@ -2303,7 +2391,7 @@ static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Heig
                 ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
                 Color = (A << 24) | (R << 16) | (G << 8) | B;
             }
-            Surface[Y * PitchPx + X] = Color;
+            T->Color[Y * T->PitchPx + X] = Color;
         }
     }
 }
@@ -2344,7 +2432,32 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     if(Width <= 0 || Width > PitchPx) Width = PitchPx;
     int Height = (int)g_EmuNv2aSurfaceClipH;
     if(Height <= 0 || Height > 4096) Height = 480;
-    ULONG *Surface = (ULONG *)(uintptr_t)SurfaceHost;
+
+    EmuNv2aRasterTarget Target = {};
+    Target.Color = (ULONG *)(uintptr_t)SurfaceHost;
+    Target.PitchPx = PitchPx;
+    Target.Width = Width;
+    Target.Height = Height;
+
+    // Resolve the depth (zeta) surface when a depth test is enabled and a zeta
+    // surface is bound (same base-0 raw-pointer fallback as the color surface).
+    if(g_EmuNv2aDepthTest && g_EmuNv2aSurfaceZetaFormat != 0 && g_EmuNv2aSurfaceZetaOffset != 0)
+    {
+        ULONG ZetaBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaZeta);
+        ULONG ZetaHost = EmuNv2aHostPointer(ZetaBase + g_EmuNv2aSurfaceZetaOffset);
+        if(ZetaHost == 0 && ZetaBase != 0)
+            ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceZetaOffset);
+        if(ZetaHost != 0)
+        {
+            Target.Depth = (void *)(uintptr_t)ZetaHost;
+            Target.DepthFormat = g_EmuNv2aSurfaceZetaFormat;
+            Target.DepthFunc = g_EmuNv2aDepthFunc;
+            Target.DepthWrite = g_EmuNv2aDepthWrite;
+            Target.DepthPitchB = (int)g_EmuNv2aSurfacePitchZeta;
+            if(Target.DepthPitchB <= 0)
+                Target.DepthPitchB = Width * (g_EmuNv2aSurfaceZetaFormat == 2 ? 4 : 2);
+        }
+    }
 
     EmuNv2aVertexArrayState *Pos = &g_EmuNv2aVertexArray[EmuNv2aAttrPosition];
     EmuNv2aVertexArrayState *Dif = &g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse];
@@ -2373,13 +2486,14 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     static float VX[4096];
     static float VY[4096];
+    static float VZ[4096];
     static ULONG VC[4096];
     if(Count > 4096) Count = 4096;
 
     for(ULONG i = 0; i < Count; i++)
     {
         ULONG Index = Start + i;
-        float Xc, Yc, W;
+        float Xc, Yc, Zc = 0.0f, W;
         ULONG Color = 0xFFFFFFFF;
 
         if(VpActive)
@@ -2421,7 +2535,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             EmuVshExecuteProgram(g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
                                  (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
                                  Input, OutPos, OutCol);
-            Xc = OutPos[0]; Yc = OutPos[1]; W = OutPos[3];
+            Xc = OutPos[0]; Yc = OutPos[1]; Zc = OutPos[2]; W = OutPos[3];
             ULONG R = EmuNv2aClampByte(OutCol[0] * 255.0f);
             ULONG G = EmuNv2aClampByte(OutCol[1] * 255.0f);
             ULONG B = EmuNv2aClampByte(OutCol[2] * 255.0f);
@@ -2433,6 +2547,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             ULONG PosHost = EmuNv2aHostPointer(VertexBase + Pos->Offset + Index * PosStride);
             Xc = EmuNv2aReadHostFloat(PosHost);
             Yc = EmuNv2aReadHostFloat(PosHost + 4);
+            Zc = (PosSize >= 3) ? EmuNv2aReadHostFloat(PosHost + 8) : 0.0f;
             W  = (PosSize >= 4) ? EmuNv2aReadHostFloat(PosHost + 12) : 1.0f;
 
             if(DifStride != 0)
@@ -2463,6 +2578,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
         float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
         VX[i] = (Xc * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
         VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
+        VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
         VC[i] = Color;
     }
 
@@ -2474,8 +2590,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 5: // TRIANGLES
                 for(ULONG i = 0; i + 2 < Count; i += 3)
                 {
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+2], VY[i+2], VZ[i+2],
                         VC[i], VC[i+1], VC[i+2]);
                     Triangles++;
                 }
@@ -2483,8 +2599,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 6: // TRIANGLE_STRIP
                 for(ULONG i = 0; i + 2 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+2], VY[i+2], VZ[i+2],
                         VC[i], VC[i+1], VC[i+2]);
                     Triangles++;
                 }
@@ -2493,8 +2609,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 10: // POLYGON
                 for(ULONG i = 1; i + 1 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[0], VY[0], VX[i], VY[i], VX[i+1], VY[i+1],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[0], VY[0], VZ[0], VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1],
                         VC[0], VC[i], VC[i+1]);
                     Triangles++;
                 }
@@ -2502,11 +2618,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 8: // QUADS
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+2], VY[i+2], VZ[i+2],
                         VC[i], VC[i+1], VC[i+2]);
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+2], VY[i+2], VX[i+3], VY[i+3],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[i], VY[i], VZ[i], VX[i+2], VY[i+2], VZ[i+2], VX[i+3], VY[i+3], VZ[i+3],
                         VC[i], VC[i+2], VC[i+3]);
                     Triangles += 2;
                 }
@@ -2514,11 +2630,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 9: // QUAD_STRIP
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+3], VY[i+3],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+3], VY[i+3], VZ[i+3],
                         VC[i], VC[i+1], VC[i+3]);
-                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+3], VY[i+3], VX[i+2], VY[i+2],
+                    EmuNv2aFillTriangle(&Target,
+                        VX[i], VY[i], VZ[i], VX[i+3], VY[i+3], VZ[i+3], VX[i+2], VY[i+2], VZ[i+2],
                         VC[i], VC[i+3], VC[i+2]);
                     Triangles += 2;
                 }
@@ -2536,10 +2652,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     if(g_EmuNv2aRasterLogCount < 32)
     {
-        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu) vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
+        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu) depth=%s(fmt=%lu func=0x%lX) vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
                VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount,
+               Target.Depth ? "on" : "off", g_EmuNv2aSurfaceZetaFormat, g_EmuNv2aDepthFunc,
                g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
                g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
                VX[0], VY[0], VC[0]);
