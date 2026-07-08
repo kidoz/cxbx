@@ -1612,6 +1612,47 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Stop
 }
 
 // ******************************************************************
+// * func: EmuXAudioDownloadEffectsImage
+// ******************************************************************
+HRESULT WINAPI XTL::EmuXAudioDownloadEffectsImage
+(
+    LPCSTR                  pszImageName,
+    LPVOID                  pImageLoc,
+    DWORD                   dwFlags,
+    LPVOID                 *ppImageDesc
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuXAudioDownloadEffectsImage\n"
+               "(\n"
+               "   pszImageName              : 0x%.08X\n"
+               "   pImageLoc                 : 0x%.08X\n"
+               "   dwFlags                   : 0x%.08X\n"
+               "   ppImageDesc               : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pszImageName, pImageLoc, dwFlags, ppImageDesc);
+    }
+    #endif
+
+    // Loads a DSP effects image (dsstdfx.bin) into the Xbox GP DSP. The host
+    // has no DSP; MUST be hooked -- the guest implementation cold-boots the
+    // whole MCPX core (CMcpxCore::SetupEncodeProcessor NULL-derefs against
+    // the register-level APU model). Hand back a zeroed image description so
+    // callers that read effect indices get benign state.
+    static DWORD s_ZeroImageDesc[64] = {0};
+
+    if(ppImageDesc != 0)
+        *ppImageDesc = s_ZeroImageDesc;
+
+    EmuSwapFS();   // XBox FS
+
+    return S_OK;
+}
+
+// ******************************************************************
 // * func: EmuDirectSoundDoWork
 // ******************************************************************
 VOID WINAPI XTL::EmuDirectSoundDoWork()
