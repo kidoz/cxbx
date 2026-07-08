@@ -972,6 +972,21 @@ SOOVPA<8> XAudioDownloadEffectsImage_1_0_5849 =
         { 0xFF, 0x85 }
     }
 };
+// _DirectSoundUseFullHRTF@0 (dsound.lib, 31 bytes)
+SOOVPA<8> DirectSoundUseFullHRTF_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x06, 0x0F },
+        { 0x08, 0xF0 },
+        { 0x0E, 0x85 },
+        { 0x11, 0x74 },
+        { 0x13, 0x68 },
+        { 0x19, 0x15 },
+        { 0x1E, 0xC3 }
+    }
+};
 OOVPATable DSound_1_0_5849[] =
 {
     // DirectSoundCreate
@@ -1392,6 +1407,14 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuXAudioDownloadEffectsImage,
         #ifdef _DEBUG_TRACE
         "EmuXAudioDownloadEffectsImage"
+        #endif
+    },
+    // DirectSoundUseFullHRTF
+    {
+        (OOVPA*)&DirectSoundUseFullHRTF_1_0_5849,
+        XTL::EmuDirectSoundUseFullHRTF,
+        #ifdef _DEBUG_TRACE
+        "EmuDirectSoundUseFullHRTF"
         #endif
     },
 };
