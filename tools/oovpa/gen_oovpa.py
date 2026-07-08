@@ -171,9 +171,13 @@ def _extract_from_member(member: bytes, sym: str) -> Function | None:
 # --------------------------------------------------------------------------- #
 
 
-def pick_pairs(fn: Function, want: int, max_offset: int) -> list[tuple[int, int]]:
+def pick_pairs(fn: Function, want: int, max_offset: int,
+               allow_fewer: bool = False) -> list[tuple[int, int]]:
     """Evenly spread `want` (offset, value) pairs over the function, skipping
-    relocated dwords. Offset 0 is always included (anchors the scan)."""
+    relocated dwords. Offset 0 is always included (anchors the scan).
+    `allow_fewer` permits tiny mostly-relocated functions (thin call stubs)
+    to yield fewer pairs -- only safe for XRef signatures, where the rel32
+    call-target pair carries the discrimination."""
     banned = set()
     for r in fn.reloc_offsets:
         banned.update(range(r, r + 4))
@@ -181,7 +185,10 @@ def pick_pairs(fn: Function, want: int, max_offset: int) -> list[tuple[int, int]
 
     usable = [o for o in range(limit + 1) if o not in banned]
     if len(usable) < want:
-        sys.exit(f"{fn.name}: only {len(usable)} usable offsets, need {want}")
+        if allow_fewer and usable:
+            want = len(usable)
+        else:
+            sys.exit(f"{fn.name}: only {len(usable)} usable offsets, need {want}")
 
     picked = [0] if 0 in usable else [usable[0]]
     # Ideal evenly-spaced targets; snap each to the nearest usable offset.
@@ -487,7 +494,7 @@ def main() -> int:
             continue
         chain_snips, int_must, int_may, chain_enums = chain
 
-        wrap_pairs = pick_pairs(wrapper, args.pairs, args.max_offset)
+        wrap_pairs = pick_pairs(wrapper, args.pairs, args.max_offset, allow_fewer=True)
         ok = True
         for p, img in must_imgs:
             n = count_xref_matches(img, wrap_pairs, xref_off, int_must[p])
