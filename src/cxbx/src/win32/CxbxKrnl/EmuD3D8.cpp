@@ -1547,6 +1547,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // ******************************************************************
     // * create emulated shader struct
     // ******************************************************************
+    // NOTE: pFunction is Xbox-native (version token low word 0x2078 followed by
+    // 128-bit NV2A microcode) and pDeclaration uses Xbox-extended vertex types;
+    // the host runtime accepts them without validation but the resulting shader
+    // is garbage. Running these for real needs an NV2A -> vs.1.1 recompiler
+    // (Cxbx-Reloaded's VshDecoder approach).
     X_D3DVertexShader *pD3DVertexShader = new X_D3DVertexShader();
 
     // Todo: Intelligently fill out these fields as necessary
@@ -1604,12 +1609,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
     }
     #endif
 
-    HRESULT hRet;
-
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
-    /*
     HRESULT hRet = g_pD3DDevice8->SetVertexShaderConstant
     (
         Register,
@@ -1618,9 +1620,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
     );
 
     if(FAILED(hRet))
-    */
     {
-        printf("*Warning* we're lying about setting a vertex shader constant!\n");
+        EmuWarning("SetVertexShaderConstant failed (Register = %d, Count = %d)", Register, ConstantCount);
 
         hRet = D3D_OK;
     }
@@ -4598,8 +4599,18 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader
                GetCurrentThreadId(), Handle);
     }
     #endif
- 
-    g_pD3DDevice8->SetVertexShader(Handle);
+
+    // A handle from EmuIDirect3DDevice8_CreateVertexShader is a pointer to our
+    // X_D3DVertexShader wrapper (heap, >= 0x10000); resolve it to the host
+    // shader handle it wraps. Raw FVF handles (small bit patterns) pass through.
+    DWORD HostHandle = Handle;
+    if(Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader)))
+        HostHandle = ((X_D3DVertexShader*)Handle)->Handle;
+
+    HRESULT hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
+
+    if(FAILED(hRet))
+        EmuWarning("SetVertexShader failed (Handle = 0x%.08X, Host = 0x%.08X)", Handle, HostHandle);
 
     EmuSwapFS();   // XBox FS
 
