@@ -92,6 +92,7 @@ class X_CDirectSoundStream
                 PVOID                   pOutputBuffer                       // TODO: Fillout params
             );
             HRESULT (WINAPI *Discontinuity)(X_CDirectSoundStream *pThis);   // 0x14
+            HRESULT (WINAPI *Flush)(X_CDirectSoundStream *pThis);           // 0x18
         }
         *pVtbl;
 
@@ -607,6 +608,44 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_GetStatus
 (
     X_CDirectSoundBuffer   *pThis,
     LPDWORD                 pdwStatus
+);
+
+// ******************************************************************
+// * func: EmuDirectSoundDoWork
+// ******************************************************************
+VOID WINAPI EmuDirectSoundDoWork();
+
+// ******************************************************************
+// * func: EmuCDirectSoundStream_Flush
+// ******************************************************************
+HRESULT WINAPI EmuCDirectSoundStream_Flush(X_CDirectSoundStream *pThis);
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_FlushEx
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundStream_FlushEx
+(
+    X_CDirectSoundStream   *pThis,
+    DWORD                   dwFlags,
+    LONGLONG                rtTimeStamp
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetEG
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundStream_SetEG
+(
+    X_CDirectSoundStream   *pThis,
+    LPVOID                  pEnvelopeDesc
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetMixBinsS
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundStream_SetMixBinsS
+(
+    X_CDirectSoundStream   *pThis,
+    LPVOID                  pMixBins
 );
 
 // ******************************************************************

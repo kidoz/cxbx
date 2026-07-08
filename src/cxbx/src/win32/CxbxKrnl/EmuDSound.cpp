@@ -73,7 +73,8 @@ XTL::X_CDirectSoundStream::_vtbl XTL::X_CDirectSoundStream::vtbl =
     &XTL::EmuCDirectSoundStream_Release,        // 0x04
     {0xCDCDCDCD, 0xCDCDCDCD},                   // 0x08 - Unknown
     &XTL::EmuCDirectSoundStream_Process,        // 0x10 - Process
-    &XTL::EmuCDirectSoundStream_Discontinuity   // 0x14 - Discontinuity
+    &XTL::EmuCDirectSoundStream_Discontinuity,  // 0x14 - Discontinuity
+    &XTL::EmuCDirectSoundStream_Flush           // 0x18 - Flush
 };
 
 // ******************************************************************
@@ -1608,6 +1609,111 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Stop
     EmuSwapFS();   // XBox FS
 
     return hRet;
+}
+
+// ******************************************************************
+// * func: EmuDirectSoundDoWork
+// ******************************************************************
+VOID WINAPI XTL::EmuDirectSoundDoWork()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuDirectSoundDoWork();\n", GetCurrentThreadId());
+    #endif
+
+    // The XDK requires titles to pump this every frame to advance the Xbox
+    // DSound engine. The host DSound mixes on its own thread, so there is
+    // nothing to pump -- but this MUST be hooked: the guest implementation
+    // walks voice lists that were never initialized (DirectSoundCreate is
+    // HLE'd) and NULL-derefs.
+
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
+// * func: EmuCDirectSoundStream_Flush
+// ******************************************************************
+HRESULT WINAPI XTL::EmuCDirectSoundStream_Flush(X_CDirectSoundStream *pThis)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuCDirectSoundStream_Flush(0x%.08X);\n", GetCurrentThreadId(), pThis);
+    #endif
+
+    // Streams are not host-backed yet; nothing to flush.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_FlushEx
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundStream_FlushEx
+(
+    X_CDirectSoundStream   *pThis,
+    DWORD                   dwFlags,
+    LONGLONG                rtTimeStamp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuIDirectSoundStream_FlushEx(0x%.08X, 0x%.08X);\n", GetCurrentThreadId(), pThis, dwFlags);
+    #endif
+
+    // Streams are not host-backed yet; nothing to flush.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetEG
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundStream_SetEG
+(
+    X_CDirectSoundStream   *pThis,
+    LPVOID                  pEnvelopeDesc
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuIDirectSoundStream_SetEG(0x%.08X, 0x%.08X);\n", GetCurrentThreadId(), pThis, pEnvelopeDesc);
+    #endif
+
+    // Xbox-only DSP envelope generator; accept and ignore.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetMixBinsS
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundStream_SetMixBinsS
+(
+    X_CDirectSoundStream   *pThis,
+    LPVOID                  pMixBins
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuIDirectSoundStream_SetMixBinsS(0x%.08X, 0x%.08X);\n", GetCurrentThreadId(), pThis, pMixBins);
+    #endif
+
+    // Xbox-only speaker-routing matrix; accept and ignore.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
 }
 
 // ******************************************************************

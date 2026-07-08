@@ -889,6 +889,74 @@ SOOVPA<9> IDirectSoundBuffer8_GetStatus_1_0_5849 =
     }
 };
 
+// ?DoWork@CDirectSound@DirectSound@@QAGXXZ (dsound.lib, 49 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSound_DoWork_1_0_5849 =
+{
+    0, 8, XREF_DS5849_DOWORK, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x14, 0x24 },
+        { 0x19, 0xE8 },
+        { 0x22, 0x68 },
+        { 0x28, 0x15 },
+        { 0x30, 0x00 }
+    }
+};
+
+// _DirectSoundDoWork@0 (dsound.lib, 41 bytes; call@0x14 -> XREF_DS5849_DOWORK)
+SOOVPA<9> DirectSoundDoWork_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x14, XREF_DS5849_DOWORK },
+        { 0x00, 0x56 },
+        { 0x06, 0x0F },
+        { 0x09, 0xA1 },
+        { 0x11, 0x06 },
+        { 0x18, 0x85 },
+        { 0x1C, 0x0B },
+        { 0x22, 0xFF },
+        { 0x28, 0xC3 }
+    }
+};
+
+// ?FlushEx@CDirectSoundStream@DirectSound@@QAGJ_JK@Z (dsound.lib, 106 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundStream_FlushExI_1_0_5849 =
+{
+    0, 8, XREF_DS5849_STR_FLUSHEX, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x0F, 0x00 },
+        { 0x1E, 0xFF },
+        { 0x2D, 0x14 },
+        { 0x3C, 0x75 },
+        { 0x4B, 0x00 },
+        { 0x5C, 0xFF },
+        { 0x69, 0x00 }
+    }
+};
+
+// _IDirectSoundStream_FlushEx@16 (dsound.lib, 24 bytes; call@0x11 -> XREF_DS5849_STR_FLUSHEX)
+SOOVPA<9> IDirectSoundStream_FlushEx_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x11, XREF_DS5849_STR_FLUSHEX },
+        { 0x00, 0xFF },
+        { 0x03, 0x10 },
+        { 0x06, 0x24 },
+        { 0x09, 0x74 },
+        { 0x0D, 0x74 },
+        { 0x10, 0xE8 },
+        { 0x15, 0xC2 },
+        { 0x17, 0x00 }
+    }
+};
+
 OOVPATable DSound_1_0_5849[] =
 {
     // DirectSoundCreate
@@ -1271,6 +1339,36 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuIDirectSoundBuffer8_GetStatus,
         #ifdef _DEBUG_TRACE
         "EmuIDirectSoundBuffer8_GetStatus"
+        #endif
+    },
+    // CDirectSound::DoWork (XREF save)
+    {
+        (OOVPA*)&CDirectSound_DoWork_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSound::DoWork (XREF)"
+        #endif
+    },
+    // DirectSoundDoWork
+    {
+        (OOVPA*)&DirectSoundDoWork_1_0_5849,
+        XTL::EmuDirectSoundDoWork,
+        #ifdef _DEBUG_TRACE
+        "EmuDirectSoundDoWork"
+        #endif
+    },
+    // CDirectSoundStream::FlushEx (XREF save)
+    {
+        (OOVPA*)&CDirectSoundStream_FlushExI_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundStream::FlushEx (XREF)"
+        #endif
+    },
+    // IDirectSoundStream::FlushEx
+    {
+        (OOVPA*)&IDirectSoundStream_FlushEx_1_0_5849,
+        XTL::EmuIDirectSoundStream_FlushEx,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_FlushEx"
         #endif
     },
 };

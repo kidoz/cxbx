@@ -183,7 +183,6 @@ static const XFUNC k_dsound[] = {
     XF(DirectSoundCreate, 1),
     XF(DirectSoundCreateBuffer, 1),
     XF(DirectSoundCreateStream, 1),
-    XF(DirectSoundDoWork, 0),
     XF(IDirectSound_CreateSoundBuffer, 1),
     XF(IDirectSound_SetI3DL2Listener, 1),
     XF(IDirectSound_SetMixBinHeadroom, 1),
@@ -212,6 +211,17 @@ static const XFUNC k_dsound[] = {
     XF(IDirectSoundBuffer_Unlock, 0),
     XF(IDirectSoundBuffer_SetMixBins, 1),
     XF(IDirectSoundBuffer_GetStatus, 1),
+    // Per-frame pump + the stream wrappers NestopiaX's music path drives.
+    // The four expect=0 stream setters are twin forests all the way down
+    // (wrapper, internal, and voice-level callees all byte-collide) --
+    // documented debt; their un-HLE'd wrappers run guest code against the
+    // fake X_CDirectSoundStream object.
+    XF(DirectSoundDoWork, 1),
+    XF(IDirectSoundStream_Pause, 0),
+    XF(IDirectSoundStream_FlushEx, 1),
+    XF(IDirectSoundStream_SetEG, 0),
+    XF(IDirectSoundStream_SetMixBins, 0),
+    XF(IDirectSoundStream_SetVolume, 0),
 };
 
 // XAPI input family (Xapi.1.0.5849.inl). These are the functions a title's

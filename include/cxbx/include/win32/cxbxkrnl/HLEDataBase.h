@@ -190,6 +190,8 @@ enum XRefDataBaseOffset
     XREF_DS5849_BUF_SETMIXBINS,
     XREF_DS5849_BUF_GETSTATUS_T,
     XREF_DS5849_BUF_GETSTATUS,
+    XREF_DS5849_DOWORK,
+    XREF_DS5849_STR_FLUSHEX,
     // XDK 5849 XAPI input: XID_fCloseDevice internal (the 12-byte
     // XInputClose thin wrapper is matched by its call target).
     XREF_XAPI5849_XINPUTCLOSE
