@@ -1070,8 +1070,49 @@ static ULONG g_EmuNv2aScanoutDumpIndex = 0;
 // is assumed. See EmuNv2aDumpScanout.
 extern "C" ULONG g_EmuDisplayPitch = 0;
 
+// ---------------------------------------------------------------------------
+// NV2A software rasterizer (Phase 0): the register model above captures the
+// method stream but never turns a triangle into pixels, so raw-NV2A titles
+// (nxdk / non-XDK homebrew that render through the pushbuffer instead of the
+// HLE D3D8 path) present a black frame. Phase 0 takes the simplest slice that
+// proves the pipeline end to end: a bound color surface + pre-transformed
+// (screen-space) vertices fetched from the vertex arrays + a flat-shaded
+// edge-function triangle raster writing straight into the surface. No z-buffer,
+// no texturing, no vertex program yet. Gated behind CXBX_NV2A_RASTER so it
+// cannot perturb the working HLE-D3D8 titles or the conformance suite.
+#define NV097_SET_CONTEXT_DMA_COLOR         0x0194u
+#define NV097_SET_CONTEXT_DMA_VERTEX_A      0x019Cu
+#define NV097_SET_SURFACE_CLIP_HORIZONTAL   0x0200u
+#define NV097_SET_SURFACE_CLIP_VERTICAL     0x0204u
+#define NV097_SET_SURFACE_PITCH             0x020Cu
+#define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
+#define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
+#define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
+#define NV097_DRAW_ARRAYS                   0x1810u
+#define EmuNv2aVertexAttrCount              16u
+#define EmuNv2aAttrPosition                 0u
+#define EmuNv2aAttrDiffuse                  3u
+
+struct EmuNv2aVertexArrayState
+{
+    ULONG Offset;
+    ULONG Format;
+};
+
+static EmuNv2aVertexArrayState g_EmuNv2aVertexArray[EmuNv2aVertexAttrCount] = {};
+static ULONG g_EmuNv2aContextDmaColor = 0;
+static ULONG g_EmuNv2aContextDmaVertex = 0;
+static ULONG g_EmuNv2aSurfaceColorOffset = 0;
+static ULONG g_EmuNv2aSurfacePitchColor = 0;
+static ULONG g_EmuNv2aSurfaceClipW = 0;
+static ULONG g_EmuNv2aSurfaceClipH = 0;
+static ULONG g_EmuNv2aBeginOp = 0;
+static bool  g_bEmuNv2aRaster = false;
+static bool  g_bEmuNv2aRasterChecked = false;
+
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
+static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count);
 
 static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data)
 {
@@ -1144,6 +1185,34 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         {
             if(g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0)
                 EmuNv2aDumpSourceTexture(0);
+        }
+
+        // Phase 0 rasterizer state: track the color surface, the vertex arrays,
+        // and the active primitive so a DRAW_ARRAYS can be turned into pixels.
+        switch(Method)
+        {
+            case NV097_SET_CONTEXT_DMA_COLOR:    g_EmuNv2aContextDmaColor = Data; break;
+            case NV097_SET_CONTEXT_DMA_VERTEX_A: g_EmuNv2aContextDmaVertex = Data; break;
+            case NV097_SET_SURFACE_CLIP_HORIZONTAL: g_EmuNv2aSurfaceClipW = (Data >> 16) & 0xFFFF; break;
+            case NV097_SET_SURFACE_CLIP_VERTICAL:   g_EmuNv2aSurfaceClipH = (Data >> 16) & 0xFFFF; break;
+            case NV097_SET_SURFACE_PITCH:        g_EmuNv2aSurfacePitchColor = Data & 0xFFFF; break;
+            case NV097_SET_SURFACE_COLOR_OFFSET: g_EmuNv2aSurfaceColorOffset = Data; break;
+            case NV097_SET_BEGIN_END:            g_EmuNv2aBeginOp = Data; break;
+            case NV097_DRAW_ARRAYS:
+                EmuNv2aRasterizeDrawArrays(Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
+                break;
+            default:
+                if(Method >= NV097_SET_VERTEX_DATA_ARRAY_OFFSET &&
+                   Method < NV097_SET_VERTEX_DATA_ARRAY_OFFSET + EmuNv2aVertexAttrCount * 4)
+                {
+                    g_EmuNv2aVertexArray[(Method - NV097_SET_VERTEX_DATA_ARRAY_OFFSET) / 4].Offset = Data;
+                }
+                else if(Method >= NV097_SET_VERTEX_DATA_ARRAY_FORMAT &&
+                        Method < NV097_SET_VERTEX_DATA_ARRAY_FORMAT + EmuNv2aVertexAttrCount * 4)
+                {
+                    g_EmuNv2aVertexArray[(Method - NV097_SET_VERTEX_DATA_ARRAY_FORMAT) / 4].Format = Data;
+                }
+                break;
         }
     }
 
@@ -2081,6 +2150,233 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 
     delete[] Pixels;
     delete[] Surface;
+}
+
+// Read the Phase 0 raster gate once. CXBX_NV2A_RASTER=1 turns on the pixel path;
+// off by default so the HLE-D3D8 titles and the conformance suite are untouched.
+static bool EmuNv2aRasterEnabled()
+{
+    if(!g_bEmuNv2aRasterChecked)
+    {
+        char Buffer[8] = {0};
+        DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_RASTER", Buffer, sizeof(Buffer));
+        g_bEmuNv2aRaster = (Length > 0 && Buffer[0] == '1');
+        g_bEmuNv2aRasterChecked = true;
+    }
+    return g_bEmuNv2aRaster;
+}
+
+static float EmuNv2aReadHostFloat(ULONG HostAddress)
+{
+    float Value = 0.0f;
+    if(HostAddress != 0)
+        EmuTryReadHost(HostAddress, &Value, sizeof(Value));
+    return Value;
+}
+
+// Flat-fill one screen-space triangle into a 32bpp surface with the edge-function
+// (half-plane) test. Vertices are already in pixel coordinates (Phase 0 assumes a
+// passthrough vertex program). Winding is unknown, so a point is inside when the
+// three edge functions share a sign. Clipped to the surface rectangle.
+static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Height,
+                                float ax, float ay, float bx, float by,
+                                float cx, float cy, ULONG Color)
+{
+    float Area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if(Area > -1e-3f && Area < 1e-3f)
+        return; // degenerate / zero-area
+
+    float LoXf = ax < bx ? (ax < cx ? ax : cx) : (bx < cx ? bx : cx);
+    float HiXf = ax > bx ? (ax > cx ? ax : cx) : (bx > cx ? bx : cx);
+    float LoYf = ay < by ? (ay < cy ? ay : cy) : (by < cy ? by : cy);
+    float HiYf = ay > by ? (ay > cy ? ay : cy) : (by > cy ? by : cy);
+
+    int MinX = (int)LoXf;       int MinY = (int)LoYf;
+    int MaxX = (int)HiXf + 1;   int MaxY = (int)HiYf + 1;
+    if(MinX < 0) MinX = 0;
+    if(MinY < 0) MinY = 0;
+    if(MaxX > Width)  MaxX = Width;
+    if(MaxY > Height) MaxY = Height;
+
+    for(int Y = MinY; Y < MaxY; Y++)
+    {
+        for(int X = MinX; X < MaxX; X++)
+        {
+            float px = (float)X + 0.5f, py = (float)Y + 0.5f;
+            float e0 = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+            float e1 = (cx - bx) * (py - by) - (cy - by) * (px - bx);
+            float e2 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
+            bool Inside = (e0 >= 0 && e1 >= 0 && e2 >= 0) ||
+                          (e0 <= 0 && e1 <= 0 && e2 <= 0);
+            if(Inside)
+                Surface[Y * PitchPx + X] = Color;
+        }
+    }
+}
+
+// Phase 0 draw: fetch pre-transformed vertices from the position/diffuse arrays,
+// assemble the active primitive, and flat-shade each triangle into the bound
+// color surface. Proves the pushbuffer -> pixels path without a vertex program,
+// z-buffer, or texturing.
+static ULONG g_EmuNv2aRasterLogCount = 0;
+
+static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
+{
+    if(!EmuNv2aRasterEnabled() || g_EmuNv2aBeginOp == 0 || Count < 3)
+        return;
+
+    ULONG SurfaceBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
+    ULONG SurfaceHost = EmuNv2aHostPointer(SurfaceBase + g_EmuNv2aSurfaceColorOffset);
+    // Fall back to treating the offset as a raw guest pointer (base-0 DMA, the
+    // common Xbox case) when the color DMA base did not land on mapped memory.
+    if(SurfaceHost == 0 && SurfaceBase != 0 && g_EmuNv2aSurfaceColorOffset != 0)
+        SurfaceHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceColorOffset);
+    if(SurfaceHost == 0)
+    {
+        if(g_EmuNv2aRasterLogCount < 16)
+        {
+            printf("Emu (0x%lX): NV2A raster: surface unresolved (dma=0x%.08lX off=0x%.08lX).\n",
+                   GetCurrentThreadId(), g_EmuNv2aContextDmaColor, g_EmuNv2aSurfaceColorOffset);
+            fflush(stdout);
+            g_EmuNv2aRasterLogCount++;
+        }
+        return;
+    }
+
+    int PitchB = (int)g_EmuNv2aSurfacePitchColor;
+    if(PitchB <= 0) PitchB = 640 * 4;
+    int PitchPx = PitchB / 4;
+    int Width = (int)g_EmuNv2aSurfaceClipW;
+    if(Width <= 0 || Width > PitchPx) Width = PitchPx;
+    int Height = (int)g_EmuNv2aSurfaceClipH;
+    if(Height <= 0 || Height > 4096) Height = 480;
+    ULONG *Surface = (ULONG *)(uintptr_t)SurfaceHost;
+
+    EmuNv2aVertexArrayState *Pos = &g_EmuNv2aVertexArray[EmuNv2aAttrPosition];
+    EmuNv2aVertexArrayState *Dif = &g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse];
+    ULONG VertexBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaVertex);
+    ULONG PosStride = (Pos->Format >> 8) & 0xFF;
+    ULONG PosType   = Pos->Format & 0x0F;
+    ULONG DifStride = (Dif->Format >> 8) & 0xFF;
+    ULONG DifType   = Dif->Format & 0x0F;
+    if(PosStride == 0 || PosType != 2 /* TYPE_F */)
+    {
+        if(g_EmuNv2aRasterLogCount < 16)
+        {
+            printf("Emu (0x%lX): NV2A raster: position array not float (fmt=0x%.08lX); skipping.\n",
+                   GetCurrentThreadId(), Pos->Format);
+            fflush(stdout);
+            g_EmuNv2aRasterLogCount++;
+        }
+        return;
+    }
+
+    static float VX[4096];
+    static float VY[4096];
+    static ULONG VC[4096];
+    if(Count > 4096) Count = 4096;
+
+    for(ULONG i = 0; i < Count; i++)
+    {
+        ULONG Index = Start + i;
+        ULONG PosHost = EmuNv2aHostPointer(VertexBase + Pos->Offset + Index * PosStride);
+        VX[i] = EmuNv2aReadHostFloat(PosHost);
+        VY[i] = EmuNv2aReadHostFloat(PosHost + 4);
+
+        ULONG Color = 0xFFFFFFFF;
+        if(DifStride != 0)
+        {
+            ULONG DifHost = EmuNv2aHostPointer(VertexBase + Dif->Offset + Index * DifStride);
+            if(DifHost != 0)
+            {
+                if(DifType == 2 /* TYPE_F, float4 RGBA */)
+                {
+                    ULONG R = (ULONG)(EmuNv2aReadHostFloat(DifHost + 0) * 255.0f + 0.5f) & 0xFF;
+                    ULONG G = (ULONG)(EmuNv2aReadHostFloat(DifHost + 4) * 255.0f + 0.5f) & 0xFF;
+                    ULONG B = (ULONG)(EmuNv2aReadHostFloat(DifHost + 8) * 255.0f + 0.5f) & 0xFF;
+                    ULONG A = (ULONG)(EmuNv2aReadHostFloat(DifHost + 12) * 255.0f + 0.5f) & 0xFF;
+                    Color = (A << 24) | (R << 16) | (G << 8) | B;
+                }
+                else
+                {
+                    ULONG Raw = 0xFFFFFFFF;
+                    EmuTryReadHost(DifHost, &Raw, sizeof(Raw)); // D3DCOLOR 0xAARRGGBB
+                    Color = Raw;
+                }
+            }
+        }
+        VC[i] = Color;
+    }
+
+    ULONG Triangles = 0;
+    __try
+    {
+        switch(g_EmuNv2aBeginOp)
+        {
+            case 5: // TRIANGLES
+                for(ULONG i = 0; i + 2 < Count; i += 3)
+                {
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2], VC[i]);
+                    Triangles++;
+                }
+                break;
+            case 6: // TRIANGLE_STRIP
+                for(ULONG i = 0; i + 2 < Count; i++)
+                {
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2], VC[i]);
+                    Triangles++;
+                }
+                break;
+            case 7:  // TRIANGLE_FAN
+            case 10: // POLYGON
+                for(ULONG i = 1; i + 1 < Count; i++)
+                {
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[0], VY[0], VX[i], VY[i], VX[i+1], VY[i+1], VC[0]);
+                    Triangles++;
+                }
+                break;
+            case 8: // QUADS
+                for(ULONG i = 0; i + 3 < Count; i += 4)
+                {
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2], VC[i]);
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[i], VY[i], VX[i+2], VY[i+2], VX[i+3], VY[i+3], VC[i]);
+                    Triangles += 2;
+                }
+                break;
+            case 9: // QUAD_STRIP
+                for(ULONG i = 0; i + 3 < Count; i += 2)
+                {
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+3], VY[i+3], VC[i]);
+                    EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
+                        VX[i], VY[i], VX[i+3], VY[i+3], VX[i+2], VY[i+2], VC[i]);
+                    Triangles += 2;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        printf("Emu (0x%lX): NV2A raster: fault while filling (surf=0x%.08lX).\n",
+               GetCurrentThreadId(), SurfaceHost);
+        fflush(stdout);
+    }
+
+    if(g_EmuNv2aRasterLogCount < 32)
+    {
+        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d v0=(%.1f,%.1f) c0=0x%.08lX\n",
+               GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
+               SurfaceHost, Width, Height, PitchB, VX[0], VY[0], VC[0]);
+        fflush(stdout);
+        g_EmuNv2aRasterLogCount++;
+    }
 }
 
 static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)

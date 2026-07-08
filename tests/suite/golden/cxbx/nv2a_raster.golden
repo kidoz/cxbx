@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe nv2a_raster
+CHK nv2a_raster.pb_init PASS
+CHK nv2a_raster.back_buffer PASS
+CHK nv2a_raster.vbuf_alloc PASS
+CHK nv2a_raster.centroid_filled PASS
+CHK nv2a_raster.corner_clear PASS
+#result nv2a_raster verdict=PASS checks=5 fail=0
