@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_state
+#result d3d_state verdict=PASS checks=7 fail=0

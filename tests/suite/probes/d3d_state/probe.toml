@@ -1,0 +1,7 @@
+# XDK-toolchain probe (see xdk_smoke): D3D8 HLE state checks -- transform
+# round-trips, SetRenderState_* family survival, GetDisplayMode sanity.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
