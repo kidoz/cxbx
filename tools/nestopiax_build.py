@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Rebuild NestopiaX 1.0 from its released source against XDK 5849 using the
 XDK's own vc71 toolchain (CL/Link) + imagebld -- the same pipeline as the
 suite's XDK probes. Honors the vcproj Release|Xbox configuration (defines,
@@ -15,7 +15,7 @@ VC = XDK / "xbox" / "bin" / "vc71"
 OUT = Path(r"C:\Users\ALEKSA~1\AppData\Local\Temp\claude\D--projects-cxbx\475e1110-42b6-4414-877d-6984a4cb8dcb\scratchpad\nx_build")
 CONFIG = "Release|Xbox"
 
-DEFINES = ["NDEBUG", "_XBOX", "EMU_A68K", "MMX", "_CONSOLE", "_SECURE_SCL=0"]
+DEFINES = ["NDEBUG", "_XBOX", "EMU_A68K", "MMX", "_CONSOLE", "_SECURE_SCL=0", "CXBX_NO_SPLASH_MP3"]
 INCLUDES = [
     r".\src\cpu\s2650", r".\src\alt\xbox", r".\src\alt\mp3", r".\src\burn\cps3",
     r".\src\cpu\m6809", r".\src\cpu\hd6309", r".\src\alt", r".\src\cpu\m6800",

@@ -1612,6 +1612,24 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Stop
 }
 
 // ******************************************************************
+// * func: EmuDirectSoundUseFullHRTF
+// ******************************************************************
+VOID WINAPI XTL::EmuDirectSoundUseFullHRTF()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuDirectSoundUseFullHRTF();\n", GetCurrentThreadId());
+    #endif
+
+    // Selects the full HRTF 3D-audio filter set on the Xbox DSP. The host
+    // has no DSP; the guest implementation initializes MCPX state that
+    // NULL-derefs against the register-level APU model, so accept and ignore.
+
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
 // * func: EmuXAudioDownloadEffectsImage
 // ******************************************************************
 HRESULT WINAPI XTL::EmuXAudioDownloadEffectsImage

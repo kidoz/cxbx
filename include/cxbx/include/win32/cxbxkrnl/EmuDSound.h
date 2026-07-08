@@ -611,6 +611,11 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_GetStatus
 );
 
 // ******************************************************************
+// * func: EmuDirectSoundUseFullHRTF
+// ******************************************************************
+VOID WINAPI EmuDirectSoundUseFullHRTF();
+
+// ******************************************************************
 // * func: EmuXAudioDownloadEffectsImage
 // ******************************************************************
 HRESULT WINAPI EmuXAudioDownloadEffectsImage

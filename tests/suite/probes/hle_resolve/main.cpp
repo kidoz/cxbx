@@ -218,6 +218,7 @@ static const XFUNC k_dsound[] = {
     // fake X_CDirectSoundStream object.
     XF(DirectSoundDoWork, 1),
     XF(XAudioDownloadEffectsImage, 1),
+    XF(DirectSoundUseFullHRTF, 1),
     XF(IDirectSoundStream_Pause, 0),
     XF(IDirectSoundStream_FlushEx, 1),
     XF(IDirectSoundStream_SetEG, 0),
