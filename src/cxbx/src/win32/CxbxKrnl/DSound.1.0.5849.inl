@@ -425,6 +425,332 @@ SOOVPA<9> CDirectSound_CommitDeferredSettings_1_0_5849 =
     }
 };
 
+// ?SetBufferData@CDirectSoundBuffer@DirectSound@@QAGJPAXK@Z (dsound.lib, 174 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_SetBufferData_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_SETBUFFERDATA, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x18, 0x45 },
+        { 0x31, 0x3B },
+        { 0x4A, 0x08 },
+        { 0x62, 0x75 },
+        { 0x79, 0xE8 },
+        { 0x94, 0x83 },
+        { 0xAD, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetBufferData@12 (dsound.lib, 32 bytes; call@0x19 -> XREF_DS5849_BUF_SETBUFFERDATA)
+SOOVPA<9> IDirectSoundBuffer8_SetBufferData_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x19, XREF_DS5849_BUF_SETBUFFERDATA },
+        { 0x00, 0x8B },
+        { 0x04, 0xFF },
+        { 0x08, 0x8B },
+        { 0x0D, 0x0C },
+        { 0x11, 0xF7 },
+        { 0x16, 0xC8 },
+        { 0x18, 0xE8 },
+        { 0x1F, 0x00 }
+    }
+};
+
+// ?Play@CMcpxBuffer@DirectSound@@QAEJK@Z (dsound.lib, 176 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_PlayT_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_PLAY_T, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x19, 0x04 },
+        { 0x32, 0xF6 },
+        { 0x4B, 0x00 },
+        { 0x64, 0x12 },
+        { 0x7D, 0x53 },
+        { 0x96, 0x00 },
+        { 0xAF, 0x00 }
+    }
+};
+
+// ?Play@CDirectSoundBuffer@DirectSound@@QAGJKKK@Z (dsound.lib, 81 bytes; call@0x35 ?Play@CMcpxBuffer@DirectSound@@QAEJK@Z -> XREF_DS5849_BUF_PLAY_T)
+// XRef chain level: saved to XREF_DS5849_BUF_PLAY, discriminated by callee.
+SOOVPA<9> CDirectSoundBuffer_Play_1_0_5849 =
+{
+    0, 9, XREF_DS5849_BUF_PLAY, 1,
+    {
+        { 0x35, XREF_DS5849_BUF_PLAY_T },
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x22, 0x05 },
+        { 0x2D, 0x48 },
+        { 0x39, 0x85 },
+        { 0x44, 0xFF },
+        { 0x50, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_Play@16 (dsound.lib, 36 bytes; call@0x1D -> XREF_DS5849_BUF_PLAY)
+SOOVPA<9> IDirectSoundBuffer8_Play_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x1D, XREF_DS5849_BUF_PLAY },
+        { 0x00, 0xFF },
+        { 0x05, 0x44 },
+        { 0x0A, 0x24 },
+        { 0x0F, 0x74 },
+        { 0x14, 0xE4 },
+        { 0x19, 0x23 },
+        { 0x1C, 0xE8 },
+        { 0x23, 0x00 }
+    }
+};
+
+// ?Stop@CDirectSoundBuffer@DirectSound@@QAGJXZ (dsound.lib, 79 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_Stop_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_STOP, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x21, 0xB8 },
+        { 0x2C, 0x8B },
+        { 0x37, 0x85 },
+        { 0x42, 0xFF },
+        { 0x4E, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_Stop@4 (dsound.lib, 24 bytes; call@0x11 -> XREF_DS5849_BUF_STOP)
+SOOVPA<9> IDirectSoundBuffer8_Stop_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x11, XREF_DS5849_BUF_STOP },
+        { 0x00, 0x8B },
+        { 0x03, 0x04 },
+        { 0x06, 0x83 },
+        { 0x09, 0xF7 },
+        { 0x0D, 0x23 },
+        { 0x10, 0xE8 },
+        { 0x15, 0xC2 },
+        { 0x17, 0x00 }
+    }
+};
+
+// ?SetPlayRegion@CDirectSoundBuffer@DirectSound@@QAGJKK@Z (dsound.lib, 128 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_SetPlayRegion_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_SETPLAYREGION, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x12, 0xF8 },
+        { 0x24, 0xB8 },
+        { 0x36, 0x56 },
+        { 0x48, 0x00 },
+        { 0x5A, 0xE8 },
+        { 0x6C, 0x0B },
+        { 0x7F, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetPlayRegion@12 (dsound.lib, 32 bytes; call@0x19 -> XREF_DS5849_BUF_SETPLAYREGION)
+SOOVPA<9> IDirectSoundBuffer8_SetPlayRegion_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x19, XREF_DS5849_BUF_SETPLAYREGION },
+        { 0x00, 0x8B },
+        { 0x04, 0xFF },
+        { 0x08, 0x8B },
+        { 0x0D, 0x0C },
+        { 0x11, 0xF7 },
+        { 0x16, 0xC8 },
+        { 0x18, 0xE8 },
+        { 0x1F, 0x00 }
+    }
+};
+
+// ?SetLoopRegion@CDirectSoundBuffer@DirectSound@@QAGJKK@Z (dsound.lib, 133 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_SetLoopRegion_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_SETLOOPREGION, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x12, 0xF8 },
+        { 0x25, 0x05 },
+        { 0x38, 0x75 },
+        { 0x4B, 0x00 },
+        { 0x5E, 0x89 },
+        { 0x71, 0x0B },
+        { 0x84, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetLoopRegion@12 (dsound.lib, 32 bytes; call@0x19 -> XREF_DS5849_BUF_SETLOOPREGION)
+SOOVPA<9> IDirectSoundBuffer8_SetLoopRegion_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x19, XREF_DS5849_BUF_SETLOOPREGION },
+        { 0x00, 0x8B },
+        { 0x04, 0xFF },
+        { 0x08, 0x8B },
+        { 0x0D, 0x0C },
+        { 0x11, 0xF7 },
+        { 0x16, 0xC8 },
+        { 0x18, 0xE8 },
+        { 0x1F, 0x00 }
+    }
+};
+
+// ?SetVolume@CDirectSoundVoice@DirectSound@@QAGJJ@Z (dsound.lib, 28 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_SetVolumeT_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_SETVOLUME_T, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x03, 0x04 },
+        { 0x07, 0x8B },
+        { 0x0B, 0x2B },
+        { 0x0F, 0x50 },
+        { 0x13, 0x0C },
+        { 0x19, 0xC2 },
+        { 0x1B, 0x00 }
+    }
+};
+
+// ?SetVolume@CDirectSoundBuffer@DirectSound@@QAGJJ@Z (dsound.lib, 78 bytes; call@0x32 ?SetVolume@CDirectSoundVoice@DirectSound@@QAGJJ@Z -> XREF_DS5849_BUF_SETVOLUME_T)
+// XRef chain level: saved to XREF_DS5849_BUF_SETVOLUME, discriminated by callee.
+SOOVPA<9> CDirectSoundBuffer_SetVolume_1_0_5849 =
+{
+    0, 9, XREF_DS5849_BUF_SETVOLUME, 1,
+    {
+        { 0x32, XREF_DS5849_BUF_SETVOLUME_T },
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x21, 0xB8 },
+        { 0x2C, 0x10 },
+        { 0x37, 0xF6 },
+        { 0x42, 0x15 },
+        { 0x4D, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetVolume@8 (dsound.lib, 28 bytes; call@0x15 -> XREF_DS5849_BUF_SETVOLUME)
+SOOVPA<9> IDirectSoundBuffer8_SetVolume_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x15, XREF_DS5849_BUF_SETVOLUME },
+        { 0x00, 0x8B },
+        { 0x03, 0x04 },
+        { 0x07, 0x08 },
+        { 0x0B, 0xC0 },
+        { 0x0F, 0x1B },
+        { 0x13, 0x51 },
+        { 0x19, 0xC2 },
+        { 0x1B, 0x00 }
+    }
+};
+
+// ?SetCurrentPosition@CMcpxBuffer@DirectSound@@QAEJK@Z (dsound.lib, 246 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_SetCurrentPositionT_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_SETCURRENTPOS_T, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x23, 0xB7 },
+        { 0x46, 0x03 },
+        { 0x6A, 0x85 },
+        { 0x8C, 0xC1 },
+        { 0xAF, 0x05 },
+        { 0xD2, 0xD2 },
+        { 0xF5, 0x00 }
+    }
+};
+
+// ?SetCurrentPosition@CDirectSoundBuffer@DirectSound@@QAGJK@Z (dsound.lib, 81 bytes; call@0x35 ?SetCurrentPosition@CMcpxBuffer@DirectSound@@QAEJK@Z -> XREF_DS5849_BUF_SETCURRENTPOS_T)
+// XRef chain level: saved to XREF_DS5849_BUF_SETCURRENTPOS, discriminated by callee.
+SOOVPA<9> CDirectSoundBuffer_SetCurrentPosition_1_0_5849 =
+{
+    0, 9, XREF_DS5849_BUF_SETCURRENTPOS, 1,
+    {
+        { 0x35, XREF_DS5849_BUF_SETCURRENTPOS_T },
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x22, 0x05 },
+        { 0x2D, 0x48 },
+        { 0x39, 0x85 },
+        { 0x44, 0xFF },
+        { 0x50, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetCurrentPosition@8 (dsound.lib, 28 bytes; call@0x15 -> XREF_DS5849_BUF_SETCURRENTPOS)
+SOOVPA<9> IDirectSoundBuffer8_SetCurrentPosition_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x15, XREF_DS5849_BUF_SETCURRENTPOS },
+        { 0x00, 0x8B },
+        { 0x03, 0x04 },
+        { 0x07, 0x08 },
+        { 0x0B, 0xC0 },
+        { 0x0F, 0x1B },
+        { 0x13, 0x51 },
+        { 0x19, 0xC2 },
+        { 0x1B, 0x00 }
+    }
+};
+
+// ?GetCurrentPosition@CDirectSoundBuffer@DirectSound@@QAGJPAK0@Z (dsound.lib, 85 bytes)
+// XRef-save signature (chain leaf, byte-unique).
+SOOVPA<8> CDirectSoundBuffer_GetCurrentPosition_1_0_5849 =
+{
+    0, 8, XREF_DS5849_BUF_GETCURRENTPOS, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0C, 0x00 },
+        { 0x16, 0x68 },
+        { 0x24, 0x00 },
+        { 0x30, 0xFF },
+        { 0x3D, 0x85 },
+        { 0x48, 0xFF },
+        { 0x54, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_GetCurrentPosition@12 (dsound.lib, 32 bytes; call@0x19 -> XREF_DS5849_BUF_GETCURRENTPOS)
+SOOVPA<9> IDirectSoundBuffer8_GetCurrentPosition_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x19, XREF_DS5849_BUF_GETCURRENTPOS },
+        { 0x00, 0x8B },
+        { 0x04, 0xFF },
+        { 0x08, 0x8B },
+        { 0x0D, 0x0C },
+        { 0x11, 0xF7 },
+        { 0x16, 0xC8 },
+        { 0x18, 0xE8 },
+        { 0x1F, 0x00 }
+    }
+};
+
 OOVPATable DSound_1_0_5849[] =
 {
     // DirectSoundCreate
@@ -607,6 +933,147 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuCDirectSound_CommitDeferredSettings,
         #ifdef _DEBUG_TRACE
         "EmuCDirectSound_CommitDeferredSettings"
+        #endif
+    },
+    // CDirectSoundBuffer::SetBufferData (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetBufferData_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetBufferData (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetBufferData
+    {
+        (OOVPA*)&IDirectSoundBuffer8_SetBufferData_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_SetBufferData,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetBufferData"
+        #endif
+    },
+    // CDirectSoundBuffer::Play chain leaf (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_PlayT_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::Play leaf (XREF)"
+        #endif
+    },
+    // CDirectSoundBuffer::Play (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_Play_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::Play (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::Play
+    {
+        (OOVPA*)&IDirectSoundBuffer8_Play_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_Play,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_Play"
+        #endif
+    },
+    // CDirectSoundBuffer::Stop (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_Stop_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::Stop (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::Stop
+    {
+        (OOVPA*)&IDirectSoundBuffer8_Stop_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_Stop,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_Stop"
+        #endif
+    },
+    // CDirectSoundBuffer::SetPlayRegion (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetPlayRegion_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetPlayRegion (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetPlayRegion
+    {
+        (OOVPA*)&IDirectSoundBuffer8_SetPlayRegion_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_SetPlayRegion,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetPlayRegion"
+        #endif
+    },
+    // CDirectSoundBuffer::SetLoopRegion (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetLoopRegion_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetLoopRegion (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetLoopRegion
+    {
+        (OOVPA*)&IDirectSoundBuffer8_SetLoopRegion_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_SetLoopRegion,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetLoopRegion"
+        #endif
+    },
+    // CDirectSoundBuffer::SetVolume chain leaf (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetVolumeT_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetVolume leaf (XREF)"
+        #endif
+    },
+    // CDirectSoundBuffer::SetVolume (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetVolume_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetVolume (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetVolume
+    {
+        (OOVPA*)&IDirectSoundBuffer8_SetVolume_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_SetVolume,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetVolume"
+        #endif
+    },
+    // CDirectSoundBuffer::SetCurrentPosition chain leaf (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetCurrentPositionT_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetCurrentPosition leaf (XREF)"
+        #endif
+    },
+    // CDirectSoundBuffer::SetCurrentPosition (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetCurrentPosition_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetCurrentPosition (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetCurrentPosition
+    {
+        (OOVPA*)&IDirectSoundBuffer8_SetCurrentPosition_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_SetCurrentPosition,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetCurrentPosition"
+        #endif
+    },
+    // CDirectSoundBuffer::GetCurrentPosition (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_GetCurrentPosition_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::GetCurrentPosition (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::GetCurrentPosition
+    {
+        (OOVPA*)&IDirectSoundBuffer8_GetCurrentPosition_1_0_5849,
+        XTL::EmuIDirectSoundBuffer8_GetCurrentPosition,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_GetCurrentPosition"
         #endif
     },
 };

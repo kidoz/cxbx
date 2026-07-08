@@ -80,11 +80,47 @@ def _symbol_name(entry: bytes, strtab: bytes) -> str:
     return entry[:8].rstrip(b"\0").decode("ascii", "replace")
 
 
+def _iter_object_members(lib: bytes):
+    """Yield every COFF object member payload in the archive (skipping the
+    linker members and the longnames member)."""
+    off = 8
+    while off + 60 <= len(lib):
+        name = lib[off : off + 16].rstrip()
+        payload, nxt = _member_at(lib, off)
+        if name not in (b"/", b"//") and len(payload) > 20:
+            machine, = struct.unpack("<H", payload[0:2])
+            if machine == 0x014C:  # i386 object
+                yield payload
+        off = nxt
+
+
+def extract_function_all(lib: bytes, symbols: dict[str, int], sym: str) -> list[Function]:
+    """All distinct copies of `sym` across archive members. Old-MSVC archives
+    can carry differently-compiled copies of the same COMDAT in several
+    members, and the linker's pick need not be the archive index's pick."""
+    out: list[Function] = []
+    seen: set[bytes] = set()
+    for member in _iter_object_members(lib):
+        fn = _extract_from_member(member, sym)
+        if fn is not None and fn.data not in seen:
+            seen.add(fn.data)
+            out.append(fn)
+    if not out:
+        sys.exit(f"symbol not defined in any archive member: {sym}")
+    return out
+
+
 def extract_function(lib: bytes, symbols: dict[str, int], sym: str) -> Function:
     if sym not in symbols:
         sys.exit(f"symbol not in archive index: {sym}")
     member, _ = _member_at(lib, symbols[sym])
+    fn = _extract_from_member(member, sym)
+    if fn is None:
+        sys.exit(f"{sym}: not found in its archive-index member")
+    return fn
 
+
+def _extract_from_member(member: bytes, sym: str) -> Function | None:
     n_sections, = struct.unpack("<H", member[2:4])
     ptr_symtab, n_symbols = struct.unpack("<II", member[8:16])
     strtab = member[ptr_symtab + 18 * n_symbols :]
@@ -97,19 +133,19 @@ def extract_function(lib: bytes, symbols: dict[str, int], sym: str) -> Function:
         if _symbol_name(e, strtab) == sym:
             value, sect_no = struct.unpack("<Ih", e[8:14])
             if sect_no <= 0:
-                sys.exit(f"{sym}: not defined in a section (sect={sect_no})")
+                return None  # undefined/absolute here; defined elsewhere
             sect_idx = sect_no - 1
             break
         i += 1 + e[17]  # skip aux symbols
     if sect_idx is None:
-        sys.exit(f"{sym}: not found in member symbol table")
+        return None
 
     sh = member[20 + 40 * sect_idx : 20 + 40 * (sect_idx + 1)]
     (size_raw, ptr_raw, ptr_reloc, _ptr_ln, n_reloc, _n_ln, flags) = struct.unpack(
         "<IIIIHHI", sh[16:40]
     )
     if not flags & IMAGE_SCN_CNT_CODE:
-        sys.exit(f"{sym}: section is not code (flags=0x{flags:08X})")
+        return None  # data symbol
 
     data = member[ptr_raw : ptr_raw + size_raw]
     relocs = []
@@ -126,7 +162,7 @@ def extract_function(lib: bytes, symbols: dict[str, int], sym: str) -> Function:
     # COMDAT sections hold one function; a nonzero Value would mean the symbol
     # is an alias inside a packed section, which this simple extractor rejects.
     if value != 0:
-        sys.exit(f"{sym}: symbol at nonzero section offset 0x{value:X} (packed section)")
+        return None
     return Function(sym, data, relocs, rel32_calls)
 
 
@@ -325,6 +361,108 @@ def main() -> int:
                   f"{len(fn.reloc_offsets)} relocs, unique in {len(must_imgs) + len(may_imgs)} images)")
             snippets.append(f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n" + render(signame, pairs))
 
+    def sig_with_suffix(signame: str, suffix: str) -> str:
+        return (signame.replace("_1_0_", f"{suffix}_1_0_")
+                if "_1_0_" in signame else signame + suffix)
+
+    def resolve_chain(sym: str, signame: str, enum_name: str,
+                      target_match: str | None, depth: int, quiet: bool = False):
+        """Build the XRef chain for `sym` bottom-up. Returns
+        (snippets, addr_by_must_image, addr_by_may_image, enum_names) or None
+        on failure. A level that is byte-unique ends the chain; a colliding
+        level is discriminated by one of its REL32 callees, tried tail-first
+        with backtracking (the tail call is usually the real worker; shared
+        helpers like DirectSoundEnterCriticalSection fail verification and
+        are skipped naturally)."""
+        if depth > 4:
+            if not quiet:
+                print(f"FAIL {signame}: XRef chain deeper than 4 levels")
+            return None
+        # The archive can hold multiple differently-compiled copies of the
+        # symbol; the linker's pick need not be the archive index's. Try each
+        # copy until one verifies against the images.
+        copies = extract_function_all(lib, symbols, sym)
+        result = None
+        for fn in copies:
+            result = _resolve_chain_copy(fn, signame, enum_name, target_match, depth)
+            if result is not None:
+                return result
+        if not quiet:
+            print(f"FAIL {signame}: no archive copy of {sym} "
+                  f"({len(copies)} tried) verified against the images")
+        return None
+
+    def _resolve_chain_copy(fn: Function, signame: str, enum_name: str,
+                            target_match: str | None, depth: int):
+        sym = fn.name
+        pairs = pick_pairs(fn, args.pairs, args.max_offset)
+
+        must_hits = {p: find_matches(img, pairs, limit=3) for p, img in must_imgs}
+        may_hits = {p: find_matches(img, pairs, limit=3) for p, img in may_imgs}
+        byte_unique = (all(len(h) == 1 for h in must_hits.values())
+                       and all(len(h) <= 1 for h in may_hits.values()))
+
+        if byte_unique:
+            snip = (f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n"
+                    f"// XRef-save signature (chain leaf, byte-unique).\n"
+                    + render(signame, pairs, save_index=enum_name))
+            return ([snip],
+                    {p: h[0] for p, h in must_hits.items()},
+                    {p: h[0] for p, h in may_hits.items() if h},
+                    [enum_name])
+
+        # Not byte-unique: discriminate by a callee, tail call first.
+        calls = list(reversed(fn.rel32_calls))
+        if target_match is not None:
+            calls = [c for c in calls if target_match in c[1]]
+        if not calls:
+            return None
+
+        for xref_off, callee_sym in calls:
+            child = resolve_chain(callee_sym, sig_with_suffix(signame, "T"),
+                                  enum_name + "_T", None, depth + 1, quiet=True)
+            if child is None:
+                continue
+            child_snips, child_must, child_may, child_enums = child
+
+            must_addr = {}
+            ok = True
+            for p, img in must_imgs:
+                cands = [b for b in must_hits[p]
+                         if (int.from_bytes(img[b + xref_off : b + xref_off + 4], "little")
+                             + b + xref_off + 4) & 0xFFFFFFFF == child_must[p]]
+                if len(cands) != 1:
+                    ok = False
+                    break
+                must_addr[p] = cands[0]
+            if not ok:
+                continue
+            may_addr = {}
+            for p, img in may_imgs:
+                if p not in child_may:
+                    continue
+                cands = [b for b in may_hits[p]
+                         if (int.from_bytes(img[b + xref_off : b + xref_off + 4], "little")
+                             + b + xref_off + 4) & 0xFFFFFFFF == child_may[p]]
+                if len(cands) > 1:
+                    ok = False
+                    break
+                if cands:
+                    may_addr[p] = cands[0]
+            if not ok:
+                continue
+
+            snip = (f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes; "
+                    f"call@0x{xref_off:02X} {callee_sym} -> {enum_name}_T)\n"
+                    f"// XRef chain level: saved to {enum_name}, discriminated by callee.\n"
+                    + render(signame, pairs, save_index=enum_name,
+                             xref_pairs=[(xref_off, enum_name + "_T")]))
+            return (child_snips + [snip], must_addr, may_addr,
+                    child_enums + [enum_name])
+
+        return None
+
+    all_chain_enums: list[str] = []
     for spec in args.xref_func:
         sym, _, rest = spec.partition("=")
         parts = rest.split(":")
@@ -342,49 +480,43 @@ def main() -> int:
                      f"{f' matching {target_match!r}' if target_match else ''}, found "
                      f"{len(calls)}: {calls or wrapper.rel32_calls}")
         xref_off, internal_sym = calls[0]
-        internal = extract_function(lib, symbols, internal_sym)
 
-        int_pairs = pick_pairs(internal, args.pairs, args.max_offset)
+        chain = resolve_chain(internal_sym, intsig, xref_enum, None, 1)
+        if chain is None:
+            failed = True
+            continue
+        chain_snips, int_must, int_may, chain_enums = chain
+
         wrap_pairs = pick_pairs(wrapper, args.pairs, args.max_offset)
-
         ok = True
         for p, img in must_imgs:
-            hits = find_matches(img, int_pairs, limit=2)
-            if len(hits) != 1:
-                print(f"FAIL {intsig}: {len(hits)} matches in {p.name} (need exactly 1)")
-                ok = False
-                failed = True
-                continue
-            n = count_xref_matches(img, wrap_pairs, xref_off, hits[0])
+            n = count_xref_matches(img, wrap_pairs, xref_off, int_must[p])
             if n != 1:
                 print(f"FAIL {wrapsig}: {n} xref-qualified matches in {p.name} (need exactly 1)")
                 ok = False
                 failed = True
         for p, img in may_imgs:
-            hits = find_matches(img, int_pairs, limit=2)
-            if len(hits) > 1:
-                print(f"FAIL {intsig}: {len(hits)} matches in {p.name} (collision)")
-                ok = False
-                failed = True
-            elif len(hits) == 1:
-                n = count_xref_matches(img, wrap_pairs, xref_off, hits[0])
+            if p in int_may:
+                n = count_xref_matches(img, wrap_pairs, xref_off, int_may[p])
                 if n > 1:
                     print(f"FAIL {wrapsig}: {n} xref-qualified matches in {p.name} (collision)")
                     ok = False
                     failed = True
         if ok:
+            depth_note = f" (chain depth {len(chain_enums)})" if len(chain_enums) > 1 else ""
             print(f"OK   {wrapsig}: {sym} ({len(wrapper.data)} bytes) "
-                  f"-> call@0x{xref_off:02X} {internal_sym} "
-                  f"({len(internal.data)} bytes) [{xref_enum}]")
-            snippets.append(
-                f"// {internal_sym} ({Path(args.lib).name}, {len(internal.data)} bytes)\n"
-                f"// XRef-save signature: locates the internal so the identical\n"
-                f"// thin wrappers below can be told apart by their call target.\n"
-                + render(intsig, int_pairs, save_index=xref_enum))
+                  f"-> call@0x{xref_off:02X} {internal_sym} [{xref_enum}]{depth_note}")
+            all_chain_enums.extend(chain_enums)
+            snippets.extend(chain_snips)
             snippets.append(
                 f"// {sym} ({Path(args.lib).name}, {len(wrapper.data)} bytes; "
                 f"call@0x{xref_off:02X} -> {xref_enum})\n"
                 + render(wrapsig, wrap_pairs, xref_pairs=[(xref_off, xref_enum)]))
+
+    if all_chain_enums:
+        print("\nREQUIRED XREF ENUM ENTRIES (add to HLEDataBase.h + .cpp array):")
+        for e in all_chain_enums:
+            print(f"    {e}")
 
     text = "\n".join(snippets)
     if args.out:

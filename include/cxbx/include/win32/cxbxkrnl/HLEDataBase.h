@@ -170,7 +170,21 @@ enum XRefDataBaseOffset
     XREF_DS5849_SETDOPPLERFACTOR,
     XREF_DS5849_SETPOSITION,
     XREF_DS5849_SETVELOCITY,
-    XREF_DS5849_COMMITDEFERRED
+    XREF_DS5849_COMMITDEFERRED,
+    // XDK 5849 DSOUND buffer-method internals; _T entries are chain leaves
+    // (the internal is itself twin-identical and is discriminated by ITS
+    // callee -- see gen_oovpa.py --xref-func chained resolution).
+    XREF_DS5849_BUF_SETBUFFERDATA,
+    XREF_DS5849_BUF_PLAY_T,
+    XREF_DS5849_BUF_PLAY,
+    XREF_DS5849_BUF_STOP,
+    XREF_DS5849_BUF_SETPLAYREGION,
+    XREF_DS5849_BUF_SETLOOPREGION,
+    XREF_DS5849_BUF_SETVOLUME_T,
+    XREF_DS5849_BUF_SETVOLUME,
+    XREF_DS5849_BUF_SETCURRENTPOS_T,
+    XREF_DS5849_BUF_SETCURRENTPOS,
+    XREF_DS5849_BUF_GETCURRENTPOS
 };
 
 #endif

@@ -183,6 +183,7 @@ after locking the backbuffer.
 | `d3d_draw`   | D3D8 HLE draw paths  | DrawVerticesUP triangles + immediate-mode Begin/End quad, pixel-exact |
 | `d3d_texture`| D3D8 HLE texture path | CreateTexture2 → LockRect upload → SetTexture → textured draws (both paths), pixel-exact |
 | `d3d_state`  | D3D8 HLE state       | Set/GetTransform bit-exact round-trips, SetRenderState_* family survival, GetDisplayMode sanity |
+| `d3d_tex_swizzle` | D3D8 HLE fidelity | documents the swizzled-texture gap: Morton-order uploads render linear (expectations flip when unswizzle lands) |
 
 The `nv2a_*` probes reach the GPU through the `0xFD000000` MMIO aperture (and, for
 `nv2a_pfifo`, guest physical memory at `0x80000000`), which CXBX trap-and-emulates

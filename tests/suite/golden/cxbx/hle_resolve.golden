@@ -1,3 +1,3 @@
 #suite xbox-conformance v1
 #probe hle_resolve
-#result hle_resolve verdict=PASS checks=79 fail=0
+#result hle_resolve verdict=PASS checks=87 fail=0

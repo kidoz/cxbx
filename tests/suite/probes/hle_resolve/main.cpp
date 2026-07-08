@@ -195,6 +195,15 @@ static const XFUNC k_dsound[] = {
     XF(IDirectSound_SetVelocity, 1),
     XF(IDirectSound_DownloadEffectsImage, 1),
     XF(IDirectSound_CommitDeferredSettings, 1),
+    // Buffer methods (hooked via chained XRef signatures).
+    XF(IDirectSoundBuffer_SetBufferData, 1),
+    XF(IDirectSoundBuffer_Play, 1),
+    XF(IDirectSoundBuffer_Stop, 1),
+    XF(IDirectSoundBuffer_SetPlayRegion, 1),
+    XF(IDirectSoundBuffer_SetLoopRegion, 1),
+    XF(IDirectSoundBuffer_SetVolume, 1),
+    XF(IDirectSoundBuffer_SetCurrentPosition, 1),
+    XF(IDirectSoundBuffer_GetCurrentPosition, 1),
 };
 
 static int run_table(const char *prefix, const XFUNC *t, int n)
