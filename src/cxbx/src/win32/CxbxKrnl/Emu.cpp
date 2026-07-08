@@ -1106,6 +1106,7 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define EmuNv2aVertexAttrCount              16u
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
+#define EmuNv2aAttrTexcoord0                9u
 #define EmuNv2aVpMaxInstr                   136u
 
 // CPU vertex-program interpreter (implemented in EmuVshDecoder.cpp): transform
@@ -1114,7 +1115,7 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // floats), outputs clip-space oPos + oD0 diffuse.
 extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
                                      const float *Const, const float *Input,
-                                     float *OutPos, float *OutCol0);
+                                     float *OutPos, float *OutCol0, float *OutTex0);
 
 struct EmuNv2aVertexArrayState
 {
@@ -1947,6 +1948,134 @@ static ULONG EmuNv2aLog2(ULONG Value)
     return Log;
 }
 
+// Decode a KELVIN texture color format code to bytes-per-texel, an unpack kind
+// (0=A8R8G8B8/X8R8G8B8, 1=R5G6B5, 2=A1R5G5B5, 3=A4R4G4B4, 4=Y8), and whether it
+// is swizzled (Morton) or linear. Returns false for unsupported codes.
+static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG *Bpp, ULONG *Kind, bool *Swizzled)
+{
+    switch(Color)
+    {
+        case 0x00: *Bpp = 1; *Kind = 4; *Swizzled = true;  return true; // SZ_Y8
+        case 0x13: *Bpp = 1; *Kind = 4; *Swizzled = false; return true; // LU_Y8
+        case 0x02: *Bpp = 2; *Kind = 2; *Swizzled = true;  return true; // SZ_A1R5G5B5
+        case 0x03: *Bpp = 2; *Kind = 2; *Swizzled = true;  return true; // SZ_X1R5G5B5
+        case 0x10: *Bpp = 2; *Kind = 2; *Swizzled = false; return true; // LU_A1R5G5B5
+        case 0x04: *Bpp = 2; *Kind = 3; *Swizzled = true;  return true; // SZ_A4R4G4B4
+        case 0x19: *Bpp = 2; *Kind = 3; *Swizzled = false; return true; // LU_A4R4G4B4
+        case 0x05: *Bpp = 2; *Kind = 1; *Swizzled = true;  return true; // SZ_R5G6B5
+        case 0x11: *Bpp = 2; *Kind = 1; *Swizzled = false; return true; // LU_R5G6B5
+        case 0x06: *Bpp = 4; *Kind = 0; *Swizzled = true;  return true; // SZ_A8R8G8B8
+        case 0x07: *Bpp = 4; *Kind = 0; *Swizzled = true;  return true; // SZ_X8R8G8B8
+        case 0x12: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8R8G8B8
+        case 0x1A: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8R8G8B8 (rect)
+        case 0x1C: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_X8R8G8B8
+        case 0x1E: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8B8G8R8 approx
+        default:   return false;
+    }
+}
+
+// Unpack one raw texel (per the format Kind) to 0xAARRGGBB. Alpha is opaque
+// except for the A8R8G8B8 kind, which carries it in the high byte.
+static ULONG EmuNv2aUnpackTexel(ULONG Raw, ULONG Kind)
+{
+    ULONG R = 0, G = 0, B = 0, A = 0xFF;
+    switch(Kind)
+    {
+        case 0: B = Raw & 0xFF; G = (Raw >> 8) & 0xFF; R = (Raw >> 16) & 0xFF; A = (Raw >> 24) & 0xFF; break;
+        case 1: R = ((Raw >> 11) & 0x1F) << 3; G = ((Raw >> 5) & 0x3F) << 2; B = (Raw & 0x1F) << 3; break;
+        case 2: R = ((Raw >> 10) & 0x1F) << 3; G = ((Raw >> 5) & 0x1F) << 3; B = (Raw & 0x1F) << 3;
+                A = (Raw & 0x8000) ? 0xFF : 0xFF; break;
+        case 3: A = ((Raw >> 12) & 0xF) << 4; R = ((Raw >> 8) & 0xF) << 4; G = ((Raw >> 4) & 0xF) << 4; B = (Raw & 0xF) << 4; break;
+        case 4: R = G = B = Raw & 0xFF; break;
+    }
+    return (A << 24) | (R << 16) | (G << 8) | B;
+}
+
+// A bound texture prepared for point sampling: the decoded texel block plus the
+// geometry needed to address it. Set up once per DRAW_ARRAYS, freed after.
+struct EmuNv2aSampler
+{
+    BYTE  *Data;
+    ULONG  Size, Width, Height, Bpp, Kind, LogW, LogH;
+    bool   Swizzled;
+};
+
+static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
+{
+    ZeroMemory(S, sizeof(*S));
+    if(Stage >= EmuNv2aTextureStageCount)
+        return false;
+
+    ULONG Format = g_EmuNv2aTexture[Stage].Format;
+    ULONG Color = (Format >> 8) & 0xFF;
+    ULONG SizeU = (Format >> 20) & 0xF;
+    ULONG SizeV = (Format >> 24) & 0xF;
+    ULONG ImageRect = g_EmuNv2aTexture[Stage].ImageRect;
+    if(!EmuNv2aTextureFormatInfo(Color, &S->Bpp, &S->Kind, &S->Swizzled))
+        return false;
+
+    if(S->Swizzled || ImageRect == 0)
+    {
+        S->Width = 1ul << SizeU;
+        S->Height = 1ul << SizeV;
+    }
+    else
+    {
+        S->Width = (ImageRect >> 16) & 0xFFFF;
+        S->Height = ImageRect & 0xFFFF;
+    }
+    if(S->Width == 0 || S->Height == 0 || S->Width > 4096 || S->Height > 4096)
+        return false;
+
+    S->LogW = EmuNv2aLog2(S->Width);
+    S->LogH = EmuNv2aLog2(S->Height);
+
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaAHandle);
+    ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
+    S->Size = S->Width * S->Height * S->Bpp;
+    S->Data = new BYTE[S->Size];
+
+    ULONG Host = EmuNv2aHostPointer(Address);
+    if(Host != 0 && EmuTryReadHost(Host, S->Data, S->Size))
+        return true;
+
+    ULONG Phys = Address;
+    if(!EmuIsPhysicalMapAddress(Phys))
+        Phys = EmuPhysicalMapBase + (Phys & EmuPhysicalRamMirrorMask);
+    if(EmuReadPhysicalMapBlock(Phys, S->Data, S->Size))
+        return true;
+
+    delete[] S->Data;
+    S->Data = NULL;
+    return false;
+}
+
+static void EmuNv2aFreeSampler(EmuNv2aSampler *S)
+{
+    if(S->Data != NULL)
+    {
+        delete[] S->Data;
+        S->Data = NULL;
+    }
+}
+
+// Nearest-neighbor sample at normalized (u,v), clamped to the edge.
+static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
+{
+    int X = (int)(u * (float)S->Width);
+    int Y = (int)(v * (float)S->Height);
+    if(X < 0) X = 0; if(X >= (int)S->Width)  X = (int)S->Width - 1;
+    if(Y < 0) Y = 0; if(Y >= (int)S->Height) Y = (int)S->Height - 1;
+
+    ULONG TexelIndex = S->Swizzled ? EmuNv2aSwizzleTexelIndex(X, Y, S->LogW, S->LogH)
+                                   : ((ULONG)Y * S->Width + (ULONG)X);
+    ULONG ByteOffset = TexelIndex * S->Bpp;
+    ULONG Raw = 0;
+    for(ULONG b = 0; b < S->Bpp && ByteOffset + b < S->Size; b++)
+        Raw |= (ULONG)S->Data[ByteOffset + b] << (b * 8);
+    return EmuNv2aUnpackTexel(Raw, S->Kind);
+}
+
 // Decode a bound KELVIN texture from guest memory and write it to a BMP. This is
 // the payload of path 1: it reproduces the source image the title uploaded,
 // independent of any rasterization.
@@ -1961,33 +2090,15 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
     ULONG SizeV = (Format >> 24) & 0xF;
     ULONG ImageRect = g_EmuNv2aTexture[Stage].ImageRect;
 
-    // Byte width and how each texel maps to RGB. kind: 0=A8R8G8B8/X8R8G8B8,
-    // 1=R5G6B5, 2=A1R5G5B5/X1R5G5B5, 3=A4R4G4B4, 4=Y8. Swizzled formats are the
-    // low color codes; the LU_IMAGE_* (>=0x10) formats are linear.
+    // Byte width and how each texel maps to RGB (see EmuNv2aTextureFormatInfo).
     ULONG Bpp = 0, Kind = 0;
     bool Swizzled = false;
-    switch(Color)
+    if(!EmuNv2aTextureFormatInfo(Color, &Bpp, &Kind, &Swizzled))
     {
-        case 0x00: Bpp = 1; Kind = 4; Swizzled = true;  break; // SZ_Y8
-        case 0x13: Bpp = 1; Kind = 4; Swizzled = false; break; // LU_Y8
-        case 0x02: Bpp = 2; Kind = 2; Swizzled = true;  break; // SZ_A1R5G5B5
-        case 0x03: Bpp = 2; Kind = 2; Swizzled = true;  break; // SZ_X1R5G5B5
-        case 0x10: Bpp = 2; Kind = 2; Swizzled = false; break; // LU_A1R5G5B5
-        case 0x04: Bpp = 2; Kind = 3; Swizzled = true;  break; // SZ_A4R4G4B4
-        case 0x19: Bpp = 2; Kind = 3; Swizzled = false; break; // LU_A4R4G4B4
-        case 0x05: Bpp = 2; Kind = 1; Swizzled = true;  break; // SZ_R5G6B5
-        case 0x11: Bpp = 2; Kind = 1; Swizzled = false; break; // LU_R5G6B5
-        case 0x06: Bpp = 4; Kind = 0; Swizzled = true;  break; // SZ_A8R8G8B8
-        case 0x07: Bpp = 4; Kind = 0; Swizzled = true;  break; // SZ_X8R8G8B8
-        case 0x12: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_A8R8G8B8
-        case 0x1A: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_A8R8G8B8 (rect)
-        case 0x1C: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_X8R8G8B8
-        case 0x1E: Bpp = 4; Kind = 0; Swizzled = false; break; // LU_A8B8G8R8 approx
-        default:
-            printf("Emu (0x%lX): KELVIN texture[%lu] unsupported color format 0x%.02lX (offset=0x%.08lX); skipping dump.\n",
-                   GetCurrentThreadId(), Stage, Color, g_EmuNv2aTexture[Stage].Offset);
-            fflush(stdout);
-            return;
+        printf("Emu (0x%lX): KELVIN texture[%lu] unsupported color format 0x%.02lX (offset=0x%.08lX); skipping dump.\n",
+               GetCurrentThreadId(), Stage, Color, g_EmuNv2aTexture[Stage].Offset);
+        fflush(stdout);
+        return;
     }
 
     // Dimensions: swizzled textures carry log2 sizes in the format word; linear
@@ -2062,17 +2173,8 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
             for(ULONG b = 0; b < Bpp && ByteOffset + b < SourceSize; b++)
                 Raw |= (ULONG)Source[ByteOffset + b] << (b * 8);
 
-            ULONG R = 0, G = 0, B = 0;
-            switch(Kind)
-            {
-                case 0: B = Raw & 0xFF; G = (Raw >> 8) & 0xFF; R = (Raw >> 16) & 0xFF; break;
-                case 1: R = ((Raw >> 11) & 0x1F) << 3; G = ((Raw >> 5) & 0x3F) << 2; B = (Raw & 0x1F) << 3; break;
-                case 2: R = ((Raw >> 10) & 0x1F) << 3; G = ((Raw >> 5) & 0x1F) << 3; B = (Raw & 0x1F) << 3; break;
-                case 3: R = ((Raw >> 8) & 0xF) << 4; G = ((Raw >> 4) & 0xF) << 4; B = (Raw & 0xF) << 4; break;
-                case 4: R = G = B = Raw & 0xFF; break;
-            }
-
-            ULONG Bgra = B | (G << 8) | (R << 16) | 0xFF000000;
+            ULONG Argb = EmuNv2aUnpackTexel(Raw, Kind);
+            ULONG Bgra = (Argb & 0x00FFFFFF) | 0xFF000000;
             Pixels[Y * Width + X] = Bgra;
 
             if(X == 0 && Y == 0)
@@ -2281,6 +2383,7 @@ struct EmuNv2aRasterTarget
     ULONG  DepthFormat;  // 1=Z16, 2=Z24S8
     ULONG  DepthFunc;    // NV097_SET_DEPTH_FUNC value (0x200..0x207)
     bool   DepthWrite;
+    const EmuNv2aSampler *Sampler; // NULL when no texture this draw
 };
 
 static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
@@ -2298,17 +2401,24 @@ static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
     }
 }
 
-// Gouraud-fill one screen-space triangle into a 32bpp surface with the edge-
-// function (half-plane) test. Barycentric weights (normalized by the signed
-// area, so winding is handled either way) cover the triangle and blend the three
-// vertex diffuse colors per pixel; uniform-colored vertices collapse to a flat
-// fill. When a depth surface is bound, the screen-space z (already the correct
-// hyperbolic value after the viewport z map) is interpolated linearly, tested
-// against the stored depth, and written back on pass. Clipped to the surface.
+// Gouraud-fill one screen-space triangle (vertices i0,i1,i2 in the transformed
+// arrays) into a 32bpp surface with the edge-function (half-plane) test.
+// Barycentric weights (normalized by the signed area, so winding is handled
+// either way) cover the triangle and blend the three vertex diffuse colors per
+// pixel; uniform-colored vertices collapse to a flat fill. When a depth surface
+// is bound the screen z is interpolated and tested/written; when a sampler is
+// bound the texcoords are perspective-correctly interpolated (via per-vertex
+// 1/w), point-sampled, and modulated with the diffuse. Clipped to the surface.
 static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
-                                float ax, float ay, float az, float bx, float by, float bz,
-                                float cx, float cy, float cz, ULONG Ca, ULONG Cb, ULONG Cc)
+                                const float *VX, const float *VY, const float *VZ,
+                                const float *VU, const float *VV, const float *VIW,
+                                const ULONG *VC, ULONG i0, ULONG i1, ULONG i2)
 {
+    float ax = VX[i0], ay = VY[i0], az = VZ[i0];
+    float bx = VX[i1], by = VY[i1], bz = VZ[i1];
+    float cx = VX[i2], cy = VY[i2], cz = VZ[i2];
+    ULONG Ca = VC[i0], Cb = VC[i1], Cc = VC[i2];
+
     float Area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
     if(Area > -1e-3f && Area < 1e-3f)
         return; // degenerate / zero-area
@@ -2338,6 +2448,11 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
     bool  Depth24    = (T->DepthFormat == 2);
     float DepthMaxF  = Depth24 ? 16777215.0f : 65535.0f;
     int   DepthPitchElem = Depth24 ? (T->DepthPitchB / 4) : (T->DepthPitchB / 2);
+
+    bool  UseTex = (T->Sampler != NULL);
+    float au = VU[i0], av = VV[i0], aiw = VIW[i0];
+    float bu = VU[i1], bv = VV[i1], biw = VIW[i1];
+    float cu = VU[i2], cv = VV[i2], ciw = VIW[i2];
 
     for(int Y = MinY; Y < MaxY; Y++)
     {
@@ -2391,6 +2506,24 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                 ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
                 Color = (A << 24) | (R << 16) | (G << 8) | B;
             }
+
+            if(UseTex)
+            {
+                // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
+                float iw = la * aiw + lb * biw + lc * ciw;
+                float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
+                float u = (la * au * aiw + lb * bu * biw + lc * cu * ciw) * inv;
+                float v = (la * av * aiw + lb * bv * biw + lc * cv * ciw) * inv;
+                ULONG Tex = EmuNv2aSampleTexel(T->Sampler, u, v);
+                // MODULATE: (texel * diffuse) / 255 per channel.
+                ULONG ca = (Color >> 24) & 0xFF, cr = (Color >> 16) & 0xFF;
+                ULONG cg = (Color >> 8) & 0xFF,  cb = Color & 0xFF;
+                ULONG ta = (Tex >> 24) & 0xFF, tr = (Tex >> 16) & 0xFF;
+                ULONG tg = (Tex >> 8) & 0xFF,  tb = Tex & 0xFF;
+                Color = (((ca * ta) / 255) << 24) | (((cr * tr) / 255) << 16) |
+                        (((cg * tg) / 255) << 8)  |  ((cb * tb) / 255);
+            }
+
             T->Color[Y * T->PitchPx + X] = Color;
         }
     }
@@ -2461,11 +2594,13 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     EmuNv2aVertexArrayState *Pos = &g_EmuNv2aVertexArray[EmuNv2aAttrPosition];
     EmuNv2aVertexArrayState *Dif = &g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse];
+    EmuNv2aVertexArrayState *Tex = &g_EmuNv2aVertexArray[EmuNv2aAttrTexcoord0];
     ULONG VertexBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaVertex);
     ULONG PosStride = (Pos->Format >> 8) & 0xFF;
     ULONG PosType   = Pos->Format & 0x0F;
     ULONG DifStride = (Dif->Format >> 8) & 0xFF;
     ULONG DifType   = Dif->Format & 0x0F;
+    ULONG TexStride = (Tex->Format >> 8) & 0xFF;
     // Phase 2: run the loaded vertex program when execution mode is PROGRAM.
     // Otherwise the position/diffuse arrays are consumed directly (Phase 0/1),
     // which needs a float position array.
@@ -2484,9 +2619,22 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     ULONG PosSize = (Pos->Format >> 4) & 0x0F;
 
+    // Texture stage 0: sample when a texture is bound and a texcoord source is
+    // available (the attr-9 array, or the vertex program's oT0).
+    EmuNv2aSampler Sampler;
+    bool SamplerReady = false;
+    bool TexBound = (g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0);
+    if(TexBound && (VpActive || TexStride != 0))
+        SamplerReady = EmuNv2aSetupSampler(0, &Sampler);
+    if(SamplerReady)
+        Target.Sampler = &Sampler;
+
     static float VX[4096];
     static float VY[4096];
     static float VZ[4096];
+    static float VU[4096];
+    static float VV[4096];
+    static float VIW[4096];
     static ULONG VC[4096];
     if(Count > 4096) Count = 4096;
 
@@ -2494,6 +2642,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     {
         ULONG Index = Start + i;
         float Xc, Yc, Zc = 0.0f, W;
+        float U = 0.0f, V = 0.0f;
         ULONG Color = 0xFFFFFFFF;
 
         if(VpActive)
@@ -2532,10 +2681,12 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
             float OutPos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
             float OutCol[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            float OutTex[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
             EmuVshExecuteProgram(g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
                                  (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
-                                 Input, OutPos, OutCol);
+                                 Input, OutPos, OutCol, OutTex);
             Xc = OutPos[0]; Yc = OutPos[1]; Zc = OutPos[2]; W = OutPos[3];
+            U = OutTex[0]; V = OutTex[1];
             ULONG R = EmuNv2aClampByte(OutCol[0] * 255.0f);
             ULONG G = EmuNv2aClampByte(OutCol[1] * 255.0f);
             ULONG B = EmuNv2aClampByte(OutCol[2] * 255.0f);
@@ -2571,6 +2722,16 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                     }
                 }
             }
+
+            if(TexStride != 0)
+            {
+                ULONG TexHost = EmuNv2aHostPointer(VertexBase + Tex->Offset + Index * TexStride);
+                if(TexHost != 0)
+                {
+                    U = EmuNv2aReadHostFloat(TexHost);
+                    V = EmuNv2aReadHostFloat(TexHost + 4);
+                }
+            }
         }
 
         // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
@@ -2579,6 +2740,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
         VX[i] = (Xc * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
         VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
         VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
+        VU[i] = U;
+        VV[i] = V;
+        VIW[i] = InvW;
         VC[i] = Color;
     }
 
@@ -2590,18 +2754,14 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 5: // TRIANGLES
                 for(ULONG i = 0; i + 2 < Count; i += 3)
                 {
-                    EmuNv2aFillTriangle(&Target,
-                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+2], VY[i+2], VZ[i+2],
-                        VC[i], VC[i+1], VC[i+2]);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+2);
                     Triangles++;
                 }
                 break;
             case 6: // TRIANGLE_STRIP
                 for(ULONG i = 0; i + 2 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(&Target,
-                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+2], VY[i+2], VZ[i+2],
-                        VC[i], VC[i+1], VC[i+2]);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+2);
                     Triangles++;
                 }
                 break;
@@ -2609,33 +2769,23 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             case 10: // POLYGON
                 for(ULONG i = 1; i + 1 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(&Target,
-                        VX[0], VY[0], VZ[0], VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1],
-                        VC[0], VC[i], VC[i+1]);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, 0, i, i+1);
                     Triangles++;
                 }
                 break;
             case 8: // QUADS
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
-                    EmuNv2aFillTriangle(&Target,
-                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+2], VY[i+2], VZ[i+2],
-                        VC[i], VC[i+1], VC[i+2]);
-                    EmuNv2aFillTriangle(&Target,
-                        VX[i], VY[i], VZ[i], VX[i+2], VY[i+2], VZ[i+2], VX[i+3], VY[i+3], VZ[i+3],
-                        VC[i], VC[i+2], VC[i+3]);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+2);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+2, i+3);
                     Triangles += 2;
                 }
                 break;
             case 9: // QUAD_STRIP
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
-                    EmuNv2aFillTriangle(&Target,
-                        VX[i], VY[i], VZ[i], VX[i+1], VY[i+1], VZ[i+1], VX[i+3], VY[i+3], VZ[i+3],
-                        VC[i], VC[i+1], VC[i+3]);
-                    EmuNv2aFillTriangle(&Target,
-                        VX[i], VY[i], VZ[i], VX[i+3], VY[i+3], VZ[i+3], VX[i+2], VY[i+2], VZ[i+2],
-                        VC[i], VC[i+3], VC[i+2]);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+3);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+3, i+2);
                     Triangles += 2;
                 }
                 break;
@@ -2650,13 +2800,17 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
         fflush(stdout);
     }
 
+    if(SamplerReady)
+        EmuNv2aFreeSampler(&Sampler);
+
     if(g_EmuNv2aRasterLogCount < 32)
     {
-        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu) depth=%s(fmt=%lu func=0x%lX) vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
+        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
                VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount,
                Target.Depth ? "on" : "off", g_EmuNv2aSurfaceZetaFormat, g_EmuNv2aDepthFunc,
+               SamplerReady ? "on" : "off", SamplerReady ? Sampler.Width : 0, SamplerReady ? Sampler.Height : 0,
                g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
                g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
                VX[0], VY[0], VC[0]);
