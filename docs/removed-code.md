@@ -1,66 +1,81 @@
->>
+# Removed Code Notes
 
-    /* TODO: Use new handle wrapping code
+These are archival references, not active implementation guidance.
 
-    // ******************************************************************
-    // * For now, just check for 'special' cases
-    // ******************************************************************
-    if(strcmp(ObjectAttributes->ObjectName->Buffer, "\\Device\\Harddisk0\\partition1\\") == 0)
-    {
-        EmuHandle *iEmuHandle = new EmuHandle;
+## NtCreateFile Handle Wrapping Experiment
 
-        iEmuHandle->m_Type = EMUHANDLE_TYPE_PARTITION1;
+```cpp
+/* TODO: Use new handle wrapping code
 
-        *FileHandle = PtrToEmuHandle(iEmuHandle);
-    }
-    else if(strcmp(ObjectAttributes->ObjectName->Buffer, "\\Device\\Harddisk0\\partition1\\TDATA") == 0)
-    {
-        EmuHandle *iEmuHandle = new EmuHandle;
+// ******************************************************************
+// * For now, just check for 'special' cases
+// ******************************************************************
+if(strcmp(ObjectAttributes->ObjectName->Buffer, "\\Device\\Harddisk0\\partition1\\") == 0)
+{
+    EmuHandle *iEmuHandle = new EmuHandle;
 
-        iEmuHandle->m_Type = EMUHANDLE_TYPE_TDATA;
+    iEmuHandle->m_Type = EMUHANDLE_TYPE_PARTITION1;
 
-        *FileHandle = PtrToEmuHandle(iEmuHandle);
+    *FileHandle = PtrToEmuHandle(iEmuHandle);
+}
+else if(strcmp(ObjectAttributes->ObjectName->Buffer, "\\Device\\Harddisk0\\partition1\\TDATA") == 0)
+{
+    EmuHandle *iEmuHandle = new EmuHandle;
 
-        // TODO: Update IoStatusBlock if necessary
-    }
-    else
-    {
-        EmuPanic();
-    }
-    */
-	
-<<
+    iEmuHandle->m_Type = EMUHANDLE_TYPE_TDATA;
 
-	__asm int 3
-	wchar_t wszObjectName[160];
+    *FileHandle = PtrToEmuHandle(iEmuHandle);
 
-	xntdll::UNICODE_STRING    NtUnicodeString;
-	xntdll::OBJECT_ATTRIBUTES NtObjAttr;
+    // TODO: Update IoStatusBlock if necessary
+}
+else
+{
+    EmuPanic();
+}
+*/
+```
 
-    setlocale(LC_ALL, "English");
-    mbstowcs(wszObjectName, ObjectAttributes->ObjectName->Buffer, 160);
+## Host NtCreateFile Probe
 
-	NT_RtlInitUnicodeString(&NtUnicodeString, wszObjectName);
+```cpp
+__asm int 3
+wchar_t wszObjectName[160];
 
-	// Initialize NtObjAttr
-	NtObjAttr.Length = sizeof(xntdll::OBJECT_ATTRIBUTES);
+xntdll::UNICODE_STRING    NtUnicodeString;
+xntdll::OBJECT_ATTRIBUTES NtObjAttr;
 
-	InitializeObjectAttributes(&NtObjAttr, &NtUnicodeString, ObjectAttributes->Attributes, ObjectAttributes->RootDirectory, NULL);
+setlocale(LC_ALL, "English");
+mbstowcs(wszObjectName, ObjectAttributes->ObjectName->Buffer, 160);
 
-    NTSTATUS ret = NT_NtCreateFile
-    (
-        FileHandle, DesiredAccess, &NtObjAttr, (xntdll::IO_STATUS_BLOCK*)IoStatusBlock,
-        (xntdll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess, CreateDisposition, CreateOptions, NULL, NULL
-    );
+NT_RtlInitUnicodeString(&NtUnicodeString, wszObjectName);
 
-	if(FAILED(ret))
-		MessageBox(g_hEmuWindow, "Bad!", "Cxbx", MB_OK);
-	else
-		MessageBox(g_hEmuWindow, "Good!", "Cxbx", MB_OK);
+// Initialize NtObjAttr
+NtObjAttr.Length = sizeof(xntdll::OBJECT_ATTRIBUTES);
 
+InitializeObjectAttributes(
+    &NtObjAttr,
+    &NtUnicodeString,
+    ObjectAttributes->Attributes,
+    ObjectAttributes->RootDirectory,
+    NULL
+);
 
-<<
+NTSTATUS ret = NT_NtCreateFile
+(
+    FileHandle, DesiredAccess, &NtObjAttr, (xntdll::IO_STATUS_BLOCK*)IoStatusBlock,
+    (xntdll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess,
+    CreateDisposition, CreateOptions, NULL, NULL
+);
 
+if(FAILED(ret))
+    MessageBox(g_hEmuWindow, "Bad!", "Cxbx", MB_OK);
+else
+    MessageBox(g_hEmuWindow, "Good!", "Cxbx", MB_OK);
+```
+
+## TLS Adjustment Calculation
+
+```cpp
 // ******************************************************************
 // * calculate TLS adjustment
 // ******************************************************************
@@ -76,7 +91,7 @@ else
     uint32 TlsZF = x_Xbe->m_TLS->dwSizeofZeroFill;
     uint32 TlsEA = x_Xbe->m_TLS->dwDataEndAddr;
     uint32 TlsSA = x_Xbe->m_TLS->dwDataStartAddr;
-    
+
     // ******************************************************************
     // * calculate tls adjustment
     // ******************************************************************
@@ -84,3 +99,4 @@ else
     TlsAdjust &= 0xFFFFFFF0;
     TlsAdjust += 4;
 }
+```

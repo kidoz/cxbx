@@ -1,26 +1,43 @@
-Direct3D resources are going to be a little bit of a hack.
-There is a tough situation, because precompiled resources
-(XPR) can be loaded into memory manually by an Xbox Game,
-and then "Registered" with pResource->Register(addr);
+# Direct3D Notes
 
-This is a problem because we never have an opportunity to
-intercept the "this" pointer for this datatype. The base
-resource class looks like this:
+This describes the Direct3D HLE resource strategy captured in the original CXBX
+notes. Treat it as implementation context, not as a complete modern graphics
+design.
 
+## Resource Registration Problem
+
+Direct3D resources are awkward for CXBX because precompiled Xbox resources
+(`.xpr`) can be loaded into memory manually by an Xbox title and then registered
+with:
+
+```cpp
+pResource->Register(addr);
+```
+
+At that point the emulator does not naturally get a clean interception point for
+the resource object's `this` pointer. The resource layout involved is:
+
+```cpp
 DWORD Common;
 DWORD Data;
 DWORD Lock;
+```
 
-The first idea is to tuck away the PC Direct3D resource
-pointer inside of pResource->Data. The trouble with this
-is that some Xbox Games will directly access and modify
-this member.
+## Resource Pointer Strategies
 
-Another technique is to hide the PC Direct3D resource pointer
-inside of the buffer allocated by Data. This could work, as
-long as Xbox Games do not access the resource Data after the
-initial Register function is called.
+The first idea was to store the host `IDirect3D*` resource pointer in
+`pResource->Data`. That is unsafe because some Xbox titles directly access and
+modify `Data`.
 
-The currently used method is to tuck the pointer away inside
-of the Lock member, and hijack any functions that attempt to
-access the Lock member variable.
+Another option was to hide the host pointer inside the buffer allocated by
+`Data`. That can work only while titles do not access the resource data after
+registration.
+
+The recorded method stores the host pointer in `Lock` and hijacks functions that
+access the `Lock` member.
+
+## Current Context
+
+The repository also has a partial register-level NV2A model for MMIO, RAMIN,
+PFIFO, and PGRAPH method paths. That model is not full rasterization; Direct3D
+HLE and NV2A register modeling remain separate graphics bring-up concerns.

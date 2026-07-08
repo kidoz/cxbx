@@ -127,7 +127,7 @@ swap imbalance, or an NV2A register/model divergence.
 ```text
 3rdparty/dxsdk/              Bundled DirectX SDK headers
 Bin/                         Legacy binary/output placeholders
-Doc/                         Legacy project notes and current planning docs
+docs/                        Project documentation, reference notes, screenshots
 Lib/                         Bundled import libraries
 PostBuild/                   Legacy post-build utilities
 Resource/                    Win32 resources, icons, bitmaps, menus, dialogs
@@ -159,10 +159,11 @@ state.
 
 Useful starting points:
 
-- [Doc/Todo.txt](Doc/Todo.txt) - legacy task list.
-- [Doc/Changelog.txt](Doc/Changelog.txt) - historical project changes.
-- [Doc/Direct3D.txt](Doc/Direct3D.txt) - legacy Direct3D notes.
-- [Doc/Input.txt](Doc/Input.txt) - legacy input notes.
+- [docs/README.md](docs/README.md) - documentation index.
+- [docs/todo.md](docs/todo.md) - task list and open engineering topics.
+- [docs/changelog.md](docs/changelog.md) - historical project changes.
+- [docs/direct3d.md](docs/direct3d.md) - Direct3D notes.
+- [docs/input.md](docs/input.md) - input notes.
 - [tests/suite/README.md](tests/suite/README.md) - conformance suite guide.
 - [tools/xtest/README.md](tools/xtest/README.md) - probe runner usage.
 

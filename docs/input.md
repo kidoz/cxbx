@@ -1,19 +1,21 @@
-Controller Input is configured using a dialog inside
-EmuDInput.cpp/.h
+# Input Notes
 
-Configuration is actually saved into both the registry
-and shared memory within Cxbx.dll. This means that all
-active emulated games (even if there are many of them
-at the same time) will have the ability to refresh the
-current configuration at any given time.
+## Controller Configuration
 
-This works out really great because this means you can
-make changes in the input configuration at any time and
-immediately see the changes take affect.
+Controller input configuration is handled through the dialog implemented around
+`EmuDInput.cpp` and `EmuDInput.h`.
 
-It is important to note that all access to this shared
-memory, as with all shared memory, should be protected
-with a mutual exclusion mechanism. Win32 provides such
-a mechanism and it will be used.
+Configuration is saved in two places:
 
--caustik
+- the Windows registry
+- shared memory inside `Cxbx.dll`
+
+That arrangement lets active emulated titles refresh input configuration while
+they are running, so changes made in the configuration UI can take effect
+without restarting the title.
+
+## Synchronization
+
+All access to shared memory should be protected by a mutual exclusion mechanism.
+Win32 provides the required primitives, and code that updates this path should
+preserve that synchronization boundary.

@@ -1,323 +1,204 @@
-cxbx website: http://www.caustik.com/xbox/
+# Changelog
 
-version: 0.7.8c (09/02/03)
---------------------------------
+This changelog records the original caustik CXBX release history and is
+preserved as archival project context.
 
-- Spontaneous CreateDevice failures fixed (many, at least)
+Original website: <http://www.caustik.com/xbox/>
 
-- Exe now able to generate into temporary directory, allowing
-  games to be run from a read only device without path issues.
+## 0.7.8c (2003-09-02)
 
-- Finally, Cxbx.dll and Cxbx.exe enforce version synchronization.
-  This should at least diagnose about 9 billion people's problems.
+- Spontaneous `CreateDevice` failures fixed.
+- EXE generation can now use the temporary directory, allowing games to run from
+  read-only devices without path issues.
+- `Cxbx.dll` and `Cxbx.exe` now enforce version synchronization.
+- Very minor splash image tweaks.
 
-- Very minor splash image tweaks
-
-version: 0.7.8b (08/30/03)
---------------------------------
+## 0.7.8b (2003-08-30)
 
 - Fixed debug messages accidentally left in the previous release.
 
-version: 0.7.8 (08/29/03)
---------------------------------
+## 0.7.8 (2003-08-29)
 
-- Halo executes (no graphics yet)
-
+- Halo executes, with no graphics yet.
 - Overlays simulated on PCs that do not support them in hardware.
+- YUY2 overlay capabilities detection improved significantly.
+- Mesh rendering fixes, credited to kingofc. The XRay XDK demo, Gamepad demo,
+  and Rumble demo improved.
+- `Z:` drive simulation repaired.
 
-- YUY2 overlay capabilities detection improved significantly
+## 0.7.7b (2003-07-16)
 
-- Fixes to mesh rendering (thanks kingofc!). The "XRay" XDK demo is
-  extremely impressive now (and runs very efficiently), as well as
-  the Gamepad/Rumble demos.
+- Fixed lost compatibility with X-Marbles and similar titles.
 
-- Z: drive simulation repaired
+## 0.7.7 (2003-07-15)
 
-version: 0.7.7b (07/16/03)
---------------------------------
+- Turok Evolution displays startup graphics and intro sequence.
+- Stella and a few other homebrew games are playable.
+- Lower-level heap emulation was added, fixing glitches and bugs.
+- Timing fixes increased FPS.
 
-- Fixed lost compatibility with X-Marbles, etc
+## 0.7.6 (2003-07-07)
 
-version: 0.7.7 (07/15/03)
---------------------------------
+- More homebrew apps show graphics.
+- DirectInput bugs fixed.
+- PointSprites works without source hacks.
+- Code cleanup.
 
-- Turok Evolution displays startup graphics and intro sequence!!
+## 0.7.5 (2003-06-30)
 
-- Stella and a few other homebrew games are now playable :]
-  This means you can play all your atari games on Cxbx, which
-  is a great novelty.
+- X-Marbles homebrew demo is playable.
+- New GUI bitmap, credited to bot.
+- DirectSound emulation began.
+- Corrected converted EXE stack commit.
+- Fixed a long-standing debugger attach problem.
+- Advanced 4627 coverage.
+- PointSprites, Gamepad demos, and other XDK samples run better.
+- Added more Direct3D/XAPI emulation. Hunter: The Reckoning gets farther, but
+  still without graphics.
 
-- Finally low level emulation of the heap, which is a very
-  very nice thing and fixed some glitches/bugs.
+## 0.7.4 (2003-06-23)
 
-- Fixed timing (FPS is much higher now! it is unbelievable)
+- First retail game graphics.
+- Quad rendering.
+- New XD3D emulation work.
+- Additional demos play, including PointSprites, with known mipmap-filter issues.
+- Fixed a user input bug that ignored digital buttons.
 
-version: 0.7.6 (07/07/03)
---------------------------------
+## 0.7.3 (2003-06-18)
 
-- Many more homebrew apps show some graphics
+- Meshes.
+- Indexed primitive and vertex rendering.
+- Part of the invisible texture problem was fixed.
 
-- DirectInput bugs fixed
+## 0.7.2 (2003-06-13)
 
-- PointSprites works great without source hack
+- Texture support for BMP, JPG, PNG, partial XPR, and related paths.
+- `rtinit` and `cinit` run at a lower level.
+- `stdio` appears to work well.
+- Added advanced texture work, including TCI.
 
-- Lots of code cleanup
+## 0.7.1 (2003-05-30)
 
-version: 0.7.5 (06/30/03)
---------------------------------
+- Video configuration.
+- Fixed XBE change detection logic.
+- Open XBE and Import EXE can be used when a file is already open. The current
+  file is closed automatically after checking for unsaved changes.
+- Direct3D lighting works.
 
-- X-Marbles homebrew demo is playable!
+## 0.7.0 (2003-05-27)
 
-- New GUI bitmap (thanks, bot!)
+- `cxbx.dll` and `cxbx.exe` file sizes shrank substantially.
+- Added controller input and configuration.
+- Added recent XBE/EXE file menus.
+- Added support for `__declspec(thread)` style TLS.
+- Fixed GUI color issues.
+- Massive code reorganization.
+- Random optimizations.
+- Moved certain emulation components lower level.
+- XBE parsing and debug output fixes, including better handling of unusual Linux
+  XBE files.
+- Better emulation exception handling.
 
-- DirectSound emulation has begun.
+## 0.6.0-pre12 (2003-02-23)
 
-- Corrected converted Exe stack commit.
+- HLE advanced to intercepting Direct3D and Xapilib calls.
+- A simple Xbox app built with XDK 4361 or 4627 was shown to work.
 
-- Fixed a really annoying problem with the debugger
-  not being able to attach, that has been around for
-  way way too long.
+## 0.6.0-pre11 (2003-02-09)
 
-- Caught up 4627 pretty far.
+- HLE began. Cxbx can emulate a blank XDK project.
+- New icon pending author approval.
 
-- PointSprites and Gamepad demos, and some other new
-  XDK samples run better.
+## 0.6.0-pre10 (2003-02-07)
 
-- Added more Direct3D/XAPI emulation, Hunter The Reckoning
-  gets pretty far but no graphics yet.
+- Added extensive debug console output when opening, converting, or saving XBE
+  and EXE files.
 
-version: 0.7.4 (06/23/03)
---------------------------------
+## 0.6.0-pre9 (2003-02-06)
 
-- FIRST RETAIL GAME GRAPHICS (simple, but yay!!)
+- Released source code under the GNU license.
+- Debugging interface changed and became cleaner.
 
-- Quad rendering
+## 0.5.2 (2002-12-14)
 
-- Tons of new XD3D emulation
+- Fixed a section-name generation bug.
 
-- Some nice demos play now, including the cool PointSprites
-  demo. There are some issues right now with the mipmap filters
+## 0.5.1 (unknown date)
 
-- Fixed a user input bug (was ignoring digital buttons)
+- Added more XBE information to core and XBE dump output.
 
-version: 0.7.3 (06/18/03)
---------------------------------
+## 0.5.0 (2002-11-16)
 
-- Meshes
+- Fixed display of section digests.
+- Added conversion from EXE to XBE.
+- Code cleanup and small UI improvements.
 
-- Indexed [primitive/vertex] rendering
+## 0.4.4 (2002-11-01)
 
-- Fixed *part* of the invisible texture problem
+- Updated XBE structure for better accuracy.
+- Added and fixed XBE info dump details, especially TLS information.
+- Added many accurate kernel function prototypes, structs, and enums.
 
-version: 0.7.2 (06/13/03)
---------------------------------
+## 0.4.3 (2002-10-09)
 
-- Textures (bmp, jpg, png, partial .xpr, etc)
+- Added edit menu options for patching more than 64 MB of RAM and toggling
+  between debug and release mode.
+- Fixed minor GUI behavior, such as suggesting an appropriate filename when
+  saving an XBE instead of always defaulting to `default.xbe`.
 
-- rtinit/cinit run on lower level
+## 0.4.2 (2002-10-07)
 
-- stdio seems to be working great :]
+- Added logo bitmap import, allowing software boot logos to be changed.
 
-- some advanced texture stuff (TCI)
+## 0.4.1 (2002-10-04)
 
-version: 0.7.1 (05/30/03)
---------------------------------
+- Internal cleanup and organization.
+- Software running through the emulator typically terminates safely.
 
-- Video Configuration!
+## 0.4.0 beta (2002-09-16)
 
-- Fixed some Xbe change detection logic
+- Total code rewrite while preserving most functionality.
+- Cleaner UI and code design.
+- Logo bitmap is decoded and displayed in the main window when opening an XBE.
+- Debug output window traces kernel calls.
+- Logo bitmap export to BMP.
+- `xbe_info.txt` displays the correctly decoded kernel thunk table address.
 
-- Open Xbe and Import Exe can be done when a file
-  is already open (automatically closes, checking if
-  you made changes first).
+## 0.3.1 (2002-09-02)
 
-- Direct3D Lighting is working!
+- Decreased file sizes for `cxbx.exe` and `cxbx_krnl.dll`.
+- Debug output became cleaner.
 
-version: 0.7.0 (05/27/03)
---------------------------------
+## 0.3.0 (2002-08-19)
 
-- Magically shrunk cxbx.dll/cxbx.exe file sizes enormously!
+- GUI changes, new website, and significant emulation-theory changes.
+- Kernel exports are now hijacked and interpreted.
 
-- Added Controller Input and Configuration!
+## 0.2.2 (2002-07-24)
 
-- Added Recent Xbe/Exe file menus
+- Fixed minor GUI problems.
+- Added kernel thunk address description in the GUI.
 
-- Support __declspec(thread) style TLS
+## 0.2.1 (2002-07-24)
 
-- Fixed GUI color issues
+- Added Convert To EXE menu option.
+- Fixed entry-point detection when converting to EXE.
 
-- Massive code re-organization.
+## 0.2.0 (2002-07-24)
 
-- Sooo many random optimizations
+- Drastically changed UI.
+- Temporarily removed convert-to-EXE feature.
 
-- Went lower level with certain components of
-  emulation. Progress should speed up.
+## 0.1.3b (2002-07-18)
 
-- Some Xbe parsing and debug output fixes.
-  You should now be able to deal with the
-  slightly odd Linux Xbe files.
+- Fixed an incorrect debug XOR value.
 
-- Much better emulation exception handling
+## 0.1.3 (2002-07-16)
 
-version: 0.6.0-pre12 (02/23/03)
---------------------------------
+- XBE information dump shows retail/debug translated addresses.
 
-- HLE has advanced to intercepting Direct3D and
-  Xapilib calls. A simple Xbox app built with a
-  4361 or 4627 XDK has been shown to work.
+## 0.1.2 (2002-07-16)
 
-version: 0.6.0-pre11 (02/09/03)
---------------------------------
-
-- HLE has begun. Cxbx is capable of emulating a
-  blank XDK project. That is, if you had the XDK
-  and created an Xbox "game" that did absolutely
-  nothing, Cxbx could run it :P. Sounds pointless,
-  but it is actually very significant
-
-- New icon! Pending approval for use by the author
-
-version: 0.6.0-pre10 (02/07/03)
---------------------------------
-
-- Tons of debug console output when opening, or
-  converting, or saving xbe and exe files. This
-  was very easy to add because of the flexible
-  new debug console technique.
-
-version: 0.6.0-pre9 (02/06/03)
---------------------------------
-
-- Released source code under GNU license.
-
-- Debugging interface changed. Much cleaner.
-
-version: 0.5.2 (12/14/02)
---------------------------------
-
-- Fixed a bug in section name generation. This might
-  add some compatibility, not sure yet.
-
-version: 0.5.1 (??/??/??)
---------------------------------
-
-- more .xbe information added to core and xbe dump
-
-version: 0.5.0 (11/16/02)
---------------------------------
-
-- fixed a bug in displaying section digests.
-
-- added conversion from .exe to .xbe!!
-
-- more code cleanup, tiny ui improvements.
-
-version: 0.4.4 (11/01/02)
---------------------------------
-
-- updated .xbe structure for more acccuracy
-
-- added/fixed alot of information in xbe info
-  dumps. most notably is the TLS information, 
-  which is finally completely correct.
-
-- lots and lots of new kernel function prototypes
-  and structs/enums are very accurate now.
-
-version: 0.4.3 (10/09/02)
---------------------------------
-
-- added edit menu options to patch for allowing
-  more than 64mb of ram, and also to toggle between
-  debug mode / release mode. i also fixed a few 
-  relatively minor gui things, such as suggesting
-  an appropriate name for saving an .xbe file, instead
-  of just defaulting to "default.xbe".
-
-version: 0.4.2 (10/07/02)
---------------------------------
-
-- finally got around to adding logo bitmap import
-  feature. this is pretty damn cool because you
-  can change that little logo that appears when
-  you boot your xbox software to whatever you want
-  it to be. for example, you can modify xbox media
-  player to display "XBMP" instead of "Microsoft"
-
-version: 0.4.1 (10/04/02)
---------------------------------
-
-- internally alot of little things have changed,
-  code is organized pretty well now. software run
-  through the emulator typically safely terminates,
-  which is pretty damn cool from my perspective.
-
-version: 0.4.0 (BETA) (09/16/02)
---------------------------------
-
-- total code rewrite. most the funcionality
-  has remained intact with cleaner code UI
-  and code design.
-
-- logo bitmap is now decoded and displayed
-  in the main window when you open an .xbe
-  file. debug output window traces kernel
-  calls. logo bitmap can be exported to a
-  bitmap file.
-
-- xbe_info.txt now displays the correctly
-  decoded kernel thunk table address.
-
-version: 0.3.1 (09/02/2002)
---------------------------------
-
-- significantly decreased file sizes for cxbx.exe
-  and cxbx_krnl.dll. Also made debug output cleaner.
-
-version: 0.3.0 (08/19/2002)
---------------------------------
-
-- various gui changes, new web site, significant
-  changes in emulation theory. kernel exports are
-  now hijacked and interpretted.
-
-version: 0.2.2 (07/24/2002)
----------------------------
-
-- fixed various minor GUI problems
-
-- added kernel thunk address description in GUI
-
-version: 0.2.1 (07/24/2002)
----------------------------
-
-- added "Convert To .EXE" menu option.
-
-- fixed problem where entry point wasn't being detected
-  correctly when converting to .exe
-
-version: 0.2.0 (07/24/2002)
----------------------------
-
-- drastically changed UI, took out convert to .exe
-  feature (temporarily).
-
-version: 0.1.3b(07/18/2002)
----------------------------
-
--  oops..fixed an incorrect debug xor value
-
-version: 0.1.3 (07/16/2002)
----------------------------
-
-- .xbe file information dump now shows retail/debug
-   translated addresses.
-
-version: 0.1.2 (07/16/2002)
----------------------------
-
-- cxbx now dumps .xbe file information in a .txt file.
-
-- new icon ?
-
-- various tiny improvements
+- Cxbx dumps XBE file information to a text file.
+- New icon.
+- Small improvements.
