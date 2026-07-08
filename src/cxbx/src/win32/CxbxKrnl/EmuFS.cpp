@@ -220,7 +220,15 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
             if(g_pEmuHostStackBase == NULL)
                 g_pEmuHostStackBase = OrgNtTib->StackBase;
 
-            OrgNtTib->StackBase = pNewTLS;
+            // The guest reads its TLS pointer off fs:[0x04] (NtTib.StackBase, the
+            // same convention as the selector-mode KPCR). Without the content-swap
+            // that clobbers the host TEB's StackBase permanently -- which breaks
+            // host SEH dispatch on this thread (frame validation checks handler
+            // records against the stack bounds), so host __try/__except silently
+            // stops working. With the swap, the TLS pointer lives only in the
+            // Xbox role (slot 4) and the host role keeps the real StackBase.
+            if(!g_bEmuFSContentSwap)
+                OrgNtTib->StackBase = pNewTLS;
             EmuSetCurrentThread(pNewTLS, pNewTLSAllocation);
 
             // Without an LDT selector the guest shares the host TEB as its KPCR.
@@ -256,7 +264,7 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
                     // and reads the real TEB; the caller's explicit "// Xbox FS"
                     // EmuSwapFS then loads the KPCR before entering the guest. So we
                     // leave the host values in the slots and start IsXbox=false.
-                    unsigned long h0, h1, h2, h3;
+                    unsigned long h0, h1, h2, h3, h4;
                     __asm
                     {
                         mov eax, fs:[0x1C]
@@ -267,15 +275,19 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
                         mov h2, eax
                         mov eax, fs:[0x28]
                         mov h3, eax
+                        mov eax, fs:[0x04]
+                        mov h4, eax
                     }
                     g_EmuFsSwap.Host[0] = h0;
                     g_EmuFsSwap.Host[1] = h1;
                     g_EmuFsSwap.Host[2] = h2;
                     g_EmuFsSwap.Host[3] = h3;
+                    g_EmuFsSwap.Host[4] = h4;                 // the real StackBase
                     g_EmuFsSwap.Xbox[0] = (unsigned long)SelfPcr;
                     g_EmuFsSwap.Xbox[1] = (unsigned long)Prcb;
                     g_EmuFsSwap.Xbox[2] = h2 & 0xFFFFFF00;   // KPCR.Irql byte = PASSIVE (0)
                     g_EmuFsSwap.Xbox[3] = (unsigned long)CurThread;
+                    g_EmuFsSwap.Xbox[4] = (unsigned long)pNewTLS;   // guest TLS pointer
                     g_EmuFsSwap.IsXbox  = false;
                     g_EmuFsSwap.Active  = true;
                 }
@@ -388,6 +400,11 @@ void EmuCleanupFS()
     if(g_bEmuFSUnavailable)
     {
         NT_TIB *OrgNtTib;
+
+        // Leave the dying thread's TEB holding its real host values and stop
+        // swapping on it.
+        EmuFsSwapEnsureRole(false);
+        g_EmuFsSwap.Active = false;
 
         __asm
         {
