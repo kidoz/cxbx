@@ -4848,9 +4848,14 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
     if(pXbeHeader->dwBaseAddr != 0x00010000)
         return;
 
-    // A1 ?? ?? ?? ?? 8B 4B 08 01 08 : the ?? dword is the per-title global
+    // A1 ?? ?? ?? ?? 8B (4B|4E) 08 (01|29) 08 : mov eax,[global] /
+    // mov ecx,[ebx+8 or esi+8] / add-or-sub [eax],ecx. The alloc side uses
+    // add (seen via ebx on FCEUltra/z26x/NestopiaX 1.3); the FREE side uses
+    // sub via esi (seen on NestopiaX 1.0's CMcpxGPDspManager teardown after
+    // GP-DSP init fails against the APU model). The ?? dword is the
+    // per-title accounting global; it stays NULL because the DSP-heap init
+    // that would set it never succeeds under the HLE.
     const uint08 Head = 0xA1;
-    const uint08 Tail[] = { 0x8B, 0x4B, 0x08, 0x01, 0x08 };
     static uint32 s_ApuScratchCounters[4];
     int Patched = 0;
 
@@ -4864,8 +4869,10 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
             continue;
         }
 
-        if(*(uint08*)Address != Head ||
-           memcmp((void*)(Address + 5), Tail, sizeof(Tail)) != 0)
+        const uint08 *p = (const uint08*)Address;
+        if(p[0] != Head ||
+           p[5] != 0x8B || (p[6] != 0x4B && p[6] != 0x4E) || p[7] != 0x08 ||
+           (p[8] != 0x01 && p[8] != 0x29) || p[9] != 0x08)
             continue;
 
         // The loaded global must live inside the image and still be NULL
@@ -4874,12 +4881,13 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
         if(GlobalAddr < Base || GlobalAddr + 4 > End || *(uint32*)GlobalAddr != 0)
             continue;
 
-        // mov ecx,[ebx+8] ; add [&scratch],ecx ; nop
-        uint08 Patch[10] = { 0x8B, 0x4B, 0x08, 0x01, 0x0D, 0, 0, 0, 0, 0x90 };
+        // mov ecx,[reg+8] ; add-or-sub [&scratch],ecx ; nop
+        // (preserves the original register and add/sub opcode)
+        uint08 Patch[10] = { 0x8B, p[6], 0x08, p[8], 0x0D, 0, 0, 0, 0, 0x90 };
         *(uint32*)&Patch[5] = (uint32)(uintptr_t)&s_ApuScratchCounters[Patched];
         EmuWriteBytes(Address, Patch, sizeof(Patch));
-        printf("Emu (0x%lX): DSOUND APU accounting (0x%.08lX, global 0x%.08lX) redirected to scratch.\n",
-               GetCurrentThreadId(), Address, GlobalAddr);
+        printf("Emu (0x%lX): DSOUND APU accounting (0x%.08lX, %s, global 0x%.08lX) redirected to scratch.\n",
+               GetCurrentThreadId(), Address, (p[8] == 0x01) ? "add" : "sub", GlobalAddr);
         Patched++;
     }
 
