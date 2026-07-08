@@ -3690,6 +3690,22 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     // truth, and the eventual resume returns the interrupted side its values.
     EmuFsSwapEnsureRole((ULONG)e->ContextRecord->Eip < 0x10000000);
 
+    // Guest breakpoints: debug-build XDK titles trace through a print-then-int3
+    // debug service (e.g. the CDX XBApp's "XBApp: Creating Direct3D...") that a
+    // devkit's attached kernel debugger swallows and continues. Emulate the
+    // debugger being present: step over the int3 and resume. Host-side
+    // breakpoints (real debugger / CRT asserts) are left alone.
+    if(e->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT &&
+       (ULONG)e->ContextRecord->Eip >= 0x00010000 &&
+       (ULONG)e->ContextRecord->Eip < 0x10000000)
+    {
+        printf("Emu (0x%lX): guest breakpoint (int3) at 0x%.08lX skipped (devkit debugger emulation).\n",
+               GetCurrentThreadId(), e->ContextRecord->Eip);
+        fflush(stdout);
+        e->ContextRecord->Eip += 1;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     bool WasXboxFS = EmuIsXboxFS();
 
     if(WasXboxFS)
