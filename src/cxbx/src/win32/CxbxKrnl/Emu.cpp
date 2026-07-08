@@ -3680,6 +3680,15 @@ static bool EmuLooksLikeReturnAddress(ULONG Address)
 
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
+    // Under the LDT-less content-swap an SEH unwind (e.g. a guest __except
+    // catching a fault raised inside a host-side HLE call) skips the balancing
+    // EmuSwapFS calls, leaving the shared FS slots in the wrong role for the
+    // code that then runs. The faulting EIP says definitively which side was
+    // executing (guest image below Cxbx.dll's 0x10000000 base, host above), so
+    // re-anchor the role to it: the handler's own swaps below then start from
+    // truth, and the eventual resume returns the interrupted side its values.
+    EmuFsSwapEnsureRole((ULONG)e->ContextRecord->Eip < 0x10000000);
+
     bool WasXboxFS = EmuIsXboxFS();
 
     if(WasXboxFS)
@@ -5134,6 +5143,11 @@ void EmuXRefFailure()
 // ******************************************************************
 int EmuException(LPEXCEPTION_POINTERS e)
 {
+    // Re-anchor the content-swap role to the faulting EIP (see
+    // EmuVectoredExceptionHandler) -- this filter can run after an unwind
+    // already skipped balancing EmuSwapFS calls.
+    EmuFsSwapEnsureRole((ULONG)e->ContextRecord->Eip < 0x10000000);
+
     bool WasXboxFS = EmuIsXboxFS();
 
     if(WasXboxFS)
@@ -5210,6 +5224,12 @@ int EmuException(LPEXCEPTION_POINTERS e)
         if(MessageBox(XTL::g_hEmuWindow, buffer, "cxbx", MB_ICONSTOP | MB_OKCANCEL) == IDOK)
 			ExitProcess(1);
 	}
+
+    // Restore the role the faulting code held (the entry swap above moved to the
+    // host role); without this, declining the search in the Xbox role leaves the
+    // slots inverted for whatever handler runs next.
+    if(WasXboxFS)
+        EmuSwapFS();
 
     return EXCEPTION_CONTINUE_SEARCH;
 }

@@ -84,6 +84,74 @@ struct EmuFsSwapState
 extern bool g_bEmuFSContentSwap;
 extern thread_local EmuFsSwapState g_EmuFsSwap;
 
+// Returns the role the shared slots ACTUALLY hold right now, decided by content:
+// fs:[0x1C] is SelfPcr (a unique heap pointer) in the Xbox role and the TEB's
+// EnvironmentPointer in the host role, and neither side ever rewrites it. The
+// IsXbox flag alone can go stale -- an SEH unwind (e.g. a guest __except catching
+// a fault raised in host code) skips the balancing EmuSwapFS calls -- so every
+// swap decides by content and self-heals the flag.
+static inline bool EmuFsSwapActualIsXbox()
+{
+    unsigned long v;
+    __asm
+    {
+        mov eax, fs:[0x1C]
+        mov v, eax
+    }
+    return v == g_EmuFsSwap.Xbox[0];
+}
+
+// Exchange the 4 overlaid KPCR/TEB slots: save the current contents into the
+// array of the role they actually belong to (picking up any runtime drift, e.g.
+// the guest writing the Irql byte at fs:[0x24]), then load the other role.
+static inline void EmuFsSwapExchange()
+{
+    bool Actual = EmuFsSwapActualIsXbox();
+    unsigned long s0, s1, s2, s3;
+    __asm
+    {
+        mov eax, fs:[0x1C]
+        mov s0, eax
+        mov eax, fs:[0x20]
+        mov s1, eax
+        mov eax, fs:[0x24]
+        mov s2, eax
+        mov eax, fs:[0x28]
+        mov s3, eax
+    }
+    unsigned long *save = Actual ? g_EmuFsSwap.Xbox : g_EmuFsSwap.Host;
+    unsigned long *load = Actual ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
+    save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3;
+    s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3];
+    __asm
+    {
+        mov eax, s0
+        mov fs:[0x1C], eax
+        mov eax, s1
+        mov fs:[0x20], eax
+        mov eax, s2
+        mov fs:[0x24], eax
+        mov eax, s3
+        mov fs:[0x28], eax
+    }
+    g_EmuFsSwap.IsXbox = !Actual;
+}
+
+// Force the slots into a specific role (no-op when they already hold it). Used
+// by the exception paths to re-anchor the role to the code that was actually
+// interrupted (the faulting EIP says which side was running), repairing any
+// inversion an unbalanced SEH unwind left behind.
+static inline void EmuFsSwapEnsureRole(bool Xbox)
+{
+    if(!g_bEmuFSContentSwap || !g_EmuFsSwap.Active)
+        return;
+
+    if(EmuFsSwapActualIsXbox() != Xbox)
+        EmuFsSwapExchange();
+    else
+        g_EmuFsSwap.IsXbox = Xbox;
+}
+
 // ******************************************************************
 // * func: EmuGetCurrentThread
 // ******************************************************************
@@ -106,7 +174,7 @@ extern void EmuAdjustCurrentThreadKernelApcDisable(long Delta);
 static inline bool EmuIsXboxFS()
 {
     if(g_bEmuFSUnavailable)
-        return (g_bEmuFSContentSwap && g_EmuFsSwap.Active) ? g_EmuFsSwap.IsXbox : false;
+        return (g_bEmuFSContentSwap && g_EmuFsSwap.Active) ? EmuFsSwapActualIsXbox() : false;
 
     unsigned char chk;
 
@@ -152,36 +220,7 @@ static inline void EmuSwapFS()
         // LDT-less content-swap: exchange the 4 overlaid KPCR/TEB slots so the
         // side about to run (host after this call, or guest) sees its own values.
         if(g_bEmuFSContentSwap && g_EmuFsSwap.Active)
-        {
-            unsigned long s0, s1, s2, s3;
-            __asm
-            {
-                mov eax, fs:[0x1C]
-                mov s0, eax
-                mov eax, fs:[0x20]
-                mov s1, eax
-                mov eax, fs:[0x24]
-                mov s2, eax
-                mov eax, fs:[0x28]
-                mov s3, eax
-            }
-            unsigned long *save = g_EmuFsSwap.IsXbox ? g_EmuFsSwap.Xbox : g_EmuFsSwap.Host;
-            unsigned long *load = g_EmuFsSwap.IsXbox ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
-            save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3;
-            s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3];
-            __asm
-            {
-                mov eax, s0
-                mov fs:[0x1C], eax
-                mov eax, s1
-                mov fs:[0x20], eax
-                mov eax, s2
-                mov fs:[0x24], eax
-                mov eax, s3
-                mov fs:[0x28], eax
-            }
-            g_EmuFsSwap.IsXbox = !g_EmuFsSwap.IsXbox;
-        }
+            EmuFsSwapExchange();
         return;
     }
 
