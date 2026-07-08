@@ -1348,8 +1348,16 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
 
     if(SUCCEEDED(hRet))
     {
-//        memcpy(pAudioPtr,  pvBufferData, dwAudioBytes);
-//        memcpy(pAudioPtr2, (PVOID)((DWORD)pvBufferData+dwAudioBytes), dwAudioBytes2);
+        // Copy the title's PCM data into the host buffer. (These copies were
+        // historically commented out, which left every HLE'd static buffer
+        // playing uninitialized host memory instead of the title's audio.)
+        if(pvBufferData != 0 && !IsBadReadPtr(pvBufferData, dwBufferBytes))
+        {
+            if(pAudioPtr != 0 && dwAudioBytes != 0)
+                memcpy(pAudioPtr, pvBufferData, dwAudioBytes);
+            if(pAudioPtr2 != 0 && dwAudioBytes2 != 0)
+                memcpy(pAudioPtr2, (PVOID)((DWORD)pvBufferData + dwAudioBytes), dwAudioBytes2);
+        }
 
         pThis->EmuDirectSoundBuffer8->Unlock(pAudioPtr, dwAudioBytes, pAudioPtr2, dwAudioBytes2);
     }

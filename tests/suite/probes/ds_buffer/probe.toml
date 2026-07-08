@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): DSOUND HLE static-buffer runtime --
+# create, upload PCM, play on the host audio device, verify the play cursor
+# advances, stop. Uses the XRef-chained buffer-method hooks.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
