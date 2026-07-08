@@ -206,6 +206,22 @@ static const XFUNC k_dsound[] = {
     XF(IDirectSoundBuffer_GetCurrentPosition, 1),
 };
 
+// XAPI input family (Xapi.1.0.5849.inl). These are the functions a title's
+// menu/controller loop lives on; hooking them + CXBX_INPUT_STATE injection
+// enables headless input. XInitDevices stays 0: its 8-byte wrapper is almost
+// entirely relocations, so no verifiable signature exists (the un-HLE'd
+// guest init is harmless one-time OHCI register reads).
+static const XFUNC k_xapi[] = {
+    XF(XInitDevices, 0),
+    XF(XGetDevices, 1),
+    XF(XGetDeviceChanges, 1),
+    XF(XInputOpen, 1),
+    XF(XInputClose, 1),
+    XF(XInputGetCapabilities, 1),
+    XF(XInputGetState, 1),
+    XF(XInputSetState, 1),
+};
+
 static int run_table(const char *prefix, const XFUNC *t, int n)
 {
     int resolved = 0;
@@ -232,6 +248,7 @@ void __cdecl main()
 
     run_table("d3d", k_d3d, sizeof(k_d3d) / sizeof(k_d3d[0]));
     run_table("dsound", k_dsound, sizeof(k_dsound) / sizeof(k_dsound[0]));
+    run_table("xapi", k_xapi, sizeof(k_xapi) / sizeof(k_xapi[0]));
 
     emitf("#result hle_resolve verdict=%s checks=%d fail=%d",
           g_fails ? "FAIL" : "PASS", g_checks, g_fails);

@@ -184,7 +184,10 @@ enum XRefDataBaseOffset
     XREF_DS5849_BUF_SETVOLUME,
     XREF_DS5849_BUF_SETCURRENTPOS_T,
     XREF_DS5849_BUF_SETCURRENTPOS,
-    XREF_DS5849_BUF_GETCURRENTPOS
+    XREF_DS5849_BUF_GETCURRENTPOS,
+    // XDK 5849 XAPI input: XID_fCloseDevice internal (the 12-byte
+    // XInputClose thin wrapper is matched by its call target).
+    XREF_XAPI5849_XINPUTCLOSE
 };
 
 #endif

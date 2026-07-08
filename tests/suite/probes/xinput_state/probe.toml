@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): XAPI input HLE with headless injection.
+# CXBX_INPUT_STATE must match the EXPECT_* constants in main.cpp.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
+CXBX_INPUT_STATE = "0x0004,255,0,0,0,0,0,0,0"

@@ -56,6 +56,7 @@ namespace XTL
 #include "Xapi.1.0.4134.inl"
 #include "Xapi.1.0.4361.inl"
 #include "Xapi.1.0.4627.inl"
+#include "Xapi.1.0.5849.inl"
 #include "D3D8.1.0.3925.inl"
 #include "D3D8.1.0.4034.inl"
 #include "D3D8.1.0.4134.inl"
@@ -110,6 +111,15 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         XAPI_1_0_4627,
         XAPI_1_0_4627_SIZE
+    },
+    // Xapilib Version 1.0.5849 (generated from XDK 5849 xapilib.lib; the
+    // XInput/device family only -- enables headless input via
+    // CXBX_INPUT_STATE. XInitDevices deliberately unhooked, see the .inl.)
+    {
+        "XAPILIB",
+        1, 0, 5849,
+        XAPI_1_0_5849,
+        XAPI_1_0_5849_SIZE
     },
     // D3D8 Version 1.0.3925
     {
@@ -325,6 +335,7 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5849_BUF_SETCURRENTPOS_T
     -1, // XREF_DS5849_BUF_SETCURRENTPOS
     -1, // XREF_DS5849_BUF_GETCURRENTPOS
+    -1, // XREF_XAPI5849_XINPUTCLOSE
 };
 
 // ******************************************************************
