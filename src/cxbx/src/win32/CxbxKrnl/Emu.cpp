@@ -3759,6 +3759,13 @@ static bool EmuLooksLikeReturnAddress(ULONG Address)
     return false;
 }
 
+// The initial (main/render) thread; its unrecoverable faults stay fatal, but a
+// worker thread's can be survived (CXBX_SURVIVE_THREAD_FAULT) so an unrelated
+// subsystem crash -- e.g. a DSOUND mixing thread NULL-dereferencing an
+// uninitialised voice array -- does not tear down a title that is otherwise
+// reaching its render loop.
+static DWORD g_EmuInitialThreadId = 0;
+
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
     // Under the LDT-less content-swap an SEH unwind (e.g. a guest __except
@@ -3922,10 +3929,36 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 
     fflush(stdout);
 
+    // Survive a worker thread's unrecoverable fault (opt-in): a fault in HLE
+    // code mid-guest-call does not reliably unwind to the PCSTProxy __except
+    // (the SEH chain / FS state at the fault is unreliable), so terminating in
+    // EmuException is not enough. Redirect the faulting thread's execution to a
+    // clean ExitThread instead -- an unrelated subsystem crash (e.g. a DSOUND
+    // mixer thread, or a partial-HLE resource helper) then loses only its own
+    // thread rather than tearing down a title reaching its render loop. The
+    // FS role was re-anchored to the faulting EIP at entry, so ExitThread runs
+    // in the correct role.
+    if(g_EmuInitialThreadId != 0 && GetCurrentThreadId() != g_EmuInitialThreadId &&
+       getenv("CXBX_SURVIVE_THREAD_FAULT") != NULL)
+    {
+        extern void EmuThreadFaultExit();
+        printf("Emu (0x%lX): worker thread fault survived -- exiting this thread only.\n",
+               GetCurrentThreadId());
+        fflush(stdout);
+        e->ContextRecord->Eip = (ULONG)(uintptr_t)&EmuThreadFaultExit;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     if(WasXboxFS)
         EmuSwapFS();
 
     return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Redirect target for a survived worker-thread fault: end the thread cleanly.
+void EmuThreadFaultExit()
+{
+    ExitThread(0);
 }
 
 static PVOID g_hEmuVectoredExceptionHandler = NULL;
@@ -4411,6 +4444,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     XTL::EmuD3DInit(pXbeHeader, dwXbeHeaderSize);
 
     printf("Emu (0x%X): Initial thread starting.\n", GetCurrentThreadId());
+
+    g_EmuInitialThreadId = GetCurrentThreadId();
 
     // ******************************************************************
     // * Entry Point
@@ -5487,6 +5522,21 @@ int EmuException(LPEXCEPTION_POINTERS e)
 		sprintf(buffer, "Recieved Exception [0x%.08X]@0x%.08X\n\nPress 'OK' to terminate emulation.\nPress 'Cancel' to debug.", e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
 
         char szLogFile[260];
+
+        // Survive a worker thread's unrecoverable fault (opt-in): let the
+        // faulting thread unwind to its PCSTProxy __except and die alone,
+        // instead of terminating the whole title. The initial/render thread
+        // stays fatal so a broken render path is still surfaced.
+        if(g_EmuInitialThreadId != 0 && GetCurrentThreadId() != g_EmuInitialThreadId &&
+           getenv("CXBX_SURVIVE_THREAD_FAULT") != NULL)
+        {
+            printf("Emu (0x%X): worker thread fault survived -- terminating this thread only.\n",
+                   GetCurrentThreadId());
+            fflush(stdout);
+            if(WasXboxFS)
+                EmuSwapFS();
+            return EXCEPTION_EXECUTE_HANDLER;
+        }
 
         if(EmuGetLogFile(szLogFile, sizeof(szLogFile)))
             ExitProcess(e->ExceptionRecord->ExceptionCode);
