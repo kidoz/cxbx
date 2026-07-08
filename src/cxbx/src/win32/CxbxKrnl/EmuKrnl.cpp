@@ -5153,6 +5153,63 @@ static void EmuStartAudioInterruptThread()
     }
 }
 
+// The USB host-controller interrupt (bus level 1). An nxdk title connects an
+// OHCI ISR and then busy-waits on a memory flag its ISR/DPC updates once per
+// frame (start-of-frame). This HLE has no real controller ticking the frame
+// counter, so synthesize it: raise a SOF source and fire the connected level-1
+// ISR on a timer, letting the title's USB frame processing advance.
+static const ULONG EmuUsbInterruptLevel = 1;
+static volatile LONG g_EmuUsbThreadStarted = 0;
+
+extern "C" void EmuUsb0SignalInterrupt();   // Emu.cpp: raise HcInterruptStatus SOF
+
+static DWORD WINAPI EmuUsbInterruptThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): USB-interrupt thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    for(;;)
+    {
+        Sleep(8);   // ~125 Hz, roughly an OHCI frame cadence
+
+        EmuKInterrupt *Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuUsbInterruptLevel];
+        if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
+            continue;
+
+        EmuUsb0SignalInterrupt();   // start-of-frame source pending
+
+        EmuSwapFS();   // Xbox FS
+        __try
+        {
+            Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        EmuSwapFS();   // Win2k/XP FS
+    }
+
+    return 0;
+}
+
+static void EmuStartUsbInterruptThread()
+{
+    // Opt-in (CXBX_USB_IRQ=1): firing an ISR asynchronously can destabilize a
+    // title, so keep it off by default and leave the probes untouched.
+    char enabled[8] = {0};
+    if(GetEnvironmentVariableA("CXBX_USB_IRQ", enabled, sizeof(enabled)) == 0)
+        return;
+
+    if(InterlockedExchange(&g_EmuUsbThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting USB-interrupt delivery thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuUsbInterruptThread, NULL, 0, NULL);
+    }
+}
+
 extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 {
     EmuSwapFS();   // Win2k/XP FS
@@ -5187,6 +5244,9 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 
     if(Connected && (Level == EmuAudioInterruptLevels[0] || Level == EmuAudioInterruptLevels[1]))
         EmuStartAudioInterruptThread();
+
+    if(Connected && Level == EmuUsbInterruptLevel)
+        EmuStartUsbInterruptThread();
 
     EmuSwapFS();   // Xbox FS
 
