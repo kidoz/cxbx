@@ -1,0 +1,2 @@
+# Requires a target with an AC97 audio-controller (ACI) model (traps 0xFEC00000 MMIO).
+tags = ["aci"]

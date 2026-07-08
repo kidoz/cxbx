@@ -1,0 +1,11 @@
+#suite xbox-conformance v1
+#probe ac97_dma
+CHK ac97.dma_civ_advances PASS
+CHK ac97.dma_bcis_latched PASS
+CHK ac97.dma_globsta_pcmout PASS
+CHK ac97.dma_lastvalid_halts PASS
+CHK ac97.dma_celv_latched PASS
+CHK ac97.dma_lvbci_latched PASS
+CHK ac97.dma_lvi_resumes PASS
+CHK ac97.dma_stop_halts PASS
+#result ac97_dma verdict=PASS checks=8 fail=0
