@@ -1,0 +1,6 @@
+# Requires the NV2A software rasterizer with the fixed-function composite-matrix
+# transform. On Cxbx the raster path is gated behind CXBX_NV2A_RASTER.
+tags = ["nv2a"]
+
+[env]
+CXBX_NV2A_RASTER = "1"

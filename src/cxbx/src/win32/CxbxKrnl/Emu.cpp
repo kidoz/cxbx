@@ -1201,6 +1201,8 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_DEPTH_TEST_ENABLE         0x030Cu
 #define NV097_SET_DEPTH_FUNC                0x0354u
 #define NV097_SET_DEPTH_MASK                0x035Cu
+#define NV097_SET_PROJECTION_MATRIX         0x0440u
+#define NV097_SET_COMPOSITE_MATRIX          0x0680u
 #define NV097_SET_VIEWPORT_OFFSET           0x0A20u
 #define NV097_SET_VIEWPORT_SCALE            0x0AF0u
 #define NV097_SET_TRANSFORM_PROGRAM         0x0B00u
@@ -1247,6 +1249,16 @@ static bool  g_bEmuNv2aRasterChecked = false;
 // screen coordinates; a title that programs a real viewport gets it applied.
 static float g_EmuNv2aViewportOffset[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 static float g_EmuNv2aViewportScale[4]  = { 1.0f, 1.0f, 1.0f, 1.0f };
+// Fixed-function composite matrix (object -> clip), applied in the non-program
+// path. Row-major, D3D row-vector convention (clip.j = sum_i pos.i * M[i][j]).
+// Identity by default so a title that supplies clip/screen coordinates directly
+// (and never programs the matrix) is untransformed.
+static float g_EmuNv2aCompositeMatrix[16] = {
+    1.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 1.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 1.0f,
+};
 // Vertex-program state (Phase 2): uploaded microcode + constant memory. The
 // interpreter runs when execution mode is PROGRAM and a program is loaded;
 // otherwise the raw position/diffuse arrays feed the transform back-end.
@@ -1390,6 +1402,10 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                     // Constant memory upload: one float per word at the load cursor.
                     if(g_EmuNv2aConstWriteFloat < 192 * 4)
                         memcpy(&g_EmuNv2aTransformConstant[g_EmuNv2aConstWriteFloat++], &Data, 4);
+                }
+                else if(Method >= NV097_SET_COMPOSITE_MATRIX && Method < NV097_SET_COMPOSITE_MATRIX + 64)
+                {
+                    memcpy(&g_EmuNv2aCompositeMatrix[(Method - NV097_SET_COMPOSITE_MATRIX) / 4], &Data, 4);
                 }
                 else if(Method >= NV097_SET_VERTEX_DATA_ARRAY_OFFSET &&
                    Method < NV097_SET_VERTEX_DATA_ARRAY_OFFSET + EmuNv2aVertexAttrCount * 4)
@@ -2849,6 +2865,17 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                     V = EmuNv2aReadHostFloat(TexHost + 4);
                 }
             }
+
+            // Fixed-function transform: object position * composite matrix ->
+            // clip. Identity by default, so a title that supplies clip/screen
+            // coordinates directly is unaffected; a title that programs the
+            // matrix (fixed-function pipeline) gets its object geometry mapped.
+            const float *M = g_EmuNv2aCompositeMatrix;
+            float ox = Xc, oy = Yc, oz = Zc, ow = W;
+            Xc = ox * M[0] + oy * M[4] + oz * M[8]  + ow * M[12];
+            Yc = ox * M[1] + oy * M[5] + oz * M[9]  + ow * M[13];
+            Zc = ox * M[2] + oy * M[6] + oz * M[10] + ow * M[14];
+            W  = ox * M[3] + oy * M[7] + oz * M[11] + ow * M[15];
         }
 
         // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
