@@ -78,8 +78,9 @@ struct EmuFsSwapState
 {
     bool          Active;    // this thread installed the swap (via EmuGenerateFS)
     bool          IsXbox;    // true: slots hold the Xbox KPCR; false: the host TEB
-    unsigned long Xbox[4];   // SelfPcr(0x1C), Prcb(0x20), Irql/ClientId(0x24), CurrentThread(0x28)
-    unsigned long Host[4];   // original host TEB values at those offsets
+    unsigned long Xbox[5];   // SelfPcr(0x1C), Prcb(0x20), Irql/ClientId(0x24), CurrentThread(0x28), TlsPtr(0x04)
+    unsigned long Host[5];   // original host TEB values at those offsets (0x04 = the real StackBase,
+                             // which host SEH dispatch validates handler frames against)
 };
 extern bool g_bEmuFSContentSwap;
 extern thread_local EmuFsSwapState g_EmuFsSwap;
@@ -107,7 +108,7 @@ static inline bool EmuFsSwapActualIsXbox()
 static inline void EmuFsSwapExchange()
 {
     bool Actual = EmuFsSwapActualIsXbox();
-    unsigned long s0, s1, s2, s3;
+    unsigned long s0, s1, s2, s3, s4;
     __asm
     {
         mov eax, fs:[0x1C]
@@ -118,11 +119,13 @@ static inline void EmuFsSwapExchange()
         mov s2, eax
         mov eax, fs:[0x28]
         mov s3, eax
+        mov eax, fs:[0x04]
+        mov s4, eax
     }
     unsigned long *save = Actual ? g_EmuFsSwap.Xbox : g_EmuFsSwap.Host;
     unsigned long *load = Actual ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
-    save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3;
-    s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3];
+    save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3; save[4] = s4;
+    s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3]; s4 = load[4];
     __asm
     {
         mov eax, s0
@@ -133,6 +136,8 @@ static inline void EmuFsSwapExchange()
         mov fs:[0x24], eax
         mov eax, s3
         mov fs:[0x28], eax
+        mov eax, s4
+        mov fs:[0x04], eax
     }
     g_EmuFsSwap.IsXbox = !Actual;
 }
