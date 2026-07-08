@@ -1737,6 +1737,56 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetVertexShaderConstant4
 }
 
 // ******************************************************************
+// * Pixel-shader fixed-function fallback
+// ******************************************************************
+// Untranslated Xbox register-combiner pixel shaders are emulated by driving the
+// PC fixed-function texture stages: modulate the stage-0 texture by the vertex-
+// lit diffuse colour (and modulate-in a second bound texture, e.g. a projected
+// caustic map), which approximates the common "texture * lighting [* detail]"
+// combiners well enough to show a lit, textured surface instead of black.
+#define X_PIXELSHADER_FALLBACK_MARKER   0xF5000000u
+#define X_PIXELSHADER_FALLBACK_MASK     0xFF000000u
+
+static bool g_bUsePixelShaderFallback = false;
+
+static void EmuApplyPixelShaderFallback()
+{
+    using namespace XTL;
+
+    if(g_pD3DDevice8 == 0)
+        return;
+
+    g_pD3DDevice8->SetPixelShader(0);   // fixed-function
+
+    // Stage 0: texture * diffuse (colour and alpha).
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLOROP,   D3DTOP_MODULATE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_ALPHAOP,   D3DTOP_MODULATE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+    // Stage 1: modulate in a second texture if one is bound (caustics / detail);
+    // fall back to the running colour when absent.
+    IDirect3DBaseTexture8 *pStage1 = 0;
+    g_pD3DDevice8->GetTexture(1, &pStage1);
+    if(pStage1 != 0)
+    {
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLOROP,   D3DTOP_MODULATE2X);
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CURRENT);
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAOP,   D3DTOP_SELECTARG2);
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAARG2, D3DTA_CURRENT);
+        pStage1->Release();
+    }
+    else
+    {
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    }
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_CreatePixelShader
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
@@ -1764,6 +1814,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
+    // pFunction is an Xbox X_D3DPIXELSHADERDEF (NV2A register-combiner state),
+    // not PC ps.1.x bytecode, so the host CreatePixelShader rejects it. Rather
+    // than run with NO pixel shader (which leaves the bound textures unsampled
+    // and the surface near-black), hand back a fallback marker handle; SetPixel-
+    // Shader routes it to a fixed-function modulate of the bound texture(s) with
+    // the vertex-lit diffuse -- an approximation of the combiner that at least
+    // shows the textures and lighting instead of a black silhouette.
+    static DWORD s_PixelShaderFallbackCounter = 0;
+
     HRESULT hRet = g_pD3DDevice8->CreatePixelShader
     (
         pFunction,
@@ -1772,8 +1831,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
 
     if(FAILED(hRet))
     {
-        printf("*Warning* we're lying about the creation of a pixel shader!\n");
-
+        *pHandle = X_PIXELSHADER_FALLBACK_MARKER | (++s_PixelShaderFallbackCounter & 0x00FFFFFF);
         hRet = D3D_OK;
     }
 
@@ -1808,21 +1866,29 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
-    HRESULT hRet = g_pD3DDevice8->SetPixelShader
-    (
-        Handle
-    );
-
-    if(FAILED(hRet))
+    // A fallback-marker handle (or any handle the host rejects) is an untranslated
+    // Xbox register-combiner shader: drive the fixed-function pipeline instead so
+    // the bound textures are sampled and lit. Record it so the draw path keeps the
+    // modulate stages asserted even if the title later touches texture state.
+    if(Handle == 0)
     {
-        printf("*Warning* we're lying about setting a pixel shader!\n");
-
-        hRet = D3D_OK;
+        g_bUsePixelShaderFallback = false;
+        g_pD3DDevice8->SetPixelShader(0);
+    }
+    else if((Handle & X_PIXELSHADER_FALLBACK_MASK) == X_PIXELSHADER_FALLBACK_MARKER ||
+            FAILED(g_pD3DDevice8->SetPixelShader(Handle)))
+    {
+        g_bUsePixelShaderFallback = true;
+        EmuApplyPixelShaderFallback();
+    }
+    else
+    {
+        g_bUsePixelShaderFallback = false;
     }
 
     EmuSwapFS();   // XBox FS
 
-    return hRet;
+    return D3D_OK;
 }
 
 // ******************************************************************
@@ -4865,6 +4931,12 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader
 static void EmuUpdateDeferredStates()
 {
     using namespace XTL;
+
+    // Re-assert the fixed-function fallback for an untranslated pixel shader on
+    // every draw: the bound textures (which it modulates) change per draw, and
+    // the title may touch texture-stage state between draws.
+    if(g_bUsePixelShaderFallback)
+        EmuApplyPixelShaderFallback();
 
     // Certain D3DRS values need to be checked on each Draw[Indexed]Vertices
     if(EmuD3DDeferredRenderState != 0)
