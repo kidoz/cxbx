@@ -174,31 +174,27 @@ static const XFUNC k_d3d[] = {
     XF(D3DTexture_LockRect, 1),
 };
 
-// DSOUND: the DSOUND 5849 table (DSound.1.0.5849.inl) hooks the functions
-// whose library code is distinct (expect=1). The expect=0 entries are the
-// byte-identical thin wrappers -- SetDistanceFactor/SetRolloffFactor/
-// SetDopplerFactor/SetPosition/SetVelocity/SetI3DL2Listener/SetMixBinHeadroom/
-// CommitDeferredSettings and the CreateBuffer/CreateStream pair differ only in
-// a relocated call target, so plain signatures cannot tell them apart;
-// hooking them needs XRef signatures (match the wrapper's rel32 against the
-// located internal CDirectSound_* function). DirectSoundDoWork additionally
-// has no Emu impl.
+// DSOUND: the DSOUND 5849 table (DSound.1.0.5849.inl) hooks the distinct-code
+// functions directly and the byte-identical thin wrappers via XRef signatures
+// (the wrapper's rel32 call target is matched against the located internal
+// CDirectSound_* method -- generated with gen_oovpa.py --xref-func).
+// DirectSoundDoWork stays 0: no Emu impl exists for it.
 static const XFUNC k_dsound[] = {
     XF(DirectSoundCreate, 1),
-    XF(DirectSoundCreateBuffer, 0),
-    XF(DirectSoundCreateStream, 0),
+    XF(DirectSoundCreateBuffer, 1),
+    XF(DirectSoundCreateStream, 1),
     XF(DirectSoundDoWork, 0),
     XF(IDirectSound_CreateSoundBuffer, 1),
-    XF(IDirectSound_SetI3DL2Listener, 0),
-    XF(IDirectSound_SetMixBinHeadroom, 0),
+    XF(IDirectSound_SetI3DL2Listener, 1),
+    XF(IDirectSound_SetMixBinHeadroom, 1),
     XF(IDirectSound_SetOrientation, 1),
-    XF(IDirectSound_SetDistanceFactor, 0),
-    XF(IDirectSound_SetRolloffFactor, 0),
-    XF(IDirectSound_SetDopplerFactor, 0),
-    XF(IDirectSound_SetPosition, 0),
-    XF(IDirectSound_SetVelocity, 0),
+    XF(IDirectSound_SetDistanceFactor, 1),
+    XF(IDirectSound_SetRolloffFactor, 1),
+    XF(IDirectSound_SetDopplerFactor, 1),
+    XF(IDirectSound_SetPosition, 1),
+    XF(IDirectSound_SetVelocity, 1),
     XF(IDirectSound_DownloadEffectsImage, 1),
-    XF(IDirectSound_CommitDeferredSettings, 0),
+    XF(IDirectSound_CommitDeferredSettings, 1),
 };
 
 static int run_table(const char *prefix, const XFUNC *t, int n)
