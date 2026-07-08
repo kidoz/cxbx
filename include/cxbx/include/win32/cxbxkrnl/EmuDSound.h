@@ -611,6 +611,17 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_GetStatus
 );
 
 // ******************************************************************
+// * func: EmuXAudioDownloadEffectsImage
+// ******************************************************************
+HRESULT WINAPI EmuXAudioDownloadEffectsImage
+(
+    LPCSTR                  pszImageName,
+    LPVOID                  pImageLoc,
+    DWORD                   dwFlags,
+    LPVOID                 *ppImageDesc
+);
+
+// ******************************************************************
 // * func: EmuDirectSoundDoWork
 // ******************************************************************
 VOID WINAPI EmuDirectSoundDoWork();

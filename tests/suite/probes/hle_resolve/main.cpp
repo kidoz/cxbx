@@ -217,6 +217,7 @@ static const XFUNC k_dsound[] = {
     // documented debt; their un-HLE'd wrappers run guest code against the
     // fake X_CDirectSoundStream object.
     XF(DirectSoundDoWork, 1),
+    XF(XAudioDownloadEffectsImage, 1),
     XF(IDirectSoundStream_Pause, 0),
     XF(IDirectSoundStream_FlushEx, 1),
     XF(IDirectSoundStream_SetEG, 0),

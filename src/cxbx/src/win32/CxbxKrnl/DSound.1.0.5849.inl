@@ -957,6 +957,21 @@ SOOVPA<9> IDirectSoundStream_FlushEx_1_0_5849 =
     }
 };
 
+// _XAudioDownloadEffectsImage@16 (dsound.lib, 514 bytes)
+SOOVPA<8> XAudioDownloadEffectsImage_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x24, 0x0A },
+        { 0x48, 0xFF },
+        { 0x6D, 0xF3 },
+        { 0x90, 0xE8 },
+        { 0xB6, 0xFC },
+        { 0xDA, 0x00 },
+        { 0xFF, 0x85 }
+    }
+};
 OOVPATable DSound_1_0_5849[] =
 {
     // DirectSoundCreate
@@ -1369,6 +1384,14 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuIDirectSoundStream_FlushEx,
         #ifdef _DEBUG_TRACE
         "EmuIDirectSoundStream_FlushEx"
+        #endif
+    },
+    // XAudioDownloadEffectsImage
+    {
+        (OOVPA*)&XAudioDownloadEffectsImage_1_0_5849,
+        XTL::EmuXAudioDownloadEffectsImage,
+        #ifdef _DEBUG_TRACE
+        "EmuXAudioDownloadEffectsImage"
         #endif
     },
 };
