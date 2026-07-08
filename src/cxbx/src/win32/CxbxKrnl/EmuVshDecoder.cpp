@@ -718,7 +718,7 @@ static float *VshExecOutputDst(DWORD Addr, float Reg[13][4], float Col[2][4],
 
 extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
                                      const float *Const, const float *Input,
-                                     float *OutPos, float *OutCol0)
+                                     float *OutPos, float *OutCol0, float *OutTex0)
 {
     if(Program == NULL || InstrCount <= 0)
         return false;
@@ -794,8 +794,13 @@ extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int S
             break;
     }
 
-    // oPos lives in the R12 alias; diffuse in oD0.
+    // oPos lives in the R12 alias; diffuse in oD0; texcoord0 in oT0.
     OutPos[0] = Reg[12][0]; OutPos[1] = Reg[12][1]; OutPos[2] = Reg[12][2]; OutPos[3] = Reg[12][3];
     OutCol0[0] = Col[0][0]; OutCol0[1] = Col[0][1]; OutCol0[2] = Col[0][2]; OutCol0[3] = Col[0][3];
+    if(OutTex0 != NULL)
+    {
+        OutTex0[0] = Tex[0][0]; OutTex0[1] = Tex[0][1];
+        OutTex0[2] = Tex[0][2]; OutTex0[3] = Tex[0][3];
+    }
     return true;
 }

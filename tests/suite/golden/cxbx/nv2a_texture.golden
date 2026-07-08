@@ -1,0 +1,11 @@
+#suite xbox-conformance v1
+#probe nv2a_texture
+CHK nv2a_texture.pb_init PASS
+CHK nv2a_texture.back_buffer PASS
+CHK nv2a_texture.tex_alloc PASS
+CHK nv2a_texture.vbuf_alloc PASS
+CHK nv2a_texture.tl_red PASS
+CHK nv2a_texture.tr_green PASS
+CHK nv2a_texture.bl_blue PASS
+CHK nv2a_texture.br_white PASS
+#result nv2a_texture verdict=PASS checks=8 fail=0
