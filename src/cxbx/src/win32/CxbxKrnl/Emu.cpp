@@ -3170,6 +3170,31 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             }
         }
 
+        // 0x0F 0xB6/0xB7 /r = movzx r32, r/m8|r/m16 : zero-extended narrow read
+        // (what a C `uint16_t` volatile load into a wider variable compiles to,
+        // e.g. the DSOUND ISR reading an AC97 channel status word at 0xFEC00116).
+        if(AccessType == 0 && Instruction[0] == 0x0F &&
+           (Instruction[1] == 0xB6 || Instruction[1] == 0xB7))
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Size = Instruction[1] == 0xB6 ? 1 : 2;
+                ULONG Value = EmuReadMmio(FaultAddress, Size);
+                EmuSetContextRegister(e->ContextRecord, (Instruction[2] >> 3) & 0x07, Value);
+                e->ContextRecord->Eip += 1 + OperandLength;
+
+                printf("Emu (0x%lX): Emulated MMIO movzx %s read 0x%.08lX.\n",
+                       GetCurrentThreadId(), Size == 1 ? "byte" : "word", FaultAddress);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
         if(AccessType == 0 && Instruction[0] == 0x8B && Instruction[1] == 0x01 &&
            e->ContextRecord->Ecx == FaultAddress)
         {
