@@ -1,0 +1,11 @@
+# XDK-toolchain probe: built with the real XDK 5849 compiler and links the
+# genuine XDK static libraries. Needs a target that can boot real-XDK
+# (xapilib) images headless.
+tags = ["xdk"]
+
+# Cxbx recipe for XDK-linked images (the proven dolphin-demo setup):
+# model the already-patched kernel and enable the LDT-less FS content swap.
+# Other emulators simply ignore these variables.
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
