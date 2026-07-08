@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): pixel-exact verification of the D3D8
+# HLE draw paths (DrawVerticesUP triangle list + immediate-mode Begin/End
+# quad -- the NestopiaX menu path).
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

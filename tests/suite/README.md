@@ -155,7 +155,12 @@ XAPI images) and declare the run-time env recipe in `probe.toml`'s `[env]`
 table (on Cxbx: `CXBX_KERNEL_SKIP_INIT=1` + `CXBX_FS_SWAP=1`). End the probe
 with `HalReturnToFirmware(2)` — returning from `main()` parks in the XAPI
 dashboard-relaunch path under emulation. See `probes/xdk_smoke/` for the
-template.
+template; `common/xdk_xtrace.h` is the shared trace harness for XDK probes.
+
+Pixel-readback discipline for D3D probes: the HLE `Surface_LockRect` leaves
+the host surface locked (Xbox D3D has no UnlockRect in the HLE table), so do
+ALL rendering first and a single readback at the end — never draw or present
+after locking the backbuffer.
 
 ## Probes (v1)
 
@@ -173,6 +178,8 @@ template.
 | `nv2a_pfifo` | NV2A PFIFO / PGRAPH  | DMA object + pushbuffer → pusher → PGRAPH method dispatch   |
 | `xdk_smoke`  | XDK runtime (HLE)    | XDK-5849-built XBE boots via xapilib, file I/O, clean exit  |
 | `hle_resolve`| OOVPA/HLE database   | per-function: the HLE pass patched this real d3d8/dsound.lib function (expect=0 entries = documented signature debt) |
+| `d3d_clear_present` | D3D8 HLE (host GPU) | CreateDevice → Clear → Swap → pixel-exact backbuffer readback |
+| `d3d_draw`   | D3D8 HLE draw paths  | DrawVerticesUP triangles + immediate-mode Begin/End quad, pixel-exact |
 
 The `nv2a_*` probes reach the GPU through the `0xFD000000` MMIO aperture (and, for
 `nv2a_pfifo`, guest physical memory at `0x80000000`), which CXBX trap-and-emulates

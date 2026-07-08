@@ -1,0 +1,7 @@
+# XDK-toolchain probe (see xdk_smoke): exercises the D3D8 HLE end-to-end --
+# CreateDevice, Clear, Swap, backbuffer pixel readback on the host GPU.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
