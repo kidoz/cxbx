@@ -917,6 +917,15 @@ HRESULT WINAPI EmuIDirect3DDevice8_Swap
 VOID WINAPI EmuIDirect3DDevice8_MakeSpace();
 
 // ******************************************************************
+// * immediate-mode drawing (Begin / SetVertexData* / End)
+// ******************************************************************
+VOID WINAPI EmuIDirect3DDevice8_Begin(X_D3DPRIMITIVETYPE PrimitiveType);
+VOID WINAPI EmuIDirect3DDevice8_SetVertexData2f(INT Register, FLOAT a, FLOAT b);
+VOID WINAPI EmuIDirect3DDevice8_SetVertexData4f(INT Register, FLOAT a, FLOAT b, FLOAT c, FLOAT d);
+VOID WINAPI EmuIDirect3DDevice8_SetVertexDataColor(INT Register, DWORD Color);
+VOID WINAPI EmuIDirect3DDevice8_End();
+
+// ******************************************************************
 // * func: EmuIDirect3DResource8_Register
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DResource8_Register
