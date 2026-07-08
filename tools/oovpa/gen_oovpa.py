@@ -38,11 +38,17 @@ IMAGE_SCN_CNT_CODE = 0x00000020
 # --------------------------------------------------------------------------- #
 
 
+IMAGE_REL_I386_REL32 = 0x0014
+
+
 class Function:
-    def __init__(self, name: str, data: bytes, reloc_offsets: list[int]) -> None:
+    def __init__(self, name: str, data: bytes, reloc_offsets: list[int],
+                 rel32_calls: list[tuple[int, str]] | None = None) -> None:
         self.name = name
         self.data = data
         self.reloc_offsets = reloc_offsets  # start offset of each relocated dword
+        # (operand offset, target symbol) for each REL32 relocation
+        self.rel32_calls = rel32_calls or []
 
 
 def _member_at(lib: bytes, off: int) -> tuple[bytes, int]:
@@ -107,17 +113,21 @@ def extract_function(lib: bytes, symbols: dict[str, int], sym: str) -> Function:
 
     data = member[ptr_raw : ptr_raw + size_raw]
     relocs = []
+    rel32_calls = []
     for r in range(n_reloc):
-        va, _symidx, _rtype = struct.unpack(
+        va, symidx, rtype = struct.unpack(
             "<IIH", member[ptr_reloc + 10 * r : ptr_reloc + 10 * r + 10]
         )
         relocs.append(va)
+        if rtype == IMAGE_REL_I386_REL32:
+            e = member[ptr_symtab + 18 * symidx : ptr_symtab + 18 * (symidx + 1)]
+            rel32_calls.append((va, _symbol_name(e, strtab)))
 
     # COMDAT sections hold one function; a nonzero Value would mean the symbol
     # is an alias inside a packed section, which this simple extractor rejects.
     if value != 0:
         sys.exit(f"{sym}: symbol at nonzero section offset 0x{value:X} (packed section)")
-    return Function(sym, data, relocs)
+    return Function(sym, data, relocs, rel32_calls)
 
 
 # --------------------------------------------------------------------------- #
@@ -154,12 +164,24 @@ def pick_pairs(fn: Function, want: int, max_offset: int) -> list[tuple[int, int]
     return [(o, fn.data[o]) for o in picked]
 
 
-def render(name: str, pairs: list[tuple[int, int]]) -> str:
-    large = pairs[-1][0] > 0xFF
+def render(name: str, pairs: list[tuple[int, int]], save_index: str = "-1",
+           xref_pairs: list[tuple[int, str]] | None = None) -> str:
+    """Emit an OOVPA initializer. `xref_pairs` (offset, XREF enum name) come
+    first per the matcher's convention (pairs [0..XRefCount) are XRefs);
+    `save_index` is an XREF enum name for save-signatures, "-1" otherwise."""
+    xref_pairs = xref_pairs or []
+    count = len(xref_pairs) + len(pairs)
+    max_off = max([o for o, _ in pairs] + [o for o, _ in xref_pairs])
+    if pairs[-1][0] != max_off:
+        sys.exit(f"{name}: last byte pair must hold the max offset "
+                 f"(matcher uses Sovp[count-1].Offset as the scan bound)")
+    large = max_off > 0xFF
     kind = "LOOVPA" if large else "SOOVPA"
-    lines = [f"{kind}<{len(pairs)}> {name} =", "{", f"    {int(large)}, {len(pairs)}, -1, 0,", "    {"]
-    body = ",\n".join(f"        {{ 0x{o:02X}, 0x{v:02X} }}" for o, v in pairs)
-    return "\n".join(lines) + "\n" + body + "\n    }\n};\n"
+    lines = [f"{kind}<{count}> {name} =", "{",
+             f"    {int(large)}, {count}, {save_index}, {len(xref_pairs)},", "    {"]
+    rows = [f"        {{ 0x{o:02X}, {v} }}" for o, v in xref_pairs]
+    rows += [f"        {{ 0x{o:02X}, 0x{v:02X} }}" for o, v in pairs]
+    return "\n".join(lines) + "\n" + ",\n".join(rows) + "\n    }\n};\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +224,31 @@ def count_matches(img: bytes, pairs: list[tuple[int, int]]) -> int:
         if base >= 0 and all(img[base + o] == v for o, v in pairs):
             n += 1
         pos = img.find(bytes([first_val]), pos + 1)
+    return n
+
+
+def find_matches(img: bytes, pairs: list[tuple[int, int]], limit: int = 64) -> list[int]:
+    out = []
+    end = len(img) - pairs[-1][0]
+    for base in range(end):
+        if all(img[base + o] == v for o, v in pairs):
+            out.append(base)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def count_xref_matches(img: bytes, pairs: list[tuple[int, int]],
+                       xref_off: int, internal_addr: int) -> int:
+    """Simulate the engine's XRef matching: among all byte-pair matches, count
+    those whose rel32 operand at xref_off resolves to internal_addr."""
+    n = 0
+    for base in find_matches(img, pairs):
+        if base + xref_off + 4 > len(img):
+            continue
+        rel = int.from_bytes(img[base + xref_off : base + xref_off + 4], "little")
+        if (rel + base + xref_off + 4) & 0xFFFFFFFF == internal_addr:
+            n += 1
     return n
 
 
