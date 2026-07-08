@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_draw
+#result d3d_draw verdict=PASS checks=7 fail=0
