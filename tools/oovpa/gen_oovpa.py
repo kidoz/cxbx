@@ -264,7 +264,7 @@ def main() -> int:
         if ok:
             print(f"OK   {signame}: {sym} ({len(fn.data)} bytes, "
                   f"{len(fn.reloc_offsets)} relocs, unique in {len(must_imgs) + len(may_imgs)} images)")
-            snippets.append(f"// {sym} (d3d8.lib 5849, {len(fn.data)} bytes)\n" + render(signame, pairs))
+            snippets.append(f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n" + render(signame, pairs))
 
     text = "\n".join(snippets)
     if args.out:
