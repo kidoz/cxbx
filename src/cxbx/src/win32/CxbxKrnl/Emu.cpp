@@ -518,6 +518,21 @@ static const ULONG EmuUsbPortPRSC = 1u << 20;  // PortResetStatusChange
 static const ULONG EmuUsbPortChangeMask =
     EmuUsbPortCSC | EmuUsbPortPESC | EmuUsbPortPSSC | EmuUsbPortOCIC | EmuUsbPortPRSC;
 static ULONG g_EmuUsb0PortStatus[EmuUsbPortCount] = { 0, 0, 0, 0 };
+// HcInterruptStatus (write-1-to-clear) + the frame counter, so a synthesized SOF
+// interrupt can be raised for the guest USB ISR and acknowledged by it.
+static const ULONG EmuUsbHcInterruptStatus = 0x0000000C;
+static const ULONG EmuUsbHcFmNumber = 0x0000003C;
+static const ULONG EmuUsbIntStatusSF = 1u << 2;   // StartOfFrame
+static ULONG g_EmuUsb0IntStatus = 0;
+static ULONG g_EmuUsb0FmNumber = 0;
+
+// Raise a USB start-of-frame interrupt source (called from the USB delivery
+// thread just before it invokes the connected level-1 ISR).
+extern "C" void EmuUsb0SignalInterrupt()
+{
+    g_EmuUsb0IntStatus |= EmuUsbIntStatusSF;
+    g_EmuUsb0FmNumber = (g_EmuUsb0FmNumber + 1) & 0xFFFF;
+}
 static const ULONG EmuApuMmioBase = 0xFE800000;
 static const ULONG EmuApuMmioEnd = EmuApuMmioBase + 0x0007FFFF;
 static const ULONG EmuApuXgscnt = 0x0000200C;
@@ -689,6 +704,14 @@ static ULONG EmuUsb0ReadRegister32(ULONG Address)
         // The controller reset bit self-clears once the reset completes.
         Value = EmuUsb0CachedRegister(Address, 0) & ~EmuUsbHcCommandStatusReset;
     }
+    else if(Offset == EmuUsbHcInterruptStatus)
+    {
+        Value = g_EmuUsb0IntStatus;
+    }
+    else if(Offset == EmuUsbHcFmNumber)
+    {
+        Value = g_EmuUsb0FmNumber;
+    }
     else
     {
         Value = EmuUsb0CachedRegister(Address, 0);
@@ -731,6 +754,8 @@ static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
 
     if(EmuUsb0IsPortStatus(Offset, &PortIndex))
         EmuUsb0WritePortStatus(PortIndex, Value);
+    else if(Offset == EmuUsbHcInterruptStatus)
+        g_EmuUsb0IntStatus &= ~Value;   // write-1-to-clear
     else
         EmuStoreMmioRegister(Address, Value);
 
