@@ -193,21 +193,25 @@ HLEData HLEDataBase[] =
         DSound_1_0_4627,
         DSound_1_0_4627_SIZE
     },
-    // DSound Version 1.0.5849 (generated from XDK 5849 dsound.lib; distinct
-    // functions only -- see DSound.1.0.5849.inl for the identical-wrapper
-    // limitation). Deliberately NOT reused for 5933: a 4-function table is
-    // not a coherent HLE boundary, and on NestopiaX 1.3 the byte-identical
-    // DirectSoundCreate match replaced the guest's internal CDirectSound
-    // state while the rest of its dsound code ran un-HLE'd -> NULL-deref at
-    // guest 0x0017C2DE far earlier than its known audio crash. Extend the
-    // table (XRef signatures for the identical wrappers + buffer/stream
-    // methods) before considering a 5933 reuse.
+    // DSound Version 1.0.5849 (generated from XDK 5849 dsound.lib; the
+    // create/setter/buffer-method surface plus DoWork -- see
+    // DSound.1.0.5849.inl).
     {
         "DSOUND",
         1, 0, 5849,
         DSound_1_0_5849,
         DSound_1_0_5849_SIZE
     },
+    // DSound 1.0.5933 reuse: attempted TWICE, reverted twice -- do not
+    // re-register without 5933-exact signatures. Even with the full 5849
+    // lifecycle covered (creates, all buffer methods, DoWork, stream
+    // vtable/FlushEx; audio-critical set dry-run-verified byte-identical in
+    // the NestopiaX 1.3 image), the title died at ~520 log lines (baseline
+    // un-HLE'd: ~4600) at guest 0x181DA6 -- `mov al,[esi+0x12]` with esi=0,
+    // i.e. a 5933-CHANGED dsound internal (no 5849 byte-equivalent exists;
+    // verified unmatchable against dsound.lib) reading a guest global that
+    // only the guest's own -- now skipped -- init would set. Coherent 5933
+    // coverage needs a 5933 XDK dsound.lib to generate from.
     // XG Version 1.0.4361
     {
         "XGRAPHC",
@@ -340,6 +344,8 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5849_BUF_SETMIXBINS
     -1, // XREF_DS5849_BUF_GETSTATUS_T
     -1, // XREF_DS5849_BUF_GETSTATUS
+    -1, // XREF_DS5849_DOWORK
+    -1, // XREF_DS5849_STR_FLUSHEX
     -1, // XREF_XAPI5849_XINPUTCLOSE
 };
 
