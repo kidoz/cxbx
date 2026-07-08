@@ -516,7 +516,11 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
         //                EmuCleanup("Unknown MultiSampleType (0x%.08X)", pPresentationParameters->MultiSampleType);
                 }
 
-                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->Flags |= D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+                // The Xbox Flags field carries Xbox-only bits (field/interlace
+                // scanout hints, e.g. 0x20 from z26x) that the PC runtime
+                // rejects as an invalid call; LOCKABLE_BACKBUFFER (0x1) is the
+                // only flag DX8 defines, so replace rather than OR.
+                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->Flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
         
                 // ******************************************************************
                 // * Retrieve Resolution from Configuration
@@ -591,6 +595,16 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
             // ******************************************************************
             if(FAILED(g_EmuD3D8CreateDeviceProxyData.hRet))
             {
+                XTL::X_D3DPRESENT_PARAMETERS *pp = g_EmuD3D8CreateDeviceProxyData.pPresentationParameters;
+                printf("EmuD3D8 (0x%X): CreateDevice params: %ux%u fmt=%u count=%u swap=%u windowed=%u "
+                       "zenable=%u zfmt=%u flags=0x%X msaa=0x%X hz=%u interval=0x%X\n",
+                       GetCurrentThreadId(), pp->BackBufferWidth, pp->BackBufferHeight,
+                       (UINT)pp->BackBufferFormat, pp->BackBufferCount, (UINT)pp->SwapEffect,
+                       pp->Windowed, pp->EnableAutoDepthStencil, (UINT)pp->AutoDepthStencilFormat,
+                       pp->Flags, (UINT)pp->MultiSampleType, pp->FullScreen_RefreshRateInHz,
+                       pp->FullScreen_PresentationInterval);
+                fflush(stdout);
+
                 if(g_EmuD3D8CreateDeviceProxyData.hRet == D3DERR_INVALIDCALL)
                     EmuCleanup("IDirect3D8::CreateDevice failed (Invalid Call)");
                 else if(g_EmuD3D8CreateDeviceProxyData.hRet == D3DERR_NOTAVAILABLE)
@@ -2454,6 +2468,30 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     EmuSwapFS();   // XBox FS
 
     return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_MakeSpace
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // ******************************************************************
+    // * debug trace
+    // ******************************************************************
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_MakeSpace();\n", GetCurrentThreadId());
+    }
+    #endif
+
+    // Xbox extension: reserve room in the NV2A push buffer. The host device
+    // has no guest-visible push buffer, so there is nothing to reserve.
+
+    EmuSwapFS();   // XBox FS
+
+    return;
 }
 
 // ******************************************************************
