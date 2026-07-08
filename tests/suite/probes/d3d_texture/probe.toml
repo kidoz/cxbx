@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): pixel-exact verification of the D3D8
+# HLE texture path -- CreateTexture2, LockRect upload, SetTexture, textured
+# draws through both DrawVerticesUP and the immediate-mode bracket.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

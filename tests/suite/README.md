@@ -12,7 +12,8 @@ tests/suite/
   probes/      smoke cpu_flags memory fileio kernel_cov kernel_trap
   golden/<emulator>/*.golden                          # per-target regression baselines
   build-probe.sh                                       # build one probe (MSYS2 + scoop clang)
-tools/xtest/   xtest.py  config.toml                   # the runner (build / run / diff / JUnit)
+tools/xtest/   xtest.py                                # the runner (build / run / diff / JUnit)
+tools/config.toml                                      # local machine config (gitignored; copy config.toml.example)
 ```
 
 ## Quick start
@@ -106,7 +107,7 @@ model that traps `0xFD000000`). A probe declares required tags in an optional
 tags = ["nv2a"]
 ```
 
-A target advertises what it supports via `capabilities` in `config.toml`
+A target advertises what it supports via `capabilities` in `tools/config.toml`
 (`[emulator.cxbx] capabilities = ["nv2a"]`) or `--capability nv2a` on the command
 line. When running the full set, a probe whose tags aren't all covered is
 **skipped** (reported, not failed) — so an `nv2a` probe won't hang an emulator
@@ -180,6 +181,8 @@ after locking the backbuffer.
 | `hle_resolve`| OOVPA/HLE database   | per-function: the HLE pass patched this real d3d8/dsound.lib function (expect=0 entries = documented signature debt) |
 | `d3d_clear_present` | D3D8 HLE (host GPU) | CreateDevice → Clear → Swap → pixel-exact backbuffer readback |
 | `d3d_draw`   | D3D8 HLE draw paths  | DrawVerticesUP triangles + immediate-mode Begin/End quad, pixel-exact |
+| `d3d_texture`| D3D8 HLE texture path | CreateTexture2 → LockRect upload → SetTexture → textured draws (both paths), pixel-exact |
+| `d3d_state`  | D3D8 HLE state       | Set/GetTransform bit-exact round-trips, SetRenderState_* family survival, GetDisplayMode sanity |
 
 The `nv2a_*` probes reach the GPU through the `0xFD000000` MMIO aperture (and, for
 `nv2a_pfifo`, guest physical memory at `0x80000000`), which CXBX trap-and-emulates

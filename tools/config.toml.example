@@ -1,0 +1,25 @@
+# Example local tool configuration.
+# Copy this file to tools/config.toml and adjust paths for your machine.
+# tools/config.toml is ignored by git.
+
+[paths]
+# Repo-relative paths are resolved from the repository root.
+suite_dir = "tests/suite"
+nxdk_dir = "REPLACE_WITH_NXDK_DIR"
+msys2_bash = "REPLACE_WITH_MSYS2_BASH"
+
+[emulator.cxbx]
+exe = "build-min/src/cxbx/cxbx.exe"
+run_args = ["--run", "{xbe}", "--log", "{log}"]
+timeout = 25
+build_dir = "build-min"
+capabilities = ["nv2a", "aci", "apu", "usb0", "xdk"]
+d_drive = "."
+kill_names = ["default.exe"]
+
+[kernelaudit]
+# Optional. If omitted, make_ref.py uses:
+#   <paths.nxdk_dir>/lib/xboxkrnl/xboxkrnl.exe.def
+# xboxkrnl_def = "REPLACE_WITH_NXDK_DIR/lib/xboxkrnl/xboxkrnl.exe.def"
+# Optional. Defaults to tools/kernelaudit/xboxkrnl_ordinals.csv.
+ordinals_csv = "tools/kernelaudit/xboxkrnl_ordinals.csv"
