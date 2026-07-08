@@ -2271,6 +2271,63 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
     return hRet;
 }
 
+// A title's YUV video (NestopiaX's skin/NES output) is created as a D3DFMT_YUY2
+// texture. With no hardware YUY2 overlay on a modern host, CreateTexture hands
+// back a "fake" texture -- a raw YUY2 memory block with the high pointer bit set
+// -- which SetTexture cannot bind, so the video showed as garbage. Convert that
+// YUY2 block to a real RGB texture on the host and bind that instead, doing the
+// YUV->RGB the Xbox YuvEnable render state would have done in hardware.
+static XTL::IDirect3DTexture8 *g_pYuvConvertTexture = NULL;
+static DWORD g_dwYuvConvertW = 0, g_dwYuvConvertH = 0;
+
+static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const uint08 *pYuy2)
+{
+    DWORD w = g_dwOverlayW & ~1u, h = g_dwOverlayH; // YUY2 packs two pixels per unit
+    if(w == 0 || h == 0)
+        return NULL;
+
+    if(g_pYuvConvertTexture == NULL || g_dwYuvConvertW != w || g_dwYuvConvertH != h)
+    {
+        if(g_pYuvConvertTexture != NULL)
+            g_pYuvConvertTexture->Release();
+        g_pYuvConvertTexture = NULL;
+        if(FAILED(g_pD3DDevice8->CreateTexture(w, h, 1, 0, XTL::D3DFMT_A8R8G8B8,
+                                               XTL::D3DPOOL_MANAGED, &g_pYuvConvertTexture)))
+            return NULL;
+        g_dwYuvConvertW = w; g_dwYuvConvertH = h;
+    }
+
+    XTL::D3DLOCKED_RECT lr;
+    if(FAILED(g_pYuvConvertTexture->LockRect(0, &lr, NULL, 0)))
+        return NULL;
+
+    const uint08 *s = pYuy2;
+    for(DWORD y = 0; y < h; y++)
+    {
+        uint08 *d = (uint08*)lr.pBits + (size_t)y * lr.Pitch;
+        for(DWORD x = 0; x < w; x += 2)
+        {
+            float Y0 = s[0], U = s[1], Y1 = s[2], V = s[3];
+            s += 4;
+            for(int k = 0; k < 2; k++)
+            {
+                float Y = k ? Y1 : Y0;
+                float R = Y + 1.402f * (V - 128.0f);
+                float G = Y - 0.344f * (U - 128.0f) - 0.714f * (V - 128.0f);
+                float B = Y + 1.772f * (U - 128.0f);
+                d[0] = (uint08)(B < 0 ? 0 : (B > 255 ? 255 : B));   // B
+                d[1] = (uint08)(G < 0 ? 0 : (G > 255 ? 255 : G));   // G
+                d[2] = (uint08)(R < 0 ? 0 : (R > 255 ? 255 : R));   // R
+                d[3] = 0xFF;                                        // A
+                d += 4;
+            }
+        }
+    }
+
+    g_pYuvConvertTexture->UnlockRect(0);
+    return g_pYuvConvertTexture;
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetTexture
 // ******************************************************************
@@ -2300,8 +2357,17 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
 
     if(pTexture != NULL)
     {
-        EmuVerifyResourceIsRegistered(pTexture);
-        pBaseTexture8 = pTexture->EmuBaseTexture8;
+        if((uint32)pTexture & 0x80000000)
+        {
+            // Fake YUY2 overlay texture: convert its YUV block to a real RGB
+            // texture on the host and bind that (the YuvEnable path).
+            pBaseTexture8 = EmuConvertYuy2Texture((const uint08*)((uint32)pTexture & 0x7FFFFFFF));
+        }
+        else
+        {
+            EmuVerifyResourceIsRegistered(pTexture);
+            pBaseTexture8 = pTexture->EmuBaseTexture8;
+        }
     }
 
     HRESULT hRet = g_pD3DDevice8->SetTexture(Stage, pBaseTexture8);
