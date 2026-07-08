@@ -1086,6 +1086,8 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_SURFACE_CLIP_VERTICAL     0x0204u
 #define NV097_SET_SURFACE_PITCH             0x020Cu
 #define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
+#define NV097_SET_VIEWPORT_OFFSET           0x0A20u
+#define NV097_SET_VIEWPORT_SCALE            0x0AF0u
 #define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
 #define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
 #define NV097_DRAW_ARRAYS                   0x1810u
@@ -1109,6 +1111,11 @@ static ULONG g_EmuNv2aSurfaceClipH = 0;
 static ULONG g_EmuNv2aBeginOp = 0;
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
+// Viewport transform (clip/NDC -> screen). Defaults are identity so the Phase 0
+// pre-transformed case (w==1, no viewport programmed) maps position straight to
+// screen coordinates; a title that programs a real viewport gets it applied.
+static float g_EmuNv2aViewportOffset[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+static float g_EmuNv2aViewportScale[4]  = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
@@ -1211,6 +1218,14 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                         Method < NV097_SET_VERTEX_DATA_ARRAY_FORMAT + EmuNv2aVertexAttrCount * 4)
                 {
                     g_EmuNv2aVertexArray[(Method - NV097_SET_VERTEX_DATA_ARRAY_FORMAT) / 4].Format = Data;
+                }
+                else if(Method >= NV097_SET_VIEWPORT_OFFSET && Method < NV097_SET_VIEWPORT_OFFSET + 16)
+                {
+                    memcpy(&g_EmuNv2aViewportOffset[(Method - NV097_SET_VIEWPORT_OFFSET) / 4], &Data, 4);
+                }
+                else if(Method >= NV097_SET_VIEWPORT_SCALE && Method < NV097_SET_VIEWPORT_SCALE + 16)
+                {
+                    memcpy(&g_EmuNv2aViewportScale[(Method - NV097_SET_VIEWPORT_SCALE) / 4], &Data, 4);
                 }
                 break;
         }
@@ -2174,17 +2189,26 @@ static float EmuNv2aReadHostFloat(ULONG HostAddress)
     return Value;
 }
 
-// Flat-fill one screen-space triangle into a 32bpp surface with the edge-function
-// (half-plane) test. Vertices are already in pixel coordinates (Phase 0 assumes a
-// passthrough vertex program). Winding is unknown, so a point is inside when the
-// three edge functions share a sign. Clipped to the surface rectangle.
+static ULONG EmuNv2aClampByte(float v)
+{
+    if(v <= 0.0f) return 0;
+    if(v >= 255.0f) return 255;
+    return (ULONG)(v + 0.5f);
+}
+
+// Gouraud-fill one screen-space triangle into a 32bpp surface with the edge-
+// function (half-plane) test. Barycentric weights (normalized by the signed
+// area, so winding is handled either way) both cover the triangle and blend the
+// three vertex diffuse colors per pixel; when the vertices share a color this
+// collapses to a flat fill. Clipped to the surface rectangle.
 static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Height,
                                 float ax, float ay, float bx, float by,
-                                float cx, float cy, ULONG Color)
+                                float cx, float cy, ULONG Ca, ULONG Cb, ULONG Cc)
 {
     float Area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
     if(Area > -1e-3f && Area < 1e-3f)
         return; // degenerate / zero-area
+    float InvArea = 1.0f / Area;
 
     float LoXf = ax < bx ? (ax < cx ? ax : cx) : (bx < cx ? bx : cx);
     float HiXf = ax > bx ? (ax > cx ? ax : cx) : (bx > cx ? bx : cx);
@@ -2198,18 +2222,40 @@ static void EmuNv2aFillTriangle(ULONG *Surface, int PitchPx, int Width, int Heig
     if(MaxX > Width)  MaxX = Width;
     if(MaxY > Height) MaxY = Height;
 
+    bool Uniform = (Ca == Cb && Cb == Cc);
+    float Aa = (float)((Ca >> 24) & 0xFF), Ra = (float)((Ca >> 16) & 0xFF);
+    float Ga = (float)((Ca >>  8) & 0xFF), Bva = (float)(Ca & 0xFF);
+    float Ab = (float)((Cb >> 24) & 0xFF), Rb = (float)((Cb >> 16) & 0xFF);
+    float Gb = (float)((Cb >>  8) & 0xFF), Bvb = (float)(Cb & 0xFF);
+    float Ac = (float)((Cc >> 24) & 0xFF), Rc = (float)((Cc >> 16) & 0xFF);
+    float Gc = (float)((Cc >>  8) & 0xFF), Bvc = (float)(Cc & 0xFF);
+
     for(int Y = MinY; Y < MaxY; Y++)
     {
         for(int X = MinX; X < MaxX; X++)
         {
             float px = (float)X + 0.5f, py = (float)Y + 0.5f;
-            float e0 = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-            float e1 = (cx - bx) * (py - by) - (cy - by) * (px - bx);
-            float e2 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
-            bool Inside = (e0 >= 0 && e1 >= 0 && e2 >= 0) ||
-                          (e0 <= 0 && e1 <= 0 && e2 <= 0);
-            if(Inside)
-                Surface[Y * PitchPx + X] = Color;
+            // Barycentric weights of a, b, c (sum to 1 inside the triangle).
+            float la = ((cx - bx) * (py - by) - (cy - by) * (px - bx)) * InvArea;
+            float lb = ((ax - cx) * (py - cy) - (ay - cy) * (px - cx)) * InvArea;
+            float lc = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * InvArea;
+            if(la < -1e-4f || lb < -1e-4f || lc < -1e-4f)
+                continue;
+
+            ULONG Color;
+            if(Uniform)
+            {
+                Color = Ca;
+            }
+            else
+            {
+                ULONG A = EmuNv2aClampByte(la * Aa + lb * Ab + lc * Ac);
+                ULONG R = EmuNv2aClampByte(la * Ra + lb * Rb + lc * Rc);
+                ULONG G = EmuNv2aClampByte(la * Ga + lb * Gb + lc * Gc);
+                ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
+                Color = (A << 24) | (R << 16) | (G << 8) | B;
+            }
+            Surface[Y * PitchPx + X] = Color;
         }
     }
 }
@@ -2271,6 +2317,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
         return;
     }
 
+    ULONG PosSize = (Pos->Format >> 4) & 0x0F;
+
     static float VX[4096];
     static float VY[4096];
     static ULONG VC[4096];
@@ -2280,8 +2328,15 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     {
         ULONG Index = Start + i;
         ULONG PosHost = EmuNv2aHostPointer(VertexBase + Pos->Offset + Index * PosStride);
-        VX[i] = EmuNv2aReadHostFloat(PosHost);
-        VY[i] = EmuNv2aReadHostFloat(PosHost + 4);
+        float X = EmuNv2aReadHostFloat(PosHost);
+        float Y = EmuNv2aReadHostFloat(PosHost + 4);
+        // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
+        // size<4 the position carries no w, so w=1 and this is a straight map;
+        // combined with the identity viewport default it reproduces Phase 0.
+        float W = (PosSize >= 4) ? EmuNv2aReadHostFloat(PosHost + 12) : 1.0f;
+        float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
+        VX[i] = (X * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
+        VY[i] = (Y * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
 
         ULONG Color = 0xFFFFFFFF;
         if(DifStride != 0)
@@ -2317,7 +2372,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                 for(ULONG i = 0; i + 2 < Count; i += 3)
                 {
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2], VC[i]);
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2],
+                        VC[i], VC[i+1], VC[i+2]);
                     Triangles++;
                 }
                 break;
@@ -2325,7 +2381,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                 for(ULONG i = 0; i + 2 < Count; i++)
                 {
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2], VC[i]);
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2],
+                        VC[i], VC[i+1], VC[i+2]);
                     Triangles++;
                 }
                 break;
@@ -2334,7 +2391,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                 for(ULONG i = 1; i + 1 < Count; i++)
                 {
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[0], VY[0], VX[i], VY[i], VX[i+1], VY[i+1], VC[0]);
+                        VX[0], VY[0], VX[i], VY[i], VX[i+1], VY[i+1],
+                        VC[0], VC[i], VC[i+1]);
                     Triangles++;
                 }
                 break;
@@ -2342,9 +2400,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2], VC[i]);
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+2], VY[i+2],
+                        VC[i], VC[i+1], VC[i+2]);
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+2], VY[i+2], VX[i+3], VY[i+3], VC[i]);
+                        VX[i], VY[i], VX[i+2], VY[i+2], VX[i+3], VY[i+3],
+                        VC[i], VC[i+2], VC[i+3]);
                     Triangles += 2;
                 }
                 break;
@@ -2352,9 +2412,11 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+3], VY[i+3], VC[i]);
+                        VX[i], VY[i], VX[i+1], VY[i+1], VX[i+3], VY[i+3],
+                        VC[i], VC[i+1], VC[i+3]);
                     EmuNv2aFillTriangle(Surface, PitchPx, Width, Height,
-                        VX[i], VY[i], VX[i+3], VY[i+3], VX[i+2], VY[i+2], VC[i]);
+                        VX[i], VY[i], VX[i+3], VY[i+3], VX[i+2], VY[i+2],
+                        VC[i], VC[i+3], VC[i+2]);
                     Triangles += 2;
                 }
                 break;
@@ -2371,9 +2433,12 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     if(g_EmuNv2aRasterLogCount < 32)
     {
-        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d v0=(%.1f,%.1f) c0=0x%.08lX\n",
+        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
-               SurfaceHost, Width, Height, PitchB, VX[0], VY[0], VC[0]);
+               SurfaceHost, Width, Height, PitchB,
+               g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
+               g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
+               VX[0], VY[0], VC[0]);
         fflush(stdout);
         g_EmuNv2aRasterLogCount++;
     }

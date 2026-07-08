@@ -1,0 +1,7 @@
+# Requires a target with an NV2A GPU model AND the Phase 1 raster transform
+# back-end (perspective divide + viewport + Gouraud interpolation). On Cxbx the
+# raster path is gated behind CXBX_NV2A_RASTER; this probe turns it on.
+tags = ["nv2a"]
+
+[env]
+CXBX_NV2A_RASTER = "1"

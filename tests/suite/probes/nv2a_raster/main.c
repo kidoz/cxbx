@@ -38,6 +38,8 @@
 // x,y,z position + a packed D3DCOLOR (0xAARRGGBB) diffuse per vertex.
 typedef struct { float x, y, z; uint32_t color; } Vertex;
 
+static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+
 int main(void)
 {
     xt_begin("v1", "nv2a_raster");
@@ -97,6 +99,18 @@ int main(void)
         p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL,   ((uint32_t)FBH << 16));
         p = pb_push1(p, NV097_SET_SURFACE_PITCH, pb_back_buffer_pitch() & 0xFFFF);
         p = pb_push1(p, NV097_SET_SURFACE_COLOR_OFFSET, (uint32_t)(uintptr_t)bb);
+
+        // These vertices are already in screen space, so program an identity
+        // viewport (pb_init leaves a 3D NDC->screen viewport bound, which would
+        // otherwise re-scale them). This is the pre-transformed passthrough case.
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0,  f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4,  f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8,  f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 12, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0,   f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4,   f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8,   f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12,  f2u(1.0f));
 
         // Point the position (float3) + diffuse (D3DCOLOR) arrays at the buffer.
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + ATTR_POSITION * 4, vbAddr);
