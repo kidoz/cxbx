@@ -30,4 +30,5 @@ It runs automatically as the first (fail-fast) step of `python tools/xtest/xtest
 - `xboxkrnl_ordinals.csv` — the committed authoritative `ordinal,name,kind`
   reference (self-contained, so the check needs no external SDK/nxdk install).
 - `make_ref.py` — regenerates the CSV from nxdk's `xboxkrnl.exe.def`
-  (run only when updating the reference; requires a local nxdk).
+  (run only when updating the reference; requires local nxdk paths in
+  `tools/config.toml`, copied from `tools/config.toml.example`).

@@ -23,8 +23,10 @@ Failed checks are reported with their full `expect=`/`got=` detail (not just the
 check name), so a divergence is actionable from the console. `--show-trace` prints
 each probe's complete trace after the report for deeper inspection.
 
-## Configuration — `config.toml`
+## Configuration — `tools/config.toml`
 
+- Copy `tools/config.toml.example` to `tools/config.toml` and adjust local paths.
+  The real config is ignored by git.
 - `paths.suite_dir` / `nxdk_dir` / `msys2_bash` — build toolchain locations.
 - `emulator.cxbx` — the built-in adapter: `exe`, `run_args` (with `{xbe}`/`{log}`),
   `timeout`, `d_drive` (where the guest `D:` maps, relative to the XBE dir),
@@ -45,8 +47,8 @@ each probe's complete trace after the report for deeper inspection.
 
 The gate needs the full local toolchain (meson/ninja + a C++ compiler for the
 emulator; MSYS2 make + clang + nxdk for the probe XBEs) with paths set in
-`config.toml`, so the workflow targets a self-hosted Windows runner. GitHub-hosted
-runners do not have the nxdk toolchain.
+`tools/config.toml`, so the workflow targets a self-hosted Windows runner.
+GitHub-hosted runners do not have the nxdk toolchain.
 
 ## How a run works
 

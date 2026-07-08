@@ -34,6 +34,12 @@ from pathlib import Path
 from typing import Any, cast
 
 HERE = Path(__file__).resolve().parent
+TOOLS_DIR = HERE.parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from tool_config import config_path_value, load_config as load_tool_config, repo_root
+
 OUT_DIR = HERE / "out"
 Config = dict[str, Any]
 CommandFunc = Callable[[Config, argparse.Namespace], int]
@@ -45,12 +51,30 @@ CommandFunc = Callable[[Config, argparse.Namespace], int]
 
 
 def load_config() -> Config:
-    with open(HERE / "config.toml", "rb") as f:
-        return tomllib.load(f)
+    try:
+        cfg = load_tool_config(required=True)
+    except (FileNotFoundError, OSError) as e:
+        sys.exit(str(e))
+
+    paths = cfg.setdefault("paths", {})
+    suite_dir = config_path_value(cfg, "paths", "suite_dir", default=repo_root() / "tests" / "suite")
+    if suite_dir is not None:
+        paths["suite_dir"] = str(suite_dir)
+    for key in ("nxdk_dir", "msys2_bash"):
+        value = config_path_value(cfg, "paths", key)
+        if value is not None:
+            paths[key] = str(value)
+
+    cxbx = cfg.setdefault("emulator", {}).setdefault("cxbx", {})
+    for key in ("exe", "build_dir"):
+        value = config_path_value(cfg, "emulator", "cxbx", key)
+        if value is not None:
+            cxbx[key] = str(value)
+    return cfg
 
 
 def win_to_posix(p: str | Path) -> str:
-    """C:/Users/x -> /c/Users/x  (for MSYS2 command lines)."""
+    """Convert a Windows drive path to an MSYS2-style path."""
     p = str(p).replace("\\", "/")
     m = re.match(r"^([A-Za-z]):/(.*)$", p)
     return f"/{m.group(1).lower()}/{m.group(2)}" if m else p
