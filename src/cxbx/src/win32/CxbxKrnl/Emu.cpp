@@ -84,7 +84,8 @@ static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
-static void  EmuInstallDolphinDemoBootstrap(Xbe::Header *pXbeHeader);
+static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
+static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
 static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static void  EmuInstallAutoBootLaunchData();
@@ -4291,7 +4292,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
         EmuInstallFceultraBootstrap(pXbeHeader);
-        EmuInstallDolphinDemoBootstrap(pXbeHeader);
+        EmuInstallCdxLaunchBootstrap(pXbeHeader);
+        EmuInstallDsoundApuAccountingPatch(pXbeHeader);
         EmuInstallAutoBootLaunchData();
     }
 
@@ -4681,26 +4683,98 @@ static void EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader)
     fflush(stdout);
 }
 
-// The XDK 5849 dolphin demo ("Dolphin Demos", title id 0, cdx\sample\demos) is a
-// CDX demo-disc title: its startup relaunches via an XLaunchNewImage wrapper
-// (guest 0x00015E1C) whose success path QuickReboots (HalReturnToFirmware(2)) --
-// on real hardware the reboot re-runs the image with the launch applied. A
-// user-mode HLE can't persist that, and letting the reboot return sends the
-// framework down an error path that dereferences uninitialised framework globals.
-// Neutralise the wrapper to a no-op return so the title skips the relaunch and
-// proceeds -- the same targeted-patch approach as EmuInstallFceultraBootstrap.
-static bool EmuIsDolphinDemo(Xbe::Header *pXbeHeader)
+// Find a unique occurrence of a byte pattern inside the mapped XBE image.
+// Returns the guest address of the single match, or 0 when the pattern is
+// absent or ambiguous (multiple hits).
+static uint32 EmuFindUniquePattern(Xbe::Header *pXbeHeader, const uint08 *Bytes, uint32 Count)
 {
-    if(pXbeHeader->dwBaseAddr != 0x00010000)
-        return false;
+    uint32 Base = pXbeHeader->dwBaseAddr;
+    uint32 End = Base + pXbeHeader->dwSizeofImage;
+    uint32 Found = 0;
 
-    Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
-    return wcsncmp(pCertificate->wszTitleName, L"Dolphin Demos", 14) == 0;
+    for(uint32 Address = Base; Address + Count <= End; Address++)
+    {
+        if(IsBadReadPtr((void*)Address, Count))
+        {
+            Address += 0xFFF;   // skip toward the next page
+            continue;
+        }
+
+        if(memcmp((void*)Address, Bytes, Count) == 0)
+        {
+            if(Found != 0)
+                return 0;       // ambiguous
+            Found = Address;
+        }
+    }
+
+    return Found;
 }
 
-static void EmuInstallDolphinDemoBootstrap(Xbe::Header *pXbeHeader)
+// The XDK DSOUND library accounts APU-heap usage through a pointer global that
+// the audio-processor init would set on real hardware; in this HLE it stays
+// NULL, so DSOUND's `mov eax,[global] / mov ecx,[ebx+8] / add [eax],ecx`
+// accounting faults on the first sound-buffer allocation. Three titles have
+// now hit the identical compiler-generated site (FCEUltra 0x0010C1D7, z26x
+// 0x0017502F, NestopiaX 1.3): find every occurrence of the pattern in the
+// image and rewrite it to bump a scratch counter instead, leaving the
+// accounting a harmless no-op.
+static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
 {
-    if(!EmuIsDolphinDemo(pXbeHeader))
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
+        return;
+
+    // A1 ?? ?? ?? ?? 8B 4B 08 01 08 : the ?? dword is the per-title global
+    const uint08 Head = 0xA1;
+    const uint08 Tail[] = { 0x8B, 0x4B, 0x08, 0x01, 0x08 };
+    static uint32 s_ApuScratchCounters[4];
+    int Patched = 0;
+
+    uint32 Base = pXbeHeader->dwBaseAddr;
+    uint32 End = Base + pXbeHeader->dwSizeofImage;
+    for(uint32 Address = Base; Address + 10 <= End && Patched < 4; Address++)
+    {
+        if(IsBadReadPtr((void*)Address, 10))
+        {
+            Address += 0xFFF;   // skip toward the next page
+            continue;
+        }
+
+        if(*(uint08*)Address != Head ||
+           memcmp((void*)(Address + 5), Tail, sizeof(Tail)) != 0)
+            continue;
+
+        // The loaded global must live inside the image and still be NULL
+        // (never initialised) -- both true only for the DSOUND counter.
+        uint32 GlobalAddr = *(uint32*)(Address + 1);
+        if(GlobalAddr < Base || GlobalAddr + 4 > End || *(uint32*)GlobalAddr != 0)
+            continue;
+
+        // mov ecx,[ebx+8] ; add [&scratch],ecx ; nop
+        uint08 Patch[10] = { 0x8B, 0x4B, 0x08, 0x01, 0x0D, 0, 0, 0, 0, 0x90 };
+        *(uint32*)&Patch[5] = (uint32)(uintptr_t)&s_ApuScratchCounters[Patched];
+        EmuWriteBytes(Address, Patch, sizeof(Patch));
+        printf("Emu (0x%lX): DSOUND APU accounting (0x%.08lX, global 0x%.08lX) redirected to scratch.\n",
+               GetCurrentThreadId(), Address, GlobalAddr);
+        Patched++;
+    }
+
+    if(Patched != 0)
+        fflush(stdout);
+}
+
+// XDK 5849 titles built on the CDX demo framework (the dolphin demo, the CDX
+// player, z26x-era launchers) relaunch at startup via an XLaunchNewImage
+// wrapper whose success path QuickReboots (HalReturnToFirmware(2)) -- on real
+// hardware the reboot re-runs the image with the launch applied. A user-mode
+// HLE can't persist that, and letting the reboot return sends the framework
+// down an error path that dereferences uninitialised globals. Locate the
+// wrapper by its (position-independent) prologue signature anywhere in the
+// image and neutralise it to a no-op return -- the same targeted-patch
+// approach as EmuInstallFceultraBootstrap, made title-agnostic.
+static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
         return;
 
     // XLaunchNewImage wrapper prologue: push ebp / mov ebp,esp / push args / push 1
@@ -4712,27 +4786,48 @@ static void EmuInstallDolphinDemoBootstrap(Xbe::Header *pXbeHeader)
     // xor eax,eax ; ret 0x14  (matches the wrapper's own __stdcall ret 0x14)
     const uint08 LaunchWrapperPatch[] = { 0x33, 0xC0, 0xC2, 0x14, 0x00 };
 
-    if(EmuBytesMatch(0x00015E1C, LaunchWrapperSig, sizeof(LaunchWrapperSig), pXbeHeader))
-    {
-        EmuWriteBytes(0x00015E1C, LaunchWrapperPatch, sizeof(LaunchWrapperPatch));
-        printf("Emu (0x%lX): Dolphin demo XLaunchNewImage wrapper (0x00015E1C) neutralised (no reboot-to-self).\n",
-               GetCurrentThreadId());
+    uint32 WrapperAddr = EmuFindUniquePattern(pXbeHeader, LaunchWrapperSig, sizeof(LaunchWrapperSig));
+    if(WrapperAddr == 0)
+        return;
 
-        // The HLE replaces the D3D8 library code that would set its internal
-        // device global D3D__pDevice (guest .data 0x000314D8), so un-patched
-        // library internals (e.g. present.obj helpers) dereference NULL. Point
-        // the global at a zeroed scratch device: those internals then read
-        // benign state and skip their raw-hardware work, while the patched
-        // API surface (Clear/Swap/...) renders through the host device.
-        static uint08 s_DolphinFakeD3DDevice[0x4000];
-        *(uint32*)0x000314D8 = (uint32)(uintptr_t)s_DolphinFakeD3DDevice;
-        printf("Emu (0x%lX): Dolphin demo D3D__pDevice (0x000314D8) pointed at a scratch device.\n",
-               GetCurrentThreadId());
-    }
-    else
+    EmuWriteBytes(WrapperAddr, LaunchWrapperPatch, sizeof(LaunchWrapperPatch));
+    printf("Emu (0x%lX): CDX XLaunchNewImage wrapper (0x%.08lX) neutralised (no reboot-to-self).\n",
+           GetCurrentThreadId(), WrapperAddr);
+
+    // The HLE replaces the D3D8 library code that would set its internal device
+    // global D3D__pDevice, so un-patched library internals (e.g. present.obj
+    // helpers) dereference NULL. The global's per-title address is embedded in
+    // D3DDevice_Swap's prologue (`push esi / mov esi,[D3D__pDevice] /
+    // mov eax,[esi+8D4h]`); extract it and point it at a zeroed scratch device
+    // so those internals read benign state and skip their raw-hardware work,
+    // while the patched API surface (Clear/Swap/...) renders through the host
+    // device.
+    const uint08 SwapPrologueHead[] = { 0x56, 0x8B, 0x35 };
+    const uint08 SwapPrologueTail[] = { 0x8B, 0x86, 0xD4, 0x08, 0x00, 0x00, 0x85, 0xC0 };
+
+    uint32 Base = pXbeHeader->dwBaseAddr;
+    uint32 End = Base + pXbeHeader->dwSizeofImage;
+    for(uint32 Address = Base; Address + 15 <= End; Address++)
     {
-        printf("Emu (0x%lX): Dolphin demo XLaunchNewImage wrapper signature NOT matched at 0x00015E1C.\n",
-               GetCurrentThreadId());
+        if(IsBadReadPtr((void*)Address, 15))
+        {
+            Address += 0xFFF;
+            continue;
+        }
+
+        if(memcmp((void*)Address, SwapPrologueHead, sizeof(SwapPrologueHead)) == 0 &&
+           memcmp((void*)(Address + 7), SwapPrologueTail, sizeof(SwapPrologueTail)) == 0)
+        {
+            uint32 DeviceGlobal = *(uint32*)(Address + 3);
+            if(DeviceGlobal >= Base && DeviceGlobal < End)
+            {
+                static uint08 s_CdxFakeD3DDevice[0x4000];
+                *(uint32*)DeviceGlobal = (uint32)(uintptr_t)s_CdxFakeD3DDevice;
+                printf("Emu (0x%lX): CDX D3D__pDevice (0x%.08lX) pointed at a scratch device.\n",
+                       GetCurrentThreadId(), DeviceGlobal);
+            }
+            break;
+        }
     }
 
     fflush(stdout);
