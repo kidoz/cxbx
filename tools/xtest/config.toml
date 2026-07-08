@@ -19,8 +19,9 @@ build_dir  = "build"
 # Capabilities this target advertises. A probe tagged (probe.toml `tags`) with a
 # capability not listed here is skipped. This Cxbx build has the NV2A MMIO model
 # the AC97 audio-controller (ACI) model, the APU audio-processor model, and the
-# USB0/OHCI host-controller model (Emu.cpp), so it advertises all four.
-capabilities = ["nv2a", "aci", "apu", "usb0"]
+# USB0/OHCI host-controller model (Emu.cpp). "xdk" means it can boot real-XDK
+# (xapilib-linked) images headless via CXBX_KERNEL_SKIP_INIT + CXBX_FS_SWAP.
+capabilities = ["nv2a", "aci", "apu", "usb0", "xdk"]
 # Where the guest's D: drive maps on the host, relative to the XBE directory.
 # "." means D:\ == the directory containing default.xbe (Cxbx's behavior).
 d_drive    = "."

@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xdk_smoke
+#result xdk_smoke verdict=PASS checks=4 fail=0

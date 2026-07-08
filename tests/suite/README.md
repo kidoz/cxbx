@@ -136,6 +136,27 @@ Harness API: `xt_begin/xt_end`, `xt_ev/xt_note`,
 `xt_check_u32/u64/bool/str`, `xt_check` (generic), `xt_check_flags` (EFLAGS),
 `xt_enable_screen`. See `common/xtrace.h`.
 
+### XDK-toolchain probes (`build.ps1` instead of a `Makefile`)
+
+nxdk probes contain no XDK library code, so they can never exercise the HLE
+layer (`EmuD3D8`/`EmuDSound`/`EmuXapi`) — OOVPA signatures have nothing to
+match. A probe directory with a **`build.ps1`** is instead built with the real
+Xbox XDK 5849 toolchain from `other/sdk/XDKSetup5849.15_extracted/XDK`:
+
+```
+xbox\bin\vc71\CL.Exe   (/D_XBOX /ML, /I xbox\include)
+xbox\bin\vc71\Link.Exe (/MACHINE:I386 /FIXED:NO /SUBSYSTEM:XBOX, xbox\lib)
+xbox\bin\imagebld.exe  (/IN:probe.exe /OUT:bin\default.xbe)
+```
+
+so the image links genuine `xapilib`/`d3d8`/`dsound` code — exactly what real
+titles ship. Such probes are tagged `xdk` (skipped on targets that can't boot
+XAPI images) and declare the run-time env recipe in `probe.toml`'s `[env]`
+table (on Cxbx: `CXBX_KERNEL_SKIP_INIT=1` + `CXBX_FS_SWAP=1`). End the probe
+with `HalReturnToFirmware(2)` — returning from `main()` parks in the XAPI
+dashboard-relaunch path under emulation. See `probes/xdk_smoke/` for the
+template.
+
 ## Probes (v1)
 
 | Probe        | Subsystem            | What it checks                                              |
@@ -150,6 +171,7 @@ Harness API: `xt_begin/xt_end`, `xt_ev/xt_note`,
 | `nv2a_pmc`   | NV2A PMC / RAMIN     | `PMC_BOOT_0` chip ID, `PMC_ENABLE`, RAMIN write/readback (0xFD MMIO) |
 | `nv2a_intr`  | NV2A interrupts      | `INTR_EN` latch, `PMC_INTR_0` aggregation, write-1-to-clear |
 | `nv2a_pfifo` | NV2A PFIFO / PGRAPH  | DMA object + pushbuffer → pusher → PGRAPH method dispatch   |
+| `xdk_smoke`  | XDK runtime (HLE)    | XDK-5849-built XBE boots via xapilib, file I/O, clean exit  |
 
 The `nv2a_*` probes reach the GPU through the `0xFD000000` MMIO aperture (and, for
 `nv2a_pfifo`, guest physical memory at `0x80000000`), which CXBX trap-and-emulates

@@ -55,9 +55,16 @@ def win_to_posix(p: str | Path) -> str:
 
 
 def discover_probes(suite_dir: Path) -> list[str]:
-    """Every subdir of probes/ that has a Makefile, sorted by name."""
+    """Every subdir of probes/ that has a build entry point, sorted by name.
+    A Makefile means an nxdk probe; a build.ps1 means an XDK-toolchain probe
+    (built with the real XDK compiler so the image contains genuine XDK
+    library code the HLE layer can hook)."""
     pdir = suite_dir / "probes"
-    return sorted(d.name for d in pdir.iterdir() if d.is_dir() and (d / "Makefile").exists())
+    return sorted(
+        d.name
+        for d in pdir.iterdir()
+        if d.is_dir() and ((d / "Makefile").exists() or (d / "build.ps1").exists())
+    )
 
 
 def probe_tags(suite_dir: Path, name: str) -> list[str]:
@@ -68,6 +75,17 @@ def probe_tags(suite_dir: Path, name: str) -> list[str]:
         return []
     with open(p, "rb") as f:
         return [str(t) for t in tomllib.load(f).get("tags", [])]
+
+
+def probe_env(suite_dir: Path, name: str) -> dict[str, str]:
+    """Extra environment variables a probe needs at run time, from the optional
+    `[env]` table in probes/<name>/probe.toml (e.g. the CXBX_* switches an
+    XDK-linked probe needs; other emulators simply ignore them)."""
+    p = suite_dir / "probes" / name / "probe.toml"
+    if not p.exists():
+        return {}
+    with open(p, "rb") as f:
+        return {str(k): str(v) for k, v in tomllib.load(f).get("env", {}).items()}
 
 
 def target_capabilities(cfg: Config, args: argparse.Namespace) -> set[str] | None:
@@ -87,13 +105,20 @@ def target_capabilities(cfg: Config, args: argparse.Namespace) -> set[str] | Non
 
 def build_probe(cfg: Config, name: str) -> tuple[bool, str]:
     suite_dir = Path(cfg["paths"]["suite_dir"])
-    bash = cfg["paths"]["msys2_bash"]
-    probe_posix = win_to_posix(suite_dir / "probes" / name)
-    script_posix = win_to_posix(suite_dir / "build-probe.sh")
-    env = dict(os.environ, MSYSTEM="MINGW64")
-    cmd = [bash, "-lc", f"sh {script_posix} {probe_posix} -j4"]
-    r = subprocess.run(cmd, env=env, capture_output=True, text=True)
-    xbe = suite_dir / "probes" / name / "bin" / "default.xbe"
+    probe_dir = suite_dir / "probes" / name
+    ps1 = probe_dir / "build.ps1"
+    if ps1.exists():
+        # XDK-toolchain probe: the script drives the XDK's own CL/Link/imagebld.
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    else:
+        bash = cfg["paths"]["msys2_bash"]
+        probe_posix = win_to_posix(probe_dir)
+        script_posix = win_to_posix(suite_dir / "build-probe.sh")
+        env = dict(os.environ, MSYSTEM="MINGW64")
+        cmd = [bash, "-lc", f"sh {script_posix} {probe_posix} -j4"]
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    xbe = probe_dir / "bin" / "default.xbe"
     ok = r.returncode == 0 and xbe.exists()
     tail = (r.stdout + r.stderr).strip().splitlines()[-4:]
     return ok, "\n".join(tail)
@@ -126,7 +151,7 @@ class CxbxAdapter:
         self.ecfg = cfg["emulator"]["cxbx"]
         self.suite_dir = Path(cfg["paths"]["suite_dir"])
 
-    def run(self, name: str, timeout: int) -> RunResult:
+    def run(self, name: str, timeout: int, extra_env: dict[str, str] | None = None) -> RunResult:
         bindir = self.suite_dir / "probes" / name / "bin"
         xbe = bindir / "default.xbe"
         log = bindir / "run.log"
@@ -144,7 +169,8 @@ class CxbxAdapter:
 
         timed_out = False
         code = None
-        p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env = dict(os.environ, **extra_env) if extra_env else None
+        p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         try:
             code = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -165,7 +191,7 @@ class CustomAdapter:
         self.suite_dir = Path(cfg["paths"]["suite_dir"])
         self.cmd_template = cmd_template
 
-    def run(self, name: str, timeout: int) -> RunResult:
+    def run(self, name: str, timeout: int, extra_env: dict[str, str] | None = None) -> RunResult:
         bindir = self.suite_dir / "probes" / name / "bin"
         xbe = bindir / "default.xbe"
         rundir = bindir
@@ -176,7 +202,8 @@ class CustomAdapter:
         cmd = self.cmd_template.format(xbe=str(xbe), rundir=str(rundir), log=str(log))
         timed_out = False
         code = None
-        p = subprocess.Popen(cmd, shell=True)
+        env = dict(os.environ, **extra_env) if extra_env else None
+        p = subprocess.Popen(cmd, shell=True, env=env)
         try:
             code = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -414,7 +441,7 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     results = []
     for name in names:
         print(f"[run] {name} ...", end=" ", flush=True)
-        rr = adapter.run(name, timeout)
+        rr = adapter.run(name, timeout, probe_env(suite_dir, name))
         res = ProbeResult(name)
         res.timed_out = rr.timed_out
         if rr.trace_path and Path(rr.trace_path).exists():
