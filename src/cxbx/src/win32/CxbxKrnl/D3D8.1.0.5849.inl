@@ -550,6 +550,24 @@ SOOVPA<16> IDirect3DDevice8_SetRenderTarget_1_0_5849 =
     }
 };
 
+// Hand-authored from the placed 5849 images (z26x @ 0x13EF20, dolphin @
+// 0x27190, pusher.obj _D3DDevice_MakeSpace@0): `mov eax,[free-count global] /
+// push eax / shr eax,1 / push eax / call worker / ret`. Offsets avoid the
+// relocated global (+0x01) and call rel32 (+0x0A); verified unique in both.
+SOOVPA<7> IDirect3DDevice8_MakeSpace_1_0_5849 =
+{
+    0, 7, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x50 },
+        { 0x06, 0xD1 },
+        { 0x07, 0xE8 },
+        { 0x08, 0x50 },
+        { 0x09, 0xE8 },
+        { 0x0E, 0xC3 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // IDirect3D8::CreateDevice
@@ -750,6 +768,14 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_SetRenderTarget,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetRenderTarget"
+        #endif
+    },
+    // IDirect3DDevice8::MakeSpace
+    {
+        (OOVPA*)&IDirect3DDevice8_MakeSpace_1_0_5849,
+        XTL::EmuIDirect3DDevice8_MakeSpace,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_MakeSpace"
         #endif
     },
     // IDirect3DDevice8::EnableOverlay (* unchanged since 4361 *)

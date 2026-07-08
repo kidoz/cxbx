@@ -912,6 +912,11 @@ HRESULT WINAPI EmuIDirect3DDevice8_Swap
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_MakeSpace
+// ******************************************************************
+VOID WINAPI EmuIDirect3DDevice8_MakeSpace();
+
+// ******************************************************************
 // * func: EmuIDirect3DResource8_Register
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DResource8_Register
