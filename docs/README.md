@@ -1,25 +1,27 @@
 # Documentation
 
-This directory contains current project documentation and converted legacy notes
-from the original `Doc/` directory.
+This directory contains project documentation, reference notes, historical
+release records, and screenshots.
 
-## Current Guides
+## Guides
 
 - [Conformance suite](../tests/suite/README.md)
 - [Probe runner](../tools/xtest/README.md)
 
-## Converted Legacy Notes
+## Reference Notes
 
-- [Changelog](changelog.md) - historical caustik CXBX release history.
-- [Developer notes](developer.md) - legacy OpenXDK/MSVC development context with
-  current Meson notes.
-- [Direct3D notes](direct3d.md) - historic Direct3D HLE resource strategy.
+- [Developer notes](developer.md) - build and open-xdk development context.
+- [Direct3D notes](direct3d.md) - Direct3D HLE resource strategy.
 - [Input notes](input.md) - controller configuration and shared-memory notes.
-- [Kernel test suite](kernel-test-suite.md) - legacy kernel test run notes and
-  current conformance-suite pointer.
+- [Kernel test suite](kernel-test-suite.md) - kernel test and conformance runner
+  notes.
+
+## Historical Records
+
+- [Changelog](changelog.md) - original caustik CXBX release history.
 - [Removed code notes](removed-code.md) - archived implementation fragments.
-- [Thanks](thanks.md) - legacy acknowledgements.
-- [Todo](todo.md) - historical task list.
+- [Thanks](thanks.md) - acknowledgements.
+- [Todo](todo.md) - historical task list and open engineering topics.
 
 ## Assets
 

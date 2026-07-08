@@ -1,5 +1,18 @@
-If you are planning on doing development on Cxbx, please read:
+# Developer Notes
 
-a) You *must* have the current OpenXDK source tree available in
-   your MSVC search path for /lib and /include. This is necessary
-   because Cxbx implements kernel prototypes inside xboxkrnl.h
+## Current Build Context
+
+CXBX is now built with Meson as a 32-bit Windows/x86 target. See the root
+[README](../README.md) for the current quick start and development commands.
+
+The tree still bundles open-xdk support headers and libraries under
+`include/open-xdk/include` and `src/open-xdk/src`. Keep those include paths
+available when working on kernel prototypes and open-xdk-backed code.
+
+## OpenXDK Context
+
+Older MSVC project files expected an OpenXDK source tree in the compiler
+`/lib` and `/include` search paths because Cxbx implements kernel prototypes
+inside `xboxkrnl.h`. That is useful context for understanding the source layout,
+but current development should use the repository's Meson files rather than
+manually configuring MSVC project search paths.
