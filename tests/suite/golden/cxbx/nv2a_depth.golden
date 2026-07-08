@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe nv2a_depth
+CHK nv2a_depth.pb_init PASS
+CHK nv2a_depth.back_buffer PASS
+CHK nv2a_depth.zbuf_alloc PASS
+CHK nv2a_depth.vbuf_alloc PASS
+CHK nv2a_depth.left_red_kept PASS
+CHK nv2a_depth.right_blue_wins PASS
+#result nv2a_depth verdict=PASS checks=6 fail=0
