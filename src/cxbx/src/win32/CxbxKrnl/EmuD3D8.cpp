@@ -81,6 +81,7 @@ static void           EmuAdjustPower2(UINT *dwWidth, UINT *dwHeight);
 static XTL::LPDIRECT3D8             g_pD3D8         = NULL; // Direct3D8
 static XTL::LPDIRECT3DDEVICE8       g_pD3DDevice8   = NULL; // Direct3D8 Device
 static BOOL                         g_bSupportsYUY2 = FALSE;// Does device support YUY2 overlays?
+static BOOL                         g_bYuvEnable    = FALSE;// D3DRS_YUVENABLE: sample bound textures as YUY2 and convert to RGB
 static XTL::LPDIRECTDRAW7           g_pDD7          = NULL; // DirectDraw7
 static XTL::LPDIRECTDRAWSURFACE7    g_pDDSPrimary   = NULL; // DirectDraw7 Primary Surface
 static XTL::LPDIRECTDRAWSURFACE7    g_pDDSOverlay7  = NULL; // DirectDraw7 Overlay Surface
@@ -4795,7 +4796,20 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_YuvEnable
     }
     #endif
 
-    printf("*Warning* YuvEnable not implemented\n");
+    // D3DRS_YUVENABLE tells the NV2A to sample bound textures as YUY2 and
+    // convert YUV->RGB in the texture unit (titles composite XMV video this
+    // way). The host has no such texture-unit conversion, so we do the YUV->RGB
+    // in software when the surface is bound: a YUY2 texture reaches SetTexture
+    // either as a fake high-bit handle (converted via EmuConvertYuy2Texture) or,
+    // on hardware that lacks YUY2 sampling, is handled there too. Here we just
+    // latch the state (and stop spamming a per-frame warning).
+    BOOL bEnable = Value != 0;
+    if(bEnable != g_bYuvEnable)
+    {
+        g_bYuvEnable = bEnable;
+        printf("EmuD3D8: YuvEnable %s (YUY2 textures convert to RGB on bind)\n",
+               bEnable ? "ON" : "OFF");
+    }
 
     EmuSwapFS();   // XBox FS
 
