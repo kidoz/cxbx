@@ -880,6 +880,21 @@ HRESULT WINAPI EmuIDirect3DDevice8_GetDisplayMode
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_GetDisplayFieldStatus
+// ******************************************************************
+typedef struct _X_D3DFIELD_STATUS
+{
+    DWORD               Field;          // D3DFIELDTYPE
+    DWORD               VBlankCount;
+}
+X_D3DFIELD_STATUS;
+
+VOID WINAPI EmuIDirect3DDevice8_GetDisplayFieldStatus
+(
+    X_D3DFIELD_STATUS        *pFieldStatus
+);
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_Clear
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DDevice8_Clear

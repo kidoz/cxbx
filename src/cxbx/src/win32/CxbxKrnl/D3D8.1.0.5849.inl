@@ -800,8 +800,35 @@ SOOVPA<8> IDirect3DDevice8_LightEnable_1_0_5849 =
     }
 };
 
+// _D3DDevice_GetDisplayFieldStatus@4 (d3d8.lib 5849, 58 bytes). Reads the
+// native NV2A CRTC field/vblank state -- unpatched, it dereferences the guest's
+// native D3D device global (never populated by HLE) and faults. XMV video decode
+// (XMVDecoder_GetNextFrame) calls it every frame for A/V pacing.
+SOOVPA<8> IDirect3DDevice8_GetDisplayFieldStatus_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x8B },
+        { 0x07, 0xE8 },
+        { 0x0B, 0x8B },
+        { 0x0F, 0x89 },
+        { 0x12, 0xF7 },
+        { 0x1C, 0x74 },
+        { 0x30, 0xC2 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
+    // IDirect3DDevice8::GetDisplayFieldStatus
+    {
+        (OOVPA*)&IDirect3DDevice8_GetDisplayFieldStatus_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetDisplayFieldStatus"
+        #endif
+    },
     // IDirect3D8::CreateDevice
     {
         (OOVPA*)&IDirect3D8_CreateDevice_1_0_4627,
