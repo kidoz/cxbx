@@ -1956,9 +1956,16 @@ static const ULONG EmuNv2aNotifierSentinel = 0x8000BEEF;
 
 static bool EmuNv2aNotifySatisfyEnabled()
 {
+    // On by default: in D3D-HLE mode the host has already performed the batch's
+    // work synchronously by the time the guest polls, so reporting the NV2A
+    // completion sentinel is legitimate. Titles that spin on it -- NestopiaX
+    // 1.3's XMV menu/video path -- otherwise hang or, worse, present torn frames
+    // (the decoder blocks mid-frame, so the YUY2 buffer the overlay samples is
+    // half-written and shows as garbage). Opt out with CXBX_NV2A_NO_NOTIFY when
+    // diagnosing the raw push-buffer path.
     static int s_Enabled = -1;
     if(s_Enabled < 0)
-        s_Enabled = getenv("CXBX_NV2A_NOTIFY") != NULL ? 1 : 0;
+        s_Enabled = getenv("CXBX_NV2A_NO_NOTIFY") != NULL ? 0 : 1;
 
     return s_Enabled != 0;
 }
