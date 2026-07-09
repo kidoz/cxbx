@@ -59,6 +59,7 @@ namespace XTL
 #include <cstring>
 #include <fcntl.h>
 #include <io.h>
+#include <tlhelp32.h>
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -1899,6 +1900,49 @@ static bool EmuMaybeSatisfyNv2aNotifier(ULONG Address, ULONG ComparedValue, ULON
     }
 
     return true;
+}
+
+// Opt-in thread-EIP watchdog: after a delay, suspend every other thread in the
+// process and log its EIP/ESP, so a stalled title's thread landscape is visible.
+static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
+{
+    Sleep(14000);
+
+    DWORD Pid = GetCurrentProcessId();
+    DWORD Self = GetCurrentThreadId();
+    HANDLE Snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if(Snap == INVALID_HANDLE_VALUE)
+        return 0;
+
+    THREADENTRY32 Te;
+    Te.dwSize = sizeof(Te);
+    printf("WATCHDOG: --- thread EIP snapshot ---\n");
+    if(Thread32First(Snap, &Te))
+    {
+        do
+        {
+            if(Te.th32OwnerProcessID != Pid || Te.th32ThreadID == Self)
+                continue;
+
+            HANDLE Th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, Te.th32ThreadID);
+            if(Th == NULL)
+                continue;
+
+            SuspendThread(Th);
+            CONTEXT Ctx;
+            Ctx.ContextFlags = CONTEXT_CONTROL;
+            if(GetThreadContext(Th, &Ctx))
+                printf("WATCHDOG: tid 0x%lX eip=0x%08X esp=0x%08X\n",
+                       Te.th32ThreadID, (unsigned)Ctx.Eip, (unsigned)Ctx.Esp);
+            ResumeThread(Th);
+            CloseHandle(Th);
+        }
+        while(Thread32Next(Snap, &Te));
+    }
+    CloseHandle(Snap);
+    printf("WATCHDOG: --- end ---\n");
+    fflush(stdout);
+    return 0;
 }
 
 static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size)
@@ -5678,6 +5722,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // handler) because CreateThread inside the vectored-exception path wedges
     // the faulting thread.
     EmuAciStartDmaThread();
+
+    // Thread-EIP watchdog (opt-in via CXBX_FENCE_DUMP): after a delay, snapshot
+    // every thread's EIP so a stalled title's thread landscape can be read
+    // (which thread is the render loop, what each is blocked on).
+    if(getenv("CXBX_FENCE_DUMP") != NULL)
+        CreateThread(NULL, 0, EmuThreadEipWatchdog, NULL, 0, NULL);
 
     printf("Emu (0x%X): Initializing Direct3D.\n", GetCurrentThreadId());
 
