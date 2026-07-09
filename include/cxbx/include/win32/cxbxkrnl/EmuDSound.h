@@ -251,6 +251,14 @@ ULONG WINAPI EmuIDirectSound8_Release
 );
 
 // ******************************************************************
+// * func: EmuIDirectSound8_SynchPlayback
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSound8_SynchPlayback
+(
+    LPDIRECTSOUND8          pThis
+);
+
+// ******************************************************************
 // * func: EmuIDirectSound8_DownloadEffectsImage
 // ******************************************************************
 HRESULT WINAPI EmuIDirectSound8_DownloadEffectsImage

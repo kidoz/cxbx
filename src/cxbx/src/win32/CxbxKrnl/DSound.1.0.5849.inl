@@ -987,6 +987,46 @@ SOOVPA<8> DirectSoundUseFullHRTF_1_0_5849 =
         { 0x1E, 0xC3 }
     }
 };
+// _IDirectSound_Release@4 (dsound.lib 5849, 22 bytes). The Xbox interface
+// thunk adjusts the object by -8 and dispatches Release through the native
+// vtable; unpatched it runs against the raw host IDirectSound8 Cxbx hands out
+// and faults. XMV video decode releases a DirectSound every frame. This -8
+// this-offset is unique to IDirectSound (buffers use -0x1C), so the byte
+// pattern locates it unambiguously.
+SOOVPA<8> IDirectSound_Release_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x04, 0x8D },
+        { 0x06, 0xF8 },
+        { 0x07, 0xF7 },
+        { 0x0B, 0x23 },
+        { 0x10, 0xFF },
+        { 0x12, 0x08 },
+        { 0x13, 0xC2 }
+    }
+};
+
+// _IDirectSound_SynchPlayback@4 (dsound.lib 5849, 24 bytes). Waits for the APU
+// voice queue to reach a sync point; unpatched it calls a native helper that
+// walks the Xbox object internals and faults on the host object. XMV calls it
+// every frame for A/V pacing -- a no-op is correct for the host mixer.
+SOOVPA<8> IDirectSound_SynchPlayback_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x04, 0x8B },
+        { 0x05, 0xC8 },
+        { 0x06, 0x83 },
+        { 0x08, 0xF8 },
+        { 0x09, 0xF7 },
+        { 0x0F, 0x51 },
+        { 0x10, 0xE8 }
+    }
+};
+
 OOVPATable DSound_1_0_5849[] =
 {
     // DirectSoundCreate
@@ -995,6 +1035,22 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuDirectSoundCreate,
         #ifdef _DEBUG_TRACE
         "EmuDirectSoundCreate"
+        #endif
+    },
+    // IDirectSound8::Release
+    {
+        (OOVPA*)&IDirectSound_Release_1_0_5849,
+        XTL::EmuIDirectSound8_Release,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSound8_Release"
+        #endif
+    },
+    // IDirectSound8::SynchPlayback
+    {
+        (OOVPA*)&IDirectSound_SynchPlayback_1_0_5849,
+        XTL::EmuIDirectSound8_SynchPlayback,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSound8_SynchPlayback"
         #endif
     },
     // IDirectSound8::CreateSoundBuffer
