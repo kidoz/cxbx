@@ -2352,16 +2352,114 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
     delete[] Source;
 }
 
+// Optional live window for the raw-NV2A scanout. A raw-NV2A / pbkit title never
+// creates a host D3D8 window (that only exists on the HLE-D3D8 path), so its
+// software-rasterized frames were visible only as BMP dumps. When
+// CXBX_NV2A_WINDOW=1 this opens a window and blits the displayed framebuffer to
+// it on each present -- the same on-screen path the D3D8 titles get. Off by
+// default, so the conformance suite (which never sets it) is untouched.
+static HWND g_hEmuNv2aWindow = NULL;
+static volatile LONG g_EmuNv2aWindowChecked = 0;
+static bool g_bEmuNv2aWindow = false;
+
+static bool EmuNv2aWindowEnabled()
+{
+    if(InterlockedCompareExchange(&g_EmuNv2aWindowChecked, 1, 0) == 0)
+    {
+        char Buffer[8] = {0};
+        DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_WINDOW", Buffer, sizeof(Buffer));
+        g_bEmuNv2aWindow = (Length > 0 && Buffer[0] == '1');
+    }
+    return g_bEmuNv2aWindow;
+}
+
+static LRESULT CALLBACK EmuNv2aWndProc(HWND Hwnd, UINT Msg, WPARAM W, LPARAM L)
+{
+    if(Msg == WM_DESTROY)
+    {
+        g_hEmuNv2aWindow = NULL;
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcA(Hwnd, Msg, W, L);
+}
+
+static DWORD WINAPI EmuNv2aWindowThread(LPVOID Param)
+{
+    ULONG Packed = (ULONG)(uintptr_t)Param;
+    int W = (int)(Packed >> 16), H = (int)(Packed & 0xFFFF);
+
+    WNDCLASSA Wc = {};
+    Wc.lpfnWndProc = EmuNv2aWndProc;
+    Wc.hInstance = GetModuleHandle(NULL);
+    Wc.lpszClassName = "CxbxNv2aRender";
+    Wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClassA(&Wc);
+
+    RECT R = { 0, 0, W, H };
+    AdjustWindowRect(&R, WS_OVERLAPPEDWINDOW, FALSE);
+    g_hEmuNv2aWindow = CreateWindowA("CxbxNv2aRender", "cxbx : NV2A software rasterizer",
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, R.right - R.left, R.bottom - R.top,
+        NULL, NULL, GetModuleHandle(NULL), NULL);
+    ShowWindow(g_hEmuNv2aWindow, SW_SHOW);
+    UpdateWindow(g_hEmuNv2aWindow);
+
+    MSG Msg;
+    while(GetMessage(&Msg, NULL, 0, 0) > 0)
+    {
+        TranslateMessage(&Msg);
+        DispatchMessage(&Msg);
+    }
+    return 0;
+}
+
+// Blit a top-down BGRA framebuffer to the live window, creating it (on its own
+// message-pump thread) on first use.
+static void EmuNv2aBlitToWindow(const ULONG *Pixels, ULONG Width, ULONG Height)
+{
+    if(g_hEmuNv2aWindow == NULL)
+    {
+        ULONG WinH = Height > 480 ? 480 : Height;   // pbkit hands over-tall buffers
+        ULONG Packed = (Width << 16) | (WinH & 0xFFFF);
+        CreateThread(NULL, 0, EmuNv2aWindowThread, (LPVOID)(uintptr_t)Packed, 0, NULL);
+        for(int i = 0; i < 200 && g_hEmuNv2aWindow == NULL; i++)
+            Sleep(2);
+    }
+    if(g_hEmuNv2aWindow == NULL)
+        return;
+
+    HDC Hdc = GetDC(g_hEmuNv2aWindow);
+    if(Hdc == NULL)
+        return;
+
+    BITMAPINFO Bmi = {};
+    Bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    Bmi.bmiHeader.biWidth = (LONG)Width;
+    Bmi.bmiHeader.biHeight = -(LONG)Height;   // top-down
+    Bmi.bmiHeader.biPlanes = 1;
+    Bmi.bmiHeader.biBitCount = 32;
+    Bmi.bmiHeader.biCompression = BI_RGB;
+
+    RECT Rc;
+    GetClientRect(g_hEmuNv2aWindow, &Rc);
+    if(Rc.right > 0 && Rc.bottom > 0)
+        StretchDIBits(Hdc, 0, 0, Rc.right, Rc.bottom, 0, 0, (int)Width, (int)Height,
+                      Pixels, &Bmi, DIB_RGB_COLORS, SRCCOPY);
+    ReleaseDC(g_hEmuNv2aWindow, Hdc);
+}
+
 // Capture the displayed framebuffer ("path 2"). The CRTC scanout base register
 // (NV_PCRTC_START) is programmed with the physical address of the surface to put
 // on screen -- exactly what a title flips to at frame end (nxdk pbkit's
 // pb_show_front_screen / VBL swap, the XDK's D3D present). Snapshotting the
 // surface at that address reproduces the actual on-screen image, independent of
 // any rasterization: whatever the guest drew into that buffer (CPU or GPU) is
-// what we write to %TEMP%\cxbx_fbN.bmp.
+// what we write to %TEMP%\cxbx_fbN.bmp and (with CXBX_NV2A_WINDOW=1) the window.
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 {
-    if(g_EmuNv2aScanoutDumpIndex >= 16 || PhysicalAddress == 0)
+    bool WantWindow = EmuNv2aWindowEnabled();
+    bool WantBmp = (g_EmuNv2aScanoutDumpIndex < 16);
+    if(PhysicalAddress == 0 || (!WantBmp && !WantWindow))
         return;
 
     // Geometry: pitch from the video HAL (else a 640-wide default); height from
@@ -2429,12 +2527,16 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
         }
     }
 
+    // Live window (every present, uncapped) then the BMP dump (first 16 only).
+    if(WantWindow)
+        EmuNv2aBlitToWindow(Pixels, Width, Height);
+
     char dir[MAX_PATH] = {0};
     GetTempPathA(sizeof(dir), dir);
     char path[MAX_PATH];
     sprintf(path, "%scxbx_fb%lu.bmp", dir, g_EmuNv2aScanoutDumpIndex);
 
-    FILE *f = fopen(path, "wb");
+    FILE *f = WantBmp ? fopen(path, "wb") : NULL;
     if(f != NULL)
     {
         ULONG DataSize = Width * Height * 4;
