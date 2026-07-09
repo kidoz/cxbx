@@ -1848,6 +1848,59 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
     return true;
 }
 
+// ******************************************************************
+// * NV2A push-buffer completion notifiers (D3D-HLE mode)
+// ******************************************************************
+// A title's raw NV2A push-buffer ends a batch by having the GPU write a
+// completion sentinel (0x8000BEEF) into a notifier in physical memory, then
+// spins reading that notifier until it appears. In High-Level-Emulation mode
+// Cxbx executes the equivalent work synchronously through the host Direct3D
+// device and never runs the raw push-buffer, so the notifier is never written
+// and the guest spins forever (NestopiaX 1.3's menu/video path does exactly
+// this). Since the host work the notifier stands for is already complete by the
+// time the guest polls, signalling completion is legitimate: when a title
+// compares a physical-map location against the sentinel, write it through so the
+// poll (and any later read of the same notifier) terminates.
+static const ULONG EmuNv2aNotifierSentinel = 0x8000BEEF;
+
+static bool EmuNv2aNotifySatisfyEnabled()
+{
+    static int s_Enabled = -1;
+    if(s_Enabled < 0)
+        s_Enabled = getenv("CXBX_NV2A_NOTIFY") != NULL ? 1 : 0;
+
+    return s_Enabled != 0;
+}
+
+// If the guest is polling a physical notifier for the NV2A completion sentinel,
+// write it through and report the satisfied value back so the emulated compare
+// reflects equality on this very iteration. Returns true when it acted.
+static bool EmuMaybeSatisfyNv2aNotifier(ULONG Address, ULONG ComparedValue, ULONG *MemoryValue)
+{
+    if(!EmuNv2aNotifySatisfyEnabled() || ComparedValue != EmuNv2aNotifierSentinel)
+        return false;
+
+    if(MemoryValue != NULL && *MemoryValue == EmuNv2aNotifierSentinel)
+        return false;
+
+    if(!EmuWritePhysicalMap(Address, 4, EmuNv2aNotifierSentinel))
+        return false;
+
+    if(MemoryValue != NULL)
+        *MemoryValue = EmuNv2aNotifierSentinel;
+
+    static ULONG s_Logged = 0;
+    if(s_Logged < 16)
+    {
+        s_Logged++;
+        printf("Emu (0x%lX): Satisfied NV2A completion notifier 0x%.08lX.\n",
+               GetCurrentThreadId(), Address);
+        fflush(stdout);
+    }
+
+    return true;
+}
+
 static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size)
 {
     ULONG End = Address + Size - 1;
@@ -3893,6 +3946,8 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 if(!EmuReadPhysicalMap(FaultAddress, 4, &Left))
                     return false;
 
+                EmuMaybeSatisfyNv2aNotifier(FaultAddress, Right, &Left);
+
                 EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
                 e->ContextRecord->Eip += OperandLength;
 
@@ -4016,6 +4071,8 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 ULONG Right = *(ULONG*)&Instruction[OperandLength];
                 if(!EmuReadPhysicalMap(FaultAddress, 4, &Left))
                     return false;
+
+                EmuMaybeSatisfyNv2aNotifier(FaultAddress, Right, &Left);
 
                 EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
                 e->ContextRecord->Eip += OperandLength + 4;
