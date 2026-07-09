@@ -81,7 +81,7 @@ void __cdecl main()
     pp.BackBufferHeight = 480;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
     pp.BackBufferCount  = 1;
-    pp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    pp.SwapEffect       = D3DSWAPEFFECT_COPY;   // preserve back buffer so the GDI mirror can read the last frame
     pp.Flags            = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
 
     D3DDevice *pDev = NULL;
@@ -116,7 +116,7 @@ void __cdecl main()
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
 
-    int frames = 0, locked = 0;
+    int frames = 0, locked = 0, back_locked = 0;
     unsigned long chksum = 0;
 
     for (int i = 0; i < 4000; i++) {
@@ -153,9 +153,15 @@ void __cdecl main()
                 }
                 pSurf->UnlockRect();
 
+                // Clear each frame. Cxbx's GDI mirror window (CXBX_D3D_WINDOW)
+                // refreshes on Clear, so keeping this drives the live display on
+                // hosts whose D3D8 windowed Present will not composite to a window.
+                pDev->Clear(0, NULL, D3DCLEAR_TARGET, 0xFF000000, 1.0f, 0);
+
                 if (pBack != NULL) {
                     D3DLOCKED_RECT bd;
                     if (SUCCEEDED(pBack->LockRect(&bd, NULL, 0))) {
+                        back_locked = 1;
                         for (int y = 0; y < vh && (y + oy) < 480; y++) {
                             unsigned char *srow = g_frame + (y * vw) * 4;
                             unsigned char *drow = (unsigned char *)bd.pBits +
@@ -165,19 +171,24 @@ void __cdecl main()
                         pBack->UnlockRect();
                     }
                 }
-                pDev->Present(NULL, NULL, NULL, NULL);
+                D3DDevice_Swap(0);   // Xbox present (inlined C thunk; HLE-patched)
 
                 frames++;
-                if (frames == 30)
-                    dump_bmp("D:\\xmvframe.bmp", vw, vh, g_frame);
-                if (frames == 150)
-                    dump_bmp("D:\\xmvframe2.bmp", vw, vh, g_frame);
+                // Filmstrip: dump every 24th frame (~1/sec) as xmvfNN.bmp so the
+                // playing movie can be shown as a sequence without a display.
+                if ((frames % 24) == 0 && (frames / 24) <= 10) {
+                    char path[64];
+                    _snprintf(path, sizeof(path) - 1, "D:\\xmvf%02d.bmp", frames / 24);
+                    path[sizeof(path) - 1] = 0;
+                    dump_bmp(path, vw, vh, g_frame);
+                }
             }
         }
         Sleep(10);
     }
 
     xt_chk("xmv.surface_lockable", 1, locked);
+    xt_chk("xmv.backbuffer_lockable", 1, back_locked);
     xt_chk("xmv.frames_played", 1, frames > 0);
     xt_emitf("EV  xmv.play frames=%d size=%dx%d chksum=0x%08lX",
              frames, vw, vh, (unsigned long)chksum);
