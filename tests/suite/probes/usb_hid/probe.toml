@@ -1,0 +1,9 @@
+# Requires USB HID enumeration over raw OHCI: a modeled root-hub device plus
+# OHCI endpoint/transfer-descriptor execution. This Cxbx has the OHCI register
+# model + a synthesized SOF interrupt but no device/transfer engine, so the
+# capability is absent and the probe is skipped here; it documents the
+# requirement and passes on a target that enumerates a USB HID device.
+tags = ["usbhid"]
+
+[env]
+CXBX_USB_IRQ = "1"
