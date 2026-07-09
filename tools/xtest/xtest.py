@@ -280,6 +280,32 @@ class ProbeResult:
 
 CHK_RE = re.compile(r"^CHK (\S+) .*?(PASS|FAIL)\s*$")
 RESULT_RE = re.compile(r"^#result (\S+) verdict=(\S+) checks=(\d+) fail=(\d+)")
+# Every trace line is also mirrored live through DbgPrint as "XT| <line>" (see
+# tests/suite/common/xtrace.c). We tolerate an emulator-supplied line prefix
+# (timestamp/thread tag) before the marker and keep everything after it.
+XT_MIRROR_RE = re.compile(r"XT\| (.*)$")
+
+
+def dbgprint_trace(log_path: Path | None) -> str:
+    """Reconstruct the probe trace from the DbgPrint mirror in the emulator log.
+
+    The probe writes its trace to two channels for redundancy: the guest
+    D:\\<probe>.trace file and a live DbgPrint mirror the emulator captures into
+    its log. The file channel goes through the guest's FATX / D:\\ remap and can
+    hiccup under host load (automount race, transient open/lock failure, a
+    truncated write); the DbgPrint mirror is delivered synchronously by the
+    emulator itself and is far more reliable. Used only as a fallback, so a
+    file-channel flake can't turn a passing probe into a spurious
+    NOTRACE/PARTIAL/TIMEOUT. Emulators that don't capture DbgPrint just yield ""
+    here and lose nothing."""
+    if not log_path:
+        return ""
+    try:
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [m.group(1) for line in text.splitlines() if (m := XT_MIRROR_RE.search(line))]
+    return "\n".join(lines)
 
 
 def parse_trace(text: str, res: ProbeResult) -> None:
@@ -495,6 +521,21 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
                 parse_trace(res.trace_text, res)
             elif rr.timed_out:
                 res.verdict = "TIMEOUT"
+            # Fall back to the DbgPrint mirror in the emulator log when the
+            # guest's file-channel trace is missing or truncated: it is the same
+            # trace delivered through the emulator's own synchronous logging, so
+            # it survives a D:\ file-I/O flake under load. Only adopt it when it
+            # carries a complete #result -- a mirror that is itself partial adds
+            # nothing and we let the retry/timeout path handle it.
+            if res.verdict in ("NOTRACE", "PARTIAL", "TIMEOUT"):
+                mirror = dbgprint_trace(rr.log_path)
+                if mirror.strip():
+                    mres = ProbeResult(name)
+                    parse_trace(mirror, mres)
+                    if mres.verdict not in ("NOTRACE", "PARTIAL"):
+                        mres.timed_out = rr.timed_out
+                        mres.trace_text = mirror
+                        res = mres
             if res.verdict not in ("TIMEOUT", "NOTRACE", "PARTIAL"):
                 break
             if attempt == 0:
