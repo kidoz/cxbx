@@ -2470,6 +2470,45 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetDisplayMode
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_GetDisplayFieldStatus
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus
+(
+    X_D3DFIELD_STATUS       *pFieldStatus
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // ******************************************************************
+    // * debug trace
+    // ******************************************************************
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_GetDisplayFieldStatus\n"
+               "(\n"
+               "   pFieldStatus        : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pFieldStatus);
+    }
+    #endif
+
+    // On real hardware this reads the current display field parity and the
+    // vblank tally straight from the NV2A CRTC.  Cxbx presents whole progressive
+    // frames through the host GPU, so report D3DFIELD_PROGRESSIVE and synthesise
+    // a 60 Hz vblank counter from the wall clock.  That is enough for callers
+    // that pace themselves against the vblank count -- e.g. XMV video decode,
+    // whose XMVDecoder_GetNextFrame samples this every frame and advances when
+    // (VBlankCount - baseline) crosses the next frame's presentation time.
+    if(pFieldStatus != NULL)
+    {
+        pFieldStatus->Field       = 3; // D3DFIELD_PROGRESSIVE
+        pFieldStatus->VBlankCount  = (DWORD)(((unsigned __int64)GetTickCount() * 60) / 1000);
+    }
+
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_Clear
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
