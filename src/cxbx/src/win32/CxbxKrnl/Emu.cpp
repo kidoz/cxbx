@@ -1198,7 +1198,11 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_SURFACE_PITCH             0x020Cu
 #define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
 #define NV097_SET_SURFACE_ZETA_OFFSET       0x0214u
+#define NV097_SET_BLEND_ENABLE              0x0304u
 #define NV097_SET_DEPTH_TEST_ENABLE         0x030Cu
+#define NV097_SET_BLEND_FUNC_SFACTOR        0x0344u
+#define NV097_SET_BLEND_FUNC_DFACTOR        0x0348u
+#define NV097_SET_BLEND_EQUATION            0x0350u
 #define NV097_SET_DEPTH_FUNC                0x0354u
 #define NV097_SET_DEPTH_MASK                0x035Cu
 #define NV097_SET_PROJECTION_MATRIX         0x0440u
@@ -1278,6 +1282,12 @@ static ULONG g_EmuNv2aSurfaceZetaFormat = 0; // 1=Z16, 2=Z24S8
 static bool  g_EmuNv2aDepthTest = false;
 static bool  g_EmuNv2aDepthWrite = true;
 static ULONG g_EmuNv2aDepthFunc = 0x0201;    // LESS
+// Alpha blending. Disabled by default (source overwrites), so titles that never
+// enable it are unaffected. Defaults mirror the NV2A reset state (ONE/ZERO/ADD).
+static bool  g_EmuNv2aBlendEnable = false;
+static ULONG g_EmuNv2aBlendSFactor = 0x0001; // ONE
+static ULONG g_EmuNv2aBlendDFactor = 0x0000; // ZERO
+static ULONG g_EmuNv2aBlendEquation = 0x8006; // FUNC_ADD
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
@@ -1375,6 +1385,10 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_DEPTH_TEST_ENABLE:    g_EmuNv2aDepthTest = (Data != 0); break;
             case NV097_SET_DEPTH_FUNC:           g_EmuNv2aDepthFunc = Data; break;
             case NV097_SET_DEPTH_MASK:           g_EmuNv2aDepthWrite = (Data != 0); break;
+            case NV097_SET_BLEND_ENABLE:         g_EmuNv2aBlendEnable = (Data != 0); break;
+            case NV097_SET_BLEND_FUNC_SFACTOR:   g_EmuNv2aBlendSFactor = Data; break;
+            case NV097_SET_BLEND_FUNC_DFACTOR:   g_EmuNv2aBlendDFactor = Data; break;
+            case NV097_SET_BLEND_EQUATION:       g_EmuNv2aBlendEquation = Data; break;
             case NV097_SET_BEGIN_END:            g_EmuNv2aBeginOp = Data; break;
             case NV097_DRAW_ARRAYS:
                 EmuNv2aRasterizeDrawArrays(Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
@@ -2614,7 +2628,66 @@ struct EmuNv2aRasterTarget
     ULONG  DepthFunc;    // NV097_SET_DEPTH_FUNC value (0x200..0x207)
     bool   DepthWrite;
     const EmuNv2aSampler *Sampler; // NULL when no texture this draw
+    bool   BlendEnable;
+    ULONG  BlendSFactor, BlendDFactor, BlendEquation;
 };
+
+// The blend factor for one channel (all normalized 0..1). SRC/DST_COLOR use the
+// channel's own value; SRC/DST_ALPHA use the alpha; the CONSTANT_* factors are
+// approximated as ONE (blend color is rarely used by titles).
+static float EmuNv2aBlendFactor(ULONG Factor, float ChanSrc, float ChanDst, float Sa, float Da)
+{
+    switch(Factor)
+    {
+        case 0x0000: return 0.0f;                 // ZERO
+        case 0x0001: return 1.0f;                 // ONE
+        case 0x0300: return ChanSrc;              // SRC_COLOR
+        case 0x0301: return 1.0f - ChanSrc;       // ONE_MINUS_SRC_COLOR
+        case 0x0302: return Sa;                   // SRC_ALPHA
+        case 0x0303: return 1.0f - Sa;            // ONE_MINUS_SRC_ALPHA
+        case 0x0304: return Da;                   // DST_ALPHA
+        case 0x0305: return 1.0f - Da;            // ONE_MINUS_DST_ALPHA
+        case 0x0306: return ChanDst;              // DST_COLOR
+        case 0x0307: return 1.0f - ChanDst;       // ONE_MINUS_DST_COLOR
+        case 0x0308: { float m = Sa < 1.0f - Da ? Sa : 1.0f - Da; return m; } // SRC_ALPHA_SATURATE
+        default:     return 1.0f;
+    }
+}
+
+static ULONG EmuNv2aBlendChannel(ULONG Eq, float S, float D)
+{
+    float R;
+    switch(Eq)
+    {
+        case 0x800A: R = S - D; break;   // FUNC_SUBTRACT
+        case 0x800B: R = D - S; break;   // FUNC_REVERSE_SUBTRACT
+        case 0x8007: R = S < D ? S : D; break; // MIN (of the pre-factored terms)
+        case 0x8008: R = S > D ? S : D; break; // MAX
+        default:     R = S + D; break;   // FUNC_ADD
+    }
+    if(R <= 0.0f) return 0;
+    if(R >= 1.0f) return 255;
+    return (ULONG)(R * 255.0f + 0.5f);
+}
+
+// Blend a source pixel over the destination per the programmed factors/equation.
+static ULONG EmuNv2aBlend(ULONG Src, ULONG Dst, ULONG Sf, ULONG Df, ULONG Eq)
+{
+    float sa = ((Src >> 24) & 0xFF) / 255.0f, sr = ((Src >> 16) & 0xFF) / 255.0f;
+    float sg = ((Src >> 8) & 0xFF) / 255.0f,  sb = (Src & 0xFF) / 255.0f;
+    float da = ((Dst >> 24) & 0xFF) / 255.0f, dr = ((Dst >> 16) & 0xFF) / 255.0f;
+    float dg = ((Dst >> 8) & 0xFF) / 255.0f,  db = (Dst & 0xFF) / 255.0f;
+
+    ULONG A = EmuNv2aBlendChannel(Eq, sa * EmuNv2aBlendFactor(Sf, sa, da, sa, da),
+                                      da * EmuNv2aBlendFactor(Df, sa, da, sa, da));
+    ULONG R = EmuNv2aBlendChannel(Eq, sr * EmuNv2aBlendFactor(Sf, sr, dr, sa, da),
+                                      dr * EmuNv2aBlendFactor(Df, sr, dr, sa, da));
+    ULONG G = EmuNv2aBlendChannel(Eq, sg * EmuNv2aBlendFactor(Sf, sg, dg, sa, da),
+                                      dg * EmuNv2aBlendFactor(Df, sg, dg, sa, da));
+    ULONG B = EmuNv2aBlendChannel(Eq, sb * EmuNv2aBlendFactor(Sf, sb, db, sa, da),
+                                      db * EmuNv2aBlendFactor(Df, sb, db, sa, da));
+    return (A << 24) | (R << 16) | (G << 8) | B;
+}
 
 static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
 {
@@ -2754,6 +2827,10 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                         (((cg * tg) / 255) << 8)  |  ((cb * tb) / 255);
             }
 
+            if(T->BlendEnable)
+                Color = EmuNv2aBlend(Color, T->Color[Y * T->PitchPx + X],
+                                     T->BlendSFactor, T->BlendDFactor, T->BlendEquation);
+
             T->Color[Y * T->PitchPx + X] = Color;
         }
     }
@@ -2806,6 +2883,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     Target.PitchPx = PitchPx;
     Target.Width = Width;
     Target.Height = Height;
+    Target.BlendEnable = g_EmuNv2aBlendEnable;
+    Target.BlendSFactor = g_EmuNv2aBlendSFactor;
+    Target.BlendDFactor = g_EmuNv2aBlendDFactor;
+    Target.BlendEquation = g_EmuNv2aBlendEquation;
 
     // Resolve the depth (zeta) surface when a depth test is enabled and a zeta
     // surface is bound (same base-0 raw-pointer fallback as the color surface).
