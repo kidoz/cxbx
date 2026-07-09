@@ -1930,10 +1930,12 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
 
             SuspendThread(Th);
             CONTEXT Ctx;
-            Ctx.ContextFlags = CONTEXT_CONTROL;
+            Ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
             if(GetThreadContext(Th, &Ctx))
-                printf("WATCHDOG: tid 0x%lX eip=0x%08X esp=0x%08X\n",
-                       Te.th32ThreadID, (unsigned)Ctx.Eip, (unsigned)Ctx.Esp);
+                printf("WATCHDOG: tid 0x%lX eip=0x%08X esp=0x%08X eax=0x%08X ecx=0x%08X edx=0x%08X esi=0x%08X edi=0x%08X\n",
+                       Te.th32ThreadID, (unsigned)Ctx.Eip, (unsigned)Ctx.Esp,
+                       (unsigned)Ctx.Eax, (unsigned)Ctx.Ecx, (unsigned)Ctx.Edx,
+                       (unsigned)Ctx.Esi, (unsigned)Ctx.Edi);
             ResumeThread(Th);
             CloseHandle(Th);
         }
