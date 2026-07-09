@@ -2512,6 +2512,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_Clear
 // ******************************************************************
+static void EmuMirrorPresentToWindow();   // defined below; mirrors host back buffer to GDI window
+
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 (
     DWORD           Count,
@@ -2523,6 +2525,12 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+
+    // Mirror the previously-presented frame (opt-in via CXBX_D3D_WINDOW). Clear
+    // runs at the top of each frame, before the new frame overwrites the back
+    // buffer, so this shows the last completed frame in the GDI live window --
+    // used when the host's D3D8 windowed Present will not composite to a window.
+    EmuMirrorPresentToWindow();
 
     // ******************************************************************
     // * debug trace
@@ -2569,6 +2577,60 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
     return ret;
 }
 
+// Mirror the presented frame to the emulator's GDI live window (Emu.cpp).
+extern "C" void EmuHostBlitToWindow(const void *Pixels, unsigned Width, unsigned Height);
+
+// Copy the host back buffer to the GDI live window (opt-in via CXBX_D3D_WINDOW),
+// called from both Swap and Present. Some hosts' D3D8 *windowed* Present does not
+// composite to the visible window, so the emulator window stays black even when
+// rendering is correct; a GDI StretchDIBits of the presented pixels always shows.
+// Must run with the host (Win2k/XP) FS active.
+static void EmuMirrorPresentToWindow()
+{
+    static int s_MirrorWindow = -1;
+    if(s_MirrorWindow < 0)
+        s_MirrorWindow = GetEnvironmentVariableA("CXBX_D3D_WINDOW", NULL, 0) != 0 ? 1 : 0;
+
+    if(!s_MirrorWindow || g_pD3DDevice8 == NULL)
+        return;
+
+    XTL::IDirect3DSurface8 *pHostBack = NULL;
+    if(FAILED(g_pD3DDevice8->GetBackBuffer(0, XTL::D3DBACKBUFFER_TYPE_MONO, &pHostBack)) || pHostBack == NULL)
+        return;
+
+    XTL::D3DSURFACE_DESC sd;
+    XTL::D3DLOCKED_RECT lr;
+    // The guest's UnlockRect is not HLE-patched, so the host back buffer is left
+    // locked by the emulated LockRect the guest used to write the frame. Clear
+    // that stale lock before reading it, or our LockRect returns INVALIDCALL.
+    pHostBack->UnlockRect();
+    if(SUCCEEDED(pHostBack->GetDesc(&sd)) &&
+       SUCCEEDED(pHostBack->LockRect(&lr, NULL, D3DLOCK_READONLY)))
+    {
+        static DWORD *s_pMirror = NULL;
+        static DWORD  s_MirrorPixels = 0;
+        DWORD need = sd.Width * sd.Height;
+
+        if(need > s_MirrorPixels)
+        {
+            free(s_pMirror);
+            s_pMirror = (DWORD*)malloc(need * sizeof(DWORD));
+            s_MirrorPixels = s_pMirror ? need : 0;
+        }
+
+        if(s_pMirror != NULL)
+        {
+            for(DWORD y = 0; y < sd.Height; y++)
+                memcpy(s_pMirror + y * sd.Width,
+                       (BYTE*)lr.pBits + y * lr.Pitch, sd.Width * sizeof(DWORD));
+            EmuHostBlitToWindow(s_pMirror, sd.Width, sd.Height);
+        }
+
+        pHostBack->UnlockRect();
+    }
+    pHostBack->Release();
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_Present
 // ******************************************************************
@@ -2597,6 +2659,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
                GetCurrentThreadId(), pSourceRect, pDestRect, pDummy1, pDummy2);
     }
     #endif
+
+    EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(pSourceRect, pDestRect, (HWND)pDummy1, (CONST RGNDATA*)pDummy2);
 
@@ -2634,6 +2698,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     // the emulation.
     if(Flags != 0)
         EmuWarning("EmuIDirect3DDevice8_Swap: Flags = 0x%.08X (ignored)", Flags);
+
+    EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
 
