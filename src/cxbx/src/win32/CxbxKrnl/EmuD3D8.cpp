@@ -2585,15 +2585,8 @@ extern "C" void EmuHostBlitToWindow(const void *Pixels, unsigned Width, unsigned
 // composite to the visible window, so the emulator window stays black even when
 // rendering is correct; a GDI StretchDIBits of the presented pixels always shows.
 // Must run with the host (Win2k/XP) FS active.
-static void EmuMirrorPresentToWindow()
+static void EmuMirrorBlitHostBackbuffer()
 {
-    static int s_MirrorWindow = -1;
-    if(s_MirrorWindow < 0)
-        s_MirrorWindow = GetEnvironmentVariableA("CXBX_D3D_WINDOW", NULL, 0) != 0 ? 1 : 0;
-
-    if(!s_MirrorWindow || g_pD3DDevice8 == NULL)
-        return;
-
     XTL::IDirect3DSurface8 *pHostBack = NULL;
     if(FAILED(g_pD3DDevice8->GetBackBuffer(0, XTL::D3DBACKBUFFER_TYPE_MONO, &pHostBack)) || pHostBack == NULL)
         return;
@@ -2629,6 +2622,27 @@ static void EmuMirrorPresentToWindow()
         pHostBack->UnlockRect();
     }
     pHostBack->Release();
+}
+
+static void EmuMirrorPresentToWindow()
+{
+    static int s_MirrorWindow = -1;
+    if(s_MirrorWindow < 0)
+        s_MirrorWindow = GetEnvironmentVariableA("CXBX_D3D_WINDOW", NULL, 0) != 0 ? 1 : 0;
+
+    if(!s_MirrorWindow || g_pD3DDevice8 == NULL)
+        return;
+
+    // Titles that hand the emulator an incomplete/scratch device (e.g. the CDX
+    // D3D__pDevice hack) can fault inside GetBackBuffer/LockRect; the mirror is a
+    // display convenience and must never take the title down, so swallow it.
+    __try
+    {
+        EmuMirrorBlitHostBackbuffer();
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
 }
 
 // ******************************************************************
