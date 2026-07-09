@@ -2577,6 +2577,16 @@ static void EmuNv2aBlitToWindow(const ULONG *Pixels, ULONG Width, ULONG Height)
     ReleaseDC(g_hEmuNv2aWindow, Hdc);
 }
 
+// Exposed for the D3D8-HLE present path (EmuD3D8.cpp): mirror the host back
+// buffer to the same GDI live window the software rasterizer uses. Some hosts'
+// D3D8 *windowed* Present does not composite to the visible window (it blits
+// below the desktop compositor), leaving a black window even though rendering
+// succeeded; a GDI StretchDIBits of the presented pixels always shows.
+extern "C" void EmuHostBlitToWindow(const void *Pixels, unsigned Width, unsigned Height)
+{
+    EmuNv2aBlitToWindow((const ULONG *)Pixels, (ULONG)Width, (ULONG)Height);
+}
+
 // Capture the displayed framebuffer ("path 2"). The CRTC scanout base register
 // (NV_PCRTC_START) is programmed with the physical address of the surface to put
 // on screen -- exactly what a title flips to at frame end (nxdk pbkit's
