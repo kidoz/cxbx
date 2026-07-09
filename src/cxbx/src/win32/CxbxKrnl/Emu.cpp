@@ -1154,11 +1154,14 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 #define EmuNv2aTextureStageStride      0x40u
 #define EmuNv2aTextureStageCount       4u
 
+#define NV097_SET_TEXTURE_FILTER_0     0x1B14u
+
 struct EmuNv2aTextureState
 {
     ULONG Offset;
     ULONG Format;
     ULONG ImageRect;
+    ULONG Filter;
 };
 
 static EmuNv2aTextureState g_EmuNv2aTexture[EmuNv2aTextureStageCount] = {};
@@ -1351,6 +1354,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 g_EmuNv2aTexture[Stage].Format = Data;
             else if(Method == StageMethod + (NV097_SET_TEXTURE_IMAGE_RECT_0 - NV097_SET_TEXTURE_OFFSET_0))
                 g_EmuNv2aTexture[Stage].ImageRect = Data;
+            else if(Method == StageMethod + (NV097_SET_TEXTURE_FILTER_0 - NV097_SET_TEXTURE_OFFSET_0))
+                g_EmuNv2aTexture[Stage].Filter = Data;
 
             if(g_EmuNv2aTextureMethodLogCount < 32)
             {
@@ -2140,6 +2145,7 @@ struct EmuNv2aSampler
     BYTE  *Data;
     ULONG  Size, Width, Height, Bpp, Kind, LogW, LogH;
     bool   Swizzled;
+    bool   Bilinear;   // mag filter == LINEAR
 };
 
 static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
@@ -2171,6 +2177,7 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
 
     S->LogW = EmuNv2aLog2(S->Width);
     S->LogH = EmuNv2aLog2(S->Height);
+    S->Bilinear = (((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xF) == 2); // MAG == LINEAR
 
     ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaAHandle);
     ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
@@ -2201,11 +2208,9 @@ static void EmuNv2aFreeSampler(EmuNv2aSampler *S)
     }
 }
 
-// Nearest-neighbor sample at normalized (u,v), clamped to the edge.
-static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
+// Fetch one texel at integer coordinates (clamped to the edge, swizzle-aware).
+static ULONG EmuNv2aFetchTexel(const EmuNv2aSampler *S, int X, int Y)
 {
-    int X = (int)(u * (float)S->Width);
-    int Y = (int)(v * (float)S->Height);
     if(X < 0) X = 0; if(X >= (int)S->Width)  X = (int)S->Width - 1;
     if(Y < 0) Y = 0; if(Y >= (int)S->Height) Y = (int)S->Height - 1;
 
@@ -2216,6 +2221,38 @@ static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
     for(ULONG b = 0; b < S->Bpp && ByteOffset + b < S->Size; b++)
         Raw |= (ULONG)S->Data[ByteOffset + b] << (b * 8);
     return EmuNv2aUnpackTexel(Raw, S->Kind);
+}
+
+// Sample at normalized (u,v): nearest, or bilinear (4-texel blend) when the mag
+// filter is LINEAR.
+static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
+{
+    if(!S->Bilinear)
+        return EmuNv2aFetchTexel(S, (int)(u * (float)S->Width), (int)(v * (float)S->Height));
+
+    // Sample the 2x2 texel neighborhood around the point (texel centers at +0.5).
+    float fx = u * (float)S->Width  - 0.5f;
+    float fy = v * (float)S->Height - 0.5f;
+    int x0 = (int)fx; if((float)x0 > fx) x0--;   // floor without libm
+    int y0 = (int)fy; if((float)y0 > fy) y0--;
+    float wx = fx - (float)x0, wy = fy - (float)y0;
+
+    ULONG c00 = EmuNv2aFetchTexel(S, x0,     y0);
+    ULONG c10 = EmuNv2aFetchTexel(S, x0 + 1, y0);
+    ULONG c01 = EmuNv2aFetchTexel(S, x0,     y0 + 1);
+    ULONG c11 = EmuNv2aFetchTexel(S, x0 + 1, y0 + 1);
+
+    ULONG Out = 0;
+    for(int sh = 0; sh < 32; sh += 8)
+    {
+        float a = (float)((c00 >> sh) & 0xFF), b = (float)((c10 >> sh) & 0xFF);
+        float c = (float)((c01 >> sh) & 0xFF), d = (float)((c11 >> sh) & 0xFF);
+        float top = a + (b - a) * wx;
+        float bot = c + (d - c) * wx;
+        float val = top + (bot - top) * wy;
+        Out |= ((ULONG)(val + 0.5f) & 0xFF) << sh;
+    }
+    return Out;
 }
 
 // Decode a bound KELVIN texture from guest memory and write it to a BMP. This is

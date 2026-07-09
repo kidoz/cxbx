@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe nv2a_filter
+CHK nv2a_filter.pb_init PASS
+CHK nv2a_filter.back_buffer PASS
+CHK nv2a_filter.tex_alloc PASS
+CHK nv2a_filter.vbuf_alloc PASS
+CHK nv2a_filter.center_blended PASS
+#result nv2a_filter verdict=PASS checks=5 fail=0
