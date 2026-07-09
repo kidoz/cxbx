@@ -263,6 +263,18 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     bool NeedsPosEpilogue = false;
     VshEmit(Out, &n, 0xFFFE0101);   // vs.1.1
 
+    // Seed the position scratch (the R12/oPos alias) from the position input v0.
+    // 2D / UI shaders often write only oPos.xy and leave z,w to the vertex; the
+    // epilogue then copies the whole scratch to oPos, so unwritten components
+    // must be defined -- reading an uninitialized temp makes the host reject the
+    // shader (D3DERR_INVALIDCALL). A full oPos-writing shader overwrites this.
+    {
+        static const DWORD IdSwz[4] = { 0, 1, 2, 3 };
+        VshEmit(Out, &n, SIO_MOV);
+        VshEmit(Out, &n, VshDstToken(SPR_TEMP, VSH_POS_SCRATCH, 0xF));
+        VshEmit(Out, &n, VshSrcToken(SPR_INPUT, 0, IdSwz, FALSE, FALSE));
+    }
+
     for(DWORD i = 0; i < InstrCount; i++)
     {
         const DWORD *I = &pXboxFunction[1 + i * 4];
