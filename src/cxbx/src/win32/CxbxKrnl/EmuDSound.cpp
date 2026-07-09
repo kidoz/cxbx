@@ -104,11 +104,25 @@ HRESULT WINAPI XTL::EmuDirectSoundCreate
     }
     #endif
 
-    HRESULT hRet = DirectSoundCreate8(NULL, ppDirectSound, NULL);
+    // Xbox DirectSound is a process singleton. Hand back the existing host
+    // device (AddRef'd) rather than leaking a second one -- XMV video decode
+    // calls DirectSoundCreate every frame for A/V pacing, and a title that owns
+    // the device must not have it clobbered/released out from under it.
+    HRESULT hRet = DS_OK;
 
-    g_pDSound8 = *ppDirectSound;
+    if(g_pDSound8 == NULL)
+    {
+        hRet = DirectSoundCreate8(NULL, &g_pDSound8, NULL);
 
-    hRet = g_pDSound8->SetCooperativeLevel(g_hEmuWindow, DSSCL_PRIORITY);
+        if(SUCCEEDED(hRet) && g_pDSound8 != NULL)
+            hRet = g_pDSound8->SetCooperativeLevel(g_hEmuWindow, DSSCL_PRIORITY);
+    }
+    else
+    {
+        g_pDSound8->AddRef();
+    }
+
+    *ppDirectSound = g_pDSound8;
 
     EmuSwapFS();   // XBox FS
 
@@ -542,9 +556,46 @@ ULONG WINAPI XTL::EmuIDirectSound8_Release
 
     ULONG uRet = pThis->Release();
 
+    // Drop the singleton cache once the host device is really gone, so a later
+    // DirectSoundCreate re-creates it instead of handing back a freed pointer.
+    if(uRet == 0 && pThis == g_pDSound8)
+        g_pDSound8 = NULL;
+
     EmuSwapFS();   // XBox FS
 
     return uRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSound8_SynchPlayback
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSound8_SynchPlayback
+(
+    LPDIRECTSOUND8          pThis
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // ******************************************************************
+    // * debug trace
+    // ******************************************************************
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSound8_SynchPlayback\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis);
+    }
+    #endif
+
+    // On hardware this blocks until the APU voice queue reaches a sync point.
+    // Cxbx has no APU voice model and the host mixer plays independently, so
+    // there is nothing to wait on -- report success immediately.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
 }
 
 // ******************************************************************
