@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe nv2a_blend
+CHK nv2a_blend.pb_init PASS
+CHK nv2a_blend.back_buffer PASS
+CHK nv2a_blend.vbuf_alloc PASS
+CHK nv2a_blend.mixed_is_blend PASS
+CHK nv2a_blend.bg_red PASS
+#result nv2a_blend verdict=PASS checks=5 fail=0
