@@ -1,0 +1,5 @@
+# Requires the NV2A software rasterizer with stencil (Z24S8) support.
+tags = ["nv2a"]
+
+[env]
+CXBX_NV2A_RASTER = "1"

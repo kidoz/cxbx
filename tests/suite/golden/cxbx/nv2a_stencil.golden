@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe nv2a_stencil
+CHK nv2a_stencil.pb_init PASS
+CHK nv2a_stencil.back_buffer PASS
+CHK nv2a_stencil.zbuf_alloc PASS
+CHK nv2a_stencil.vbuf_alloc PASS
+CHK nv2a_stencil.inside_blue PASS
+CHK nv2a_stencil.outside_masked PASS
+#result nv2a_stencil verdict=PASS checks=6 fail=0

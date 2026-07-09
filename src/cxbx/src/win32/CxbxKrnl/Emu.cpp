@@ -1203,6 +1203,14 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_SURFACE_ZETA_OFFSET       0x0214u
 #define NV097_SET_BLEND_ENABLE              0x0304u
 #define NV097_SET_DEPTH_TEST_ENABLE         0x030Cu
+#define NV097_SET_STENCIL_TEST_ENABLE       0x032Cu
+#define NV097_SET_STENCIL_MASK              0x0360u
+#define NV097_SET_STENCIL_FUNC              0x0364u
+#define NV097_SET_STENCIL_FUNC_REF          0x0368u
+#define NV097_SET_STENCIL_FUNC_MASK         0x036Cu
+#define NV097_SET_STENCIL_OP_FAIL           0x0370u
+#define NV097_SET_STENCIL_OP_ZFAIL          0x0374u
+#define NV097_SET_STENCIL_OP_ZPASS          0x0378u
 #define NV097_SET_BLEND_FUNC_SFACTOR        0x0344u
 #define NV097_SET_BLEND_FUNC_DFACTOR        0x0348u
 #define NV097_SET_BLEND_EQUATION            0x0350u
@@ -1291,6 +1299,15 @@ static bool  g_EmuNv2aBlendEnable = false;
 static ULONG g_EmuNv2aBlendSFactor = 0x0001; // ONE
 static ULONG g_EmuNv2aBlendDFactor = 0x0000; // ZERO
 static ULONG g_EmuNv2aBlendEquation = 0x8006; // FUNC_ADD
+// Stencil (in the Z24S8 zeta buffer's low byte). Off by default.
+static bool  g_EmuNv2aStencilTest = false;
+static ULONG g_EmuNv2aStencilFunc = 0x0207;      // ALWAYS
+static ULONG g_EmuNv2aStencilRef = 0;
+static ULONG g_EmuNv2aStencilFuncMask = 0xFF;
+static ULONG g_EmuNv2aStencilMask = 0xFF;        // write mask
+static ULONG g_EmuNv2aStencilOpFail = 0x1E00;    // KEEP
+static ULONG g_EmuNv2aStencilOpZFail = 0x1E00;
+static ULONG g_EmuNv2aStencilOpZPass = 0x1E00;
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
@@ -1394,6 +1411,14 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_BLEND_FUNC_SFACTOR:   g_EmuNv2aBlendSFactor = Data; break;
             case NV097_SET_BLEND_FUNC_DFACTOR:   g_EmuNv2aBlendDFactor = Data; break;
             case NV097_SET_BLEND_EQUATION:       g_EmuNv2aBlendEquation = Data; break;
+            case NV097_SET_STENCIL_TEST_ENABLE:  g_EmuNv2aStencilTest = (Data != 0); break;
+            case NV097_SET_STENCIL_MASK:         g_EmuNv2aStencilMask = Data & 0xFF; break;
+            case NV097_SET_STENCIL_FUNC:         g_EmuNv2aStencilFunc = Data; break;
+            case NV097_SET_STENCIL_FUNC_REF:     g_EmuNv2aStencilRef = Data & 0xFF; break;
+            case NV097_SET_STENCIL_FUNC_MASK:    g_EmuNv2aStencilFuncMask = Data & 0xFF; break;
+            case NV097_SET_STENCIL_OP_FAIL:      g_EmuNv2aStencilOpFail = Data; break;
+            case NV097_SET_STENCIL_OP_ZFAIL:     g_EmuNv2aStencilOpZFail = Data; break;
+            case NV097_SET_STENCIL_OP_ZPASS:     g_EmuNv2aStencilOpZPass = Data; break;
             case NV097_SET_BEGIN_END:            g_EmuNv2aBeginOp = Data; break;
             case NV097_DRAW_ARRAYS:
                 EmuNv2aRasterizeDrawArrays(Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
@@ -2659,14 +2684,18 @@ struct EmuNv2aRasterTarget
     int    PitchPx;
     int    Width;
     int    Height;
-    void  *Depth;        // NULL when no depth test this draw
+    void  *Depth;        // NULL when neither depth nor stencil is active this draw
     int    DepthPitchB;
     ULONG  DepthFormat;  // 1=Z16, 2=Z24S8
     ULONG  DepthFunc;    // NV097_SET_DEPTH_FUNC value (0x200..0x207)
+    bool   DepthTest;
     bool   DepthWrite;
     const EmuNv2aSampler *Sampler; // NULL when no texture this draw
     bool   BlendEnable;
     ULONG  BlendSFactor, BlendDFactor, BlendEquation;
+    bool   StencilTest;
+    ULONG  StencilFunc, StencilRef, StencilFuncMask, StencilMask;
+    ULONG  StencilOpFail, StencilOpZFail, StencilOpZPass;
 };
 
 // The blend factor for one channel (all normalized 0..1). SRC/DST_COLOR use the
@@ -2738,6 +2767,22 @@ static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
         case 0x205: return Src != Dst;   // NOTEQUAL
         case 0x206: return Src >= Dst;   // GEQUAL
         default:    return true;         // ALWAYS
+    }
+}
+
+// Apply a stencil operation to the current 8-bit stencil value.
+static ULONG EmuNv2aStencilOp(ULONG Op, ULONG Value, ULONG Ref)
+{
+    switch(Op)
+    {
+        case 0x0000: return 0;                                   // ZERO
+        case 0x1E01: return Ref & 0xFF;                          // REPLACE
+        case 0x1E02: return Value < 0xFF ? Value + 1 : 0xFF;     // INCR (saturate)
+        case 0x1E03: return Value > 0 ? Value - 1 : 0;           // DECR (saturate)
+        case 0x150A: return (~Value) & 0xFF;                     // INVERT
+        case 0x8507: return (Value + 1) & 0xFF;                  // INCR_WRAP
+        case 0x8508: return (Value - 1) & 0xFF;                  // DECR_WRAP
+        default:     return Value;                               // KEEP
     }
 }
 
@@ -2815,20 +2860,38 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
 
                 if(Depth24)
                 {
+                    // Z24S8: 24-bit depth in the high bits, 8-bit stencil in the
+                    // low byte. Stencil test first, then depth; the stencil op
+                    // (fail / zfail / zpass) updates the stored stencil.
                     ULONG *Slot = (ULONG *)T->Depth + Y * DepthPitchElem + X;
-                    ULONG Dst = (*Slot) >> 8;             // 24-bit depth in high bits
-                    if(!EmuNv2aDepthPass(T->DepthFunc, Src, Dst))
-                        continue;
-                    if(T->DepthWrite)
-                        *Slot = (Src << 8) | (*Slot & 0xFF); // preserve stencil
+                    ULONG Stored = *Slot;
+                    ULONG Dst = Stored >> 8;
+                    ULONG Sten = Stored & 0xFF;
+
+                    bool SPass = !T->StencilTest ||
+                        EmuNv2aDepthPass(T->StencilFunc, T->StencilRef & T->StencilFuncMask,
+                                         Sten & T->StencilFuncMask);
+                    bool DPass = !T->DepthTest || EmuNv2aDepthPass(T->DepthFunc, Src, Dst);
+
+                    if(T->StencilTest)
+                    {
+                        ULONG Op = !SPass ? T->StencilOpFail
+                                          : (!DPass ? T->StencilOpZFail : T->StencilOpZPass);
+                        ULONG NewSt = EmuNv2aStencilOp(Op, Sten, T->StencilRef);
+                        Sten = (NewSt & T->StencilMask) | (Sten & ~T->StencilMask);
+                    }
+                    ULONG NewDepth = (T->DepthTest && SPass && DPass && T->DepthWrite) ? Src : Dst;
+                    *Slot = (NewDepth << 8) | (Sten & 0xFF);
+                    if(!SPass || !DPass)
+                        continue;   // fragment killed -> no color
                 }
                 else
                 {
                     unsigned short *Slot = (unsigned short *)T->Depth + Y * DepthPitchElem + X;
                     ULONG Dst = *Slot;
-                    if(!EmuNv2aDepthPass(T->DepthFunc, Src, Dst))
+                    if(T->DepthTest && !EmuNv2aDepthPass(T->DepthFunc, Src, Dst))
                         continue;
-                    if(T->DepthWrite)
+                    if(T->DepthTest && T->DepthWrite)
                         *Slot = (unsigned short)Src;
                 }
             }
@@ -2925,9 +2988,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
     Target.BlendDFactor = g_EmuNv2aBlendDFactor;
     Target.BlendEquation = g_EmuNv2aBlendEquation;
 
-    // Resolve the depth (zeta) surface when a depth test is enabled and a zeta
-    // surface is bound (same base-0 raw-pointer fallback as the color surface).
-    if(g_EmuNv2aDepthTest && g_EmuNv2aSurfaceZetaFormat != 0 && g_EmuNv2aSurfaceZetaOffset != 0)
+    // Resolve the depth (zeta) surface when depth OR stencil testing is enabled
+    // and a zeta surface is bound (same base-0 raw-pointer fallback as color).
+    if((g_EmuNv2aDepthTest || g_EmuNv2aStencilTest) &&
+       g_EmuNv2aSurfaceZetaFormat != 0 && g_EmuNv2aSurfaceZetaOffset != 0)
     {
         ULONG ZetaBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaZeta);
         ULONG ZetaHost = EmuNv2aHostPointer(ZetaBase + g_EmuNv2aSurfaceZetaOffset);
@@ -2938,10 +3002,19 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
             Target.Depth = (void *)(uintptr_t)ZetaHost;
             Target.DepthFormat = g_EmuNv2aSurfaceZetaFormat;
             Target.DepthFunc = g_EmuNv2aDepthFunc;
+            Target.DepthTest = g_EmuNv2aDepthTest;
             Target.DepthWrite = g_EmuNv2aDepthWrite;
             Target.DepthPitchB = (int)g_EmuNv2aSurfacePitchZeta;
             if(Target.DepthPitchB <= 0)
                 Target.DepthPitchB = Width * (g_EmuNv2aSurfaceZetaFormat == 2 ? 4 : 2);
+            Target.StencilTest = g_EmuNv2aStencilTest && (g_EmuNv2aSurfaceZetaFormat == 2);
+            Target.StencilFunc = g_EmuNv2aStencilFunc;
+            Target.StencilRef = g_EmuNv2aStencilRef;
+            Target.StencilFuncMask = g_EmuNv2aStencilFuncMask;
+            Target.StencilMask = g_EmuNv2aStencilMask;
+            Target.StencilOpFail = g_EmuNv2aStencilOpFail;
+            Target.StencilOpZFail = g_EmuNv2aStencilOpZFail;
+            Target.StencilOpZPass = g_EmuNv2aStencilOpZPass;
         }
     }
 
