@@ -801,10 +801,20 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
     fflush(stdout);
 }
 
+static void EmuAciDmaSync();   // time-based DMA state-machine catch-up (defined below)
+
 static ULONG EmuAciReadRegister32(ULONG Address)
 {
     ULONG Offset = EmuAciOffset(Address);
     ULONG Value = 0;
+
+    // Bring the bus-master DMA state machine up to date before the guest reads a
+    // channel/status register. Advancement is otherwise driven by a background
+    // thread; making a read observe current state removes the dependency on that
+    // thread being scheduled within the guest's poll window (which starves under
+    // heavy host load and left CIV/SR/GLOB_STA reading stale-zero).
+    if(Offset >= EmuAciBusMasterBase)
+        EmuAciDmaSync();
 
     switch(Offset)
     {
@@ -906,9 +916,44 @@ static const ULONG EmuAciStatusLvbci = 0x04;   // last valid buffer completed
 static const ULONG EmuAciStatusBcis = 0x08;    // buffer completion status
 static const ULONG EmuAciControlIoce = 0x10;   // interrupt-on-completion enable
 
+// The DMA state machine advances at a fixed buffer cadence. It is stepped from
+// two places -- the background delivery thread and, lazily, a guest register
+// read -- so both share one monotonic time base guarded by a lock, and whoever
+// runs first consumes the elapsed buffer periods (the other then sees none).
+// This makes the observable register state (CIV/SR/GLOB_STA) a pure function of
+// elapsed wall time, independent of host thread scheduling.
+static const DWORD EmuAciDmaPeriodMs = 5;       // ~200 Hz buffer cadence
+static const DWORD EmuAciDmaMaxCatchup = 64;    // cap a backlog burst after a long stall
+
+static CRITICAL_SECTION g_EmuAciDmaLock;
+static DWORD g_EmuAciDmaLastMs = 0;
+static volatile LONG g_EmuAciDmaPendingIrq = 0;
+static volatile LONG g_EmuAciDmaInitState = 0;   // 0=uninit, 1=initializing, 2=ready
+
+// Race-safe one-time init of the lock + time base without depending on Vista's
+// InitOnce (this tree targets the XP-era SDK). The winner initializes; any
+// concurrent caller briefly spins until the lock is constructed.
+static void EmuAciDmaEnsureInit()
+{
+    if(g_EmuAciDmaInitState == 2)
+        return;
+
+    if(InterlockedCompareExchange(&g_EmuAciDmaInitState, 1, 0) == 0)
+    {
+        InitializeCriticalSection(&g_EmuAciDmaLock);
+        g_EmuAciDmaLastMs = GetTickCount();
+        InterlockedExchange(&g_EmuAciDmaInitState, 2);
+    }
+    else
+    {
+        while(g_EmuAciDmaInitState != 2)
+            Sleep(0);
+    }
+}
+
 // Advance every running channel by one buffer. Returns the number of
 // completions that want an interrupt delivered (caller fires the audio ISR).
-extern "C" int EmuAciDmaAdvance()
+static int EmuAciDmaAdvanceOnce()
 {
     int Fired = 0;
 
@@ -961,6 +1006,51 @@ extern "C" int EmuAciDmaAdvance()
     }
 
     return Fired;
+}
+
+// Step the DMA model forward by however many buffer periods have elapsed since
+// the last catch-up. Idempotent and safe to call from either the delivery
+// thread or a guest read: the lock serializes the two, and a caller that finds
+// no whole period elapsed does nothing. Completions that want an interrupt are
+// accumulated for the delivery thread to fire (a read never delivers an ISR).
+static void EmuAciDmaSync()
+{
+    EmuAciDmaEnsureInit();
+    EnterCriticalSection(&g_EmuAciDmaLock);
+
+    DWORD Now = GetTickCount();
+    DWORD Elapsed = Now - g_EmuAciDmaLastMs;   // unsigned: correct across a single wrap
+    DWORD Steps = Elapsed / EmuAciDmaPeriodMs;
+
+    if(Steps > 0)
+    {
+        if(Steps > EmuAciDmaMaxCatchup)
+        {
+            Steps = EmuAciDmaMaxCatchup;
+            g_EmuAciDmaLastMs = Now;                        // collapse a large backlog
+        }
+        else
+        {
+            g_EmuAciDmaLastMs += Steps * EmuAciDmaPeriodMs;  // keep the sub-period remainder
+        }
+
+        for(DWORD k = 0; k < Steps; k++)
+        {
+            int Fired = EmuAciDmaAdvanceOnce();
+            if(Fired > 0)
+                InterlockedExchangeAdd(&g_EmuAciDmaPendingIrq, Fired);
+        }
+    }
+
+    LeaveCriticalSection(&g_EmuAciDmaLock);
+}
+
+// Background delivery-thread entry point: bring the model up to date and report
+// whether a buffer completion is pending an interrupt (delivered by the caller).
+extern "C" int EmuAciDmaAdvance()
+{
+    EmuAciDmaSync();
+    return (int)InterlockedExchange(&g_EmuAciDmaPendingIrq, 0);
 }
 
 static void EmuAciWriteRegister(ULONG Address, ULONG Size, ULONG Value)
