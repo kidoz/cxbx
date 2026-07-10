@@ -776,6 +776,14 @@ HRESULT WINAPI EmuIDirect3DDevice8_SetPixelShader
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_DeletePixelShader
+// ******************************************************************
+VOID WINAPI EmuIDirect3DDevice8_DeletePixelShader
+(
+    DWORD           Handle
+);
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_CreateTexture2
 // ******************************************************************
 X_D3DResource * WINAPI EmuIDirect3DDevice8_CreateTexture2
