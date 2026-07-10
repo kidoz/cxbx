@@ -908,6 +908,21 @@ HRESULT WINAPI EmuIDirect3DDevice8_Clear
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetDebugMarker
+// ******************************************************************
+DWORD WINAPI EmuIDirect3DDevice8_SetDebugMarker(DWORD Marker);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_GetDebugMarker
+// ******************************************************************
+DWORD WINAPI EmuIDirect3DDevice8_GetDebugMarker();
+
+// ******************************************************************
+// * func: EmuD3DPERF_Reset
+// ******************************************************************
+VOID WINAPI EmuD3DPERF_Reset();
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_Present
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DDevice8_Present

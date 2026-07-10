@@ -97,6 +97,104 @@ static XTL::D3DCAPS8                g_D3DCaps;              // Direct3D8 Caps
 static HBRUSH                       g_hBgBrush      = NULL; // Background Brush
 static volatile bool                g_bRenderWindowActive = false;
 static XBVideo                      g_XBVideo;
+static DWORD                        g_D3DDebugMarker = 0;
+static uint08                      *g_pD3DPerfStatistics = NULL;
+static volatile DWORD              *g_pD3DSingleStepPusher = NULL;
+static bool                         g_bD3DDebugGlobalsScanned = false;
+
+// XDK 5849 D3DPERF_APICounters values used by the HLE debug bridge.
+enum EmuD3DPerfApiCounter
+{
+    EMU_API_D3DDEVICE_BLOCKUNTILIDLE = 18,
+    EMU_API_D3DDEVICE_CLEAR = 21,
+    EMU_D3DAPI_MAX = 255
+};
+
+enum EmuD3DPerfLayout
+{
+    EMU_D3DPERF_WAIT_COUNTER_OFFSET = 0x33A50,
+    EMU_D3DPERF_WAIT_COUNTER_DWORDS = 120,
+    EMU_D3DPERF_API_COUNTER_OFFSET = 0x33C30,
+    EMU_D3DPERF_RENDER_COUNTER_OFFSET = 0x3402C,
+    EMU_D3DPERF_RENDER_COUNTER_DWORDS = 166,
+    EMU_D3DPERF_TEXTURE_COUNTER_OFFSET = 0x342C4,
+    EMU_D3DPERF_TEXTURE_COUNTER_DWORDS = 32,
+    EMU_D3DPERF_REQUIRED_SIZE = 0x34344
+};
+
+static DWORD *EmuD3DPerfApiCounters()
+{
+    return g_pD3DPerfStatistics == NULL ? NULL :
+        (DWORD*)(g_pD3DPerfStatistics + EMU_D3DPERF_API_COUNTER_OFFSET);
+}
+
+// Locate the two debug-runtime globals without depending on title link
+// addresses. D3DPERF_GetStatistics is a stable aligned accessor
+// (mov eax, <static D3DPERF>; ret), while the single-step reference is
+// identified by the surrounding pusher validation sequence. Relocated
+// operands are deliberately decoded rather than embedded in OOVPAs.
+static void EmuLocateD3DDebugGlobals()
+{
+    if(g_bD3DDebugGlobalsScanned || g_XbeHeader == NULL)
+        return;
+
+    g_bD3DDebugGlobalsScanned = true;
+
+    const uint32 ImageBase = g_XbeHeader->dwBaseAddr;
+    const uint32 ImageEnd = ImageBase + g_XbeHeader->dwSizeofImage;
+    const uint32 SectionOffset = g_XbeHeader->dwSectionHeadersAddr - ImageBase;
+    if(ImageEnd < ImageBase || SectionOffset >= g_XbeHeaderSize ||
+       g_XbeHeader->dwSections >
+           (g_XbeHeaderSize - SectionOffset) / sizeof(Xbe::SectionHeader))
+        return;
+
+    Xbe::SectionHeader *pSections =
+        (Xbe::SectionHeader*)((uint08*)g_XbeHeader + SectionOffset);
+
+    for(uint32 SectionIndex = 0; SectionIndex < g_XbeHeader->dwSections; SectionIndex++)
+    {
+        Xbe::SectionHeader *pSection = &pSections[SectionIndex];
+        if(!pSection->dwFlags.bExecutable || pSection->dwVirtualSize < 20 ||
+           pSection->dwVirtualAddr < ImageBase ||
+           pSection->dwVirtualAddr > ImageEnd ||
+           pSection->dwVirtualSize > ImageEnd - pSection->dwVirtualAddr)
+            continue;
+
+        uint08 *pCode = (uint08*)pSection->dwVirtualAddr;
+        const uint32 ScanSize = pSection->dwVirtualSize - 19;
+        for(uint32 Offset = 0; Offset < ScanSize; Offset++)
+        {
+            uint08 *p = pCode + Offset;
+
+            if(g_pD3DPerfStatistics == NULL &&
+               p[0] == 0xB8 && p[5] == 0xC3 &&
+               p[6] == 0xCC && p[7] == 0xCC && p[8] == 0xCC &&
+               p[9] == 0xCC && p[10] == 0xCC && p[11] == 0xCC &&
+               p[12] == 0xCC && p[13] == 0xCC && p[14] == 0xCC &&
+               p[15] == 0xCC && p[16] == 0x55 && p[17] == 0x8B && p[18] == 0xEC)
+            {
+                const uint32 Statistics = *(uint32*)(p + 1);
+                if(Statistics >= ImageBase &&
+                   Statistics <= ImageEnd &&
+                   EMU_D3DPERF_REQUIRED_SIZE <= ImageEnd - Statistics)
+                    g_pD3DPerfStatistics = (uint08*)Statistics;
+            }
+
+            if(g_pD3DSingleStepPusher == NULL &&
+               p[0] == 0xF6 && p[1] == 0x05 && p[6] == 0x01 && p[7] == 0x74 &&
+               p[9] == 0xF6 && p[10] == 0x86 && p[11] == 0xD8 &&
+               p[12] == 0x08 && p[13] == 0x00 && p[14] == 0x00 && p[15] == 0xC0)
+            {
+                const uint32 SingleStep = *(uint32*)(p + 2);
+                if(SingleStep >= ImageBase && SingleStep + sizeof(DWORD) <= ImageEnd)
+                    g_pD3DSingleStepPusher = (volatile DWORD*)SingleStep;
+            }
+
+            if(g_pD3DPerfStatistics != NULL && g_pD3DSingleStepPusher != NULL)
+                return;
+        }
+    }
+}
 
 #define EMU_D3DLOCK_TILED    0x40
 #define EMU_D3DLOCK_READONLY 0x80
@@ -2733,6 +2831,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 {
     EmuSwapFS();   // Win2k/XP FS
 
+    EmuLocateD3DDebugGlobals();
+    DWORD *pApiCounters = EmuD3DPerfApiCounters();
+    if(pApiCounters != NULL)
+        pApiCounters[EMU_API_D3DDEVICE_CLEAR]++;
+
     EmuFlushTiledSurfaceLocks();
 
     // Mirror the previously-presented frame (opt-in via CXBX_D3D_WINDOW). Clear
@@ -2781,9 +2884,63 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 
     HRESULT ret = g_pD3DDevice8->Clear(Count, pRects, Flags, Color, Z, Stencil);
 
+    if(g_pD3DSingleStepPusher != NULL && (*g_pD3DSingleStepPusher & 1) != 0)
+    {
+        // A read lock is the D3D8 host-side synchronization primitive available
+        // here: it cannot complete until rendering into the target has drained.
+        XTL::IDirect3DSurface8 *pRenderTarget = NULL;
+        if(SUCCEEDED(g_pD3DDevice8->GetRenderTarget(&pRenderTarget)) &&
+           pRenderTarget != NULL)
+        {
+            XTL::D3DLOCKED_RECT LockedRect;
+            RECT Pixel = { 0, 0, 1, 1 };
+            if(SUCCEEDED(pRenderTarget->LockRect(&LockedRect, &Pixel, D3DLOCK_READONLY)))
+                pRenderTarget->UnlockRect();
+            pRenderTarget->Release();
+        }
+
+        if(pApiCounters != NULL)
+            pApiCounters[EMU_API_D3DDEVICE_BLOCKUNTILIDLE]++;
+    }
+
     EmuSwapFS();   // XBox FS
 
     return ret;
+}
+
+DWORD WINAPI XTL::EmuIDirect3DDevice8_SetDebugMarker(DWORD Marker)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    DWORD PreviousMarker = g_D3DDebugMarker;
+    g_D3DDebugMarker = Marker;
+    EmuSwapFS();   // XBox FS
+    return PreviousMarker;
+}
+
+DWORD WINAPI XTL::EmuIDirect3DDevice8_GetDebugMarker()
+{
+    EmuSwapFS();   // Win2k/XP FS
+    DWORD Marker = g_D3DDebugMarker;
+    EmuSwapFS();   // XBox FS
+    return Marker;
+}
+
+VOID WINAPI XTL::EmuD3DPERF_Reset()
+{
+    EmuSwapFS();   // Win2k/XP FS
+    EmuLocateD3DDebugGlobals();
+    if(g_pD3DPerfStatistics != NULL)
+    {
+        memset(g_pD3DPerfStatistics + EMU_D3DPERF_WAIT_COUNTER_OFFSET, 0,
+               EMU_D3DPERF_WAIT_COUNTER_DWORDS * sizeof(DWORD));
+        memset(g_pD3DPerfStatistics + EMU_D3DPERF_API_COUNTER_OFFSET, 0,
+               EMU_D3DAPI_MAX * sizeof(DWORD));
+        memset(g_pD3DPerfStatistics + EMU_D3DPERF_RENDER_COUNTER_OFFSET, 0,
+               EMU_D3DPERF_RENDER_COUNTER_DWORDS * sizeof(DWORD));
+        memset(g_pD3DPerfStatistics + EMU_D3DPERF_TEXTURE_COUNTER_OFFSET, 0,
+               EMU_D3DPERF_TEXTURE_COUNTER_DWORDS * sizeof(DWORD));
+    }
+    EmuSwapFS();   // XBox FS
 }
 
 // Mirror the presented frame to the emulator's GDI live window (Emu.cpp).
@@ -2888,6 +3045,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
 
     HRESULT hRet = g_pD3DDevice8->Present(pSourceRect, pDestRect, (HWND)pDummy1, (CONST RGNDATA*)pDummy2);
 
+    g_D3DDebugMarker = 0;
+
     EmuSwapFS();   // XBox FS
 
     return hRet;
@@ -2927,6 +3086,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
+
+    // The debug runtime scopes markers to one presented frame.
+    g_D3DDebugMarker = 0;
 
     EmuSwapFS();   // XBox FS
 

@@ -1,3 +1,3 @@
 #suite xbox-conformance v1
 #probe d3d_debug
-#result d3d_debug verdict=FAIL checks=4 fail=3
+#result d3d_debug verdict=PASS checks=16 fail=0
