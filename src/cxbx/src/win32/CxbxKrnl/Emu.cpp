@@ -6465,6 +6465,12 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
         0x64, 0xA1, 0x28, 0x00, 0x00, 0x00, 0x8B, 0x80,
         0x2C, 0x01, 0x00, 0x00, 0xC3
     };
+    const uint08 QueryPerformanceCounterBytes[] =
+    {
+        0x8B, 0x4C, 0x24, 0x04, 0x0F, 0x31, 0x89, 0x01,
+        0x89, 0x51, 0x04, 0x33, 0xC0, 0x40, 0xC2, 0x04,
+        0x00
+    };
     const uint08 XapiBugCheckGuardBytes[] =
     {
         0x64, 0x0F, 0xB6, 0x05, 0x24, 0x00, 0x00, 0x00,
@@ -6546,6 +6552,7 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     const uint32 XapiInitProcess = 0x001346E6;
     const uint32 XLaunchNewImageA = 0x001325AC;
     const uint32 XapiProcessGetter = 0x0013331B;
+    const uint32 QueryPerformanceCounter = 0x00132E0B;
     const uint32 XapiBugCheckGuard = 0x0013BB39;
     const uint32 XapiAfterBugCheckGuard = 0x0013BB4D;
     const uint32 XapiPerThreadData = 0x0013BB4F;
@@ -6576,6 +6583,14 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     if(!EmuBytesMatch(XapiProcessGetter, XapiProcessGetterBytes, sizeof(XapiProcessGetterBytes), pXbeHeader))
     {
         printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; XapiProcess getter bytes did not match.\n", GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(QueryPerformanceCounter, QueryPerformanceCounterBytes,
+                      sizeof(QueryPerformanceCounterBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; QueryPerformanceCounter bytes did not match.\n",
+               GetCurrentThreadId());
         return;
     }
 
@@ -6620,6 +6635,7 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13XapiInitProcess\n", GetCurrentThreadId(), XapiInitProcess);
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13XLaunchNewImageA\n", GetCurrentThreadId(), XLaunchNewImageA);
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13GetXapiProcess\n", GetCurrentThreadId(), XapiProcessGetter);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuQueryPerformanceCounter\n", GetCurrentThreadId(), QueryPerformanceCounter);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS bugcheck guard)\n", GetCurrentThreadId(), XapiBugCheckGuard, XapiAfterBugCheckGuard);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (use XAPI global data fallback)\n", GetCurrentThreadId(), XapiPerThreadData, XapiGlobalDataFallback);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (DSOUND APU heap used counter)\n",
@@ -6638,6 +6654,7 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     EmuInstallWrapper((void*)XapiInitProcess, EmuNestopiaX13XapiInitProcess);
     EmuInstallWrapper((void*)XLaunchNewImageA, EmuNestopiaX13XLaunchNewImageA);
     EmuInstallWrapper((void*)XapiProcessGetter, EmuNestopiaX13GetXapiProcess);
+    EmuInstallWrapper((void*)QueryPerformanceCounter, XTL::EmuQueryPerformanceCounter);
     EmuInstallWrapper((void*)XapiBugCheckGuard, (void*)XapiAfterBugCheckGuard);
     EmuInstallWrapper((void*)XapiPerThreadData, (void*)XapiGlobalDataFallback);
     for(uint32 i = 0; i < sizeof(XapiFsCallbackPatches) / sizeof(XapiFsCallbackPatches[0]); i++)
