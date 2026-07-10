@@ -1,13 +1,17 @@
 //Microsoft Developer Studio generated resource script.
 //
-#include "..\Include\Win32\Cxbx\ResCxbx.h"
+#include "..\include\cxbx\include\win32\cxbx\ResCxbx.h"
 
 #define APSTUDIO_READONLY_SYMBOLS
 /////////////////////////////////////////////////////////////////////////////
 //
 // Generated from the TEXTINCLUDE 2 resource.
 //
-#include "afxres.h"
+#include <windows.h>
+
+#ifndef IDC_STATIC
+#define IDC_STATIC -1
+#endif
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
@@ -28,7 +32,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_CXBX                ICON    DISCARDABLE     "cxbx.ico"
+IDI_CXBX                ICON    DISCARDABLE     "..\\docs\\branding\\cxbx.ico"
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -38,12 +42,12 @@ IDI_CXBX                ICON    DISCARDABLE     "cxbx.ico"
 
 1 TEXTINCLUDE DISCARDABLE 
 BEGIN
-    "..\\Include\\Win32\\Cxbx\\ResCxbx.h\0"
+    "..\\include\\cxbx\\include\\win32\\cxbx\\ResCxbx.h\0"
 END
 
 2 TEXTINCLUDE DISCARDABLE 
 BEGIN
-    "#include ""afxres.h""\r\n"
+    "#include <windows.h>\r\n"
     "\0"
 END
 
@@ -295,4 +299,3 @@ END
 
 /////////////////////////////////////////////////////////////////////////////
 #endif    // not APSTUDIO_INVOKED
-

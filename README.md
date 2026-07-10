@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/branding/cxbx-icon.svg" alt="CXBX icon" width="180">
+</p>
+
 # CXBX
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
@@ -235,7 +239,7 @@ meson devenv -C build-min xiso -V "game.iso"                 # verify
 
 ```text
 3rdparty/dxsdk/              Bundled DirectX SDK headers
-docs/                        Project documentation, reference notes, screenshots
+docs/                        Project documentation, reference notes, screenshots, branding
 Lib/                         Bundled import libraries
 PostBuild/                   Legacy post-build utilities
 Resource/                    Win32 resources, icons, bitmaps, menus, dialogs
