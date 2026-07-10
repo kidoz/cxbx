@@ -1,0 +1,6 @@
+# XDK 4627 retail D3D pixel-shader create/set/delete lifecycle.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

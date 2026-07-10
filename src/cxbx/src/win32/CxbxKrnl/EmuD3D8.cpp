@@ -2185,6 +2185,34 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_DeletePixelShader
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_DeletePixelShader"
+               "(Handle = 0x%.08X);\n", GetCurrentThreadId(), Handle);
+    }
+    #endif
+
+    // Xbox register-combiner definitions that the host cannot compile are
+    // represented by marker handles. They own no host shader. Zero and repeat
+    // deletion are likewise harmless at the Xbox API boundary.
+    if(Handle != 0 &&
+       (Handle & X_PIXELSHADER_FALLBACK_MASK) != X_PIXELSHADER_FALLBACK_MARKER)
+    {
+        HRESULT hRet = g_pD3DDevice8->DeletePixelShader(Handle);
+        if(FAILED(hRet))
+            EmuWarning("DeletePixelShader failed for handle 0x%.08X", Handle);
+    }
+
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_CreateTexture2
 // ******************************************************************
 XTL::X_D3DResource * WINAPI XTL::EmuIDirect3DDevice8_CreateTexture2

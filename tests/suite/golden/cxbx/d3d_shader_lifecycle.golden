@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_shader_lifecycle
+#result d3d_shader_lifecycle verdict=PASS checks=12 fail=0
