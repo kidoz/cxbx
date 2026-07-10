@@ -1582,6 +1582,66 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
 
 static void EmuNv2aRunPusher();
 
+// Replay an XDK CPU-copy push buffer through the same method decoder used by
+// the register-level NV2A pusher. In-place GPU buffers use physical addresses
+// and are intentionally left to the MMIO path.
+extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
+{
+    if(Buffer == NULL || Size < sizeof(DWORD) || Size > 16 * 1024 * 1024)
+        return false;
+
+    DWORD Offset = 0;
+    DWORD Guard = 0;
+
+    __try
+    {
+        while(Offset + sizeof(DWORD) <= Size && Guard++ < Size / sizeof(DWORD) * 2)
+        {
+            DWORD Word = Buffer[Offset / sizeof(DWORD)];
+            Offset += sizeof(DWORD);
+            NV2A_TRACE_PB(Word);
+
+            if((Word & 0xE0000003) == 0x20000000 || (Word & 3) == 1 || (Word & 3) == 2)
+            {
+                DWORD Target = Word & ((Word & 0xE0000003) == 0x20000000 ? 0x1FFFFFFC : 0xFFFFFFFC);
+                if(Target >= Size)
+                    return false;
+                Offset = Target;
+                continue;
+            }
+
+            if(Word == 0x00020000)
+                continue;
+
+            if((Word & 0xE0030003) != 0 && (Word & 0xE0030003) != 0x40000000)
+                return false;
+
+            bool Incrementing = (Word & 0xE0030003) == 0;
+            DWORD Method = Word & 0x1FFC;
+            DWORD Subchannel = (Word >> 13) & 0x07;
+            DWORD Count = (Word >> 18) & 0x07FF;
+
+            if(Count > (Size - Offset) / sizeof(DWORD))
+                return false;
+
+            for(DWORD i = 0; i < Count; i++)
+            {
+                DWORD Data = Buffer[Offset / sizeof(DWORD)];
+                Offset += sizeof(DWORD);
+                EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
+                if(Incrementing)
+                    Method += sizeof(DWORD);
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+
+    return Offset == Size;
+}
+
 static ULONG EmuReadMmioRegister32(ULONG Address)
 {
     ULONG Offset = EmuNv2aOffset(Address);

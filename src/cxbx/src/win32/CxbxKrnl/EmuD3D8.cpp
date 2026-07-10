@@ -59,6 +59,8 @@ namespace XTL
 #include <process.h>
 #include <clocale>
 
+extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size);
+
 // ******************************************************************
 // * Global(s)
 // ******************************************************************
@@ -1970,6 +1972,33 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetVertexShaderConstantNotInline
+// ******************************************************************
+VOID __fastcall XTL::EmuIDirect3DDevice8_SetVertexShaderConstantNotInline
+(
+    INT         Register,
+    CONST PVOID pConstantData,
+    DWORD       ConstantCount
+)
+{
+    #ifdef _DEBUG_TRACE
+    {
+        EmuSwapFS();   // Win2k/XP FS
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_SetVertexShaderConstantNotInline\n"
+               "(\n"
+               "   Register            : 0x%.08X\n"
+               "   pConstantData       : 0x%.08X\n"
+               "   ConstantCount       : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Register, pConstantData, ConstantCount);
+        EmuSwapFS();   // XBox FS
+    }
+    #endif
+
+    XTL::EmuIDirect3DDevice8_SetVertexShaderConstant(Register - 96, pConstantData, ConstantCount / 4);
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetVertexShaderConstant1
 // ******************************************************************
 VOID __fastcall XTL::EmuIDirect3DDevice8_SetVertexShaderConstant1
@@ -2180,6 +2209,85 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
     }
 
     EmuSwapFS();   // XBox FS
+
+    return D3D_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_SetPixelShaderConstant
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderConstant
+(
+    DWORD       Register,
+    CONST PVOID pConstantData,
+    DWORD       ConstantCount
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_SetPixelShaderConstant\n"
+           "(\n"
+           "   Register            : 0x%.08X\n"
+           "   pConstantData       : 0x%.08X\n"
+           "   ConstantCount       : 0x%.08X\n"
+           ");\n",
+           GetCurrentThreadId(), Register, pConstantData, ConstantCount);
+    #endif
+
+    HRESULT Result = g_pD3DDevice8->SetPixelShaderConstant(Register, pConstantData, ConstantCount);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Result;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_SetTextureState_BorderColor
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor
+(
+    DWORD Stage,
+    DWORD Value
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    HRESULT Result = g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_BORDERCOLOR, Value);
+
+    EmuSwapFS();   // Xbox FS
+
+    return Result;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BeginVisibilityTest
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_BeginVisibilityTest()
+{
+    // Direct3D 8 on Windows has no occlusion-query equivalent. The matching
+    // result wrapper reports a conservative visible result when implemented.
+}
+
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndVisibilityTest(DWORD Index)
+{
+    (void)Index;
+    return D3D_OK;
+}
+
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetVisibilityTestResult
+(
+    DWORD      Index,
+    UINT      *pResult,
+    ULONGLONG *pTimeStamp
+)
+{
+    (void)Index;
+
+    if(pResult != NULL)
+        *pResult = 1;
+    if(pTimeStamp != NULL)
+        *pTimeStamp = 0;
 
     return D3D_OK;
 }
@@ -5276,6 +5384,31 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_StencilEnable
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetRenderState_StencilFail
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_StencilFail
+(
+    DWORD Value
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_SetRenderState_StencilFail\n"
+               "(\n"
+               "   Value               : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Value);
+    }
+    #endif
+
+    g_pD3DDevice8->SetRenderState(D3DRS_STENCILFAIL, Value);
+
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias
@@ -6015,6 +6148,51 @@ VOID EmuQuadHackB(uint32 nStride, XTL::IDirect3DVertexBuffer8 *&pOrigVertexBuffe
 
     if(pHackVertexBuffer8 != 0)
         pHackVertexBuffer8->Release();
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_RunPushBuffer
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer
+(
+    X_D3DPushBuffer *pPushBuffer,
+    PVOID            pFixup
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    HRESULT Result = D3D_OK;
+
+    __try
+    {
+        if(pPushBuffer == NULL)
+        {
+            Result = D3DERR_INVALIDCALL;
+        }
+        else if(pFixup != NULL)
+        {
+            printf("*Warning* RunPushBuffer fixups are not yet implemented\n");
+        }
+        else if((pPushBuffer->Common & 0x80000000) != 0 &&
+                pPushBuffer->Size != 0 &&
+                pPushBuffer->Size <= pPushBuffer->AllocationSize)
+        {
+            if(!EmuNv2aExecutePushBuffer((const DWORD*)pPushBuffer->Data, pPushBuffer->Size))
+                printf("*Warning* RunPushBuffer rejected an invalid CPU-copy command stream\n");
+        }
+        else if(pPushBuffer->Size > pPushBuffer->AllocationSize)
+        {
+            Result = D3DERR_INVALIDCALL;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Result = D3DERR_INVALIDCALL;
+    }
+
+    EmuSwapFS();   // Xbox FS
+
+    return Result;
 }
 
 // ******************************************************************

@@ -386,6 +386,7 @@ struct X_D3DIndexBuffer : public X_D3DResource
 // ******************************************************************
 struct X_D3DPushBuffer : public X_D3DResource
 {
+    ULONG Size;
     ULONG AllocationSize;
 };
 
@@ -741,6 +742,16 @@ HRESULT WINAPI EmuIDirect3DDevice8_SetVertexShaderConstant
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetVertexShaderConstantNotInline
+// ******************************************************************
+VOID __fastcall EmuIDirect3DDevice8_SetVertexShaderConstantNotInline
+(
+    INT         Register,
+    CONST PVOID pConstantData,
+    DWORD       ConstantCount
+);
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetVertexShaderConstant1
 // ******************************************************************
 VOID __fastcall EmuIDirect3DDevice8_SetVertexShaderConstant1
@@ -773,6 +784,28 @@ HRESULT WINAPI EmuIDirect3DDevice8_CreatePixelShader
 HRESULT WINAPI EmuIDirect3DDevice8_SetPixelShader
 (
     DWORD           Handle
+);
+
+HRESULT WINAPI EmuIDirect3DDevice8_SetPixelShaderConstant
+(
+    DWORD           Register,
+    CONST PVOID     pConstantData,
+    DWORD           ConstantCount
+);
+
+HRESULT WINAPI EmuIDirect3DDevice8_SetTextureState_BorderColor
+(
+    DWORD           Stage,
+    DWORD           Value
+);
+
+VOID WINAPI EmuIDirect3DDevice8_BeginVisibilityTest();
+HRESULT WINAPI EmuIDirect3DDevice8_EndVisibilityTest(DWORD Index);
+HRESULT WINAPI EmuIDirect3DDevice8_GetVisibilityTestResult
+(
+    DWORD           Index,
+    UINT           *pResult,
+    ULONGLONG      *pTimeStamp
 );
 
 // ******************************************************************
@@ -1261,6 +1294,14 @@ VOID WINAPI EmuIDirect3DDevice8_SetRenderState_StencilEnable
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetRenderState_StencilFail
+// ******************************************************************
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_StencilFail
+(
+    DWORD Value
+);
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias
 // ******************************************************************
 VOID WINAPI EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias
@@ -1370,6 +1411,15 @@ VOID WINAPI EmuIDirect3DDevice8_DrawIndexedVertices
     X_D3DPRIMITIVETYPE  PrimitiveType,
     UINT                VertexCount,
     CONST PWORD         pIndexData
+);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_RunPushBuffer
+// ******************************************************************
+HRESULT WINAPI EmuIDirect3DDevice8_RunPushBuffer
+(
+    X_D3DPushBuffer    *pPushBuffer,
+    PVOID               pFixup
 );
 
 // ******************************************************************
