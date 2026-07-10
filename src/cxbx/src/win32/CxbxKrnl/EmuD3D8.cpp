@@ -74,6 +74,9 @@ static DWORD WINAPI   EmuUpdateTickCount(LPVOID);
 static DWORD          EmuCheckAllocationSize(LPVOID);
 static inline void    EmuVerifyResourceIsRegistered(XTL::X_D3DResource *pResource);
 static void           EmuAdjustPower2(UINT *dwWidth, UINT *dwHeight);
+static void           EmuFlushTiledSurfaceLock(XTL::X_D3DResource *pResource);
+static void           EmuFlushTiledSurfaceLocks();
+static HRESULT        EmuLockTiledSurface(XTL::X_D3DResource *pResource, XTL::D3DLOCKED_RECT *pLockedRect, CONST RECT *pRect, DWORD Flags);
 
 // ******************************************************************
 // * Static Variable(s)
@@ -82,6 +85,7 @@ static XTL::LPDIRECT3D8             g_pD3D8         = NULL; // Direct3D8
 static XTL::LPDIRECT3DDEVICE8       g_pD3DDevice8   = NULL; // Direct3D8 Device
 static BOOL                         g_bSupportsYUY2 = FALSE;// Does device support YUY2 overlays?
 static BOOL                         g_bYuvEnable    = FALSE;// D3DRS_YUVENABLE: sample bound textures as YUY2 and convert to RGB
+static BOOL                         g_bStage0ConvertedYuv = FALSE;
 static XTL::LPDIRECTDRAW7           g_pDD7          = NULL; // DirectDraw7
 static XTL::LPDIRECTDRAWSURFACE7    g_pDDSPrimary   = NULL; // DirectDraw7 Primary Surface
 static XTL::LPDIRECTDRAWSURFACE7    g_pDDSOverlay7  = NULL; // DirectDraw7 Overlay Surface
@@ -93,6 +97,93 @@ static XTL::D3DCAPS8                g_D3DCaps;              // Direct3D8 Caps
 static HBRUSH                       g_hBgBrush      = NULL; // Background Brush
 static volatile bool                g_bRenderWindowActive = false;
 static XBVideo                      g_XBVideo;
+
+#define EMU_D3DLOCK_TILED    0x40
+#define EMU_D3DLOCK_READONLY 0x80
+
+struct EmuTiledSurfaceLock
+{
+    XTL::X_D3DResource      *pResource;
+    XTL::IDirect3DSurface8  *pSurface8;
+};
+
+static EmuTiledSurfaceLock g_TiledSurfaceLocks[8] = {};
+
+#define EMU_YUY2_TEXTURE_SLOTS 16
+
+struct EmuYuy2TextureInfo
+{
+    XTL::X_D3DResource *pHandle;
+    uint08             *pPixels;
+    DWORD               Width;
+    DWORD               Height;
+    DWORD               Pitch;
+    ULONG               RefCount;
+};
+
+static EmuYuy2TextureInfo g_Yuy2Textures[EMU_YUY2_TEXTURE_SLOTS] = {};
+
+static EmuYuy2TextureInfo *EmuFindYuy2Texture(const XTL::X_D3DResource *pHandle)
+{
+    for(int i = 0; i < EMU_YUY2_TEXTURE_SLOTS; i++)
+    {
+        if(g_Yuy2Textures[i].pHandle == pHandle)
+            return &g_Yuy2Textures[i];
+    }
+
+    return NULL;
+}
+
+static XTL::X_D3DTexture *EmuCreateYuy2Texture(DWORD Width, DWORD Height)
+{
+    for(int i = 0; i < EMU_YUY2_TEXTURE_SLOTS; i++)
+    {
+        EmuYuy2TextureInfo *pInfo = &g_Yuy2Textures[i];
+        if(pInfo->pHandle != NULL)
+            continue;
+
+        DWORD Pitch = Width * 2;
+        uint08 *pPixels = new uint08[(size_t)Pitch * Height];
+        memset(pPixels, 0, (size_t)Pitch * Height);
+
+        pInfo->pHandle = (XTL::X_D3DResource*)((uint32)pPixels | 0x80000000);
+        pInfo->pPixels = pPixels;
+        pInfo->Width = Width;
+        pInfo->Height = Height;
+        pInfo->Pitch = Pitch;
+        pInfo->RefCount = 1;
+
+        return (XTL::X_D3DTexture*)pInfo->pHandle;
+    }
+
+    return NULL;
+}
+
+static HRESULT EmuLockYuy2Texture(EmuYuy2TextureInfo *pInfo,
+                                  XTL::D3DLOCKED_RECT *pLockedRect,
+                                  CONST RECT *pRect)
+{
+    if(pInfo == NULL || pLockedRect == NULL)
+        return D3DERR_INVALIDCALL;
+
+    DWORD Left = 0;
+    DWORD Top = 0;
+    if(pRect != NULL)
+    {
+        if(pRect->left < 0 || pRect->top < 0 || pRect->right > (LONG)pInfo->Width ||
+           pRect->bottom > (LONG)pInfo->Height || pRect->left >= pRect->right ||
+           pRect->top >= pRect->bottom)
+            return D3DERR_INVALIDCALL;
+
+        Left = (DWORD)pRect->left;
+        Top = (DWORD)pRect->top;
+
+    }
+
+    pLockedRect->Pitch = pInfo->Pitch;
+    pLockedRect->pBits = pInfo->pPixels + (size_t)Top * pInfo->Pitch + (size_t)Left * 2;
+    return D3D_OK;
+}
 
 // ******************************************************************
 // * Cached Direct3D State Variable(s)
@@ -739,6 +830,109 @@ static void EmuAdjustPower2(UINT *dwWidth, UINT *dwHeight)
 
     *dwWidth = NewWidth;
     *dwHeight = NewHeight;
+}
+
+// ******************************************************************
+// * func: EmuFindTiledSurfaceLock
+// ******************************************************************
+static EmuTiledSurfaceLock *EmuFindTiledSurfaceLock(XTL::X_D3DResource *pResource)
+{
+    for(unsigned v = 0; v < sizeof(g_TiledSurfaceLocks) / sizeof(g_TiledSurfaceLocks[0]); v++)
+    {
+        if(g_TiledSurfaceLocks[v].pResource == pResource)
+            return &g_TiledSurfaceLocks[v];
+    }
+
+    return NULL;
+}
+
+// ******************************************************************
+// * func: EmuFindFreeTiledSurfaceLock
+// ******************************************************************
+static EmuTiledSurfaceLock *EmuFindFreeTiledSurfaceLock()
+{
+    for(unsigned v = 0; v < sizeof(g_TiledSurfaceLocks) / sizeof(g_TiledSurfaceLocks[0]); v++)
+    {
+        if(g_TiledSurfaceLocks[v].pResource == NULL)
+            return &g_TiledSurfaceLocks[v];
+    }
+
+    return &g_TiledSurfaceLocks[0];
+}
+
+// ******************************************************************
+// * func: EmuCommitTiledSurfaceLock
+// ******************************************************************
+static void EmuCommitTiledSurfaceLock(EmuTiledSurfaceLock *pLock)
+{
+    // The guest UnlockRect is not HLE-patched in this tree. Commit the host
+    // surface before presenting; otherwise D3D8 can display stale/partial data.
+    pLock->pSurface8->UnlockRect();
+}
+
+// ******************************************************************
+// * func: EmuFlushTiledSurfaceLock
+// ******************************************************************
+static void EmuFlushTiledSurfaceLock(XTL::X_D3DResource *pResource)
+{
+    EmuTiledSurfaceLock *pLock = EmuFindTiledSurfaceLock(pResource);
+    if(pLock == NULL)
+        return;
+
+    EmuCommitTiledSurfaceLock(pLock);
+
+    if(pLock->pSurface8 != NULL)
+        pLock->pSurface8->Release();
+
+    pLock->pResource = NULL;
+    pLock->pSurface8 = NULL;
+}
+
+// ******************************************************************
+// * func: EmuFlushTiledSurfaceLocks
+// ******************************************************************
+static void EmuFlushTiledSurfaceLocks()
+{
+    for(unsigned v = 0; v < sizeof(g_TiledSurfaceLocks) / sizeof(g_TiledSurfaceLocks[0]); v++)
+    {
+        if(g_TiledSurfaceLocks[v].pResource != NULL)
+            EmuFlushTiledSurfaceLock(g_TiledSurfaceLocks[v].pResource);
+    }
+}
+
+// ******************************************************************
+// * func: EmuLockTiledSurface
+// ******************************************************************
+static HRESULT EmuLockTiledSurface(XTL::X_D3DResource *pResource, XTL::D3DLOCKED_RECT *pLockedRect, CONST RECT *pRect, DWORD Flags)
+{
+    if(pLockedRect == NULL)
+        return D3DERR_INVALIDCALL;
+
+    XTL::IDirect3DSurface8 *pSurface8 = pResource->EmuSurface8;
+    if(pSurface8 == NULL)
+        return D3DERR_INVALIDCALL;
+
+    EmuFlushTiledSurfaceLock(pResource);
+
+    EmuTiledSurfaceLock *pLock = EmuFindFreeTiledSurfaceLock();
+    if(pLock->pResource != NULL)
+        EmuFlushTiledSurfaceLock(pLock->pResource);
+
+    pSurface8->UnlockRect();
+
+    DWORD NewFlags = 0;
+    if(Flags & EMU_D3DLOCK_READONLY)
+        NewFlags |= D3DLOCK_READONLY;
+
+    HRESULT hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+    if(FAILED(hRet))
+        return hRet;
+
+    pLock->pResource = pResource;
+    pLock->pSurface8 = pSurface8;
+    pLock->pSurface8->AddRef();
+
+    return D3D_OK;
 }
 
 // ******************************************************************
@@ -1998,9 +2192,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
     else
     {
         // If YUY2 is not supported in hardware, we'll actually mark this as a special fake texture (set highest bit)
-        *ppTexture = (X_D3DTexture*)((uint32)(new uint08[g_dwOverlayW*g_dwOverlayH*2]) | 0x80000000);
-
-        hRet = D3D_OK;
+        *ppTexture = EmuCreateYuy2Texture(Width, Height);
+        hRet = (*ppTexture != NULL) ? D3D_OK : E_OUTOFMEMORY;
     }
 
     EmuSwapFS();   // XBox FS
@@ -2281,9 +2474,12 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
 static XTL::IDirect3DTexture8 *g_pYuvConvertTexture = NULL;
 static DWORD g_dwYuvConvertW = 0, g_dwYuvConvertH = 0;
 
-static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const uint08 *pYuy2)
+static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const EmuYuy2TextureInfo *pInfo)
 {
-    DWORD w = g_dwOverlayW & ~1u, h = g_dwOverlayH; // YUY2 packs two pixels per unit
+    if(pInfo == NULL)
+        return NULL;
+
+    DWORD w = pInfo->Width & ~1u, h = pInfo->Height; // YUY2 packs two pixels per unit
     if(w == 0 || h == 0)
         return NULL;
 
@@ -2302,9 +2498,9 @@ static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const uint08 *pYuy2)
     if(FAILED(g_pYuvConvertTexture->LockRect(0, &lr, NULL, 0)))
         return NULL;
 
-    const uint08 *s = pYuy2;
     for(DWORD y = 0; y < h; y++)
     {
+        const uint08 *s = pInfo->pPixels + (size_t)y * pInfo->Pitch;
         uint08 *d = (uint08*)lr.pBits + (size_t)y * lr.Pitch;
         for(DWORD x = 0; x < w; x += 2)
         {
@@ -2355,6 +2551,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     #endif
 
     IDirect3DBaseTexture8 *pBaseTexture8 = NULL;
+    BOOL bConvertedYuv = FALSE;
 
     if(pTexture != NULL)
     {
@@ -2362,7 +2559,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
         {
             // Fake YUY2 overlay texture: convert its YUV block to a real RGB
             // texture on the host and bind that (the YuvEnable path).
-            pBaseTexture8 = EmuConvertYuy2Texture((const uint08*)((uint32)pTexture & 0x7FFFFFFF));
+            EmuYuy2TextureInfo *pInfo = EmuFindYuy2Texture(pTexture);
+            pBaseTexture8 = EmuConvertYuy2Texture(pInfo);
+            if(pInfo != NULL)
+            {
+                g_dwOverlayW = pInfo->Width;
+                g_dwOverlayH = pInfo->Height;
+                bConvertedYuv = TRUE;
+            }
         }
         else
         {
@@ -2370,6 +2574,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
             pBaseTexture8 = pTexture->EmuBaseTexture8;
         }
     }
+
+    if(Stage == 0)
+        g_bStage0ConvertedYuv = bConvertedYuv;
 
     HRESULT hRet = g_pD3DDevice8->SetTexture(Stage, pBaseTexture8);
 
@@ -2526,6 +2733,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 {
     EmuSwapFS();   // Win2k/XP FS
 
+    EmuFlushTiledSurfaceLocks();
+
     // Mirror the previously-presented frame (opt-in via CXBX_D3D_WINDOW). Clear
     // runs at the top of each frame, before the new frame overwrites the back
     // buffer, so this shows the last completed frame in the GDI live window --
@@ -2674,6 +2883,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
     }
     #endif
 
+    EmuFlushTiledSurfaceLocks();
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(pSourceRect, pDestRect, (HWND)pDummy1, (CONST RGNDATA*)pDummy2);
@@ -2713,6 +2923,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     if(Flags != 0)
         EmuWarning("EmuIDirect3DDevice8_Swap: Flags = 0x%.08X (ignored)", Flags);
 
+    EmuFlushTiledSurfaceLocks();
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
@@ -2746,6 +2957,9 @@ static EmuImVertex g_EmuImCur = { 0, 0, 0, 1.0f, 0xFFFFFFFF, 0, 0 };
 static DWORD g_EmuImPrim = 0;
 static int   g_EmuImCount = 0;
 static BOOL  g_EmuImActive = FALSE;
+static BOOL  g_EmuImCustomShader = FALSE;
+static BOOL  g_EmuImConvertedYuv = FALSE;
+static BOOL  g_EmuCurrentVertexShaderIsCustom = FALSE;
 
 VOID WINAPI XTL::EmuIDirect3DDevice8_Begin
 (
@@ -2761,6 +2975,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_Begin
     g_EmuImPrim = (DWORD)PrimitiveType;
     g_EmuImCount = 0;
     g_EmuImActive = TRUE;
+    g_EmuImCustomShader = g_EmuCurrentVertexShaderIsCustom;
+    g_EmuImConvertedYuv = g_bStage0ConvertedYuv;
     g_EmuImCur.rhw = 1.0f;
     g_EmuImCur.Diffuse = 0xFFFFFFFF;
 
@@ -2784,8 +3000,20 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexData4f
         case 0:    // D3DVSDE_POSITION
             g_EmuImCur.x = a;
             g_EmuImCur.y = b;
-            g_EmuImCur.z = c;
-            g_EmuImCur.rhw = (d == 0.0f) ? 1.0f : d;
+            if(g_EmuImCustomShader)
+            {
+                // Xbox UI shaders commonly pack screen-space position in v0.xy
+                // and texture coordinates in v0.zw (for example CXBFont).
+                g_EmuImCur.z = 0.0f;
+                g_EmuImCur.rhw = 1.0f;
+                g_EmuImCur.u = c;
+                g_EmuImCur.v = d;
+            }
+            else
+            {
+                g_EmuImCur.z = c;
+                g_EmuImCur.rhw = (d == 0.0f) ? 1.0f : d;
+            }
             if(g_EmuImActive && g_EmuImCount < EMU_IM_MAXVERTS)
                 g_EmuImVerts[g_EmuImCount++] = g_EmuImCur;
             break;
@@ -2801,8 +3029,18 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexData4f
         }
 
         case 9:    // D3DVSDE_TEXCOORD0
-            g_EmuImCur.u = a;
-            g_EmuImCur.v = b;
+            if(g_EmuImConvertedYuv && g_dwOverlayW != 0 && g_dwOverlayH != 0)
+            {
+                // Xbox linear textures use texel-space coordinates. The YUY2
+                // fallback is a normal host RGB texture, so normalize its UVs.
+                g_EmuImCur.u = a / (FLOAT)g_dwOverlayW;
+                g_EmuImCur.v = b / (FLOAT)g_dwOverlayH;
+            }
+            else
+            {
+                g_EmuImCur.u = a;
+                g_EmuImCur.v = b;
+            }
             break;
 
         default:
@@ -3289,6 +3527,14 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_AddRef
 
     ULONG uRet = 0;
 
+    EmuYuy2TextureInfo *pYuy2 = EmuFindYuy2Texture(pThis);
+    if(pYuy2 != NULL)
+    {
+        uRet = ++pYuy2->RefCount;
+        EmuSwapFS();   // XBox FS
+        return uRet;
+    }
+
     IDirect3DResource8 *pResource8 = pThis->EmuResource8;
 
     if(pThis->Lock == 0x8000BEEF)
@@ -3325,6 +3571,21 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
     #endif
 
     ULONG uRet = 0;
+
+    EmuYuy2TextureInfo *pYuy2 = EmuFindYuy2Texture(pThis);
+    if(pYuy2 != NULL)
+    {
+        if(pYuy2->RefCount != 0)
+            uRet = --pYuy2->RefCount;
+        if(uRet == 0)
+        {
+            delete[] pYuy2->pPixels;
+            memset(pYuy2, 0, sizeof(*pYuy2));
+        }
+
+        EmuSwapFS();   // XBox FS
+        return uRet;
+    }
 
     IDirect3DResource8 *pResource8 = pThis->EmuResource8;
 
@@ -3509,13 +3770,14 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_GetDesc
 
     HRESULT hRet;
 
-    if((uint32)pThis & 0x80000000)
+    EmuYuy2TextureInfo *pYuy2 = EmuFindYuy2Texture(pThis);
+    if(pYuy2 != NULL)
     {
         pDesc->Format = EmuPC2XB_D3DFormat(D3DFMT_YUY2);
-        pDesc->Height = g_dwOverlayH;
-        pDesc->Width  = g_dwOverlayW;
+        pDesc->Height = pYuy2->Height;
+        pDesc->Width  = pYuy2->Width;
         pDesc->MultiSampleType = (D3DMULTISAMPLE_TYPE)0;
-        pDesc->Size   = g_dwOverlayW*g_dwOverlayH*2;
+        pDesc->Size   = pYuy2->Pitch * pYuy2->Height;
         pDesc->Type   = D3DRTYPE_SURFACE;
         pDesc->Usage  = 0;
 
@@ -3592,37 +3854,48 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
 
     HRESULT hRet;
 
-    if((uint32)pThis & 0x80000000)
+    EmuYuy2TextureInfo *pYuy2 = EmuFindYuy2Texture(pThis);
+    if(pYuy2 != NULL)
     {
-        pLockedRect->Pitch = g_dwOverlayW*2;
-        pLockedRect->pBits = (void*)((uint32)pThis & 0x7FFFFFFF);
-
-        hRet = D3D_OK;
+        hRet = EmuLockYuy2Texture(pYuy2, pLockedRect, pRect);
     }
     else
     {
-        if(Flags & 0x40)
-            printf("*Warning* D3DLOCK_TILED ignored!\n");
-
         EmuVerifyResourceIsRegistered(pThis);
 
         IDirect3DSurface8 *pSurface8 = pThis->EmuSurface8;
 
         DWORD NewFlags = 0;
 
-        if(Flags & 0x80)
+        if(Flags & EMU_D3DLOCK_READONLY)
             NewFlags |= D3DLOCK_READONLY;
 
-        if(Flags & !(0x80 | 0x40))
+        if(Flags & !(EMU_D3DLOCK_READONLY | EMU_D3DLOCK_TILED))
             EmuCleanup("EmuIDirect3DSurface8_LockRect: Unknown Flags! (0x%.08X)", Flags);
 
-        // Remove old lock(s)
-        pSurface8->UnlockRect();
+        if(Flags & EMU_D3DLOCK_TILED)
+        {
+            hRet = EmuLockTiledSurface(pThis, pLockedRect, pRect, Flags);
+            if(FAILED(hRet))
+                printf("*Warning* D3DLOCK_TILED failed, falling back to linear LockRect\n");
+        }
+        else
+        {
+            hRet = E_FAIL;
+        }
 
-        hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+        if(!(Flags & EMU_D3DLOCK_TILED) || FAILED(hRet))
+        {
+            EmuFlushTiledSurfaceLock(pThis);
 
-        if(FAILED(hRet))
-            printf("*Warning* LockRect failed\n");
+            // Remove old lock(s)
+            pSurface8->UnlockRect();
+
+            hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+
+            if(FAILED(hRet))
+                printf("*Warning* LockRect failed\n");
+        }
     }
 
     EmuSwapFS();   // XBox FS
@@ -3653,6 +3926,12 @@ DWORD WINAPI XTL::EmuIDirect3DBaseTexture8_GetLevelCount
     }
     #endif
 
+    if(EmuFindYuy2Texture(pThis) != NULL)
+    {
+        EmuSwapFS();   // XBox FS
+        return 1;
+    }
+
     EmuVerifyResourceIsRegistered(pThis);
 
     IDirect3DBaseTexture8 *pBaseTexture8 = pThis->EmuBaseTexture8;
@@ -3676,8 +3955,11 @@ XTL::X_D3DResource * WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel2
     X_D3DSurface *pSurfaceLevel;
 
     // In a special situation, we are actually returning a memory ptr with high bit set
-    if((uint32)pThis & 0x80000000)
+    if(EmuFindYuy2Texture(pThis) != NULL)
+    {
+        EmuIDirect3DResource8_AddRef(pThis);
         return pThis;
+    }
 
     EmuIDirect3DTexture8_GetSurfaceLevel(pThis, Level, &pSurfaceLevel);
 
@@ -3714,6 +3996,15 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_LockRect
                GetCurrentThreadId(), pThis, Level, pLockedRect, pRect, Flags);
     }
     #endif
+
+    EmuYuy2TextureInfo *pYuy2 = EmuFindYuy2Texture(pThis);
+    if(pYuy2 != NULL)
+    {
+        HRESULT hRet = (Level == 0) ? EmuLockYuy2Texture(pYuy2, pLockedRect, pRect)
+                                    : D3DERR_INVALIDCALL;
+        EmuSwapFS();   // XBox FS
+        return hRet;
+    }
 
     EmuVerifyResourceIsRegistered(pThis);
 
@@ -3767,9 +4058,10 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel
     HRESULT hRet;
 
     // if highest bit is set, this is actually a raw memory pointer (for YUY2 simulation)
-    if((uint32)pThis & 0x80000000)
+    if(EmuFindYuy2Texture(pThis) != NULL)
     {
         *ppSurfaceLevel = (X_D3DSurface*)pThis;
+        EmuIDirect3DResource8_AddRef(pThis);
         hRet = D3D_OK;
     }
     else
@@ -4884,12 +5176,13 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_YuvEnable
     // on hardware that lacks YUY2 sampling, is handled there too. Here we just
     // latch the state (and stop spamming a per-frame warning).
     BOOL bEnable = Value != 0;
-    if(bEnable != g_bYuvEnable)
+    static BOOL bLoggedYuvEnable = FALSE;
+    if(bEnable && !bLoggedYuvEnable)
     {
-        g_bYuvEnable = bEnable;
-        printf("EmuD3D8: YuvEnable %s (YUY2 textures convert to RGB on bind)\n",
-               bEnable ? "ON" : "OFF");
+        printf("EmuD3D8: YuvEnable ON (YUY2 textures convert to RGB on bind)\n");
+        bLoggedYuvEnable = TRUE;
     }
+    g_bYuvEnable = bEnable;
 
     EmuSwapFS();   // XBox FS
 
@@ -5111,7 +5404,9 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader
     // X_D3DVertexShader wrapper (heap, >= 0x10000); resolve it to the host
     // shader handle it wraps. Raw FVF handles (small bit patterns) pass through.
     DWORD HostHandle = Handle;
-    if(Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader)))
+    g_EmuCurrentVertexShaderIsCustom =
+        Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader));
+    if(g_EmuCurrentVertexShaderIsCustom)
         HostHandle = ((X_D3DVertexShader*)Handle)->Handle;
 
     HRESULT hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
