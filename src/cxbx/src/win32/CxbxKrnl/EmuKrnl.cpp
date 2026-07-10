@@ -4552,7 +4552,8 @@ extern "C" VOID NTAPI EmuKeBugCheck(ULONG BugCheckCode)
     EmuSwapFS();   // Win2k/XP FS
 
     g_EmuKiBugCheckData[0] = BugCheckCode;
-    printf("EmuKrnl (0x%lX): KeBugCheck code=0x%.08lX.\n", GetCurrentThreadId(), BugCheckCode);
+    printf("EmuKrnl (0x%lX): KeBugCheck code=0x%.08lX caller=0x%.08lX.\n",
+           GetCurrentThreadId(), BugCheckCode, (ULONG)_ReturnAddress());
     EmuCleanup("Guest called KeBugCheck(0x%.08lX)", BugCheckCode);
 
     EmuSwapFS();   // Xbox FS
