@@ -125,17 +125,19 @@ def _extract_from_member(member: bytes, sym: str) -> Function | None:
     ptr_symtab, n_symbols = struct.unpack("<II", member[8:16])
     strtab = member[ptr_symtab + 18 * n_symbols :]
 
-    # Find the symbol's section and offset within it.
+    # Find the symbol's section and offset within it. Old-MSVC members can
+    # list an undefined reference entry for the name AHEAD of the definition
+    # in the same symbol table, so keep scanning past undefined hits.
     sect_idx = value = None
     i = 0
     while i < n_symbols:
         e = member[ptr_symtab + 18 * i : ptr_symtab + 18 * (i + 1)]
         if _symbol_name(e, strtab) == sym:
-            value, sect_no = struct.unpack("<Ih", e[8:14])
-            if sect_no <= 0:
-                return None  # undefined/absolute here; defined elsewhere
-            sect_idx = sect_no - 1
-            break
+            v, sect_no = struct.unpack("<Ih", e[8:14])
+            if sect_no > 0:
+                value = v
+                sect_idx = sect_no - 1
+                break
         i += 1 + e[17]  # skip aux symbols
     if sect_idx is None:
         return None

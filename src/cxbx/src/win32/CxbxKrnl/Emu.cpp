@@ -6341,8 +6341,11 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
     // so those internals read benign state and skip their raw-hardware work,
     // while the patched API surface (Clear/Swap/...) renders through the host
     // device.
+    // The device-field offset in the prologue differs per XDK: 5849 reads
+    // [esi+8D4h], 5558 reads [esi+8D0h] -- accept either.
     const uint08 SwapPrologueHead[] = { 0x56, 0x8B, 0x35 };
-    const uint08 SwapPrologueTail[] = { 0x8B, 0x86, 0xD4, 0x08, 0x00, 0x00, 0x85, 0xC0 };
+    const uint08 SwapPrologueTail5849[] = { 0x8B, 0x86, 0xD4, 0x08, 0x00, 0x00, 0x85, 0xC0 };
+    const uint08 SwapPrologueTail5558[] = { 0x8B, 0x86, 0xD0, 0x08, 0x00, 0x00, 0x85, 0xC0 };
 
     uint32 Base = pXbeHeader->dwBaseAddr;
     uint32 End = Base + pXbeHeader->dwSizeofImage;
@@ -6356,7 +6359,8 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
         }
 
         if(memcmp((void*)Address, SwapPrologueHead, sizeof(SwapPrologueHead)) == 0 &&
-           memcmp((void*)(Address + 7), SwapPrologueTail, sizeof(SwapPrologueTail)) == 0)
+           (memcmp((void*)(Address + 7), SwapPrologueTail5849, sizeof(SwapPrologueTail5849)) == 0 ||
+            memcmp((void*)(Address + 7), SwapPrologueTail5558, sizeof(SwapPrologueTail5558)) == 0))
         {
             uint32 DeviceGlobal = *(uint32*)(Address + 3);
             if(DeviceGlobal >= Base && DeviceGlobal < End)
