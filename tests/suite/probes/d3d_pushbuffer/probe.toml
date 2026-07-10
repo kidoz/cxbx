@@ -1,0 +1,6 @@
+# Retail-XDK push-buffer recording and GPU/CPU synchronization probe.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_perf
+#result d3d_perf verdict=FAIL checks=3 fail=2

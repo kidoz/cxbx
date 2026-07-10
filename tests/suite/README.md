@@ -158,6 +158,12 @@ with `HalReturnToFirmware(2)` — returning from `main()` parks in the XAPI
 dashboard-relaunch path under emulation. See `probes/xdk_smoke/` for the
 template; `common/xdk_xtrace.h` is the shared trace harness for XDK probes.
 
+The SDK also ships distinct `d3d8d.lib` (Debug) and `d3d8i.lib` (Profile)
+images. Their instrumented function bodies need their own HLE signatures; the
+retail `d3d8.lib` OOVPAs are not assumed to match. `d3d_debug` and `d3d_perf`
+check this resolution boundary before calling CreateDevice, so unsupported
+variants produce a short named FAIL rather than entering raw NV2A code.
+
 Pixel-readback discipline for D3D probes: the HLE `Surface_LockRect` leaves
 the host surface locked (Xbox D3D has no UnlockRect in the HLE table), so do
 ALL rendering first and a single readback at the end — never draw or present
@@ -184,6 +190,9 @@ after locking the backbuffer.
 | `d3d_texture`| D3D8 HLE texture path | CreateTexture2 → LockRect upload → SetTexture → textured draws (both paths), pixel-exact |
 | `d3d_state`  | D3D8 HLE state       | Set/GetTransform bit-exact round-trips, SetRenderState_* family survival, GetDisplayMode sanity |
 | `d3d_tex_swizzle` | D3D8 HLE fidelity | documents the swizzled-texture gap: Morton-order uploads render linear (expectations flip when unswizzle lands) |
+| `d3d_debug` | XDK debug D3D8 | `d3d8d` HLE resolution, debug-marker state/reset, and `D3D__SingleStepPusher` idle barrier |
+| `d3d_perf` | XDK instrumented D3D8 | `d3d8i` HLE resolution, API counters/reset, PIX event nesting, and push-buffer accounting |
+| `d3d_pushbuffer` | XDK D3D8 command stream | push-buffer record/offset/replay, kick/idle, fences, display field, and pixel readback |
 | `ds_buffer`  | DSOUND HLE (host audio) | create → PCM upload → Play → play cursor advances in real time → Stop |
 | `xinput_state` | XAPI input HLE      | device enumeration + XInputGetState returns the CXBX_INPUT_STATE-injected pad state (headless input) |
 | `ds_nestopia`| DSOUND HLE (title pattern) | NestopiaX's soundNES.cpp lifecycle API-for-API: dual buffers, SetMixBins, Lock/Unlock ring updates, GetStatus |
