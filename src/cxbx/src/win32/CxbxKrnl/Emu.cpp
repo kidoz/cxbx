@@ -686,6 +686,12 @@ static bool EmuUsb0IsPortStatus(ULONG Offset, ULONG *PortIndex)
     return true;
 }
 
+static bool EmuMmioTraceEnabled()
+{
+    static bool Enabled = getenv("CXBX_MMIO_TRACE") != NULL;
+    return Enabled;
+}
+
 static ULONG EmuUsb0ReadRegister32(ULONG Address)
 {
     ULONG Offset = EmuUsb0Offset(Address);
@@ -785,9 +791,12 @@ static ULONG EmuApuReadRegister32(ULONG Address)
             break;
     }
 
-    printf("Emu (0x%lX): APU MMIO read 0x%.08lX = 0x%.08lX.\n",
-           GetCurrentThreadId(), Address, Value);
-    fflush(stdout);
+    if(EmuMmioTraceEnabled())
+    {
+        printf("Emu (0x%lX): APU MMIO read 0x%.08lX = 0x%.08lX.\n",
+               GetCurrentThreadId(), Address, Value);
+        fflush(stdout);
+    }
 
     return Value;
 }
@@ -796,9 +805,12 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
 {
     EmuStoreMmioRegister(Address, Value);
 
-    printf("Emu (0x%lX): APU MMIO write 0x%.08lX = 0x%.08lX.\n",
-           GetCurrentThreadId(), Address, Value);
-    fflush(stdout);
+    if(EmuMmioTraceEnabled())
+    {
+        printf("Emu (0x%lX): APU MMIO write 0x%.08lX = 0x%.08lX.\n",
+               GetCurrentThreadId(), Address, Value);
+        fflush(stdout);
+    }
 }
 
 static void EmuAciDmaSync();   // time-based DMA state-machine catch-up (defined below)
@@ -4559,8 +4571,11 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
             e->ContextRecord->Eip += 5;
 
-            printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
-            fflush(stdout);
+            if(EmuMmioTraceEnabled())
+            {
+                printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -4895,9 +4910,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             EmuWriteMmio(FaultAddress, 4, e->ContextRecord->Eax);
             e->ContextRecord->Eip += 5;
 
-            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
-                   GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax);
-            fflush(stdout);
+            if(EmuMmioTraceEnabled())
+            {
+                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax);
+                fflush(stdout);
+            }
 
             return true;
         }
