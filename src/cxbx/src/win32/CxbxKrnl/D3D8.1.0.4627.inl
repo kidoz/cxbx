@@ -400,6 +400,50 @@ SOOVPA<10> IDirect3DDevice8_GetDepthStencilSurface2B_1_0_4627 =
 };
 
 // ******************************************************************
+// * IDirect3DDevice8_SetRenderTarget
+// ******************************************************************
+// Hand-authored from the 4627 d3d8.lib archive member
+// (_D3DDevice_SetRenderTarget@8, 32 bytes): a thin forwarder that loads the
+// two surface arguments and tail-calls D3D::CommonSetRenderTarget. The two
+// relocated dwords (the viewport immediates at +0x09 and the rel32 call at
+// +0x10) are excluded; the four fixed bytes of the argument-load prologue, the
+// push/call/ret epilogue, and the trailing NOP padding discriminate the stub.
+// Verified unique across the Turok - Evolution image and 22 other XBE/probe
+// images via tools/oovpa/gen_oovpa.py.
+SOOVPA<8> IDirect3DDevice8_SetRenderTarget_1_0_4627 =
+{
+    0,  // Large == 0
+    8,  // Count == 8
+
+    -1, // XRef Not Saved
+    0,  // XRef Not Used
+
+    {
+        // IDirect3DDevice8_SetRenderTarget+0x00 : mov eax, [esp+0x08]
+        { 0x00, 0x8B }, // (Offset,Value)-Pair #1
+        { 0x04, 0x8B }, // (Offset,Value)-Pair #2
+
+        // IDirect3DDevice8_SetRenderTarget+0x08 : push <viewport reloc>
+        { 0x08, 0x68 }, // (Offset,Value)-Pair #3
+
+        // IDirect3DDevice8_SetRenderTarget+0x0D : push eax
+        { 0x0D, 0x50 }, // (Offset,Value)-Pair #4
+
+        // IDirect3DDevice8_SetRenderTarget+0x0F : call CommonSetRenderTarget (rel32 reloc)
+        { 0x0F, 0xE8 }, // (Offset,Value)-Pair #5
+
+        // IDirect3DDevice8_SetRenderTarget+0x16 : ret 8 (operand byte after C2 08)
+        { 0x16, 0x00 }, // (Offset,Value)-Pair #6
+
+        // IDirect3DDevice8_SetRenderTarget+0x1A : nop padding
+        { 0x1A, 0x90 }, // (Offset,Value)-Pair #7
+
+        // IDirect3DDevice8_SetRenderTarget+0x1F : nop padding (max offset = scan bound)
+        { 0x1F, 0x90 }, // (Offset,Value)-Pair #8
+    }
+};
+
+// ******************************************************************
 // * IDirect3DDevice8_GetTile
 // ******************************************************************
 SOOVPA<11> IDirect3DDevice8_GetTile_1_0_4627 =
@@ -1561,6 +1605,16 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_GetDepthStencilSurface2B"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderTarget
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderTarget_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderTarget,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderTarget"
         #endif
     },
     // IDirect3DDevice8::GetTile
