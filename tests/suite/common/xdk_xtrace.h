@@ -11,17 +11,41 @@
 #include <string.h>
 #include <stdarg.h>
 
-extern "C" ULONG __cdecl DbgPrint(const char *Format, ...);
+extern "C" ULONG __cdecl DbgPrint(const char* Format, ...);
 extern "C" VOID __stdcall HalReturnToFirmware(ULONG Routine);
 
 static HANDLE xt_trace = INVALID_HANDLE_VALUE;
-static const char *xt_probe = "";
+static const char* xt_probe = "";
 static int xt_checks = 0;
 static int xt_fails = 0;
 
-static void xt_emit(const char *line)
+// CXBX HLE probes use this to distinguish an unsupported XDK library variant
+// from a semantic failure inside a host wrapper. Retail/debug/instrumented D3D
+// libraries contain different code, so each variant must be patched explicitly.
+#define XT_GUEST_TOP 0x04000000UL
+
+static DWORD xt_jump_target(const unsigned char* p)
 {
-    if (xt_trace != INVALID_HANDLE_VALUE) {
+    return (DWORD)(p + 5) + *(const DWORD*)(p + 1);
+}
+
+static int xt_is_hle_patched(const void* fn)
+{
+    const unsigned char* p = (const unsigned char*)fn;
+    if(p[0] != 0xE9)
+        return 0;
+    DWORD target = xt_jump_target(p);
+    if(target >= XT_GUEST_TOP)
+        return 1;
+    // Some library exports first jump through a guest-local linker thunk.
+    p = (const unsigned char*)target;
+    return p[0] == 0xE9 && xt_jump_target(p) >= XT_GUEST_TOP;
+}
+
+static void xt_emit(const char* line)
+{
+    if(xt_trace != INVALID_HANDLE_VALUE)
+    {
         DWORD cb;
         WriteFile(xt_trace, line, (DWORD)strlen(line), &cb, NULL);
         WriteFile(xt_trace, "\n", 1, &cb, NULL);
@@ -29,7 +53,7 @@ static void xt_emit(const char *line)
     DbgPrint("XT| %s\n", line);
 }
 
-static void xt_emitf(const char *fmt, ...)
+static void xt_emitf(const char* fmt, ...)
 {
     char line[480];
     va_list ap;
@@ -41,7 +65,7 @@ static void xt_emitf(const char *fmt, ...)
 }
 
 // Probe name MUST match the probe directory name (runner contract).
-static void xt_begin(const char *probe)
+static void xt_begin(const char* probe)
 {
     char path[64];
     xt_probe = probe;
@@ -53,19 +77,19 @@ static void xt_begin(const char *probe)
     xt_emitf("#probe %s", probe);
 }
 
-static void xt_chk(const char *name, int expect, int got)
+static void xt_chk(const char* name, int expect, int got)
 {
     xt_checks++;
-    if (expect != got)
+    if(expect != got)
         xt_fails++;
     xt_emitf("CHK  %s expect=%d got=%d %s", name, expect, got,
              (expect == got) ? "PASS" : "FAIL");
 }
 
-static void xt_chk_u32(const char *name, DWORD expect, DWORD got)
+static void xt_chk_u32(const char* name, DWORD expect, DWORD got)
 {
     xt_checks++;
-    if (expect != got)
+    if(expect != got)
         xt_fails++;
     xt_emitf("CHK  %s expect=0x%08X got=0x%08X %s", name, expect, got,
              (expect == got) ? "PASS" : "FAIL");
@@ -79,7 +103,7 @@ static void xt_end_and_exit(void)
     xt_emitf("#result %s verdict=%s checks=%d fail=%d",
              xt_probe, xt_fails ? "FAIL" : "PASS", xt_checks, xt_fails);
     xt_emit("#end");
-    if (xt_trace != INVALID_HANDLE_VALUE)
+    if(xt_trace != INVALID_HANDLE_VALUE)
         CloseHandle(xt_trace);
     HalReturnToFirmware(2);
 }

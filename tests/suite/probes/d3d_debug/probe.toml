@@ -1,0 +1,7 @@
+# Xbox XDK 5849 debug-runtime probe. It links d3d8d.lib, so it exercises a
+# different library image than the retail d3d8.lib probes.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

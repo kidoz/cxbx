@@ -1,0 +1,7 @@
+# Xbox XDK 5849 performance-runtime probe. It links d3d8i.lib and exercises
+# the D3D8Perf API that retail d3d8.lib does not implement.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
