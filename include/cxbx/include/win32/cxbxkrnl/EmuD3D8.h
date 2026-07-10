@@ -1325,6 +1325,21 @@ VOID WINAPI EmuIDirect3DDevice8_SetRenderState_YuvEnable
     DWORD Value
 );
 
+// Xbox-extension render-state wrappers (no PC D3DRS equivalent -> no-op);
+// MultiSampleMask forwards to the host device; SetRenderStateNotInline is the
+// generic dispatcher (see EmuD3D8.cpp).
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_FrontFace(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_LineWidth(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_LogicOp(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_BackFillMode(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_TwoSidedLighting(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_MultiSampleMode(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_MultiSampleRenderTargetMode(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_MultiSampleMask(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_SampleAlpha(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_PSTextureModes(DWORD Value);
+VOID WINAPI EmuIDirect3DDevice8_SetRenderStateNotInline(DWORD State, DWORD Value);
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetTransform
 // ******************************************************************
