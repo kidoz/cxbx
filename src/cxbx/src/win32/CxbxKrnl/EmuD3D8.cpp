@@ -3015,10 +3015,41 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
         if(Flags & 0x00000002)
             newFlags |= D3DCLEAR_STENCIL;
 
+        // On Xbox a Clear never fails; host d3d8 rejects depth/stencil flags
+        // that do not match the bound depth surface (it throws
+        // D3DERR_INVALIDCALL internally -- Turok Evolution's frame loop).
+        // Drop the flags the host cannot honor.
+        if(newFlags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL))
+        {
+            IDirect3DSurface8 *pDepth = NULL;
+            if(FAILED(g_pD3DDevice8->GetDepthStencilSurface(&pDepth)) || pDepth == NULL)
+            {
+                newFlags &= ~(D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
+            }
+            else
+            {
+                D3DSURFACE_DESC Desc;
+                if(SUCCEEDED(pDepth->GetDesc(&Desc)) &&
+                   Desc.Format != D3DFMT_D24S8 && Desc.Format != D3DFMT_D24X4S4 &&
+                   Desc.Format != D3DFMT_D15S1)
+                    newFlags &= ~D3DCLEAR_STENCIL;
+                pDepth->Release();
+            }
+        }
+
         Flags = newFlags;
     }
 
-    HRESULT ret = g_pD3DDevice8->Clear(Count, pRects, Flags, Color, Z, Stencil);
+    HRESULT ret = D3D_OK;
+    if(Flags != 0)
+        ret = g_pD3DDevice8->Clear(Count, pRects, Flags, Color, Z, Stencil);
+
+    if(FAILED(ret))
+    {
+        static LONG WarnCount = 0;
+        if(InterlockedIncrement(&WarnCount) <= 5)
+            EmuWarning("Clear failed (0x%.08X) host flags=0x%.08X", ret, Flags);
+    }
 
     if(g_pD3DSingleStepPusher != NULL && (*g_pD3DSingleStepPusher & 1) != 0)
     {
@@ -5461,7 +5492,15 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ShadowFunc
     }
     #endif
 
-    printf("*Warning* ShadowFunc not implemented\n");
+    // Xbox shadow-buffer compare function (NV2A hardware shadow mapping);
+    // no host D3D8 equivalent, so accept and ignore. Warn once, not per call
+    // -- titles set this every frame (Turok Evolution's render loop).
+    static bool WarnedOnce = false;
+    if(!WarnedOnce)
+    {
+        WarnedOnce = true;
+        EmuWarning("ShadowFunc not implemented (ignored; warning shown once)");
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -6748,13 +6787,21 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP
         nStride = EmuQuadHackA(PrimitiveCount, pOrigVertexBuffer8, pHackVertexBuffer8, 0, pVertexStreamZeroData, VertexStreamZeroStride, &pNewVertexStreamZeroData);
     }
 
-    g_pD3DDevice8->DrawPrimitiveUP
+    HRESULT hRet = g_pD3DDevice8->DrawPrimitiveUP
     (
         PCPrimitiveType,
         PrimitiveCount,
         pNewVertexStreamZeroData,
         VertexStreamZeroStride
     );
+
+    if(FAILED(hRet))
+    {
+        static LONG WarnCount = 0;
+        if(InterlockedIncrement(&WarnCount) <= 5)
+            EmuWarning("DrawVerticesUP failed (0x%.08X) prim=%d primCount=%d stride=%d",
+                       hRet, PCPrimitiveType, PrimitiveCount, VertexStreamZeroStride);
+    }
 
     if(PrimitiveType == 8)  // Quad List
     {
