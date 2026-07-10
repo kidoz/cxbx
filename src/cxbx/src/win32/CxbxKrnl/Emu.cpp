@@ -5363,6 +5363,14 @@ static bool EmuIsReadableRange(ULONG Address, ULONG Bytes)
 // and take down the process before the original dump finishes.
 static volatile LONG g_VectoredDumpDepth = 0;
 
+// Repeat collapser: once a title reaches its render loop, a recoverable
+// exception at one site (e.g. d3d8's internal per-frame D3DERR throw) fires
+// thousands of times; after a few full dumps of the same (code, EIP) pair,
+// collapse further repeats to one line each.
+static ULONG g_VectoredLastCode = 0;
+static ULONG g_VectoredLastEip = 0;
+static volatile LONG g_VectoredRepeatCount = 0;
+
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
     // Under the LDT-less content-swap an SEH unwind (e.g. a guest __except
@@ -5373,6 +5381,93 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     // re-anchor the role to it: the handler's own swaps below then start from
     // truth, and the eventual resume returns the interrupted side its values.
     EmuFsSwapEnsureRole((ULONG)e->ContextRecord->Eip < 0x10000000);
+
+    // SEH self-heal (host-side exceptions only): RtlDispatchException walks
+    // the FS:[0] chain AFTER this handler returns and rejects it wholesale if
+    // a registration record lies outside the TIB's [StackLimit, StackBase].
+    // The FS content-swap can leave a guest-role stack value in those slots
+    // (seen as StackBase below StackLimit), which turns any recoverable host
+    // C++ throw -- e.g. d3d8's internal D3DERR_INVALIDCALL -- into process
+    // death. The chain itself is intact, so recompute the real stack extent
+    // from ESP and repair the bounds before dispatch continues.
+    if((ULONG)e->ContextRecord->Eip >= 0x10000000)
+    {
+        NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+        ULONG Esp = e->ContextRecord->Esp;
+
+        if(Esp < (ULONG)Tib->StackLimit || Esp >= (ULONG)Tib->StackBase)
+        {
+            MEMORY_BASIC_INFORMATION mbi;
+            if(VirtualQuery((LPCVOID)Esp, &mbi, sizeof(mbi)) == sizeof(mbi) &&
+               mbi.State == MEM_COMMIT)
+            {
+                // Top of the stack reservation = end of the last region that
+                // shares ESP's AllocationBase.
+                ULONG AllocBase = (ULONG)mbi.AllocationBase;
+                ULONG Top = (ULONG)mbi.BaseAddress + mbi.RegionSize;
+                MEMORY_BASIC_INFORMATION next;
+                for(ULONG i = 0; i < 64; i++)
+                {
+                    if(VirtualQuery((LPCVOID)Top, &next, sizeof(next)) != sizeof(next) ||
+                       (ULONG)next.AllocationBase != AllocBase || next.State == MEM_FREE)
+                        break;
+                    Top = (ULONG)next.BaseAddress + next.RegionSize;
+                }
+
+                static volatile LONG RepairCount = 0;
+                if(InterlockedIncrement(&RepairCount) <= 5)
+                {
+                    printf("Emu (0x%lX): TIB stack bounds repaired for host dispatch: "
+                           "StackBase 0x%p->0x%.08lX StackLimit 0x%p->0x%.08lX (ESP 0x%.08lX)\n",
+                           GetCurrentThreadId(), Tib->StackBase, Top,
+                           Tib->StackLimit, AllocBase, Esp);
+                    fflush(stdout);
+                }
+
+                // StackLimit must be permissive: the committed-region base is
+                // too tight -- RtlUnwind runs deeper than the throw point via
+                // normal guard-page growth, and validating against a tight
+                // limit raises STATUS_BAD_STACK mid-unwind. The bottom of the
+                // reservation can never falsely reject a live frame.
+                Tib->StackLimit = (PVOID)AllocBase;
+                Tib->StackBase = (PVOID)Top;
+            }
+        }
+
+        // Prune stale SEH head records: the content-swap can restore a chain
+        // head captured when the stack was deeper. Those functions have long
+        // returned, and unwinding through their dead records raises
+        // STATUS_BAD_STACK (0xC0000028) mid-unwind. The stack grows down, so
+        // at dispatch time every live registration sits above ESP -- records
+        // below it are provably stale.
+        {
+            struct SehRecord { SehRecord *Next; void *Handler; };
+            SehRecord *Head = (SehRecord*)Tib->ExceptionList;
+            ULONG Pruned = 0;
+
+            while(Pruned < 64 && Head != (SehRecord*)0xFFFFFFFF && (ULONG)Head < Esp)
+            {
+                if(!EmuIsReadableRange((ULONG)Head, sizeof(SehRecord)))
+                    break; // chain unusable past this point; leave it alone
+                Head = Head->Next;
+                Pruned++;
+            }
+
+            if(Pruned != 0 &&
+               (Head == (SehRecord*)0xFFFFFFFF || (ULONG)Head >= Esp))
+            {
+                static volatile LONG PruneCount = 0;
+                if(InterlockedIncrement(&PruneCount) <= 5)
+                {
+                    printf("Emu (0x%lX): SEH chain head repaired for host dispatch: "
+                           "0x%p -> 0x%p (%lu stale records below ESP 0x%.08lX pruned)\n",
+                           GetCurrentThreadId(), Tib->ExceptionList, Head, Pruned, Esp);
+                    fflush(stdout);
+                }
+                Tib->ExceptionList = (struct _EXCEPTION_REGISTRATION_RECORD*)(void*)Head;
+            }
+        }
+    }
 
     // CRC32 trace resume, step 2 of 2: the trap-flag single-step armed below
     // has executed one original instruction past the hook address; put the
@@ -5472,10 +5567,70 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
+    if(e->ExceptionRecord->ExceptionCode == g_VectoredLastCode &&
+       (ULONG)e->ContextRecord->Eip == g_VectoredLastEip)
+    {
+        if(InterlockedIncrement(&g_VectoredRepeatCount) > 3)
+        {
+            printf("Emu (0x%lX): Vectored exception [0x%.08lX]@0x%.08lX repeat x%ld -- dump suppressed.\n",
+                   GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip,
+                   g_VectoredRepeatCount);
+            fflush(stdout);
+            InterlockedDecrement(&g_VectoredDumpDepth);
+            if(WasXboxFS)
+                EmuSwapFS();
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+    }
+    else
+    {
+        g_VectoredLastCode = e->ExceptionRecord->ExceptionCode;
+        g_VectoredLastEip = (ULONG)e->ContextRecord->Eip;
+        g_VectoredRepeatCount = 1;
+    }
+
     printf("Emu (0x%lX): Vectored exception [0x%.08lX]@0x%.08lX\n",
            GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
     printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
            GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+
+    // TIB sanity: RtlDispatchException rejects the whole SEH chain (and the
+    // exception goes unhandled) when a registration record lies outside
+    // [StackLimit, StackBase]. Under the FS content-swap on guest-created
+    // threads those bounds may not describe the stack actually in use, so
+    // print the verdict and walk the chain with module attribution.
+    {
+        NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+        ULONG Esp = e->ContextRecord->Esp;
+        bool EspInBounds = (Esp >= (ULONG)Tib->StackLimit && Esp < (ULONG)Tib->StackBase);
+
+        printf("Emu (0x%lX): Vectored TIB: StackBase=0x%p StackLimit=0x%p ExceptionList=0x%p (ESP %s bounds)\n",
+               GetCurrentThreadId(), Tib->StackBase, Tib->StackLimit, Tib->ExceptionList,
+               EspInBounds ? "inside" : "OUTSIDE");
+
+        struct SehRecord { SehRecord *Next; void *Handler; };
+        SehRecord *Rec = (SehRecord*)Tib->ExceptionList;
+        char Where[MAX_PATH + 16];
+        for(ULONG i = 0; i < 8 && Rec != (SehRecord*)0xFFFFFFFF; i++)
+        {
+            if(!EmuIsReadableRange((ULONG)Rec, sizeof(SehRecord)))
+            {
+                printf("Emu (0x%lX): Vectored SEH[%lu] 0x%p UNREADABLE -- chain broken.\n",
+                       GetCurrentThreadId(), i, Rec);
+                break;
+            }
+
+            bool RecInBounds = ((ULONG)Rec >= (ULONG)Tib->StackLimit &&
+                                (ULONG)Rec < (ULONG)Tib->StackBase);
+            const char *HandlerName =
+                EmuHostAddressToModuleOffset((ULONG)Rec->Handler, Where, sizeof(Where));
+            printf("Emu (0x%lX): Vectored SEH[%lu] rec=0x%p%s handler=0x%p%s%s\n",
+                   GetCurrentThreadId(), i, Rec, RecInBounds ? "" : " (OUTSIDE stack bounds)",
+                   Rec->Handler, HandlerName != NULL ? " = " : "",
+                   HandlerName != NULL ? HandlerName : "");
+            Rec = Rec->Next;
+        }
+    }
     if(e->ExceptionRecord->NumberParameters >= 2)
     {
         printf("Emu (0x%lX): Vectored access type=%lu address=0x%.08lX\n",
