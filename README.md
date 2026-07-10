@@ -16,6 +16,8 @@ build files, structured debug traces, and an emulator conformance suite.
 
 ![CXBX emulating Dolphin demos](docs/screenshots/dolphin-demo.png)
 
+![CXBX emulating NestopiaX 1.3](docs/screenshots/nestopiax-v1.3.png)
+
 ## Current Status
 
 This repository is for development and emulator bring-up. It is not a polished
