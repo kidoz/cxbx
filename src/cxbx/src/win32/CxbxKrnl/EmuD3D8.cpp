@@ -6965,12 +6965,51 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget
         pPCNewZStencil  = pNewZStencil->EmuSurface8;
     }
 
-    HRESULT hRet = g_pD3DDevice8->SetRenderTarget(pPCRenderTarget, pPCNewZStencil);
+    // On Xbox any surface can become the render target or depth buffer --
+    // there is no D3DUSAGE_RENDERTARGET/DEPTHSTENCIL distinction -- so titles
+    // hand over surfaces the host runtime rejects. Host d3d8 rejects them by
+    // throwing the HRESULT internally (a bare C++ `throw <long>`), and that
+    // throw does not unwind across our FS content-swap: the process dies
+    // 0xE06D7363/D3DERR_INVALIDCALL (Turok Evolution's render-to-texture
+    // path). Pre-validate host-side and only forward pairs the host can
+    // accept; otherwise warn and report success, as real hardware would have
+    // accepted the call.
+    D3DSURFACE_DESC RTDesc, ZSDesc;
+    bool GotRTDesc = (pPCRenderTarget != 0 && SUCCEEDED(pPCRenderTarget->GetDesc(&RTDesc)));
+    bool GotZSDesc = (pPCNewZStencil != 0 && SUCCEEDED(pPCNewZStencil->GetDesc(&ZSDesc)));
+
+    bool HostCompatible = true;
+    if(GotRTDesc && (RTDesc.Usage & D3DUSAGE_RENDERTARGET) == 0)
+        HostCompatible = false;
+    if(GotZSDesc && (ZSDesc.Usage & D3DUSAGE_DEPTHSTENCIL) == 0)
+        HostCompatible = false;
+    if(GotRTDesc && GotZSDesc &&
+       (ZSDesc.Width < RTDesc.Width || ZSDesc.Height < RTDesc.Height ||
+        ZSDesc.MultiSampleType != RTDesc.MultiSampleType))
+        HostCompatible = false;
+
+    HRESULT hRet = D3D_OK;
+    if(HostCompatible)
+        hRet = g_pD3DDevice8->SetRenderTarget(pPCRenderTarget, pPCNewZStencil);
 
     EmuSwapFS();   // XBox FS
-    
-    if(FAILED(hRet))
-        EmuWarning("SetRenderTarget Failed! (0x%.08X)", hRet);
+
+    if(!HostCompatible || FAILED(hRet))
+    {
+        EmuWarning(HostCompatible ? "SetRenderTarget Failed! (0x%.08X)"
+                                  : "SetRenderTarget skipped (host-incompatible surfaces) (0x%.08X)", hRet);
+        if(GotRTDesc)
+            EmuWarning("SetRenderTarget RT   : fmt=%d %dx%d usage=0x%X pool=%d ms=%d",
+                       RTDesc.Format, RTDesc.Width, RTDesc.Height, RTDesc.Usage, RTDesc.Pool, RTDesc.MultiSampleType);
+        if(GotZSDesc)
+            EmuWarning("SetRenderTarget ZS   : fmt=%d %dx%d usage=0x%X pool=%d ms=%d",
+                       ZSDesc.Format, ZSDesc.Width, ZSDesc.Height, ZSDesc.Usage, ZSDesc.Pool, ZSDesc.MultiSampleType);
+    }
+
+    // The title's call would have succeeded on hardware; do not feed it an
+    // error path it never takes there.
+    if(!HostCompatible)
+        hRet = D3D_OK;
 
     return hRet;
 }
