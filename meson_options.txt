@@ -4,3 +4,10 @@ option(
   value : false,
   description : 'Build and link the legacy open-xdk xusb OHCI stack.',
 )
+
+option(
+  'build_xiso',
+  type : 'boolean',
+  value : true,
+  description : 'Build the xiso host tool (Xbox XISO list/extract/create/verify).',
+)
