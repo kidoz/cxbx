@@ -5315,6 +5315,54 @@ static void EmuCrc32TraceLog(ULONG Esp)
     }
 }
 
+// Resolve a host-side address to "module.dll+0xOFFSET" for the vectored dump.
+// Guest addresses (below Cxbx.dll's 0x10000000 base) and values that are not
+// inside a mapped PE image resolve to NULL so callers can skip them.
+// VirtualQuery's AllocationBase doubles as the module handle for any address
+// inside a loaded image.
+static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, size_t BufferSize)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+
+    if(Address < 0x10000000)
+        return NULL;
+    if(VirtualQuery((LPCVOID)Address, &mbi, sizeof(mbi)) != sizeof(mbi))
+        return NULL;
+    if(mbi.State != MEM_COMMIT || mbi.AllocationBase == NULL)
+        return NULL;
+
+    char Path[MAX_PATH];
+    if(GetModuleFileNameA((HMODULE)mbi.AllocationBase, Path, sizeof(Path)) == 0)
+        return NULL; // committed but not a PE image (heap, stack, file mapping)
+
+    const char *Name = strrchr(Path, '\\');
+    Name = (Name != NULL) ? Name + 1 : Path;
+    _snprintf(Buffer, BufferSize - 1, "%s+0x%X", Name, Address - (ULONG)mbi.AllocationBase);
+    Buffer[BufferSize - 1] = '\0';
+    return Buffer;
+}
+
+// Fault-free readability probe for the vectored dump: dereferencing a bad
+// pointer inside the handler re-enters it, so pointer chains harvested from a
+// crashed context must be validated with VirtualQuery instead of __try.
+static bool EmuIsReadableRange(ULONG Address, ULONG Bytes)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+
+    if(Address == 0)
+        return false;
+    if(VirtualQuery((LPCVOID)Address, &mbi, sizeof(mbi)) != sizeof(mbi))
+        return false;
+    if(mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        return false;
+    return (ULONG)mbi.BaseAddress + mbi.RegionSize >= Address + Bytes;
+}
+
+// Nested-fault guard for the vectored dump: a fault while dumping (bad
+// pointer chain, unreadable stack) must not cascade into a second full dump
+// and take down the process before the original dump finishes.
+static volatile LONG g_VectoredDumpDepth = 0;
+
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
     // Under the LDT-less content-swap an SEH unwind (e.g. a guest __except
@@ -5413,6 +5461,17 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
+    if(InterlockedIncrement(&g_VectoredDumpDepth) > 1)
+    {
+        InterlockedDecrement(&g_VectoredDumpDepth);
+        printf("Emu (0x%lX): nested exception [0x%.08lX]@0x%.08lX during vectored dump -- suppressed.\n",
+               GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+        fflush(stdout);
+        if(WasXboxFS)
+            EmuSwapFS();
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
     printf("Emu (0x%lX): Vectored exception [0x%.08lX]@0x%.08lX\n",
            GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
     printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
@@ -5422,6 +5481,48 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         printf("Emu (0x%lX): Vectored access type=%lu address=0x%.08lX\n",
                GetCurrentThreadId(), e->ExceptionRecord->ExceptionInformation[0],
                e->ExceptionRecord->ExceptionInformation[1]);
+    }
+
+    // MSVC C++ throw (0xE06D7363): ExceptionInformation = {0x19930520 magic,
+    // thrown object, ThrowInfo}. On x86 the ThrowInfo chain holds absolute
+    // pointers, so the thrown type's decorated name is reachable directly:
+    // ThrowInfo+12 -> CatchableTypeArray, +4 -> CatchableType, +4 ->
+    // TypeDescriptor, +8 -> name. Turns an anonymous host abort into e.g.
+    // ".?AVbad_alloc@std@@" -- or ".J" for a bare `throw <long>`, where the
+    // payload is the object's first dword. Every pointer hop is probed with
+    // VirtualQuery: this chain comes from a crashed context, and faulting on
+    // it here would nest another exception inside the dump.
+    if(e->ExceptionRecord->ExceptionCode == 0xE06D7363 &&
+       e->ExceptionRecord->NumberParameters >= 3)
+    {
+        ULONG ThrowInfo = (ULONG)e->ExceptionRecord->ExceptionInformation[2];
+        ULONG Object = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
+        const char *TypeName = "(unreadable)";
+
+        if(EmuIsReadableRange(ThrowInfo + 12, 4))
+        {
+            ULONG CatchableArray = *(ULONG*)(ThrowInfo + 12);
+            if(EmuIsReadableRange(CatchableArray + 4, 4))
+            {
+                ULONG FirstCatchable = *(ULONG*)(CatchableArray + 4);
+                if(EmuIsReadableRange(FirstCatchable + 4, 4))
+                {
+                    ULONG TypeDescriptor = *(ULONG*)(FirstCatchable + 4);
+                    if(EmuIsReadableRange(TypeDescriptor + 8, 64))
+                        TypeName = (const char*)(TypeDescriptor + 8);
+                }
+            }
+        }
+
+        printf("Emu (0x%lX): Vectored C++ throw type='%.64s' object=0x%.08lX\n",
+               GetCurrentThreadId(), TypeName, Object);
+
+        if(EmuIsReadableRange(Object, 16))
+        {
+            ULONG *Data = (ULONG*)Object;
+            printf("Emu (0x%lX): Vectored C++ throw object data: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
+                   GetCurrentThreadId(), Data[0], Data[1], Data[2], Data[3]);
+        }
     }
 
     // A near-null EIP means the guest executed a call/jump through a NULL or
@@ -5505,7 +5606,34 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         printf("Emu (0x%lX): Vectored stack unavailable.\n", GetCurrentThreadId());
     }
 
+    // Attribute host frames: the faulting EIP plus every stack slot that
+    // resolves into a loaded module, so a host-side fault names the DLL and
+    // offset that raised it instead of bare addresses. Data pointers into a
+    // module's rdata resolve too -- noise, but cheap to ignore when reading.
+    __try
+    {
+        char Where[MAX_PATH + 16];
+
+        if(EmuHostAddressToModuleOffset(e->ContextRecord->Eip, Where, sizeof(Where)) != NULL)
+            printf("Emu (0x%lX): Vectored EIP = %s\n", GetCurrentThreadId(), Where);
+
+        DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+        for(ULONG Slot = 0; Slot < 256; Slot++)
+        {
+            if(!EmuIsReadableRange((ULONG)&Stack[Slot], 4))
+                break;
+            if(EmuHostAddressToModuleOffset(Stack[Slot], Where, sizeof(Where)) != NULL)
+                printf("Emu (0x%lX): Vectored stack[%03lu] 0x%.08lX = %s\n",
+                       GetCurrentThreadId(), Slot, Stack[Slot], Where);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
     fflush(stdout);
+
+    InterlockedDecrement(&g_VectoredDumpDepth);
 
     // Survive a worker thread's unrecoverable fault (opt-in): a fault in HLE
     // code mid-guest-call does not reliably unwind to the PCSTProxy __except
