@@ -1397,6 +1397,12 @@ VOID WINAPI EmuIDirect3DDevice8_SetVertexShader
     DWORD            Handle
 );
 
+// Xbox vertex-shader lifecycle extensions (see EmuD3D8.cpp).
+VOID WINAPI EmuIDirect3DDevice8_LoadVertexShader(DWORD Handle, DWORD Address);
+VOID WINAPI EmuIDirect3DDevice8_SelectVertexShader(DWORD Handle, DWORD Address);
+VOID WINAPI EmuIDirect3DDevice8_DeleteVertexShader(DWORD Handle);
+VOID WINAPI EmuIDirect3DDevice8_GetVertexShaderSize(DWORD Handle, UINT *pSize);
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_DrawVertices
 // ******************************************************************

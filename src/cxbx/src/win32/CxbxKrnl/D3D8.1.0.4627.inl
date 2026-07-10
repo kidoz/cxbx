@@ -1931,6 +1931,71 @@ SOOVPA<8> IDirect3DDevice8_SetRenderStateNotInline_1_0_4627 =
 };
 
 // ******************************************************************
+// * Vertex-shader lifecycle signatures (generated from 4627 d3d8.lib).
+// * Verified unique across the Turok - Evolution image and 53 other XBE/probe
+// * images via tools/oovpa/gen_oovpa.py.
+// ******************************************************************
+SOOVPA<8> IDirect3DDevice8_LoadVertexShader_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x0D, 0x8B },
+        { 0x1B, 0x57 },
+        { 0x28, 0x8B },
+        { 0x36, 0x1E },
+        { 0x43, 0x00 },
+        { 0x51, 0x5B },
+        { 0x5F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SelectVertexShader_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x12, 0xFF },
+        { 0x25, 0x70 },
+        { 0x36, 0x4F },
+        { 0x48, 0x89 },
+        { 0x5A, 0x3B },
+        { 0x6C, 0x04 },
+        { 0x7F, 0x00 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_DeleteVertexShader_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x04, 0x8B },
+        { 0x08, 0x49 },
+        { 0x0D, 0x89 },
+        { 0x11, 0xE9 },
+        { 0x16, 0xC2 },
+        { 0x1A, 0x90 },
+        { 0x1F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_GetVertexShaderSize_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x04, 0x85 },
+        { 0x08, 0x8B },
+        { 0x0D, 0x51 },
+        { 0x11, 0xC2 },
+        { 0x16, 0x90 },
+        { 0x1A, 0x90 },
+        { 0x1F, 0x90 }
+    }
+};
+
+// ******************************************************************
 // * D3D8_1_0_4627
 // ******************************************************************
 OOVPATable D3D8_1_0_4627[] =
@@ -2705,6 +2770,46 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetVertexShader"
+        #endif
+    },
+    // IDirect3DDevice8::LoadVertexShader
+    {
+        (OOVPA*)&IDirect3DDevice8_LoadVertexShader_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_LoadVertexShader,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_LoadVertexShader"
+        #endif
+    },
+    // IDirect3DDevice8::SelectVertexShader
+    {
+        (OOVPA*)&IDirect3DDevice8_SelectVertexShader_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SelectVertexShader,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SelectVertexShader"
+        #endif
+    },
+    // IDirect3DDevice8::DeleteVertexShader
+    {
+        (OOVPA*)&IDirect3DDevice8_DeleteVertexShader_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_DeleteVertexShader,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_DeleteVertexShader"
+        #endif
+    },
+    // IDirect3DDevice8::GetVertexShaderSize
+    {
+        (OOVPA*)&IDirect3DDevice8_GetVertexShaderSize_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_GetVertexShaderSize,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetVertexShaderSize"
         #endif
     },
     // IDirect3DDevice8::DrawVertices (* unchanged since 4361 *)

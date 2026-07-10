@@ -6036,6 +6036,149 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_LoadVertexShader
+// ******************************************************************
+// Xbox extension: loads an already-created vertex shader into NV2A vertex
+// instruction memory at the given slot Address. The host D3D device manages
+// shader storage itself (CreateVertexShader uploaded it), so this is a no-op;
+// patching it prevents the guest from programming NV2A method registers.
+VOID WINAPI XTL::EmuIDirect3DDevice8_LoadVertexShader
+(
+    DWORD Handle,
+    DWORD Address
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_LoadVertexShader\n"
+               "(\n"
+               "   Handle              : 0x%.08X\n"
+               "   Address             : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Handle, Address);
+    }
+    #endif
+
+    EmuSwapFS();   // XBox FS
+
+    return;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_SelectVertexShader
+// ******************************************************************
+// Xbox extension: selects the vertex shader resident at slot Address and binds
+// Handle as the active declaration. On the host this is equivalent to
+// SetVertexShader (the slot model does not exist); resolve the wrapper handle
+// the same way SetVertexShader does and forward it.
+VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader
+(
+    DWORD Handle,
+    DWORD Address
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_SelectVertexShader\n"
+               "(\n"
+               "   Handle              : 0x%.08X\n"
+               "   Address             : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Handle, Address);
+    }
+    #endif
+
+    // A handle from EmuIDirect3DDevice8_CreateVertexShader is a pointer to our
+    // X_D3DVertexShader wrapper (heap, >= 0x10000); resolve it to the host
+    // shader handle it wraps. Raw FVF handles (small bit patterns) pass through.
+    DWORD HostHandle = Handle;
+    if(Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader)))
+        HostHandle = ((X_D3DVertexShader*)Handle)->Handle;
+
+    HRESULT hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
+
+    if(FAILED(hRet))
+        EmuWarning("SelectVertexShader failed (Handle = 0x%.08X, Host = 0x%.08X)", Handle, HostHandle);
+
+    EmuSwapFS();   // XBox FS
+
+    return;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_DeleteVertexShader
+// ******************************************************************
+// Frees a vertex shader created by CreateVertexShader. The Handle is our
+// X_D3DVertexShader wrapper; release the host shader it wraps, then free the
+// wrapper. Raw FVF handles have nothing to free.
+VOID WINAPI XTL::EmuIDirect3DDevice8_DeleteVertexShader
+(
+    DWORD Handle
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_DeleteVertexShader\n"
+               "(\n"
+               "   Handle              : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Handle);
+    }
+    #endif
+
+    if(Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader)))
+    {
+        X_D3DVertexShader *pShader = (X_D3DVertexShader*)Handle;
+        g_pD3DDevice8->DeleteVertexShader(pShader->Handle);
+        delete pShader;
+    }
+
+    EmuSwapFS();   // XBox FS
+
+    return;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_GetVertexShaderSize
+// ******************************************************************
+// Xbox extension: reports the size (in bytes) of a shader's NV2A microcode.
+// The host D3D device does not expose shader microcode size, so report zero
+// (the value is informational; titles use it only for buffer allocation, and
+// the HLE path does not hand the microcode back to the title).
+VOID WINAPI XTL::EmuIDirect3DDevice8_GetVertexShaderSize
+(
+    DWORD Handle,
+    UINT *pSize
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_GetVertexShaderSize\n"
+               "(\n"
+               "   Handle              : 0x%.08X\n"
+               "   pSize               : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Handle, pSize);
+    }
+    #endif
+
+    if(pSize != NULL)
+        *pSize = 0;
+
+    EmuSwapFS();   // XBox FS
+
+    return;
+}
+
+// ******************************************************************
 // * func: EmuUpdateDeferredStates
 // ******************************************************************
 static void EmuUpdateDeferredStates()
