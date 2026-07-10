@@ -62,6 +62,7 @@ namespace XTL
 #include "D3D8.1.0.4134.inl"
 #include "D3D8.1.0.4361.inl"
 #include "D3D8.1.0.4627.inl"
+#include "D3D8.1.0.5558.inl"
 #include "D3D8.1.0.5849.inl"
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
@@ -156,6 +157,15 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         D3D8_1_0_4627,
         D3D8_1_0_4627_SIZE
+    },
+    // D3D8 Version 1.0.5558 (generated from XDK 5558 d3d8.lib -- the
+    // other/xbox-sdks archive; unlocks FCEUltra's HLE route, which was
+    // previously native-only and stalled on the PFIFO GET-writeback wait)
+    {
+        "D3D8",
+        1, 0, 5558,
+        D3D8_1_0_5558,
+        D3D8_1_0_5558_SIZE
     },
     // D3D8 Version 1.0.5849 (generated from XDK 5849 d3d8.lib; unlocks z26x + 5849 samples)
     {
@@ -365,6 +375,7 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5849_DOWORK
     -1, // XREF_DS5849_STR_FLUSHEX
     -1, // XREF_XAPI5849_XINPUTCLOSE
+    -1, // XREF_D3D5558_MAKESPACE
 };
 
 // ******************************************************************

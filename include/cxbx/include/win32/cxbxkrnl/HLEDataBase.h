@@ -194,7 +194,10 @@ enum XRefDataBaseOffset
     XREF_DS5849_STR_FLUSHEX,
     // XDK 5849 XAPI input: XID_fCloseDevice internal (the 12-byte
     // XInputClose thin wrapper is matched by its call target).
-    XREF_XAPI5849_XINPUTCLOSE
+    XREF_XAPI5849_XINPUTCLOSE,
+    // XDK 5558 D3D8: D3D::MakeRequestedSpace internal (the 15-byte
+    // MakeSpace thunk is matched by its call target).
+    XREF_D3D5558_MAKESPACE
 };
 
 #endif
