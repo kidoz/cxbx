@@ -1,0 +1,9 @@
+# XDK-toolchain probe (see d3d_state): D3D8 HLE render-target / depth-stencil
+# surface checks -- GetRenderTarget2/GetDepthStencilSurface2 retrieval,
+# SetRenderTarget of registered implicit surfaces, the NULL-depth detach path,
+# and full restoration. Pins the 4627 SetRenderTarget HLE patch.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
