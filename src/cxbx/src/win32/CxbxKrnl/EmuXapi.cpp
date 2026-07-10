@@ -258,11 +258,40 @@ BOOL WINAPI XTL::EmuQueryPerformanceCounter
     }
     #endif
 
-    BOOL bRet = QueryPerformanceCounter(lpPerformanceCount);
+    static const LONGLONG XboxTscFrequency = 733333333;
+    static LONGLONG HostStart = 0;
+    static LONGLONG HostFrequency = 0;
+    static volatile LONG InitState = 0;
+    LARGE_INTEGER HostCounter;
+
+    if(InterlockedCompareExchange(&InitState, 2, 2) != 2)
+    {
+        if(InterlockedCompareExchange(&InitState, 1, 0) == 0)
+        {
+            LARGE_INTEGER Frequency;
+            QueryPerformanceFrequency(&Frequency);
+            QueryPerformanceCounter(&HostCounter);
+            HostStart = HostCounter.QuadPart;
+            HostFrequency = Frequency.QuadPart;
+            InterlockedExchange(&InitState, 2);
+        }
+        else
+        {
+            while(InterlockedCompareExchange(&InitState, 2, 2) != 2)
+                Sleep(0);
+        }
+    }
+
+    QueryPerformanceCounter(&HostCounter);
+
+    LONGLONG Elapsed = HostCounter.QuadPart - HostStart;
+    LONGLONG Whole = (Elapsed / HostFrequency) * XboxTscFrequency;
+    LONGLONG Part = (Elapsed % HostFrequency) * XboxTscFrequency / HostFrequency;
+    lpPerformanceCount->QuadPart = Whole + Part;
 
     EmuSwapFS();   // XBox FS
 
-    return bRet;
+    return TRUE;
 }
 
 // ******************************************************************
@@ -288,11 +317,11 @@ BOOL WINAPI XTL::EmuQueryPerformanceFrequency
     }
     #endif
 
-    BOOL bRet = QueryPerformanceFrequency(lpFrequency);
+    lpFrequency->QuadPart = 733333333;
 
     EmuSwapFS();   // XBox FS
 
-    return bRet;
+    return TRUE;
 }
 
 // ******************************************************************

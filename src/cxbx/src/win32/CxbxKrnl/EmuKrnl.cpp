@@ -5535,28 +5535,57 @@ extern "C" ULONGLONG NTAPI EmuKeQueryInterruptTime()
     return g_EmuKeInterruptTime;
 }
 
-extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter(xboxkrnl::PLARGE_INTEGER Frequency)
+static const LONGLONG EMU_XBOX_ACPI_FREQUENCY = 3375000;
+static LONGLONG g_EmuHostPerformanceCounterStart = 0;
+static LONGLONG g_EmuHostPerformanceCounterFrequency = 0;
+static volatile LONG g_EmuHostPerformanceCounterInitState = 0;
+
+static LONGLONG EmuGetScaledPerformanceCounter(LONGLONG TargetFrequency)
 {
     LARGE_INTEGER HostCounter;
-    LARGE_INTEGER HostFrequency;
-    QueryPerformanceCounter(&HostCounter);
-    QueryPerformanceFrequency(&HostFrequency);
 
+    if(InterlockedCompareExchange(&g_EmuHostPerformanceCounterInitState, 2, 2) != 2)
+    {
+        if(InterlockedCompareExchange(&g_EmuHostPerformanceCounterInitState, 1, 0) == 0)
+        {
+            LARGE_INTEGER HostFrequency;
+            QueryPerformanceFrequency(&HostFrequency);
+            QueryPerformanceCounter(&HostCounter);
+            g_EmuHostPerformanceCounterStart = HostCounter.QuadPart;
+            g_EmuHostPerformanceCounterFrequency = HostFrequency.QuadPart;
+            InterlockedExchange(&g_EmuHostPerformanceCounterInitState, 2);
+        }
+        else
+        {
+            while(InterlockedCompareExchange(&g_EmuHostPerformanceCounterInitState, 2, 2) != 2)
+                Sleep(0);
+        }
+    }
+
+    QueryPerformanceCounter(&HostCounter);
+
+    // Keep the counter relative to title startup and scale without overflowing.
+    LONGLONG Elapsed = HostCounter.QuadPart - g_EmuHostPerformanceCounterStart;
+    LONGLONG Whole = (Elapsed / g_EmuHostPerformanceCounterFrequency) * TargetFrequency;
+    LONGLONG Part = (Elapsed % g_EmuHostPerformanceCounterFrequency) * TargetFrequency /
+                    g_EmuHostPerformanceCounterFrequency;
+    return Whole + Part;
+}
+
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter(xboxkrnl::PLARGE_INTEGER Frequency)
+{
     if(Frequency != NULL)
-        Frequency->QuadPart = HostFrequency.QuadPart;
+        Frequency->QuadPart = EMU_XBOX_ACPI_FREQUENCY;
 
     xboxkrnl::LARGE_INTEGER Counter;
-    Counter.QuadPart = HostCounter.QuadPart;
+    Counter.QuadPart = EmuGetScaledPerformanceCounter(EMU_XBOX_ACPI_FREQUENCY);
     return Counter;
 }
 
 extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceFrequency()
 {
-    LARGE_INTEGER HostFrequency;
-    QueryPerformanceFrequency(&HostFrequency);
-
     xboxkrnl::LARGE_INTEGER Frequency;
-    Frequency.QuadPart = HostFrequency.QuadPart;
+    Frequency.QuadPart = EMU_XBOX_ACPI_FREQUENCY;
     return Frequency;
 }
 
