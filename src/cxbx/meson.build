@@ -70,10 +70,52 @@ cxbx_link_args = [
   '-lws2_32',
 ]
 
+resource_compiler = find_program('llvm-rc')
+resource_root = join_paths(meson.project_source_root(), 'Resource')
+branding_root = join_paths(meson.project_source_root(), 'docs', 'branding')
+cxbx_runtime_resources = custom_target(
+  'cxbx_runtime_resources',
+  input : files('../../Resource/CxbxDll.rc'),
+  output : 'CxbxDll.res',
+  command : [
+    resource_compiler,
+    '/nologo',
+    '/fo@OUTPUT@',
+    '/I' + resource_root,
+    '/I' + branding_root,
+    '@INPUT@',
+  ],
+  depend_files : files(
+    '../../docs/branding/cxbx.ico',
+    '../../include/cxbx/include/win32/cxbxkrnl/ResCxbxDll.h',
+  ),
+)
+cxbx_launcher_resources = custom_target(
+  'cxbx_launcher_resources',
+  input : files('../../Resource/Cxbx.rc'),
+  output : 'Cxbx.res',
+  command : [
+    resource_compiler,
+    '/nologo',
+    '/fo@OUTPUT@',
+    '/I' + resource_root,
+    '/I' + branding_root,
+    '@INPUT@',
+  ],
+  depend_files : files(
+    '../../docs/branding/cxbx.ico',
+    '../../include/cxbx/include/win32/cxbx/ResCxbx.h',
+    '../../Resource/About.bmp',
+    '../../Resource/Logo.bmp',
+    '../../Resource/Splash.bmp',
+  ),
+)
+
 cxbx_runtime = shared_library(
   'Cxbx',
   cxbx_common_src,
   cxbx_runtime_src,
+  cxbx_runtime_resources,
   include_directories : cxbx_inc,
   link_with : cxbx_link_libs,
   link_args : cxbx_link_args + [
@@ -92,6 +134,7 @@ executable(
   'cxbx',
   cxbx_common_src,
   cxbx_launcher_src,
+  cxbx_launcher_resources,
   include_directories : cxbx_inc,
   link_with : [
     cxbx_runtime,
