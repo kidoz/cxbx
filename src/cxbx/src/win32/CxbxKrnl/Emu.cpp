@@ -5380,8 +5380,11 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     {
         DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
 
-        printf("Emu (0x%lX): Vectored stack: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
-               GetCurrentThreadId(), Stack[0], Stack[1], Stack[2], Stack[3], Stack[4], Stack[5], Stack[6], Stack[7]);
+        printf("Emu (0x%lX): Vectored stack: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
+               GetCurrentThreadId(), Stack[0], Stack[1], Stack[2], Stack[3], Stack[4], Stack[5], Stack[6], Stack[7],
+               Stack[8], Stack[9], Stack[10], Stack[11]);
+        printf("Emu (0x%lX): Vectored stack+12: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
+               GetCurrentThreadId(), Stack[12], Stack[13], Stack[14], Stack[15], Stack[16], Stack[17], Stack[18], Stack[19]);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
