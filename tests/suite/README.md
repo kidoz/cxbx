@@ -191,6 +191,7 @@ after locking the backbuffer.
 | `d3d_state`  | D3D8 HLE state       | Set/GetTransform bit-exact round-trips, SetRenderState_* family survival, GetDisplayMode sanity |
 | `d3d_shader_lifecycle` | XDK 4627 D3D8 shaders | Create/set/delete pixel shader, repeated delete, and zero-handle safety |
 | `d3d_rendertarget` | XDK 4627 D3D8 surfaces | SetRenderTarget HLE interception, NULL-depth handling, and render/depth restoration |
+| `d3d_stencil_state` | XDK 4627 D3D8 state | StencilFail, variable-count constants, and immediate-mode HLE interception |
 | `d3d_tex_swizzle` | D3D8 HLE fidelity | documents the swizzled-texture gap: Morton-order uploads render linear (expectations flip when unswizzle lands) |
 | `d3d_debug` | XDK debug D3D8 | `d3d8d` HLE resolution, debug-marker state/reset, and `D3D__SingleStepPusher` idle barrier |
 | `d3d_perf` | XDK instrumented D3D8 | `d3d8i` HLE resolution, API counters/reset, PIX event nesting, and push-buffer accounting |
