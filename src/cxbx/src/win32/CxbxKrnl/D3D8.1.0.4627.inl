@@ -444,6 +444,27 @@ SOOVPA<8> IDirect3DDevice8_SetRenderTarget_1_0_4627 =
 };
 
 // ******************************************************************
+// * IDirect3DDevice8_SetRenderState_StencilFail
+// ******************************************************************
+// Generated from _D3DDevice_SetRenderState_StencilFail@4 in the archived XDK
+// 4627 d3d8.lib. Relocated device/global addresses and the MakeSpace call are
+// excluded. Verified unique in Turok - Evolution.
+SOOVPA<8> IDirect3DDevice8_SetRenderState_StencilFail_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0E, 0xE8 },
+        { 0x1F, 0xB9 },
+        { 0x2F, 0x15 },
+        { 0x3F, 0x1E },
+        { 0x4F, 0x04 },
+        { 0x5F, 0xC0 },
+        { 0x6F, 0x90 }
+    }
+};
+
+// ******************************************************************
 // * IDirect3DDevice8_GetTile
 // ******************************************************************
 SOOVPA<11> IDirect3DDevice8_GetTile_1_0_4627 =
@@ -573,6 +594,181 @@ SOOVPA<12> IDirect3DDevice8_SetVertexShaderConstant4_1_0_4627 =
         // IDirect3DDevice8_SetVertexShaderConstant4+0x91 : emms
         { 0x91, 0x0F }, // (Offset,Value)-Pair #11
         { 0x92, 0x77 }, // (Offset,Value)-Pair #12
+    }
+};
+
+// Generated from the archived XDK 4627 d3d8.lib and verified unique in Turok.
+SOOVPA<8> IDirect3DDevice8_SetVertexShaderConstantNotInline_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x09, 0x53 },
+        { 0x12, 0x8B },
+        { 0x1D, 0x8B },
+        { 0x24, 0x5E },
+        { 0x2D, 0x5B },
+        { 0x36, 0x90 },
+        { 0x3F, 0x90 }
+    }
+};
+
+// Generated from the archived XDK 4627 d3d8.lib and verified unique in Turok.
+SOOVPA<8> IDirect3DDevice8_SetVertexShaderConstantNotInlineFast_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x1F, 0x00 },
+        { 0x3E, 0x3D },
+        { 0x5F, 0x5E },
+        { 0x7F, 0x0F },
+        { 0x9F, 0x83 },
+        { 0xBF, 0x8A },
+        { 0xDF, 0x90 }
+    }
+};
+
+// XDK 4627 immediate-mode entries generated from d3d8.lib and verified unique
+// in Turok - Evolution.
+SOOVPA<8> IDirect3DDevice8_Begin_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x07, 0xE8 }, { 0x12, 0x05 }, { 0x1B, 0x08 },
+        { 0x24, 0x04 }, { 0x2D, 0x00 }, { 0x36, 0x90 }, { 0x3F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_End_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x09, 0x3B }, { 0x13, 0xC7 }, { 0x1B, 0x04 },
+        { 0x24, 0x06 }, { 0x2D, 0x6A }, { 0x36, 0x08 }, { 0x3F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetVertexData2f_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x09, 0x3B }, { 0x13, 0x8B }, { 0x1B, 0x18 },
+        { 0x24, 0x8B }, { 0x2D, 0x08 }, { 0x36, 0x00 }, { 0x3F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetVertexData4f_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x0D, 0x05 }, { 0x1B, 0x07 }, { 0x28, 0x00 },
+        { 0x36, 0x89 }, { 0x43, 0x89 }, { 0x51, 0xC0 }, { 0x5F, 0x90 }
+    }
+};
+
+// _D3DDevice_RunPushBuffer@8 (archived XDK 4627 d3d8.lib, 480 bytes).
+// Generated with tools/oovpa/gen_oovpa.py and verified unique in Turok.
+SOOVPA<8> IDirect3DDevice8_RunPushBuffer_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0x0C },
+        { 0x48, 0x03 },
+        { 0x6D, 0x8B },
+        { 0x91, 0x8B },
+        { 0xB6, 0x78 },
+        { 0xDA, 0x8B },
+        { 0xFF, 0x00 }
+    }
+};
+
+// _D3DDevice_SetPixelShaderConstant@12 (archived XDK 4627 d3d8.lib,
+// 656 bytes). Generated with tools/oovpa/gen_oovpa.py and verified unique in
+// Turok.
+SOOVPA<8> IDirect3DDevice8_SetPixelShaderConstant_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0x02 },
+        { 0x48, 0x07 },
+        { 0x6D, 0x00 },
+        { 0x8F, 0x15 },
+        { 0xB5, 0x05 },
+        { 0xDB, 0xDF },
+        { 0xFC, 0x05 }
+    }
+};
+
+// _D3DDevice_SetTextureState_BorderColor@8 (archived XDK 4627 d3d8.lib,
+// 64 bytes). Generated with tools/oovpa/gen_oovpa.py and verified unique in
+// Turok.
+SOOVPA<8> IDirect3DDevice8_SetTextureState_BorderColor_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x09, 0x3B },
+        { 0x13, 0x8B },
+        { 0x1B, 0x06 },
+        { 0x24, 0x8B },
+        { 0x2D, 0x08 },
+        { 0x34, 0x91 },
+        { 0x3F, 0x90 }
+    }
+};
+
+// _D3DDevice_BeginVisibilityTest@0 (archived XDK 4627 d3d8.lib, 48 bytes).
+// Generated with tools/oovpa/gen_oovpa.py and verified unique in Turok.
+SOOVPA<8> IDirect3DDevice8_BeginVisibilityTest_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x0D, 0x05 },
+        { 0x14, 0x00 },
+        { 0x1A, 0x01 },
+        { 0x21, 0x89 },
+        { 0x28, 0x06 },
+        { 0x2F, 0x90 }
+    }
+};
+
+// _D3DDevice_EndVisibilityTest@4 (archived XDK 4627 d3d8.lib, 96 bytes).
+// Generated with tools/oovpa/gen_oovpa.py and verified unique in Turok.
+SOOVPA<8> IDirect3DDevice8_EndVisibilityTest_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0D, 0x85 },
+        { 0x1B, 0x8B },
+        { 0x28, 0xE8 },
+        { 0x36, 0x00 },
+        { 0x43, 0x00 },
+        { 0x50, 0xE8 },
+        { 0x5F, 0x90 }
+    }
+};
+
+// _D3DDevice_GetVisibilityTestResult@12 (archived XDK 4627 d3d8.lib,
+// 96 bytes). Generated with tools/oovpa/gen_oovpa.py and verified unique in
+// Turok.
+SOOVPA<8> IDirect3DDevice8_GetVisibilityTestResult_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0D, 0xE9 },
+        { 0x1B, 0x00 },
+        { 0x28, 0x5E },
+        { 0x36, 0x8B },
+        { 0x43, 0x0A },
+        { 0x51, 0x0C },
+        { 0x5F, 0x90 }
     }
 };
 
@@ -1667,6 +1863,58 @@ OOVPATable D3D8_1_0_4627[] =
         "EmuIDirect3DDevice8_SetVertexShaderConstant4"
         #endif
     },
+    // IDirect3DDevice8::SetVertexShaderConstantNotInline
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexShaderConstantNotInline_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetVertexShaderConstantNotInline,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexShaderConstantNotInline"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexShaderConstantNotInlineFast
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexShaderConstantNotInlineFast_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetVertexShaderConstantNotInline,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexShaderConstantNotInlineFast"
+        #endif
+    },
+    // IDirect3DDevice8::Begin
+    {
+        (OOVPA*)&IDirect3DDevice8_Begin_1_0_4627,
+        XTL::EmuIDirect3DDevice8_Begin,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_Begin"
+        #endif
+    },
+    // IDirect3DDevice8::End
+    {
+        (OOVPA*)&IDirect3DDevice8_End_1_0_4627,
+        XTL::EmuIDirect3DDevice8_End,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_End"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexData2f
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexData2f_1_0_4627,
+        XTL::EmuIDirect3DDevice8_SetVertexData2f,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexData2f"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexData4f
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexData4f_1_0_4627,
+        XTL::EmuIDirect3DDevice8_SetVertexData4f,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexData4f"
+        #endif
+    },
     // IDirect3DDevice8::CreatePixelShader (* unchanged since 4361 *)
     {
         (OOVPA*)&IDirect3DDevice8_CreatePixelShader_1_0_4361,
@@ -1687,6 +1935,16 @@ OOVPATable D3D8_1_0_4627[] =
         "EmuIDirect3DDevice8_SetPixelShader"
         #endif
     },
+    // IDirect3DDevice8::SetPixelShaderConstant
+    {
+        (OOVPA*)&IDirect3DDevice8_SetPixelShaderConstant_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetPixelShaderConstant,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetPixelShaderConstant"
+        #endif
+    },
     // IDirect3DDevice8::DeletePixelShader
     {
         (OOVPA*)&IDirect3DDevice8_DeletePixelShader_1_0_4627,
@@ -1695,6 +1953,46 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_DeletePixelShader"
+        #endif
+    },
+    // IDirect3DDevice8::SetTextureState_BorderColor
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTextureState_BorderColor_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTextureState_BorderColor"
+        #endif
+    },
+    // IDirect3DDevice8::BeginVisibilityTest
+    {
+        (OOVPA*)&IDirect3DDevice8_BeginVisibilityTest_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_BeginVisibilityTest,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BeginVisibilityTest"
+        #endif
+    },
+    // IDirect3DDevice8::EndVisibilityTest
+    {
+        (OOVPA*)&IDirect3DDevice8_EndVisibilityTest_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_EndVisibilityTest,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_EndVisibilityTest"
+        #endif
+    },
+    // IDirect3DDevice8::GetVisibilityTestResult
+    {
+        (OOVPA*)&IDirect3DDevice8_GetVisibilityTestResult_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_GetVisibilityTestResult,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetVisibilityTestResult"
         #endif
     },
     // IDirect3DDevice8::CreateTexture2
@@ -1937,6 +2235,16 @@ OOVPATable D3D8_1_0_4627[] =
         "EmuIDirect3DDevice8_SetRenderState_StencilEnable" 
         #endif
     },
+    // IDirect3DDevice8::SetRenderState_StencilFail
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_StencilFail_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_StencilFail,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_StencilFail"
+        #endif
+    },
     // IDirect3DDevice8::SetRenderState_MultiSampleAntiAlias
     {
         (OOVPA*)&IDirect3DDevice8_SetRenderState_MultiSampleAntiAlias_1_0_4627,
@@ -2015,6 +2323,16 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_DrawVertices"
+        #endif
+    },
+    // IDirect3DDevice8::RunPushBuffer
+    {
+        (OOVPA*)&IDirect3DDevice8_RunPushBuffer_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_RunPushBuffer,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_RunPushBuffer"
         #endif
     },
     // IDirect3DDevice8::DrawVerticesUP
