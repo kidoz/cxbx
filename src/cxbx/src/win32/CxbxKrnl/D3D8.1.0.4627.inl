@@ -1758,6 +1758,179 @@ SOOVPA<8> IDirect3DDevice8_MakeSpace_1_0_4627 =
 };
 
 // ******************************************************************
+// * Xbox-extension SetRenderState signatures (generated from 4627 d3d8.lib).
+// * Each is verified unique across the Turok - Evolution image and 53 other
+// * XBE/probe images via tools/oovpa/gen_oovpa.py. Five siblings
+// * (OcclusionCullEnable, StencilCullEnable, RopZCmpAlwaysRead, RopZRead,
+// * DoNotCullUncompressed) are byte-identical except for one relocated global
+// * address and require XRef signatures, which are deferred.
+// ******************************************************************
+SOOVPA<8> IDirect3DDevice8_SetRenderState_FrontFace_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x09, 0x3B },
+        { 0x13, 0x8B },
+        { 0x1B, 0x04 },
+        { 0x24, 0x06 },
+        { 0x2B, 0x0D },
+        { 0x35, 0xE9 },
+        { 0x3F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_LineWidth_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x0F, 0x0C },
+        { 0x1D, 0x0D },
+        { 0x30, 0x8B },
+        { 0x3F, 0x8B },
+        { 0x4F, 0x04 },
+        { 0x61, 0x5B },
+        { 0x6F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_LogicOp_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0D, 0x05 },
+        { 0x1B, 0xC7 },
+        { 0x28, 0x06 },
+        { 0x36, 0x17 },
+        { 0x43, 0x83 },
+        { 0x51, 0x00 },
+        { 0x5F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_BackFillMode_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0B, 0xA3 },
+        { 0x1C, 0x72 },
+        { 0x29, 0x85 },
+        { 0x36, 0x00 },
+        { 0x43, 0x0C },
+        { 0x51, 0x90 },
+        { 0x5F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_TwoSidedLighting_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x11, 0x81 },
+        { 0x1D, 0xA3 },
+        { 0x2F, 0x05 },
+        { 0x3E, 0x0D },
+        { 0x4F, 0x04 },
+        { 0x5F, 0x5E },
+        { 0x6F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_MultiSampleMode_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x09, 0x89 },
+        { 0x12, 0x21 },
+        { 0x1B, 0x75 },
+        { 0x24, 0x80 },
+        { 0x2C, 0xE8 },
+        { 0x36, 0x90 },
+        { 0x3F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_MultiSampleRenderTargetMode_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x09, 0x89 },
+        { 0x12, 0x21 },
+        { 0x1B, 0x74 },
+        { 0x24, 0x80 },
+        { 0x2C, 0xE8 },
+        { 0x36, 0x90 },
+        { 0x3F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_MultiSampleMask_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0A, 0xA3 },
+        { 0x14, 0x35 },
+        { 0x21, 0x84 },
+        { 0x2D, 0x03 },
+        { 0x38, 0xE8 },
+        { 0x43, 0x89 },
+        { 0x4F, 0x00 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_SampleAlpha_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0B, 0xC1 },
+        { 0x16, 0xF0 },
+        { 0x21, 0x79 },
+        { 0x2D, 0xCE },
+        { 0x36, 0xE8 },
+        { 0x43, 0x04 },
+        { 0x4F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderState_PSTextureModes_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x05, 0x0D },
+        { 0x0D, 0x03 },
+        { 0x16, 0x00 },
+        { 0x1A, 0xA3 },
+        { 0x21, 0x00 },
+        { 0x28, 0x90 },
+        { 0x2F, 0x90 }
+    }
+};
+
+SOOVPA<8> IDirect3DDevice8_SetRenderStateNotInline_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0C, 0xB5 },
+        { 0x1D, 0x89 },
+        { 0x28, 0x00 },
+        { 0x38, 0x09 },
+        { 0x43, 0x0C },
+        { 0x51, 0x52 },
+        { 0x5F, 0x90 }
+    }
+};
+
+// ******************************************************************
 // * D3D8_1_0_4627
 // ******************************************************************
 OOVPATable D3D8_1_0_4627[] =
@@ -2381,7 +2554,117 @@ OOVPATable D3D8_1_0_4627[] =
         XTL::EmuIDirect3DDevice8_SetRenderState_YuvEnable,
 
         #ifdef _DEBUG_TRACE
-        "EmuIDirect3DDevice8_SetRenderState_YuvEnable" 
+        "EmuIDirect3DDevice8_SetRenderState_YuvEnable"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_FrontFace
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_FrontFace_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_FrontFace,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_FrontFace"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_LineWidth
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_LineWidth_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_LineWidth,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_LineWidth"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_LogicOp
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_LogicOp_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_LogicOp,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_LogicOp"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_BackFillMode
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_BackFillMode_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_BackFillMode,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_BackFillMode"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_TwoSidedLighting
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_TwoSidedLighting_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_TwoSidedLighting,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_TwoSidedLighting"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_MultiSampleMode
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_MultiSampleMode_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleMode,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_MultiSampleMode"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_MultiSampleRenderTargetMode
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_MultiSampleRenderTargetMode_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleRenderTargetMode,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_MultiSampleRenderTargetMode"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_MultiSampleMask
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_MultiSampleMask_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleMask,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_MultiSampleMask"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_SampleAlpha
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_SampleAlpha_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_SampleAlpha,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_SampleAlpha"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_PSTextureModes
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_PSTextureModes_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_PSTextureModes,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_PSTextureModes"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderStateNotInline (generic dispatcher)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderStateNotInline_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderStateNotInline,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderStateNotInline"
         #endif
     },
     // IDirect3DDevice8::SetTransform (* unchanged since 4134 *)
