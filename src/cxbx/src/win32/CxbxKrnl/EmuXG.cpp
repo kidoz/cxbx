@@ -122,10 +122,37 @@ VOID WINAPI XTL::EmuXGSwizzleRect
     }
     #endif
 
+    // The host stores "swizzled" Xbox textures linearly, so swizzling degrades
+    // to a linear rect copy: pRect selects the source region (pitch = Pitch),
+    // pPoint the destination origin inside the packed Width x Height dest.
     if(pRect == NULL && pPoint == NULL && Pitch == 0)
+    {
         memcpy(pDest, pSource, Width*Height*BytesPerPixel);
+    }
     else
-        EmuCleanup("Unhandled swizzle (temporarily)");
+    {
+        LONG SrcLeft = (pRect != NULL) ? pRect->left : 0;
+        LONG SrcTop = (pRect != NULL) ? pRect->top : 0;
+        LONG CopyWidth = (pRect != NULL) ? (pRect->right - pRect->left) : (LONG)Width;
+        LONG CopyHeight = (pRect != NULL) ? (pRect->bottom - pRect->top) : (LONG)Height;
+        LONG DstLeft = (pPoint != NULL) ? pPoint->x : 0;
+        LONG DstTop = (pPoint != NULL) ? pPoint->y : 0;
+        DWORD SrcPitch = (Pitch != 0) ? Pitch : (DWORD)CopyWidth * BytesPerPixel;
+        DWORD DstPitch = Width * BytesPerPixel;   // swizzled dest = packed pow2
+
+        // Clamp to the destination surface so a bogus rect cannot overrun it.
+        if(DstLeft + CopyWidth > (LONG)Width)
+            CopyWidth = (LONG)Width - DstLeft;
+        if(DstTop + CopyHeight > (LONG)Height)
+            CopyHeight = (LONG)Height - DstTop;
+
+        for(LONG y = 0; y < CopyHeight; y++)
+        {
+            memcpy((BYTE*)pDest + (size_t)(DstTop + y) * DstPitch + (size_t)DstLeft * BytesPerPixel,
+                   (const BYTE*)pSource + (size_t)(SrcTop + y) * SrcPitch + (size_t)SrcLeft * BytesPerPixel,
+                   (size_t)CopyWidth * BytesPerPixel);
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -155,7 +182,7 @@ VOID WINAPI XTL::EmuXGUnswizzleRect
 	DWORD i = 1;
 	DWORD j = 1;
 
-	while( (i >= dwWidth) || (i >= dwHeight) || (i >= dwDepth) )
+	while( (i < dwWidth) || (i < dwHeight) || (i < dwDepth) )
     {
         if(i < dwWidth)
         {

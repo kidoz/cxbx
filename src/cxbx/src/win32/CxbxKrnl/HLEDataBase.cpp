@@ -69,6 +69,7 @@ namespace XTL
 #include "DSound.1.0.5849.inl"
 #include "XG.1.0.4361.inl"
 #include "XG.1.0.4627.inl"
+#include "XG.1.0.5849.inl"
 #include "XNet.1.0.3911.inl"
 #include "XOnline.1.0.4361.inl"
 
@@ -225,6 +226,23 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         XG_1_0_4627,
         XG_1_0_4627_SIZE
+    },
+    // XG Version 1.0.5849 (generated from XDK 5849 xgraphics.lib)
+    {
+        "XGRAPHC",
+        1, 0, 5849,
+        XG_1_0_5849,
+        XG_1_0_5849_SIZE
+    },
+    // XG Version 1.0.5933 (NestopiaX 1.3): adjacent build to 5849 -- reuse its
+    // table; the OOVPA byte-matches, so only genuinely unchanged functions
+    // resolve. XGRAPHC is a stateless utility library, so a partial hook is
+    // safe (unlike the DSOUND 5933 reuse above).
+    {
+        "XGRAPHC",
+        1, 0, 5933,
+        XG_1_0_5849,
+        XG_1_0_5849_SIZE
     },
     // XNet Version 1.0.3911
     {
