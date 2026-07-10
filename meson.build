@@ -58,3 +58,9 @@ subdir('src/open-xdk/src/xvga')
 
 # Emulator executable (links the libraries above).
 subdir('src/cxbx')
+
+# XISO host tool (list/extract/create/verify Xbox disc images). Pure C11,
+# no emulator dependencies. Built on every machine -- portable host code.
+if get_option('build_xiso')
+  subdir('src/xiso')
+endif
