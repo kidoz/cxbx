@@ -1689,6 +1689,75 @@ SOOVPA<14> IDirect3DTexture8_GetSurfaceLevel2_1_0_4627 =
 };
 
 // ******************************************************************
+// * IDirect3DDevice8_SetFlickerFilter
+// ******************************************************************
+// Generated from the 4627 d3d8.lib archive member
+// (_D3DDevice_SetFlickerFilter@4, 80 bytes). The 3925 signature does not match
+// (the device-field offset and the global the value is cached in moved between
+// builds), so a 4627-specific signature is required. Verified unique across the
+// Turok - Evolution image and 53 other XBE/probe images via
+// tools/oovpa/gen_oovpa.py.
+SOOVPA<8> IDirect3DDevice8_SetFlickerFilter_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0D, 0x56 },
+        { 0x15, 0x35 },
+        { 0x21, 0x00 },
+        { 0x2E, 0xC7 },
+        { 0x38, 0x89 },
+        { 0x43, 0x90 },
+        { 0x4F, 0x90 }
+    }
+};
+
+// ******************************************************************
+// * IDirect3DDevice8_SetSoftDisplayFilter
+// ******************************************************************
+// Generated from the 4627 d3d8.lib archive member
+// (_D3DDevice_SetSoftDisplayFilter@4, 96 bytes). Like SetFlickerFilter, the 3925
+// signature no longer matches; verified unique across the Turok - Evolution
+// image and 53 other XBE/probe images via tools/oovpa/gen_oovpa.py.
+SOOVPA<8> IDirect3DDevice8_SetSoftDisplayFilter_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0D, 0x56 },
+        { 0x1B, 0xC9 },
+        { 0x28, 0x23 },
+        { 0x37, 0x33 },
+        { 0x44, 0x01 },
+        { 0x51, 0x90 },
+        { 0x5F, 0x90 }
+    }
+};
+
+// ******************************************************************
+// * IDirect3DDevice8_MakeSpace
+// ******************************************************************
+// Generated from the 4627 d3d8.lib archive member (?MakeSpace@D3D@@YGPCKXZ,
+// 16 bytes). The 5558 entry carries an XRef pair; this is the plain byte-pair
+// equivalent (the function body is byte-identical across 4627/5558/5849).
+// Verified unique across the Turok - Evolution image and 7 other images via
+// tools/oovpa/gen_oovpa.py.
+SOOVPA<8> IDirect3DDevice8_MakeSpace_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x50 },
+        { 0x06, 0xD1 },
+        { 0x07, 0xE8 },
+        { 0x08, 0x50 },
+        { 0x09, 0xE8 },
+        { 0x0E, 0xC3 },
+        { 0x0F, 0x90 }
+    }
+};
+
+// ******************************************************************
 // * D3D8_1_0_4627
 // ******************************************************************
 OOVPATable D3D8_1_0_4627[] =
@@ -1811,6 +1880,46 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetRenderTarget"
+        #endif
+    },
+    // IDirect3DDevice8::SetFlickerFilter
+    {
+        (OOVPA*)&IDirect3DDevice8_SetFlickerFilter_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetFlickerFilter,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetFlickerFilter"
+        #endif
+    },
+    // IDirect3DDevice8::SetSoftDisplayFilter
+    {
+        (OOVPA*)&IDirect3DDevice8_SetSoftDisplayFilter_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetSoftDisplayFilter,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetSoftDisplayFilter"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_VertexBlend (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_VertexBlend_1_0_4361,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_VertexBlend,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_VertexBlend"
+        #endif
+    },
+    // IDirect3DDevice8::MakeSpace
+    {
+        (OOVPA*)&IDirect3DDevice8_MakeSpace_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_MakeSpace,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_MakeSpace"
         #endif
     },
     // IDirect3DDevice8::GetTile
@@ -2402,7 +2511,17 @@ OOVPATable D3D8_1_0_4627[] =
         XTL::EmuIDirect3DResource8_Register,
 
         #ifdef _DEBUG_TRACE
-        "EmuIDirect3DResource8_Register" 
+        "EmuIDirect3DResource8_Register"
+        #endif
+    },
+    // IDirect3DResource8::AddRef (* unchanged since 3925 *)
+    {
+        (OOVPA*)&IDirect3DResource8_AddRef_1_0_3925,
+
+        XTL::EmuIDirect3DResource8_AddRef,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DResource8_AddRef"
         #endif
     },
     // IDirect3DResource8::Release (* unchanged since 3925 *)
@@ -2510,7 +2629,7 @@ OOVPATable D3D8_1_0_4627[] =
         XTL::EmuIDirect3DTexture8_LockRect,
 
         #ifdef _DEBUG_TRACE
-        "EmuIDirect3DTexture8_LockRect" 
+        "EmuIDirect3DTexture8_LockRect"
         #endif
     },
 };
