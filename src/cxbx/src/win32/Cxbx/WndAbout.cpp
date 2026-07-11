@@ -37,28 +37,28 @@
 // ******************************************************************
 // * constructor
 // ******************************************************************
-WndAbout::WndAbout(HINSTANCE x_hInstance, HWND x_parent) : Wnd(x_hInstance)
+WndAbout::WndAbout(HINSTANCE x_hInstance, HWND x_parent) : Wnd(x_hInstance), m_hFont(nullptr)
 {
     m_classname = "WndAbout";
-    m_wndname   = "cxbx : About";
+    m_wndname = "cxbx : About";
 
-    m_w         = 285;
-    m_h         = 180;
+    m_w = 320;
+    m_h = 130;
 
-	// ******************************************************************
-	// * center to parent
-	// ******************************************************************
+    // ******************************************************************
+    // * center to parent
+    // ******************************************************************
     {
         RECT rect;
 
         GetWindowRect(x_parent, &rect);
 
-        m_x = rect.left + (rect.right - rect.left)/2 - m_w/2;
-        m_y = rect.top + (rect.bottom - rect.top)/2 - m_h/2;
+        m_x = rect.left + (rect.right - rect.left) / 2 - m_w / 2;
+        m_y = rect.top + (rect.bottom - rect.top) / 2 - m_h / 2;
     }
 
-    m_parent    = x_parent;
-    m_wndstyle  = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
+    m_parent = x_parent;
+    m_wndstyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
 
     return;
 }
@@ -85,13 +85,7 @@ LRESULT CALLBACK WndAbout::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
 
             int nHeight = -MulDiv(8, GetDeviceCaps(hDC, LOGPIXELSY), 72);
 
-			m_hFont = CreateFont(nHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_ROMAN, "Verdana");
-
-            m_BackBmp = (HBITMAP)LoadImage(m_hInstance, MAKEINTRESOURCE(IDB_ABOUT), IMAGE_BITMAP, 0, 0, 0);
-
-            m_BackDC  = CreateCompatibleDC(hDC);
-
-            m_OrigBmp  = (HBITMAP)SelectObject(m_BackDC, m_BackBmp);
+            m_hFont = CreateFont(nHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_ROMAN, "Verdana");
 
             ReleaseDC(hwnd, hDC);
 
@@ -109,32 +103,28 @@ LRESULT CALLBACK WndAbout::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
 
             HGDIOBJ OrgObj = SelectObject(hDC, m_hFont);
 
-			// ******************************************************************
-			// * draw bottom URL bar
-			// ******************************************************************
+            // ******************************************************************
+            // * draw current project information
+            // ******************************************************************
             {
-                SetBkColor(hDC, GetSysColor(COLOR_3DFACE));
+                SetBkMode(hDC, TRANSPARENT);
+                SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT));
 
-				SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT));
+                char projectInfo[] =
+                    "CXBX - classic original Xbox emulator\r\n"
+                    "Maintained by Aleksandr Pavlov\r\n"
+                    "https://github.com/kidoz/cxbx";
+                RECT rect = { 12, 12, 304, 96 };
 
-                char buffer[] = " Contact the author : caustik@caustik.com";
-
-                RECT rect = {0, 134, 280, 148};
-
-                ExtTextOut(hDC, 0, 134, ETO_OPAQUE, &rect, buffer, strlen(buffer), 0);
-            }
-
-			// ******************************************************************
-			// * draw bitmap
-			// ******************************************************************
-            {
-                BitBlt(hDC, 2, 4, 275, 125, m_BackDC, 0, 0, SRCCOPY);
+                DrawText(hDC, projectInfo, -1, &rect, DT_LEFT | DT_TOP | DT_NOPREFIX);
             }
 
             SelectObject(hDC, OrgObj);
 
             if(hDC != NULL)
+            {
                 ReleaseDC(hwnd, hDC);
+            }
 
             EndPaint(hwnd, &ps);
         }
@@ -142,21 +132,21 @@ LRESULT CALLBACK WndAbout::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
 
         case WM_LBUTTONUP:
             SendMessage(hwnd, WM_CLOSE, 0, 0);
-			break;
+            break;
 
         case WM_CLOSE:
             EnableWindow(m_parent, TRUE);
             DestroyWindow(hwnd);
-			break;
+            break;
 
         case WM_DESTROY:
             DeleteObject(m_hFont);
             PostQuitMessage(0);
-			break;
+            break;
 
         default:
-			return DefWindowProc(hwnd, uMsg, wParam, lParam);
-	}
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
 
     return 0;
 }

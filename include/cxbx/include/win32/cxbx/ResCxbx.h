@@ -5,8 +5,6 @@
 #define IDI_CXBX                        101
 #define IDB_SPLASH                      102
 #define IDR_MAINMENU                    103
-#define IDB_LOGO                        106
-#define IDB_ABOUT                       108
 #define IDD_CONTROLLER_CFG              111
 #define IDD_VIDEO_CFG                   113
 #define IDC_SET_X                       1000

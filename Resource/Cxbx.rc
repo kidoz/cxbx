@@ -66,8 +66,6 @@ END
 //
 
 IDB_SPLASH              BITMAP  DISCARDABLE     "Splash.bmp"
-IDB_LOGO                BITMAP  DISCARDABLE     "Logo.bmp"
-IDB_ABOUT               BITMAP  DISCARDABLE     "About.bmp"
 
 /////////////////////////////////////////////////////////////////////////////
 //
