@@ -3906,14 +3906,24 @@ extern "C" VOID NTAPI EmuAvSendTVEncoderOption(PVOID RegisterBase, ULONG Option,
 {
     if(Result != NULL)
     {
-        // Option 6 == VIDEO_ENC_GET_SETTINGS: report the AV pack + TV standard the
-        // guest video HAL uses to enumerate display modes. Return "standard AV
-        // pack, NTSC-M" (AV_PACK_STANDARD 0x01 | VIDEO_REGION_NTSCM 0x100) so nxdk
-        // and the XDK find the 640x480 60Hz mode. Returning 0 (AV_PACK_NONE) means
-        // no mode matches -> XVideoSetMode fails without allocating a framebuffer
-        // -> XVideoGetFB() returns NULL.
-        *Result = (Option == 6) ? 0x00000101 : 0;
+        // Option 6 == AV_QUERY_AV_CAPABILITIES: report the AV pack + TV
+        // standard + refresh capability the guest video HAL uses to enumerate
+        // display modes. Return "standard AV pack, NTSC-M, 60 Hz capable"
+        // (AV_PACK_STANDARD 0x01 | AV_STANDARD_NTSC_M 0x100 | AV_FLAGS_60Hz
+        // 0x400000). The 60Hz bit is load-bearing: the 5849 LTCG D3D's mode
+        // search ANDs the caps with 0xC00000 (60Hz|50Hz) and requires the
+        // result to intersect each mode record's refresh bits (bits 21-22),
+        // so caps without it match NO mode and CreateDevice fails with E_FAIL
+        // (KOF2002's exact boot failure). Returning 0 (AV_PACK_NONE) breaks
+        // nxdk's XVideoSetMode the same way.
+        *Result = (Option == 6) ? 0x00400101 : 0;
     }
+
+    EmuSwapFS();   // Win2k/XP FS
+    printf("EmuKrnl (0x%lX): AvSendTVEncoderOption option=%lu param=0x%lX result=0x%lX.\n",
+           GetCurrentThreadId(), Option, Param, Result != NULL ? *Result : 0);
+    fflush(stdout);
+    EmuSwapFS();   // Xbox FS
 }
 
 extern "C" ULONG NTAPI EmuAvSetDisplayMode(PVOID RegisterBase, ULONG Step, ULONG Mode, ULONG Format, ULONG Pitch, ULONG FrameBuffer)

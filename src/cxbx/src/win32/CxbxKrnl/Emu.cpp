@@ -1709,10 +1709,14 @@ static void EmuNv2aRunPusher();
 extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
 {
     if(Buffer == NULL || Size < sizeof(DWORD) || Size > 16 * 1024 * 1024)
+    {
         return false;
+    }
 
     DWORD Offset = 0;
     DWORD Guard = 0;
+    DWORD ReturnOffset = 0;
+    bool InSubroutine = false;
 
     __try
     {
@@ -1722,20 +1726,47 @@ extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
             Offset += sizeof(DWORD);
             NV2A_TRACE_PB(Word);
 
-            if((Word & 0xE0000003) == 0x20000000 || (Word & 3) == 1 || (Word & 3) == 2)
+            if((Word & 0xE0000003) == 0x20000000 || (Word & 3) == 1)
             {
                 DWORD Target = Word & ((Word & 0xE0000003) == 0x20000000 ? 0x1FFFFFFC : 0xFFFFFFFC);
                 if(Target >= Size)
+                {
                     return false;
+                }
+                Offset = Target;
+                continue;
+            }
+
+            if((Word & 3) == 2)
+            {
+                DWORD Target = Word & 0xFFFFFFFC;
+                if(InSubroutine || Target >= Size)
+                {
+                    return false;
+                }
+
+                ReturnOffset = Offset;
+                InSubroutine = true;
                 Offset = Target;
                 continue;
             }
 
             if(Word == 0x00020000)
+            {
+                if(!InSubroutine)
+                {
+                    return false;
+                }
+
+                Offset = ReturnOffset;
+                InSubroutine = false;
                 continue;
+            }
 
             if((Word & 0xE0030003) != 0 && (Word & 0xE0030003) != 0x40000000)
+            {
                 return false;
+            }
 
             bool Incrementing = (Word & 0xE0030003) == 0;
             DWORD Method = Word & 0x1FFC;
@@ -1743,7 +1774,9 @@ extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
             DWORD Count = (Word >> 18) & 0x07FF;
 
             if(Count > (Size - Offset) / sizeof(DWORD))
+            {
                 return false;
+            }
 
             for(DWORD i = 0; i < Count; i++)
             {
@@ -1751,7 +1784,9 @@ extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
                 Offset += sizeof(DWORD);
                 EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
                 if(Incrementing)
+                {
                     Method += sizeof(DWORD);
+                }
             }
         }
     }
@@ -1798,6 +1833,7 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
         case NV_PFIFO_CACHE1_DMA_INSTANCE:
         case NV_PFIFO_CACHE1_DMA_PUT:
         case NV_PFIFO_CACHE1_DMA_GET:
+        case NV_PFIFO_CACHE1_DMA_SUBROUTINE:
         case NV_PGRAPH_INTR:
         case NV_PGRAPH_INTR_EN:
         case NV_PGRAPH_CTX_CONTROL:
@@ -3829,11 +3865,15 @@ static void EmuNv2aRunPusher()
     ULONG Get = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_GET, 0);
     ULONG Put = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUT, 0);
 
-    if((Push0 & 1) == 0 || (DmaPush & 1) == 0)
+    if((Push0 & 1) == 0 || (DmaPush & 1) == 0 || (DmaPush & 0x00001000) != 0)
+    {
         return;
+    }
 
     if(Get == Put)
+    {
         return;
+    }
 
     // If PUT points into a host contiguous block, the guest built the pushbuffer
     // in host memory and programmed the NV2A with raw host pointers. Read it
@@ -3848,7 +3888,9 @@ static void EmuNv2aRunPusher()
     if(HostMode)
     {
         if(Get < BlockBase || Get >= Put)
+        {
             Get = BlockBase;
+        }
     }
     else if(!EmuNv2aLoadDmaObject(&BaseAddress, &Limit))
     {
@@ -3866,6 +3908,7 @@ static void EmuNv2aRunPusher()
     g_EmuNv2aPusherRunCount++;
 
     ULONG GuardLimit = HostMode ? 0x100000 : 4096;
+    bool PusherError = false;
     for(ULONG Guard = 0; Guard < GuardLimit && Get != Put; Guard++)
     {
         ULONG Word = 0;
@@ -3885,14 +3928,45 @@ static void EmuNv2aRunPusher()
             continue;
         }
 
-        if((Word & 3) == 1 || (Word & 3) == 2)
+        if((Word & 3) == 1)
         {
             Get = Word & 0xFFFFFFFC;
             continue;
         }
 
-        if(Word == 0x00020000)
+        if((Word & 3) == 2)
+        {
+            ULONG Subroutine = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0);
+            if((Subroutine & 1) != 0)
+            {
+                ULONG State = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_STATE, 0);
+                EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_STATE,
+                                     (State & ~0xE0000000) | 0x20000000);
+                PusherError = true;
+                break;
+            }
+
+            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, (Get & 0xFFFFFFFC) | 1);
+            Get = Word & 0xFFFFFFFC;
             continue;
+        }
+
+        if(Word == 0x00020000)
+        {
+            ULONG Subroutine = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0);
+            if((Subroutine & 1) == 0)
+            {
+                ULONG State = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_STATE, 0);
+                EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_STATE,
+                                     (State & ~0xE0000000) | 0x60000000);
+                PusherError = true;
+                break;
+            }
+
+            Get = Subroutine & 0xFFFFFFFC;
+            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0);
+            continue;
+        }
 
         if((Word & 0xE0030003) == 0 || (Word & 0xE0030003) == 0x40000000)
         {
@@ -3915,23 +3989,34 @@ static void EmuNv2aRunPusher()
                 EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
 
                 if(Incrementing)
+                {
                     Method += 4;
+                }
             }
         }
     }
 
     EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_GET, Get);
 
+    if(PusherError)
+    {
+        EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_PUSH, DmaPush | 0x00001000);
+    }
+
     if(Get == Put)
+    {
         EmuNv2aStoreRegister(EmuNv2aPfifoCache1Status,
                              EmuNv2aCachedRegister(EmuNv2aPfifoCache1Status, 0) | 0x10);
+    }
 
     // Titles that stall waiting on GPU write-back never reach the EmuCleanup
     // dump, so flush the opt-in histogram after early batches (and periodically
     // once the title is submitting at frame rate) — the interesting stream is
     // often a single early pushbuffer.
     if(g_EmuNv2aPusherRunCount <= 8 || (g_EmuNv2aPusherRunCount % 500) == 0)
+    {
         EmuNv2aDumpMethodStats("pusher");
+    }
 }
 
 static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
@@ -5528,8 +5613,13 @@ static void EmuCrc32TraceLog(ULONG Esp)
 
         if(str_ptr < 0x00010000 || str_ptr >= 0x10000000)
         {
-            printf("CRC32| hit at 0x%.08lX but [esp+4]=0x%08X is not a guest pointer.\n",
-                   (ULONG)g_Crc32BpAddr, str_ptr);
+            // Not the CRC-string shape: dump the first six stack args raw so
+            // the hook doubles as a generic argument probe for cdecl/stdcall
+            // guest functions.
+            printf("CRC32| hit at 0x%.08lX args=[0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X]\n",
+                   (ULONG)g_Crc32BpAddr, str_ptr, str_len,
+                   *(uint32_t*)(Esp + 12), *(uint32_t*)(Esp + 16),
+                   *(uint32_t*)(Esp + 20), *(uint32_t*)(Esp + 24));
             fflush(stdout);
             return;
         }
@@ -6855,15 +6945,18 @@ static void EmuInstallFakeKernelImage()
     // bootstrap patch needed. Opt-in via CXBX_KERNEL_SKIP_INIT while it is proven
     // out against the title set.
     const bool SkipInit = getenv("CXBX_KERNEL_SKIP_INIT") != NULL;
-    BYTE *Sec = Pe + 0x18 + 0xE0;
-    struct { char Name[8]; ULONG VSize, VAddr; } Sects[6] =
+    BYTE* Sec = Pe + 0x18 + 0xE0;
+    struct
     {
-        { { '.','t','e','x','t', 0,0,0 }, 0x5D000, 0x00001000 },
-        { { '.','d','a','t','a', 0,0,0 }, 0x03000, 0x0005E000 },
-        { { 'P','A','G','E',  0, 0,0,0 }, 0x10000, 0x00061000 },
-        { { '.','r','d','a','t','a',0,0 }, 0x05000, 0x00071000 },
-        { { '.','e','d','a','t','a',0,0 }, 0x02000, 0x00076000 },
-        { { 'I','N','I','T',  0, 0,0,0 }, 0x0A000, 0x00078000 },
+        char Name[8];
+        ULONG VSize, VAddr;
+    } Sects[6] = {
+        { { '.', 't', 'e', 'x', 't', 0, 0, 0 }, 0x5D000, 0x00001000 },
+        { { '.', 'd', 'a', 't', 'a', 0, 0, 0 }, 0x03000, 0x0005E000 },
+        { { 'P', 'A', 'G', 'E', 0, 0, 0, 0 }, 0x10000, 0x00061000 },
+        { { '.', 'r', 'd', 'a', 't', 'a', 0, 0 }, 0x05000, 0x00071000 },
+        { { '.', 'e', 'd', 'a', 't', 'a', 0, 0 }, 0x02000, 0x00076000 },
+        { { 'I', 'N', 'I', 'T', 0, 0, 0, 0 }, 0x0A000, 0x00078000 },
     };
     if(SkipInit)
         memcpy(Sects[5].Name, ".init\0\0\0", 8);   // not 'INIT' -> title skips the ring-0 patch+reboot
@@ -7767,7 +7860,6 @@ int EmuException(LPEXCEPTION_POINTERS e)
 
     return EXCEPTION_CONTINUE_SEARCH;
 }
-
 
 // ******************************************************************
 // * func: ExitException
