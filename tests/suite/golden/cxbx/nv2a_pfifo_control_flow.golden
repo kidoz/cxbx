@@ -1,0 +1,16 @@
+#suite xbox-conformance v1
+#probe nv2a_pfifo_control_flow
+CHK nv2a.control.call_body PASS
+CHK nv2a.control.return_body PASS
+CHK nv2a.control.call_get_eq_put PASS
+CHK nv2a.control.subroutine_cleared PASS
+CHK nv2a.control.old_jump_skips PASS
+CHK nv2a.control.old_jump_target PASS
+CHK nv2a.control.old_jump_get_eq_put PASS
+CHK nv2a.control.invalid_return_error PASS
+CHK nv2a.control.invalid_return_get PASS
+CHK nv2a.control.invalid_return_suspended PASS
+CHK nv2a.control.nested_call_error PASS
+CHK nv2a.control.nested_call_get PASS
+CHK nv2a.control.nested_call_suspended PASS
+#result nv2a_pfifo_control_flow verdict=PASS checks=13 fail=0

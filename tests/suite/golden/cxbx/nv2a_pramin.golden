@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe nv2a_pramin
+CHK nv2a.pramin.first_dword PASS
+CHK nv2a.pramin.last_dword PASS
+CHK nv2a.pramin.byte_rmw PASS
+CHK nv2a.pramin.byte_read PASS
+CHK nv2a.pramin.half_rmw PASS
+CHK nv2a.pramin.half_read PASS
+#result nv2a_pramin verdict=PASS checks=6 fail=0

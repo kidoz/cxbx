@@ -1,0 +1,2 @@
+# Requires a target with an NV2A PRAMIN aperture.
+tags = ["nv2a"]

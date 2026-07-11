@@ -1,0 +1,2 @@
+# Requires a target with NV2A RAMHT and PFIFO object translation.
+tags = ["nv2a"]
