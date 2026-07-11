@@ -47,7 +47,7 @@ void __cdecl main()
     // proves that the 4627 entry was patched into the host wrapper without
     // depending on separate CreateRenderTarget HLE coverage.
     hr = pDevice->SetRenderTarget(pBackBuffer, pOriginalDS);
-    xt_chk("d3d.set_rt_ds_hr", 0, SUCCEEDED(hr));
+    xt_chk("d3d.set_rt_ds_hr", 1, SUCCEEDED(hr));
 
     D3DSurface* pReadRT = D3DDevice_GetRenderTarget2();
     xt_chk("d3d.rt_after_set", 1, pReadRT == pBackBuffer);
@@ -58,7 +58,7 @@ void __cdecl main()
     // NULL-depth path: SetRenderTarget accepts a NULL depth-stencil to detach
     // depth testing. This must not fault and must keep the render target.
     hr = pDevice->SetRenderTarget(pBackBuffer, NULL);
-    xt_chk("d3d.set_rt_null_ds_hr", 0, SUCCEEDED(hr));
+    xt_chk("d3d.set_rt_null_ds_hr", 1, SUCCEEDED(hr));
 
     pReadRT = D3DDevice_GetRenderTarget2();
     xt_chk("d3d.rt_after_null_ds", 1, pReadRT == pBackBuffer);
@@ -70,7 +70,7 @@ void __cdecl main()
     // its initial state. This is the path a title runs every frame when it
     // returns to the back buffer after rendering to a texture.
     hr = pDevice->SetRenderTarget(pOriginalRT, pOriginalDS);
-    xt_chk("d3d.restore_hr", 0, SUCCEEDED(hr));
+    xt_chk("d3d.restore_hr", 1, SUCCEEDED(hr));
 
     pReadRT = D3DDevice_GetRenderTarget2();
     xt_chk("d3d.rt_restored", 1, pReadRT == pOriginalRT);
