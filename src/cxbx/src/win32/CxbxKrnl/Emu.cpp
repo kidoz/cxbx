@@ -6244,7 +6244,20 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
                 bool found=false;
 
-                for(uint32 d=0;d<dwHLEEntries;d++)
+                // CXBX_HLE_SKIP holds a comma-separated library list (e.g.
+                // "DSOUND" or "DSOUND,XGRAPHC") whose HLE tables are NOT
+                // installed, leaving the guest library to run natively.
+                // A partially-hooked library is often worse than an unhooked
+                // one: an HLE'd create hands out an emulator-owned object and
+                // the first un-hooked guest method that receives it faults.
+                bool skipped_by_env = false;
+                {
+                    const char *skip = getenv("CXBX_HLE_SKIP");
+                    if(skip != NULL && strstr(skip, szLibraryName) != NULL)
+                        skipped_by_env = true;
+                }
+
+                for(uint32 d=0;d<dwHLEEntries && !skipped_by_env;d++)
                 {
                     if(BuildVersion != HLEDataBase[d].BuildVersion || MinorVersion != HLEDataBase[d].MinorVersion || MajorVersion != HLEDataBase[d].MajorVersion || strcmp(szLibraryName, HLEDataBase[d].Library) != 0)
                         continue;
@@ -6256,7 +6269,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                     EmuInstallWrappers(HLEDataBase[d].OovpaTable, HLEDataBase[d].OovpaTableSize, Entry, pXbeHeader);
                 }
 
-                if(!found)
+                if(skipped_by_env)
+                    printf("Skipped (CXBX_HLE_SKIP)\n");
+                else if(!found)
                     printf("Skipped\n");
 
                 if(bXRefFirstPass)
