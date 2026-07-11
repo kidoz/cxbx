@@ -2165,6 +2165,14 @@ extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
 
 static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
 {
+    // Kill switch for A/B attribution: CXBX_PHYS_NO_HOST_SPAN=1 restores the
+    // pure-shadow behavior so regressions can be bisected against this path.
+    static int s_Disabled = -1;
+    if(s_Disabled < 0)
+        s_Disabled = getenv("CXBX_PHYS_NO_HOST_SPAN") != NULL ? 1 : 0;
+    if(s_Disabled)
+        return NULL;
+
     if(Address < EmuPhysicalMapBase || Address > EmuPhysicalMapEnd || Size == 0)
         return NULL;
 
