@@ -1,0 +1,6 @@
+# XDK 4627 DirectSound stream packet lifecycle and host playback progress.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

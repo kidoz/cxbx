@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe ds_stream
+#result ds_stream verdict=PASS checks=18 fail=0
