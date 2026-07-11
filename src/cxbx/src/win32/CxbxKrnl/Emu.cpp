@@ -2091,6 +2091,9 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
             IntervalMs = Seconds * 1000;
     }
 
+    printf("WATCHDOG: armed, snapshot interval %lums.\n", IntervalMs);
+    fflush(stdout);
+
     for(;;)
     {
         Sleep(IntervalMs);
@@ -2115,43 +2118,59 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
                 if(Th == NULL)
                     continue;
 
-                SuspendThread(Th);
+                // Capture context and stack words while suspended, but do NOT
+                // call printf (or anything taking a CRT lock) until the thread
+                // is resumed -- the target may be mid-printf holding the stdio
+                // lock, and blocking on it here would leave the target frozen
+                // forever (watchdog deadlock).
                 CONTEXT Ctx;
                 Ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                ULONG StackCopy[96];
+                ULONG StackWords = 0;
+                bool GotContext = false;
+
+                SuspendThread(Th);
                 if(GetThreadContext(Th, &Ctx))
+                {
+                    GotContext = true;
+                    while(StackWords < 96 &&
+                          EmuIsReadableRange(Ctx.Esp + StackWords * 4, 4))
+                    {
+                        StackCopy[StackWords] = *(ULONG*)(Ctx.Esp + StackWords * 4);
+                        StackWords++;
+                    }
+                }
+                ResumeThread(Th);
+                CloseHandle(Th);
+
+                if(GotContext)
                 {
                     printf("WATCHDOG: tid 0x%lX eip=0x%08X esp=0x%08X eax=0x%08X ecx=0x%08X edx=0x%08X esi=0x%08X edi=0x%08X\n",
                            Te.th32ThreadID, (unsigned)Ctx.Eip, (unsigned)Ctx.Esp,
                            (unsigned)Ctx.Eax, (unsigned)Ctx.Ecx, (unsigned)Ctx.Edx,
                            (unsigned)Ctx.Esi, (unsigned)Ctx.Edi);
 
-                    // Attribute the wait: scan the top of the thread's stack
-                    // for return addresses into loaded modules or guest code,
-                    // so a blocked thread names who is waiting, not just that
-                    // it waits in ntdll.
+                    // Attribute the wait: return addresses into loaded modules
+                    // or guest code name who is waiting, not just that the
+                    // thread waits in ntdll.
                     char Where[MAX_PATH + 16];
                     ULONG Shown = 0;
-                    for(ULONG Slot = 0; Slot < 96 && Shown < 8; Slot++)
+                    for(ULONG Slot = 0; Slot < StackWords && Shown < 8; Slot++)
                     {
-                        ULONG SlotAddr = Ctx.Esp + Slot * 4;
-                        if(!EmuIsReadableRange(SlotAddr, 4))
-                            break;
-                        ULONG Value = *(ULONG*)SlotAddr;
-                        if(EmuHostAddressToModuleOffset(Value, Where, sizeof(Where)) != NULL)
+                        ULONG SlotValue = StackCopy[Slot];
+                        if(EmuHostAddressToModuleOffset(SlotValue, Where, sizeof(Where)) != NULL)
                         {
-                            printf("WATCHDOG:   [%02lu] 0x%08lX = %s\n", Slot, Value, Where);
+                            printf("WATCHDOG:   [%02lu] 0x%08lX = %s\n", Slot, SlotValue, Where);
                             Shown++;
                         }
-                        else if(Value >= 0x00010000 && Value < 0x10000000 &&
-                                EmuLooksLikeReturnAddress(Value))
+                        else if(SlotValue >= 0x00010000 && SlotValue < 0x10000000 &&
+                                EmuLooksLikeReturnAddress(SlotValue))
                         {
-                            printf("WATCHDOG:   [%02lu] 0x%08lX = guest return\n", Slot, Value);
+                            printf("WATCHDOG:   [%02lu] 0x%08lX = guest return\n", Slot, SlotValue);
                             Shown++;
                         }
                     }
                 }
-                ResumeThread(Th);
-                CloseHandle(Th);
             }
             while(Thread32Next(Snap, &Te));
         }
