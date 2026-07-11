@@ -3878,6 +3878,15 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
     D3D_TRACE("Resource_Register");
     EmuSwapFS();   // Win2k/XP FS
 
+    // A partially-HLE title may pass a resource whose fields (Common, Data,
+    // Lock) contain garbage from uninitialized guest memory, causing an
+    // access violation somewhere in the host resource creation/copy below.
+    // Guard the entire body so a bad resource is left unbacked instead of
+    // crashing the process.
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+
     // ******************************************************************
     // * debug trace
     // ******************************************************************
@@ -3950,7 +3959,22 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                     break;
                 }
 
-                memcpy(pData, (void*)pBase, dwSize);
+                // Guard the memcpy: a partially-HLE title may register a
+                // resource whose Data field points to invalid memory, causing
+                // an access violation in the copy. Catch it locally and leave
+                // the resource unbacked instead of crashing the process.
+                __try
+                {
+                    memcpy(pData, (void*)pBase, dwSize);
+                }
+                __except(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    EmuWarning("EmuIDirect3DResource8_Register: VertexBuffer data copy fault at 0x%.08X -- resource left unbacked", (DWORD)pBase);
+                    pResource->EmuVertexBuffer8->Unlock();
+                    pResource->EmuVertexBuffer8 = 0;
+                    pResource->Data = 0;
+                    break;
+                }
 
                 pResource->EmuVertexBuffer8->Unlock();
 
@@ -3993,7 +4017,18 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 if(FAILED(hRet))
                     EmuCleanup("IndexBuffer Lock failed");
 
-                memcpy(pData, (void*)pBase, dwSize);
+                __try
+                {
+                    memcpy(pData, (void*)pBase, dwSize);
+                }
+                __except(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    EmuWarning("EmuIDirect3DResource8_Register: IndexBuffer data copy fault at 0x%.08X -- resource left unbacked", (DWORD)pBase);
+                    pResource->EmuIndexBuffer8->Unlock();
+                    pResource->EmuIndexBuffer8 = 0;
+                    pResource->Data = 0;
+                    break;
+                }
 
                 pResource->EmuIndexBuffer8->Unlock();
 
@@ -4248,6 +4283,12 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
         default:
             EmuCleanup("IDirect3DResource8::Register -> Common Type 0x%.08X not yet supported", dwCommonType);
+    }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        EmuWarning("EmuIDirect3DResource8_Register: access violation (resource at 0x%.08X) -- left unbacked", (DWORD)pThis);
+        hRet = D3D_OK;
     }
 
     EmuSwapFS();   // XBox FS
