@@ -7140,15 +7140,43 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
     EmuSwapFS();   // Win2k/XP FS
 
     xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Object;
+    bool AlreadySignaled = false;
+
     if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)) && Header->SignalState > 0 &&
        (Header->Type == 1 || Header->Type == 0x05))
     {
         Header->SignalState--;
+        AlreadySignaled = true;
+    }
+
+    NTSTATUS Result = STATUS_SUCCESS;
+
+    if(!AlreadySignaled && Timeout != NULL)
+    {
+        // Object is unsignaled and a timeout was given. Convert the Xbox
+        // relative timeout (negative 100-ns units) to a host wait. This paces
+        // guest threads that wait on kernel dispatcher objects (events,
+        // semaphores) for frame/audio timing. Without this the guest's decode
+        // loop spins at full speed, starving audio and causing video stutter.
+        if(Timeout->QuadPart < 0)
+        {
+            // Relative timeout: convert 100-ns units to milliseconds for Sleep
+            DWORD dwMs = (DWORD)(-Timeout->QuadPart / 10000);
+            if(dwMs == 0) dwMs = 1;
+            EmuSwapFS();   // Xbox FS
+            Sleep(dwMs);
+            EmuSwapFS();   // Win2k/XP FS
+            Result = STATUS_TIMEOUT;
+        }
+        else if(Timeout->QuadPart == 0)
+        {
+            Result = STATUS_TIMEOUT;
+        }
     }
 
     EmuSwapFS();   // Xbox FS
 
-    return STATUS_SUCCESS;
+    return Result;
 }
 
 extern "C" VOID NTAPI EmuKiUnlockDispatcherDatabase(UCHAR OldIrql)
