@@ -180,6 +180,7 @@ after locking the backbuffer.
 | `fileio_vfs` | FATX / VFS metadata  | gap probe: `GetFileSize` (works) vs the broken VFS layer above leaf I/O -- `CreateDirectory` never materializes a dir, `GetFileAttributes` returns INVALID for an existing file, `MoveFile` fails; `FindFirstFile`/`NtQueryDirectoryFile` hangs (not exercised) |
 | `kernel_cov` | kernel HLE           | time sources monotonic, `Rtl` string/memory ops            |
 | `kernel_trap`| kernel HLE (missing) | calling an unimplemented export is trapped, not crashed     |
+| `kernel_thread` | kernel HLE (threading) | `KeGetCurrentThread`, event lifecycle (`KeInitializeEvent`/`Set`/`Reset`), non-blocking `KeWaitForSingleObject`, `KeDelayExecutionThread`; documents the `PsCreateSystemThread` spawn gap (spawned threads get no Xbox FS selector on Cxbx) |
 | `gfx`        | graphics / video mem | framebuffer get/write/readback + FNV-1a fingerprint         |
 | `nv2a_pmc`   | NV2A PMC / RAMIN     | `PMC_BOOT_0` chip ID, `PMC_ENABLE`, RAMIN write/readback (0xFD MMIO) |
 | `nv2a_intr`  | NV2A interrupts      | `INTR_EN` latch, `PMC_INTR_0` aggregation, write-1-to-clear |
