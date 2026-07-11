@@ -406,8 +406,12 @@ def main() -> int:
         sym = fn.name
         pairs = pick_pairs(fn, args.pairs, args.max_offset)
 
-        must_hits = {p: find_matches(img, pairs, limit=3) for p, img in must_imgs}
-        may_hits = {p: find_matches(img, pairs, limit=3) for p, img in may_imgs}
+        # The limit bounds how large a byte-identical twin family can still be
+        # discriminated: a family with more instances than this loses the true
+        # one before the rel32 check ever runs (seen with the 4627
+        # CDirectSoundBuffer 3D setters, 5-6 twins each).
+        must_hits = {p: find_matches(img, pairs, limit=16) for p, img in must_imgs}
+        may_hits = {p: find_matches(img, pairs, limit=16) for p, img in may_imgs}
         byte_unique = (all(len(h) == 1 for h in must_hits.values())
                        and all(len(h) <= 1 for h in may_hits.values()))
 
