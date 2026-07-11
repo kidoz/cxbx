@@ -235,7 +235,17 @@ struct EmuYuy2TextureInfo
     DWORD               Height;
     DWORD               Pitch;
     ULONG               RefCount;
+    DWORD               DataSize;   // Pitch * Height (start of the canary tail)
 };
+
+// The video decoder writes frames into pPixels through LockRect; a decoder
+// that assumes Xbox pitch/size padding writes PAST Pitch*Height and, on a
+// plain new[] block, corrupts the host heap (detected only much later by an
+// unrelated free). Give every buffer a pattern-filled slop tail: moderate
+// overwrites land harmlessly, and the Release path measures and reports how
+// far the title actually wrote.
+#define EMU_YUY2_TAIL_SLOP  0x4000
+#define EMU_YUY2_TAIL_FILL  0xC5
 
 static EmuYuy2TextureInfo g_Yuy2Textures[EMU_YUY2_TEXTURE_SLOTS] = {};
 
@@ -259,8 +269,10 @@ static XTL::X_D3DTexture *EmuCreateYuy2Texture(DWORD Width, DWORD Height)
             continue;
 
         DWORD Pitch = Width * 2;
-        uint08 *pPixels = new uint08[(size_t)Pitch * Height];
-        memset(pPixels, 0, (size_t)Pitch * Height);
+        DWORD DataSize = (DWORD)((size_t)Pitch * Height);
+        uint08 *pPixels = new uint08[(size_t)DataSize + EMU_YUY2_TAIL_SLOP];
+        memset(pPixels, 0, DataSize);
+        memset(pPixels + DataSize, EMU_YUY2_TAIL_FILL, EMU_YUY2_TAIL_SLOP);
 
         pInfo->pHandle = (XTL::X_D3DResource*)((uint32)pPixels | 0x80000000);
         pInfo->pPixels = pPixels;
@@ -268,6 +280,7 @@ static XTL::X_D3DTexture *EmuCreateYuy2Texture(DWORD Width, DWORD Height)
         pInfo->Height = Height;
         pInfo->Pitch = Pitch;
         pInfo->RefCount = 1;
+        pInfo->DataSize = DataSize;
 
         return (XTL::X_D3DTexture*)pInfo->pHandle;
     }
@@ -4081,6 +4094,21 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
             uRet = --pYuy2->RefCount;
         if(uRet == 0)
         {
+            // Report how far the decoder wrote past the nominal Pitch*Height
+            // (the slop tail absorbed it; see EMU_YUY2_TAIL_SLOP).
+            DWORD dwOverrun = 0;
+            for(DWORD i = EMU_YUY2_TAIL_SLOP; i > 0; i--)
+            {
+                if(pYuy2->pPixels[pYuy2->DataSize + i - 1] != EMU_YUY2_TAIL_FILL)
+                {
+                    dwOverrun = i;
+                    break;
+                }
+            }
+            if(dwOverrun != 0)
+                printf("EmuD3D8 (0x%X): YUY2 texture %ux%u was overwritten 0x%X bytes past its %u-byte buffer.\n",
+                       GetCurrentThreadId(), pYuy2->Width, pYuy2->Height, dwOverrun, pYuy2->DataSize);
+
             delete[] pYuy2->pPixels;
             memset(pYuy2, 0, sizeof(*pYuy2));
         }
