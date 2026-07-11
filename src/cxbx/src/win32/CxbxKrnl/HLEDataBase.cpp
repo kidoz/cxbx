@@ -133,6 +133,13 @@ HLEData HLEDataBase[] =
         XAPI_1_0_5849,
         XAPI_1_0_5849_SIZE
     },
+    // Xapilib Version 1.0.5933 (NestopiaX 1.3): adjacent build, reuse 5849 table
+    {
+        "XAPILIB",
+        1, 0, 5933,
+        XAPI_1_0_5849,
+        XAPI_1_0_5849_SIZE
+    },
     // D3D8 Version 1.0.3911 (early retail era, generated from XDK 3911 d3d8.lib)
     {
         "D3D8",
