@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe fileio_vfs
+CHK vfs.getfilesize_ok PASS
+CHK vfs.mkdir_not_materialized PASS
+CHK vfs.getfileattr_invalid PASS
+CHK vfs.move_fails PASS
+CHK vfs.cleanup_absent PASS
+#result fileio_vfs verdict=PASS checks=5 fail=0
