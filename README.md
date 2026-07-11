@@ -18,11 +18,13 @@ This is the classic caustik CXBX codebase, not Cxbx-Reloaded. It is currently
 being brought forward as a 32-bit Windows/x86 HLE emulator with reproducible
 build files, structured debug traces, and an emulator conformance suite.
 
-<img src="docs/screenshots/dolphin-demo.png" alt="CXBX emulating Dolphin demos" width="480">
-
-<img src="docs/screenshots/nestopiax-v1.3.png" alt="CXBX emulating NestopiaX 1.3" width="480">
-
 Current active developer and maintainer: Aleksandr Pavlov <ckidoz@gmail.com>.
+
+## Screenshots
+
+<img src="docs/screenshots/dolphin-demo.png" alt="CXBX emulating Dolphin demos" width="320">
+<img src="docs/screenshots/nestopiax-v1.3.png" alt="CXBX emulating NestopiaX 1.3" width="320">
+<img src="docs/screenshots/turok-evalution.png" alt="CXBX emulating Turok: Evolution" width="320">
 
 ## Current Status
 
