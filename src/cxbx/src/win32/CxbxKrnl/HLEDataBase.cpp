@@ -63,7 +63,11 @@ namespace XTL
 #include "D3D8.1.0.4361.inl"
 #include "D3D8.1.0.4627.inl"
 #include "D3D8.1.0.5558.inl"
+#include "D3D8.1.0.5344.inl"
 #include "D3D8.1.0.5849.inl"
+#include "D3D8.1.0.5659.inl"
+#include "D3D8.1.0.5788.inl"
+#include "D3D8.1.0.3911.inl"
 #include "D3D8D.1.0.5849.inl"
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
@@ -124,6 +128,13 @@ HLEData HLEDataBase[] =
         XAPI_1_0_5849,
         XAPI_1_0_5849_SIZE
     },
+    // D3D8 Version 1.0.3911 (early retail era, generated from XDK 3911 d3d8.lib)
+    {
+        "D3D8",
+        1, 0, 3911,
+        D3D8_1_0_3911,
+        D3D8_1_0_3911_SIZE
+    },
     // D3D8 Version 1.0.3925
     {
         "D3D8",
@@ -159,6 +170,14 @@ HLEData HLEDataBase[] =
         D3D8_1_0_4627,
         D3D8_1_0_4627_SIZE
     },
+    // D3D8 Version 1.0.5344 (generated from XDK 5344 d3d8.lib; fills the
+    // mid-cycle gap between 4627 and 5558 that many 2003-era titles link)
+    {
+        "D3D8",
+        1, 0, 5344,
+        D3D8_1_0_5344,
+        D3D8_1_0_5344_SIZE
+    },
     // D3D8 Version 1.0.5558 (generated from XDK 5558 d3d8.lib -- the
     // other/xbox-sdks archive; unlocks FCEUltra's HLE route, which was
     // previously native-only and stalled on the PFIFO GET-writeback wait)
@@ -167,6 +186,20 @@ HLEData HLEDataBase[] =
         1, 0, 5558,
         D3D8_1_0_5558,
         D3D8_1_0_5558_SIZE
+    },
+    // D3D8 Version 1.0.5659 (generated from XDK 5659 d3d8.lib; adjacent to 5849)
+    {
+        "D3D8",
+        1, 0, 5659,
+        D3D8_1_0_5659,
+        D3D8_1_0_5659_SIZE
+    },
+    // D3D8 Version 1.0.5788 (generated from XDK 5788 d3d8.lib; adjacent to 5849)
+    {
+        "D3D8",
+        1, 0, 5788,
+        D3D8_1_0_5788,
+        D3D8_1_0_5788_SIZE
     },
     // D3D8 Version 1.0.5849 (generated from XDK 5849 d3d8.lib; unlocks z26x + 5849 samples)
     {
