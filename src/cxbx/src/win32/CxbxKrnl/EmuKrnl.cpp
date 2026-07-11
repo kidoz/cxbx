@@ -7951,13 +7951,20 @@ XBSYSAPI EXPORTNUM(187) NTSTATUS NTAPI xboxkrnl::NtClose
     }
     
     // ******************************************************************
-    // * delete 'special' handles
+    // * tolerate guest-object 'handles'
     // ******************************************************************
+    // A value above 0x80000000 is not a host handle: on real hardware that
+    // range holds kernel-object pointers and physical-map aliases, and titles
+    // do pass such values to NtClose (Turok Evolution does at its video
+    // teardown). Nothing in this tree creates the legacy 'EmuHandle' wrappers
+    // any more, so the old `delete EmuHandleToPtr(Handle)` here freed an
+    // ARBITRARY decoded address on the host heap -- a deferred heap
+    // corruption that surfaced as random RtlFreeHeap crashes much later.
+    // There is no host resource behind these values; just report success.
     if(IsEmuHandle(Handle))
     {
-        EmuHandle *iEmuHandle = EmuHandleToPtr(Handle);
-
-        delete iEmuHandle;
+        printf("EmuKrnl (0x%X): NtClose ignored a guest-object handle 0x%.08X.\n",
+               (uint32)GetCurrentThreadId(), (uint32)Handle);
 
         ret = STATUS_SUCCESS;
     }
