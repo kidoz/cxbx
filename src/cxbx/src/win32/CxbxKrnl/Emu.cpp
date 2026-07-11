@@ -1421,6 +1421,108 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count);
 
+// Opt-in PGRAPH method histogram (CXBX_NV2A_METHOD_STATS=1): count every
+// dispatched method per object class so a title's method vocabulary — in
+// particular which draw/clear methods it uses — can be enumerated from one run
+// without drowning in per-method trace lines. Methods are 4-byte-aligned
+// offsets < 0x2000, so 0x800 slots per class; the begin-op distribution of
+// SET_BEGIN_END is tracked separately (the primitive types matter, not just
+// the count). Dumped every 64k recorded methods and again from EmuCleanup.
+#define EmuNv2aStatsClassMax  16u
+#define EmuNv2aStatsSlotCount 0x800u
+
+struct EmuNv2aMethodStats
+{
+    ULONG Class;
+    ULONG Binds;
+    ULONG Counts[EmuNv2aStatsSlotCount];
+};
+
+static EmuNv2aMethodStats g_EmuNv2aMethodStats[EmuNv2aStatsClassMax] = {};
+static ULONG g_EmuNv2aStatsClassCount = 0;
+static ULONG g_EmuNv2aStatsBeginOps[32] = {};
+static ULONG g_EmuNv2aStatsTotal = 0;
+static int   g_EmuNv2aStatsEnabled = -1;
+
+static bool EmuNv2aMethodStatsEnabled()
+{
+    if(g_EmuNv2aStatsEnabled < 0)
+    {
+        char Buffer[8] = {};
+        DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_METHOD_STATS", Buffer, sizeof(Buffer));
+        g_EmuNv2aStatsEnabled = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
+    }
+    return g_EmuNv2aStatsEnabled == 1;
+}
+
+extern "C" void EmuNv2aDumpMethodStats(const char *Reason)
+{
+    if(g_EmuNv2aStatsEnabled != 1 || g_EmuNv2aStatsTotal == 0)
+        return;
+
+    printf("NV2A| stats dump (%s) total=%lu\n", Reason, g_EmuNv2aStatsTotal);
+
+    for(ULONG i = 0; i < g_EmuNv2aStatsClassCount; i++)
+    {
+        EmuNv2aMethodStats *Stats = &g_EmuNv2aMethodStats[i];
+
+        if(Stats->Binds != 0)
+            printf("NV2A| stats class=0x%.02lX bind count=%lu\n", Stats->Class, Stats->Binds);
+
+        for(ULONG Slot = 0; Slot < EmuNv2aStatsSlotCount; Slot++)
+        {
+            if(Stats->Counts[Slot] != 0)
+                printf("NV2A| stats class=0x%.02lX method=0x%.04lX count=%lu\n",
+                       Stats->Class, Slot * 4, Stats->Counts[Slot]);
+        }
+    }
+
+    for(ULONG Op = 0; Op < 32; Op++)
+    {
+        if(g_EmuNv2aStatsBeginOps[Op] != 0)
+            printf("NV2A| stats begin_op=0x%.02lX count=%lu\n", Op, g_EmuNv2aStatsBeginOps[Op]);
+    }
+
+    fflush(stdout);
+}
+
+static EmuNv2aMethodStats *EmuNv2aStatsForClass(ULONG Class)
+{
+    for(ULONG i = 0; i < g_EmuNv2aStatsClassCount; i++)
+    {
+        if(g_EmuNv2aMethodStats[i].Class == Class)
+            return &g_EmuNv2aMethodStats[i];
+    }
+
+    if(g_EmuNv2aStatsClassCount >= EmuNv2aStatsClassMax)
+        return NULL;
+
+    EmuNv2aMethodStats *Stats = &g_EmuNv2aMethodStats[g_EmuNv2aStatsClassCount++];
+    Stats->Class = Class;
+    return Stats;
+}
+
+static void EmuNv2aRecordMethodStat(ULONG Class, ULONG Method, ULONG Data)
+{
+    if(!EmuNv2aMethodStatsEnabled())
+        return;
+
+    EmuNv2aMethodStats *Stats = EmuNv2aStatsForClass(Class);
+    if(Stats == NULL)
+        return;
+
+    if(Method == 0)
+        Stats->Binds++;
+    else if((Method / 4) < EmuNv2aStatsSlotCount)
+        Stats->Counts[Method / 4]++;
+
+    if(Method == NV097_SET_BEGIN_END && Data != 0 && Data < 32)
+        g_EmuNv2aStatsBeginOps[Data]++;
+
+    if((++g_EmuNv2aStatsTotal % 65536) == 0)
+        EmuNv2aDumpMethodStats("periodic");
+}
+
 static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data)
 {
     ULONG Class = g_EmuNv2aSubchannelClass[Subchannel & 0x07];
@@ -1434,12 +1536,15 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         else
             Class = NV_CLASS_KELVIN;
 
+        EmuNv2aRecordMethodStat(Class, Method, Data);
         NV2A_TRACE_METHOD(Class, Method, Data);
         return;
     }
 
     if(Class == 0)
         Class = NV_CLASS_KELVIN;
+
+    EmuNv2aRecordMethodStat(Class, Method, Data);
 
     if(Method >= 0x180 && Method < 0x200)
     {
@@ -3754,6 +3859,11 @@ static void EmuNv2aRunPusher()
     if(Get == Put)
         EmuNv2aStoreRegister(EmuNv2aPfifoCache1Status,
                              EmuNv2aCachedRegister(EmuNv2aPfifoCache1Status, 0) | 0x10);
+
+    // Titles that stall waiting on GPU write-back never reach the EmuCleanup
+    // dump, so flush the opt-in histogram after every consumed batch — the
+    // interesting stream is often a single early pushbuffer.
+    EmuNv2aDumpMethodStats("pusher");
 }
 
 static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
@@ -6521,6 +6631,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char *szErrorMessage, ...)
         if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
             MessageBox(NULL, szBuffer1, "cxbxkrnl", MB_OK | MB_ICONEXCLAMATION);
     }
+
+    EmuNv2aDumpMethodStats("cleanup");
 
     printf("cxbxkrnl: Terminating Process\n");
     fflush(stdout);
