@@ -1,0 +1,626 @@
+// D3D8 Version 1.0.5788 OOVPA table.
+// Generated from XDK 5788 d3d8.lib via reuse-then-generate.
+// 74 reused, 1 fresh, 5 skipped.
+
+// Fresh signature definitions
+SOOVPA<8> Get2DSurfaceDesc_1_0_5788 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x19, 0x8B },
+        { 0x30, 0x82 },
+        { 0x4B, 0x00 },
+        { 0x64, 0x6C },
+        { 0x7D, 0x50 },
+        { 0x96, 0x24 },
+        { 0xB0, 0x00 }
+    }
+};
+
+
+OOVPATable D3D8_1_0_5788[] =
+{
+    // D3DDevice::CreatePushBuffer2
+    {
+        (OOVPA*)&D3DDevice_CreatePushBuffer2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CreatePushBuffer2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CreatePushBuffer2"
+        #endif
+    },
+    // D3DDevice::BeginPushBuffer
+    {
+        (OOVPA*)&D3DDevice_BeginPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_BeginPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BeginPushBuffer"
+        #endif
+    },
+    // D3DDevice::EndPushBuffer
+    {
+        (OOVPA*)&D3DDevice_EndPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_EndPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_EndPushBuffer"
+        #endif
+    },
+    // D3DDevice::RunPushBuffer
+    {
+        (OOVPA*)&D3DDevice_RunPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_RunPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_RunPushBuffer"
+        #endif
+    },
+    // D3DDevice::GetPushBufferOffset
+    {
+        (OOVPA*)&D3DDevice_GetPushBufferOffset_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetPushBufferOffset,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetPushBufferOffset"
+        #endif
+    },
+    // IDirect3DDevice8::GetDisplayFieldStatus
+    {
+        (OOVPA*)&IDirect3DDevice8_GetDisplayFieldStatus_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetDisplayFieldStatus"
+        #endif
+    },
+    // IDirect3D8::CreateDevice
+    {
+        (OOVPA*)&IDirect3D8_CreateDevice_1_0_5558,
+        XTL::EmuIDirect3D8_CreateDevice,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3D8_CreateDevice"
+        #endif
+    },
+    // IDirect3D8::GetAdapterDisplayMode
+    {
+        (OOVPA*)&IDirect3D8_GetAdapterDisplayMode_1_0_5849,
+        XTL::EmuIDirect3D8_GetAdapterDisplayMode,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3D8_GetAdapterDisplayMode"
+        #endif
+    },
+    // IDirect3D8::KickOffAndWaitForIdle
+    {
+        (OOVPA*)&IDirect3D8_KickOffAndWaitForIdle_1_0_5558,
+        XTL::EmuIDirect3D8_KickOffAndWaitForIdle,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3D8_KickOffAndWaitForIdle"
+        #endif
+    },
+    // IDirect3DDevice8::GetBackBuffer2
+    {
+        (OOVPA*)&IDirect3DDevice8_GetBackBuffer2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetBackBuffer2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetBackBuffer2"
+        #endif
+    },
+    // IDirect3DDevice8::SetViewport
+    {
+        (OOVPA*)&IDirect3DDevice8_SetViewport_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetViewport,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetViewport"
+        #endif
+    },
+    // IDirect3DDevice8::SetShaderConstantMode
+    {
+        (OOVPA*)&IDirect3DDevice8_SetShaderConstantMode_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetShaderConstantMode,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetShaderConstantMode"
+        #endif
+    },
+    // IDirect3DDevice8::GetRenderTarget2
+    {
+        (OOVPA*)&IDirect3DDevice8_GetRenderTarget2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetRenderTarget2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetRenderTarget2"
+        #endif
+    },
+    // IDirect3DDevice8::GetDepthStencilSurface2
+    {
+        (OOVPA*)&IDirect3DDevice8_GetDepthStencilSurface2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetDepthStencilSurface2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetDepthStencilSurface2"
+        #endif
+    },
+    // IDirect3DDevice8::GetTile
+    {
+        (OOVPA*)&IDirect3DDevice8_GetTile_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetTile,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetTile"
+        #endif
+    },
+    // IDirect3DDevice8::SetTileNoWait
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTileNoWait_1_0_5558,
+        XTL::EmuIDirect3DDevice8_SetTileNoWait,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTileNoWait"
+        #endif
+    },
+    // IDirect3DDevice8::CreateVertexShader (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_CreateVertexShader_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CreateVertexShader,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CreateVertexShader"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexShaderConstant1
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexShaderConstant1_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexShaderConstant1,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexShaderConstant1"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexShaderConstant4
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexShaderConstant4_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexShaderConstant4,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexShaderConstant4"
+        #endif
+    },
+    // IDirect3DDevice8::CreatePixelShader (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_CreatePixelShader_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CreatePixelShader,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CreatePixelShader"
+        #endif
+    },
+    // IDirect3DDevice8::SetPixelShader
+    {
+        (OOVPA*)&IDirect3DDevice8_SetPixelShader_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetPixelShader,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetPixelShader"
+        #endif
+    },
+    // IDirect3DDevice8::CreateTexture2
+    {
+        (OOVPA*)&IDirect3DDevice8_CreateTexture2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CreateTexture2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CreateTexture2"
+        #endif
+    },
+    // IDirect3DDevice8::SetIndices (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetIndices_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetIndices,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetIndices"
+        #endif
+    },
+    // IDirect3DDevice8::SetTexture (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTexture_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetTexture,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTexture"
+        #endif
+    },
+    // IDirect3DDevice8::GetDisplayMode
+    {
+        (OOVPA*)&IDirect3DDevice8_GetDisplayMode_1_0_5558,
+        XTL::EmuIDirect3DDevice8_GetDisplayMode,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetDisplayMode"
+        #endif
+    },
+    // IDirect3DDevice8::Clear
+    {
+        (OOVPA*)&IDirect3DDevice8_Clear_1_0_5849,
+        XTL::EmuIDirect3DDevice8_Clear,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_Clear"
+        #endif
+    },
+    // IDirect3DDevice8::Swap
+    {
+        (OOVPA*)&IDirect3DDevice8_Swap_1_0_5849,
+        XTL::EmuIDirect3DDevice8_Swap,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_Swap"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderTarget
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderTarget_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderTarget,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderTarget"
+        #endif
+    },
+    // IDirect3DDevice8::MakeSpace
+    {
+        (OOVPA*)&IDirect3DDevice8_MakeSpace_1_0_5849,
+        XTL::EmuIDirect3DDevice8_MakeSpace,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_MakeSpace"
+        #endif
+    },
+    // IDirect3DDevice8::Begin
+    {
+        (OOVPA*)&IDirect3DDevice8_Begin_1_0_5849,
+        XTL::EmuIDirect3DDevice8_Begin,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_Begin"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexData2f
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexData2f_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexData2f,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexData2f"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexData4f
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexData4f_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexData4f,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexData4f"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexDataColor
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexDataColor_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexDataColor,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexDataColor"
+        #endif
+    },
+    // IDirect3DDevice8::End
+    {
+        (OOVPA*)&IDirect3DDevice8_End_1_0_5849,
+        XTL::EmuIDirect3DDevice8_End,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_End"
+        #endif
+    },
+    // IDirect3DDevice8::EnableOverlay (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_EnableOverlay_1_0_5558,
+        XTL::EmuIDirect3DDevice8_EnableOverlay,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_EnableOverlay"
+        #endif
+    },
+    // IDirect3DDevice8::CreateVertexBuffer2
+    {
+        (OOVPA*)&IDirect3DDevice8_CreateVertexBuffer2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CreateVertexBuffer2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CreateVertexBuffer2"
+        #endif
+    },
+    // IDirect3DDevice8::UpdateOverlay
+    {
+        (OOVPA*)&IDirect3DDevice8_UpdateOverlay_1_0_5849,
+        XTL::EmuIDirect3DDevice8_UpdateOverlay,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_UpdateOverlay"
+        #endif
+    },
+    // IDirect3DDevice8::GetOverlayUpdateStatus
+    {
+        (OOVPA*)&IDirect3DDevice8_GetOverlayUpdateStatus_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetOverlayUpdateStatus,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetOverlayUpdateStatus"
+        #endif
+    },
+    // IDirect3DDevice8::BlockUntilVerticalBlank
+    {
+        (OOVPA*)&IDirect3DDevice8_BlockUntilVerticalBlank_1_0_5849,
+        XTL::EmuIDirect3DDevice8_BlockUntilVerticalBlank,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BlockUntilVerticalBlank"
+        #endif
+    },
+    // IDirect3DDevice8::SetVerticalBlankCallback
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVerticalBlankCallback_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVerticalBlankCallback,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVerticalBlankCallback"
+        #endif
+    },
+    // IDirect3DDevice8::SetTextureState_TexCoordIndex
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTextureState_TexCoordIndex_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetTextureState_TexCoordIndex,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTextureState_TexCoordIndex"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_CullMode (* unchanged since 4134 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_CullMode,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_CullMode"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_NormalizeNormals
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_NormalizeNormals_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_NormalizeNormals,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_NormalizeNormals"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_TextureFactor (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_TextureFactor_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_TextureFactor,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_TextureFactor"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_ZBias
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_ZBias_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_ZBias,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_ZBias"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_EdgeAntiAlias (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_EdgeAntiAlias_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_EdgeAntiAlias,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_EdgeAntiAlias"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_FillMode (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_FillMode_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_FillMode,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_FillMode"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_FogColor (* unchanged since 4134 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_FogColor_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_FogColor,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_FogColor"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_Dxt1NoiseEnable
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_Dxt1NoiseEnable_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_Dxt1NoiseEnable,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_Dxt1NoiseEnable"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_Simple (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_Simple_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_Simple,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_Simple"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_ZEnable
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_ZEnable_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_ZEnable,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_ZEnable"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_StencilEnable (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_StencilEnable_1_0_5558,
+        XTL::EmuIDirect3DDevice8_SetRenderState_StencilEnable,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_StencilEnable"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_MultiSampleAntiAlias
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_MultiSampleAntiAlias_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_ShadowFunc
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_ShadowFunc_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_ShadowFunc,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_ShadowFunc"
+        #endif
+    },
+    // IDirect3DDevice8::SetRenderState_YuvEnable
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_YuvEnable_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetRenderState_YuvEnable,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_YuvEnable"
+        #endif
+    },
+    // IDirect3DDevice8::SetTransform (* unchanged since 4134 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTransform_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetTransform,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTransform"
+        #endif
+    },
+    // IDirect3DDevice8::GetTransform (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_GetTransform_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetTransform,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetTransform"
+        #endif
+    },
+    // IDirect3DDevice8::SetStreamSource (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetStreamSource_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetStreamSource,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetStreamSource"
+        #endif
+    },
+    // IDirect3DDevice8::SetVertexShader (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetVertexShader_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetVertexShader,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetVertexShader"
+        #endif
+    },
+    // IDirect3DDevice8::DrawVertices (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DDevice8_DrawVertices_1_0_5849,
+        XTL::EmuIDirect3DDevice8_DrawVertices,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_DrawVertices"
+        #endif
+    },
+    // IDirect3DDevice8::DrawVerticesUP
+    {
+        (OOVPA*)&IDirect3DDevice8_DrawVerticesUP_1_0_5849,
+        XTL::EmuIDirect3DDevice8_DrawVerticesUP,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_DrawVerticesUP"
+        #endif
+    },
+    // IDirect3DDevice8::SetLight
+    {
+        (OOVPA*)&IDirect3DDevice8_SetLight_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetLight,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetLight"
+        #endif
+    },
+    // IDirect3DDevice8::DrawIndexedVertices
+    {
+        (OOVPA*)&IDirect3DDevice8_DrawIndexedVertices_1_0_5849,
+        XTL::EmuIDirect3DDevice8_DrawIndexedVertices,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_DrawIndexedVertices"
+        #endif
+    },
+    // IDirect3DDevice8::SetMaterial
+    {
+        (OOVPA*)&IDirect3DDevice8_SetMaterial_1_0_5849,
+        XTL::EmuIDirect3DDevice8_SetMaterial,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetMaterial"
+        #endif
+    },
+    // IDirect3DDevice8::LightEnable
+    {
+        (OOVPA*)&IDirect3DDevice8_LightEnable_1_0_5849,
+        XTL::EmuIDirect3DDevice8_LightEnable,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_LightEnable"
+        #endif
+    },
+    // IDirect3DVertexBuffer8::Lock2
+    {
+        (OOVPA*)&IDirect3DVertexBuffer8_Lock2_1_0_5558,
+        XTL::EmuIDirect3DVertexBuffer8_Lock2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DVertexBuffer8_Lock2"
+        #endif
+    },
+    // IDirect3DResource8::Register (* unchanged since 3925 *)
+    {
+        (OOVPA*)&IDirect3DResource8_Register_1_0_5558,
+        XTL::EmuIDirect3DResource8_Register,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DResource8_Register"
+        #endif
+    },
+    // IDirect3DResource8::Release (* unchanged since 3925 *)
+    {
+        (OOVPA*)&IDirect3DResource8_Release_1_0_5558,
+        XTL::EmuIDirect3DResource8_Release,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DResource8_Release"
+        #endif
+    },
+    // IDirect3DResource8::IsBusy (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DResource8_IsBusy_1_0_5558,
+        XTL::EmuIDirect3DResource8_IsBusy,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DResource8_IsBusy"
+        #endif
+    },
+    // Get2DSurfaceDesc
+    {
+        (OOVPA*)&Get2DSurfaceDesc_1_0_5788,
+        XTL::EmuGet2DSurfaceDesc,
+        #ifdef _DEBUG_TRACE
+        "EmuGet2DSurfaceDesc"
+        #endif
+    },
+    // IDirect3DSurface8::GetDesc (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DSurface8_GetDesc_1_0_5558,
+        XTL::EmuIDirect3DSurface8_GetDesc,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DSurface8_GetDesc"
+        #endif
+    },
+    // IDirect3DSurface8::LockRect (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DSurface8_LockRect_1_0_5558,
+        XTL::EmuIDirect3DSurface8_LockRect,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DSurface8_LockRect"
+        #endif
+    },
+    // IDirect3DBaseTexture8::GetLevelCount (* unchanged since 4361 *)
+    {
+        (OOVPA*)&IDirect3DBaseTexture8_GetLevelCount_1_0_5558,
+        XTL::EmuIDirect3DBaseTexture8_GetLevelCount,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DBaseTexture8_GetLevelCount"
+        #endif
+    },
+    // IDirect3DTexture8::GetSurfaceLevel2
+    {
+        (OOVPA*)&IDirect3DTexture8_GetSurfaceLevel2_1_0_5558,
+        XTL::EmuIDirect3DTexture8_GetSurfaceLevel2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DTexture8_GetSurfaceLevel2"
+        #endif
+    },
+    // IDirect3DTexture8::LockRect (* unchanged since 3925 *)
+    {
+        (OOVPA*)&IDirect3DTexture8_LockRect_1_0_5558,
+        XTL::EmuIDirect3DTexture8_LockRect,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DTexture8_LockRect"
+        #endif
+    },
+};
+
+uint32 D3D8_1_0_5788_SIZE = sizeof(D3D8_1_0_5788);
