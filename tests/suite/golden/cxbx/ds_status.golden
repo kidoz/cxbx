@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe ds_status
+#result ds_status verdict=PASS checks=16 fail=0
