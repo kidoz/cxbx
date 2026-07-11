@@ -7427,19 +7427,43 @@ void EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*En
     {
         OOVPA *Oovpa = OovpaTable[a].Oovpa;
 
-        void *pFunc = EmuLocateFunction(Oovpa, lower, upper);
+        uint32 scan = lower;
 
-        if(pFunc != 0)
+        do
         {
+            void *pFunc = EmuLocateFunction(Oovpa, scan, upper);
+
+            if(pFunc == 0)
+                break;
+
             #ifdef _DEBUG_TRACE
             printf("Emu (0x%X): 0x%.08X -> %s\n", GetCurrentThreadId(), pFunc, OovpaTable[a].szFuncName);
             #endif
+
+            // Opt-in install trace (CXBX_HLE_TRACE): one line per patch with
+            // the table entry index, so hook installation can be audited in
+            // builds without _DEBUG_TRACE (which carries the entry names).
+            {
+                static int HleTrace = -1;
+
+                if(HleTrace < 0)
+                    HleTrace = (getenv("CXBX_HLE_TRACE") != NULL) ? 1 : 0;
+
+                if(HleTrace)
+                    printf("HLE| patch entry=%u addr=0x%.08X redirect=0x%.08X flags=%u\n",
+                           a, (uint32)pFunc, (uint32)OovpaTable[a].lpRedirect, OovpaTable[a].Flags);
+            }
 
             if(OovpaTable[a].lpRedirect == 0)
                 EmuInstallWrapper(pFunc, EmuXRefFailure);
             else
                 EmuInstallWrapper(pFunc, OovpaTable[a].lpRedirect);
+
+            // A PATCH_ALL entry keeps scanning past the match; the E9 jmp
+            // just written makes re-matching the same address impossible.
+            scan = (uint32)pFunc + 1;
         }
+        while(OovpaTable[a].Flags & OOVPA_FLAG_PATCH_ALL);
     }
 }
 
