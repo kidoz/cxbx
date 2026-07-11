@@ -107,6 +107,15 @@ template <uint16 COUNT> struct SOOVPA
     Sovp[COUNT];
 };
 
+// Patch EVERY match of the signature, not just the first. For families of
+// byte-identical thin wrappers whose members all deserve the SAME wrapper
+// (e.g. the 4627 CDirectSoundBuffer deferred-3D setters), one deliberately
+// ambiguous signature + this flag replaces per-member XRef chains that
+// cannot discriminate twins anyway. Place such entries AFTER any specific
+// entries for family members: an already-patched prologue starts with the
+// E9 jmp, so it no longer matches and is skipped naturally.
+#define OOVPA_FLAG_PATCH_ALL 0x1
+
 // ******************************************************************
 // * OOVPATable
 // ******************************************************************
@@ -119,6 +128,9 @@ struct OOVPATable
     #ifdef _DEBUG_TRACE
     char  *szFuncName;
     #endif
+
+    // OOVPA_FLAG_* bits; existing aggregate initializers leave this 0.
+    uint32 Flags;
 };
 
 #pragma pack()
