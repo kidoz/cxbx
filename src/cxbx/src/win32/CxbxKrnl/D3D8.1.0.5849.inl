@@ -819,8 +819,128 @@ SOOVPA<8> IDirect3DDevice8_GetDisplayFieldStatus_1_0_5849 =
     }
 };
 
+// _D3DDevice_CreatePushBuffer2@8 (d3d8.lib, 142 bytes)
+SOOVPA<8> D3DDevice_CreatePushBuffer2_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x14, 0x00 },
+        { 0x28, 0x74 },
+        { 0x3C, 0x89 },
+        { 0x50, 0x01 },
+        { 0x64, 0xE8 },
+        { 0x78, 0x5F },
+        { 0x8D, 0x00 }
+    }
+};
+
+// _D3DDevice_BeginPushBuffer@4 (d3d8.lib, 101 bytes)
+SOOVPA<8> D3DDevice_BeginPushBuffer_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x0C, 0xE8 },
+        { 0x1C, 0xBE },
+        { 0x2A, 0x00 },
+        { 0x39, 0x07 },
+        { 0x47, 0x8B },
+        { 0x55, 0x46 },
+        { 0x64, 0x00 }
+    }
+};
+
+// _D3DDevice_EndPushBuffer@0 (d3d8.lib, 141 bytes)
+SOOVPA<8> D3DDevice_EndPushBuffer_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x51 },
+        { 0x14, 0x04 },
+        { 0x28, 0x8B },
+        { 0x3C, 0x96 },
+        { 0x50, 0x00 },
+        { 0x64, 0x10 },
+        { 0x78, 0xB8 },
+        { 0x8C, 0xC3 }
+    }
+};
+
+// _D3DDevice_RunPushBuffer@8 (d3d8.lib, 668 bytes)
+SOOVPA<8> D3DDevice_RunPushBuffer_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0x8B },
+        { 0x48, 0x04 },
+        { 0x6D, 0x89 },
+        { 0x91, 0x3B },
+        { 0xB6, 0x8B },
+        { 0xDA, 0x54 },
+        { 0xFF, 0x4C }
+    }
+};
+
+// _D3DDevice_GetPushBufferOffset@4 (d3d8.lib, 163 bytes)
+SOOVPA<8> D3DDevice_GetPushBufferOffset_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x17, 0x00 },
+        { 0x2E, 0x84 },
+        { 0x45, 0x8B },
+        { 0x5C, 0x8B },
+        { 0x73, 0x00 },
+        { 0x8A, 0xC2 },
+        { 0xA2, 0x00 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
+    // D3DDevice::CreatePushBuffer2
+    {
+        (OOVPA*)&D3DDevice_CreatePushBuffer2_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CreatePushBuffer2,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CreatePushBuffer2"
+        #endif
+    },
+    // D3DDevice::BeginPushBuffer
+    {
+        (OOVPA*)&D3DDevice_BeginPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_BeginPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BeginPushBuffer"
+        #endif
+    },
+    // D3DDevice::EndPushBuffer
+    {
+        (OOVPA*)&D3DDevice_EndPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_EndPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_EndPushBuffer"
+        #endif
+    },
+    // D3DDevice::RunPushBuffer
+    {
+        (OOVPA*)&D3DDevice_RunPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_RunPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_RunPushBuffer"
+        #endif
+    },
+    // D3DDevice::GetPushBufferOffset
+    {
+        (OOVPA*)&D3DDevice_GetPushBufferOffset_1_0_5849,
+        XTL::EmuIDirect3DDevice8_GetPushBufferOffset,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetPushBufferOffset"
+        #endif
+    },
     // IDirect3DDevice8::GetDisplayFieldStatus
     {
         (OOVPA*)&IDirect3DDevice8_GetDisplayFieldStatus_1_0_5849,
