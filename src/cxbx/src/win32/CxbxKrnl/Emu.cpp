@@ -1266,6 +1266,7 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 // texture is bound.
 // ---------------------------------------------------------------------------
 #define NV097_SET_CONTEXT_DMA_A        0x1A60u
+#define NV097_NO_OPERATION             0x0100u
 #define NV097_SET_BEGIN_END            0x17FCu
 #define NV097_SET_TEXTURE_OFFSET_0     0x1B00u
 #define NV097_SET_TEXTURE_FORMAT_0     0x1B04u
@@ -1709,6 +1710,13 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
     }
 
     EmuNv2aStoreRegister(NV_PGRAPH + (Method & 0x1FFC), Data);
+
+    if(Class == NV_CLASS_KELVIN && Method == NV097_NO_OPERATION && Data != 0)
+    {
+        ULONG Intr = EmuNv2aCachedRegister(NV_PGRAPH_INTR, 0);
+        EmuNv2aStoreRegister(NV_PGRAPH_INTR, Intr | 0x00100000);
+    }
+
     NV2A_TRACE_METHOD(Class, Method, Data);
 }
 
