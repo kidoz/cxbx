@@ -3574,6 +3574,60 @@ static void EmuComposeOverlay()
         pOldTexture->Release();
 }
 
+static bool g_bOverlayTimerResolutionActive = false;
+static LARGE_INTEGER g_OverlayPerformanceFrequency = {};
+static LARGE_INTEGER g_OverlayNextPresent = {};
+
+static void EmuResetSoftwareOverlayPacing()
+{
+    if(g_bOverlayTimerResolutionActive)
+    {
+        timeEndPeriod(1);
+        g_bOverlayTimerResolutionActive = false;
+    }
+    g_OverlayPerformanceFrequency.QuadPart = 0;
+    g_OverlayNextPresent.QuadPart = 0;
+}
+
+static void EmuPaceSoftwareOverlay()
+{
+    if(g_pOverlayFrameTexture == NULL)
+    {
+        return;
+    }
+
+    if(g_OverlayPerformanceFrequency.QuadPart == 0)
+    {
+        if(!QueryPerformanceFrequency(&g_OverlayPerformanceFrequency))
+        {
+            return;
+        }
+        g_bOverlayTimerResolutionActive = timeBeginPeriod(1) == TIMERR_NOERROR;
+    }
+
+    LARGE_INTEGER now = {};
+    QueryPerformanceCounter(&now);
+    const LONGLONG interval = g_OverlayPerformanceFrequency.QuadPart / 60;
+    if(g_OverlayNextPresent.QuadPart == 0 ||
+       now.QuadPart > g_OverlayNextPresent.QuadPart + interval * 4)
+    {
+        g_OverlayNextPresent.QuadPart = now.QuadPart + interval;
+    }
+    else
+    {
+        g_OverlayNextPresent.QuadPart += interval;
+    }
+
+    while(now.QuadPart < g_OverlayNextPresent.QuadPart)
+    {
+        const LONGLONG remainingMilliseconds =
+            (g_OverlayNextPresent.QuadPart - now.QuadPart) * 1000 /
+            g_OverlayPerformanceFrequency.QuadPart;
+        Sleep(remainingMilliseconds > 1 ? static_cast<DWORD>(remainingMilliseconds - 1) : 1);
+        QueryPerformanceCounter(&now);
+    }
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_Swap
 // ******************************************************************
@@ -3610,6 +3664,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
+
+    // Windowed Direct3D 8 Present does not reliably honor the Xbox COPY_VSYNC
+    // swap effect on modern hosts. Pace XMV-style software overlays explicitly
+    // so audio-clocked frames are presented at a stable display cadence.
+    EmuPaceSoftwareOverlay();
 
     // The debug runtime scopes markers to one presented frame.
     g_D3DDebugMarker = 0;
@@ -5090,7 +5149,10 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay
     // Stop compositing the software-overlay frame once the title turns the
     // overlay off (end of a video).
     if(!Enable)
+    {
         g_pOverlayFrameTexture = NULL;
+        EmuResetSoftwareOverlayPacing();
+    }
 
     if(g_bSupportsYUY2)
     {
