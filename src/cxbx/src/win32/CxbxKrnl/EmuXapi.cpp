@@ -39,6 +39,8 @@
 
 #include <windows.h>
 
+#include <cstdint>
+
 #include "Emu.h"
 #include "EmuFS.h"
 
@@ -57,6 +59,32 @@ namespace XTL
 {
     #include "EmuXTL.h"
 };
+
+static bool EmuXInputInjectionConfigured()
+{
+    char buffer[2] = {};
+    return GetEnvironmentVariableA("CXBX_INPUT_STATE", buffer, sizeof(buffer)) != 0;
+}
+
+static DWORD EmuXInputConnectedMask()
+{
+    DWORD connectedMask = XTL::EmuDInputGetConnectedMask();
+    if (EmuXInputInjectionConfigured()) {
+        connectedMask |= 1u;
+    }
+    return connectedMask;
+}
+
+static bool EmuXInputHandleToPort(HANDLE handle, DWORD* port)
+{
+    const std::uintptr_t handleValue = reinterpret_cast<std::uintptr_t>(handle);
+    if (port == nullptr || handleValue < 1 || handleValue > 4) {
+        return false;
+    }
+
+    *port = static_cast<DWORD>(handleValue - 1);
+    return true;
+}
 
 // ******************************************************************
 // * func: EmuRtlCreateHeap
@@ -405,12 +433,14 @@ DWORD WINAPI XTL::EmuXGetDevices
     }
     #endif
 
-    DWORD ret = NULL;
+    DWORD ret = 0;
 
-    if(DeviceType->Reserved[0] == 0 && DeviceType->Reserved[1] == 0 && DeviceType->Reserved[2] == 0 && DeviceType->Reserved[3] == 0)
-        ret = (1 << 0);    // Return 1 Controller
-    else
+    if (DeviceType != nullptr && DeviceType->Reserved[0] == 0 &&
+        DeviceType->Reserved[1] == 0 && DeviceType->Reserved[2] == 0) {
+        ret = EmuXInputConnectedMask();
+    } else {
         EmuCleanup("Unknown DeviceType");
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -444,25 +474,23 @@ BOOL WINAPI XTL::EmuXGetDeviceChanges
     }
     #endif
 
-    BOOL bRet = FALSE;
-    BOOL bFirst = TRUE;
+    static DWORD previousConnectedMask = 0;
+    static bool hasPreviousMask = false;
 
-    // Return 1 Controller Inserted initially, then no changes forever
-    if(bFirst)
-    {
-        *pdwInsertions = (1<<0);
-        *pdwRemovals   = 0;
-        bRet = TRUE;
-    }
-    else
-    {
-        *pdwInsertions = 0;
-        *pdwRemovals   = 0;
+    BOOL changed = FALSE;
+    if (DeviceType != nullptr && pdwInsertions != nullptr && pdwRemovals != nullptr) {
+        const DWORD connectedMask = EmuXInputConnectedMask();
+        const DWORD oldMask = hasPreviousMask ? previousConnectedMask : 0;
+        *pdwInsertions = connectedMask & ~oldMask;
+        *pdwRemovals = oldMask & ~connectedMask;
+        changed = (*pdwInsertions != 0 || *pdwRemovals != 0) ? TRUE : FALSE;
+        previousConnectedMask = connectedMask;
+        hasPreviousMask = true;
     }
 
     EmuSwapFS();   // XBox FS
 
-    return bRet;
+    return changed;
 }
 
 // ******************************************************************
@@ -494,11 +522,12 @@ HANDLE WINAPI XTL::EmuXInputOpen
     }
     #endif
 
-    HANDLE ret = NULL;
+    HANDLE ret = nullptr;
 
-    // TODO: We simply return dwPort+1 to represent the input device (lame!)
-    if(dwPort <= 3)
-        ret = (HANDLE)(dwPort+1);
+    if (DeviceType != nullptr && dwPort < 4 &&
+        (EmuXInputConnectedMask() & (1u << dwPort)) != 0) {
+        ret = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(dwPort + 1));
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -561,14 +590,23 @@ DWORD WINAPI XTL::EmuXInputGetCapabilities
     #endif
 
     DWORD ret = ERROR_INVALID_HANDLE;
+    DWORD port = 0;
 
-    // TODO: For now, we are only allowing 1 controller
-    if((int)hDevice >= 1 && (int)hDevice <= 4)
-    {
+    if (pCapabilities == nullptr) {
+        ret = ERROR_INVALID_PARAMETER;
+    } else if (EmuXInputHandleToPort(hDevice, &port) &&
+               (EmuXInputConnectedMask() & (1u << port)) != 0) {
+        ZeroMemory(pCapabilities, sizeof(*pCapabilities));
         pCapabilities->SubType = XINPUT_DEVSUBTYPE_GC_GAMEPAD;
-
-        ZeroMemory(&pCapabilities->In.Gamepad, sizeof(pCapabilities->In.Gamepad));
-
+        pCapabilities->In.Gamepad.wButtons = 0x00FFu;
+        memset(pCapabilities->In.Gamepad.bAnalogButtons, 0xFF,
+               sizeof(pCapabilities->In.Gamepad.bAnalogButtons));
+        pCapabilities->In.Gamepad.sThumbLX = 32767;
+        pCapabilities->In.Gamepad.sThumbLY = 32767;
+        pCapabilities->In.Gamepad.sThumbRX = 32767;
+        pCapabilities->In.Gamepad.sThumbRY = 32767;
+        pCapabilities->Out.Rumble.wLeftMotorSpeed = 0xFFFFu;
+        pCapabilities->Out.Rumble.wRightMotorSpeed = 0xFFFFu;
         ret = ERROR_SUCCESS;
     }
 
@@ -650,16 +688,17 @@ DWORD WINAPI XTL::EmuXInputGetState
     #endif
 
     DWORD ret = ERROR_INVALID_HANDLE;
+    DWORD port = 0;
 
-    // TODO: For now, the only valid handles are Controller 1 through 4,
-    //       and they are always normal Controllers
-    if((int)hDevice >= 1 && (int)hDevice <= 4)
-    {
-        if((int)hDevice == 1)
-        {
-            if(!EmuXInputInjectState(pState))
-                EmuDInputPoll(pState);
+    if (pState == nullptr) {
+        ret = ERROR_INVALID_PARAMETER;
+    } else if (EmuXInputHandleToPort(hDevice, &port)) {
+        if (port == 0 && EmuXInputInjectState(pState)) {
             ret = ERROR_SUCCESS;
+        } else if (EmuDInputPoll(port, pState)) {
+            ret = ERROR_SUCCESS;
+        } else {
+            ret = ERROR_DEVICE_NOT_CONNECTED;
         }
     }
 
@@ -693,11 +732,24 @@ DWORD WINAPI XTL::EmuXInputSetState
     }
     #endif
 
-    printf("*Warning* Ignoring EmuXInputSetState!\n");
+    DWORD ret = ERROR_INVALID_HANDLE;
+    DWORD port = 0;
+
+    if (pFeedback == nullptr) {
+        ret = ERROR_INVALID_PARAMETER;
+    } else if (EmuXInputHandleToPort(hDevice, &port)) {
+        if (port == 0 && EmuXInputInjectionConfigured()) {
+            ret = ERROR_SUCCESS;
+        } else {
+            ret = EmuDInputSetState(port, pFeedback->Rumble.wLeftMotorSpeed,
+                                    pFeedback->Rumble.wRightMotorSpeed);
+        }
+        pFeedback->Header.dwStatus = ret;
+    }
 
     EmuSwapFS();   // XBox FS
 
-    return ERROR_SUCCESS;
+    return ret;
 }
 
 // ******************************************************************
