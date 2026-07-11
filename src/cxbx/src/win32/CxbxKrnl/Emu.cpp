@@ -6481,6 +6481,25 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 	// For Unicode Conversions
 	setlocale(LC_ALL, "English");
 
+    // Back physical page 0 (64 KiB below the kernel image at 0x80010000) with
+    // real memory. The XAPI USB stack keeps its device globals there and
+    // touches them from inside KeRaiseIrqlToDpcLevel windows: on hardware
+    // nothing can preempt that code, so it legitimately relies on the stack
+    // below ESP staying intact -- but every trap-and-emulate fault makes the
+    // host kernel scribble an EXCEPTION_RECORD+CONTEXT exactly there, and the
+    // guest then consumes dispatch residue as data/code (KOF2002 jumped onto
+    // its own stack this way after USB port enumeration). A real mapping means
+    // those accesses never fault at all. No aliasing is lost: physical page 0
+    // has no host-block backing, and the trap-decoded kernel-image shadow
+    // starts at 0x80010000. Failure (no large-address space) falls back to the
+    // trap path unchanged.
+    {
+        PVOID PhysPageZero = VirtualAlloc((LPVOID)0x80000000, 0x10000,
+                                          MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        printf("Emu (0x%X): physical page-0 window at 0x80000000 %s.\n",
+               GetCurrentThreadId(), PhysPageZero != NULL ? "mapped" : "unavailable (trap path)");
+    }
+
     // ******************************************************************
     // * debug console allocation (if configured)
     // ******************************************************************
