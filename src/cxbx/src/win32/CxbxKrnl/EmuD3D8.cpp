@@ -2005,16 +2005,49 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
-    HRESULT hRet = g_pD3DDevice8->SetVertexShaderConstant
-    (
-        Register,
-        pConstantData,
-        ConstantCount
-    );
+    // On Xbox the vertex-program constant file is larger than the host
+    // vs.1.1 constant limit (96), and titles set constants at indices the
+    // host rejects by throwing the HRESULT internally (a bare C++ `throw`),
+    // which does not unwind across our FS content-swap -- the process dies
+    // 0xE06D7363/E_FAIL (Turok Evolution's render path, immediately before
+    // its 512x512 render-to-texture viewport). Clamp the register range into
+    // the host-valid [0, 95] window and forward only what fits; report
+    // success, as real hardware would have accepted the call. (Same guard
+    // discipline as SetRenderTarget / Clear / SetViewport.)
+    HRESULT hRet = D3D_OK;
+    if(g_pD3DDevice8 != 0)
+    {
+        const INT HostMaxConstants = 96;   // D3DVS_CONSTREG_MAX (vs.1.1)
+        INT Reg = Register;
+        DWORD Count = ConstantCount;
+        CONST BYTE *pData = (CONST BYTE *)pConstantData;
+
+        if(Reg < 0)
+        {
+            DWORD Skip = (DWORD)(-Reg);
+            if(Count <= Skip)
+                Count = 0;
+            else
+            {
+                Count -= Skip;
+                Reg = 0;
+                pData += Skip * 16;
+            }
+        }
+        if(Reg >= HostMaxConstants)
+            Count = 0;
+        else if(Reg + (INT)Count > HostMaxConstants)
+            Count = (DWORD)(HostMaxConstants - Reg);
+
+        if(Count > 0)
+            hRet = g_pD3DDevice8->SetVertexShaderConstant(Reg, pData, Count);
+    }
 
     if(FAILED(hRet))
     {
-        EmuWarning("SetVertexShaderConstant failed (Register = %d, Count = %d)", Register, ConstantCount);
+        static LONG WarnCount = 0;
+        if(InterlockedIncrement(&WarnCount) <= 5)
+            EmuWarning("SetVertexShaderConstant failed (Register = %d, Count = %d) hr=0x%.08X", Register, ConstantCount, (DWORD)hRet);
 
         hRet = D3D_OK;
     }
