@@ -223,7 +223,13 @@ enum XRefDataBaseOffset
     XREF_DS4627_BUF_SETCONEANGLES,
     XREF_DS4627_BUF_SETI3DL2SRC_T,
     XREF_DS4627_BUF_SETI3DL2SRC,
-    XREF_DS4627_BUF_STOP
+    XREF_DS4627_BUF_STOP,
+    // XDK 5849 D3D8 pushbuffer fence internals: saved so the thin-wrapper
+    // fence functions can be distinguished by their call target.
+    XREF_SETFENCE,
+    XREF_BLOCKONTIME,
+    XREF_KICKOFF,
+    XREF_KICKOFFANDWAITFORIDLE
 };
 
 #endif
