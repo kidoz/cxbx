@@ -4149,6 +4149,12 @@ static void EmuNv2aRunPusher()
     }
 }
 
+// Late-armed physical-access EIP trace: EmuKeConnectInterrupt sets this when a
+// title connects the USB (level-1) interrupt so the access trail into a
+// USB-init crash is captured without paying the full-boot CXBX_REBOOT_TRACE
+// cost. Armed only when CXBX_USB_PHYS_TRACE is set.
+extern "C" volatile LONG g_EmuPhysTraceArmed = 0;
+
 static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 {
     if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
@@ -4173,7 +4179,7 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
         // that performed each kernel/physical read so the read sequence can be
         // correlated back to the exact guest instructions and their branch.
         static bool s_RebootTrace = getenv("CXBX_REBOOT_TRACE") != NULL;
-        if(s_RebootTrace)
+        if(s_RebootTrace || g_EmuPhysTraceArmed != 0)
         {
             printf("Emu (0x%lX): PHYSFAULT eip=0x%.08lX access=%lu addr=0x%.08lX bytes=%02X %02X %02X %02X %02X %02X %02X\n",
                    GetCurrentThreadId(), (ULONG)Instruction, AccessType, FaultAddress,

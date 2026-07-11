@@ -5249,6 +5249,8 @@ static void EmuStartUsbInterruptThread()
     }
 }
 
+extern "C" volatile LONG g_EmuPhysTraceArmed;
+
 extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 {
     EmuSwapFS();   // Win2k/XP FS
@@ -5285,7 +5287,16 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
         EmuStartAudioInterruptThread();
 
     if(Connected && Level == EmuUsbInterruptLevel)
+    {
         EmuStartUsbInterruptThread();
+
+        // Arm the physical-access EIP trace for the USB-init window (opt-in):
+        // the current KOF2002 wild-jump lands on the stack right after the
+        // title enables OHCI interrupts, and the access trail names the last
+        // guest function on the way in.
+        if(GetEnvironmentVariableA("CXBX_USB_PHYS_TRACE", NULL, 0) != 0)
+            g_EmuPhysTraceArmed = 1;
+    }
 
     EmuSwapFS();   // Xbox FS
 
