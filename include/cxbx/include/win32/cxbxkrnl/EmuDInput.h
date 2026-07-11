@@ -50,7 +50,17 @@ extern void EmuDInputCleanup();
 // ******************************************************************
 // * func: EmuDInputPoll
 // ******************************************************************
-extern void EmuDInputPoll(PXINPUT_STATE Controller);
+extern DWORD EmuDInputGetConnectedMask();
+
+// ******************************************************************
+// * func: EmuDInputPoll
+// ******************************************************************
+extern bool EmuDInputPoll(DWORD Port, PXINPUT_STATE Controller);
+
+// ******************************************************************
+// * func: EmuDInputSetState
+// ******************************************************************
+extern DWORD EmuDInputSetState(DWORD Port, WORD LeftMotorSpeed, WORD RightMotorSpeed);
 
 // ******************************************************************
 // * offsets into analog button array

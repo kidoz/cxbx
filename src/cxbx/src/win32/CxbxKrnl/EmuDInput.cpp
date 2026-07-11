@@ -34,6 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
+#include "HostInput.h"
 #include "Emu.h"
 
 // ******************************************************************
@@ -46,10 +47,16 @@ namespace XTL
 
 #include "EmuShared.h"
 
+#include <cstring>
+
 // ******************************************************************
 // * Static Variable(s)
 // ******************************************************************
 static XBController g_XBController;
+static bool g_DirectInputReady = false;
+static XTL::XINPUT_STATE g_LastDirectInputState = {};
+static DWORD g_DirectInputPacketNumber = 0;
+static bool g_HasLastDirectInputState = false;
 
 // ******************************************************************
 // * func: XTL::EmuDInputInit
@@ -60,9 +67,11 @@ bool XTL::EmuDInputInit()
 
     g_XBController.ListenBegin(XTL::g_hEmuWindow);
 
-    if(g_XBController.GetError())
+    if (g_XBController.GetError()) {
         return false;
+    }
 
+    g_DirectInputReady = true;
     return true;
 }
 
@@ -71,18 +80,79 @@ bool XTL::EmuDInputInit()
 // ******************************************************************
 void XTL::EmuDInputCleanup()
 {
-    g_XBController.ListenEnd();
+    if (g_DirectInputReady) {
+        g_XBController.ListenEnd();
+        g_DirectInputReady = false;
+    }
+    HostInput::Shutdown();
 }
 
 // ******************************************************************
-// * func: XTL::EmuPollController
+// * func: XTL::EmuDInputGetConnectedMask
 // ******************************************************************
-void XTL::EmuDInputPoll(XTL::PXINPUT_STATE Controller)
+DWORD XTL::EmuDInputGetConnectedMask()
 {
-    g_XBController.ListenPoll(Controller);
+    DWORD connectedMask = HostInput::GetConnectedMask();
+    if (g_DirectInputReady && g_XBController.HasInputDevice()) {
+        connectedMask |= 1u;
+    }
+    return connectedMask;
+}
 
-    if(g_XBController.GetError())
+// ******************************************************************
+// * func: XTL::EmuDInputPoll
+// ******************************************************************
+bool XTL::EmuDInputPoll(DWORD Port, XTL::PXINPUT_STATE Controller)
+{
+    if (Controller == nullptr || Port >= HostInput::MaxPorts) {
+        return false;
+    }
+
+    HostInput::GamepadState hostState{};
+    if (HostInput::Poll(Port, hostState)) {
+        ZeroMemory(Controller, sizeof(*Controller));
+        Controller->dwPacketNumber = hostState.packetNumber;
+        Controller->Gamepad.wButtons = hostState.buttons;
+        memcpy(Controller->Gamepad.bAnalogButtons, hostState.analogButtons.data(),
+               hostState.analogButtons.size());
+        Controller->Gamepad.sThumbLX = hostState.leftThumbX;
+        Controller->Gamepad.sThumbLY = hostState.leftThumbY;
+        Controller->Gamepad.sThumbRX = hostState.rightThumbX;
+        Controller->Gamepad.sThumbRY = hostState.rightThumbY;
+        return true;
+    }
+
+    if (Port != 0 || !g_DirectInputReady || !g_XBController.HasInputDevice()) {
+        return false;
+    }
+
+    XTL::XINPUT_STATE directInputState{};
+    g_XBController.ListenPoll(&directInputState);
+
+    if (g_XBController.GetError()) {
         MessageBox(NULL, g_XBController.GetError(), "cxbx [*UNHANDLED!*]", MB_OK);  // TODO: Handle this!
+        return false;
+    }
 
-    return;
+    if (!g_HasLastDirectInputState ||
+        memcmp(&directInputState.Gamepad, &g_LastDirectInputState.Gamepad,
+               sizeof(directInputState.Gamepad)) != 0) {
+        ++g_DirectInputPacketNumber;
+        g_LastDirectInputState = directInputState;
+        g_HasLastDirectInputState = true;
+    }
+
+    directInputState.dwPacketNumber = g_DirectInputPacketNumber;
+    *Controller = directInputState;
+    return true;
+}
+
+DWORD XTL::EmuDInputSetState(DWORD Port, WORD LeftMotorSpeed, WORD RightMotorSpeed)
+{
+    DWORD result = HostInput::SetRumble(Port, LeftMotorSpeed, RightMotorSpeed);
+    if (result == ERROR_DEVICE_NOT_CONNECTED && Port == 0 &&
+        g_DirectInputReady && g_XBController.HasInputDevice()) {
+        return ERROR_SUCCESS;
+    }
+    return result;
 }

@@ -21,6 +21,7 @@ cxbx_launcher_src = files(
 
 cxbx_runtime_src = files(
   'src/win32/EmuShared.cpp',
+  'src/win32/HostInput.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',

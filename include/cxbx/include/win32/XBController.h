@@ -139,6 +139,7 @@ class XBController : public Error
         void ListenBegin(HWND hwnd);
         void ListenPoll(XTL::XINPUT_STATE *Controller);
         void ListenEnd();
+        bool HasInputDevice() const;
 
         // ******************************************************************
         // * DirectInput Init / Cleanup

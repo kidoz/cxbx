@@ -125,6 +125,8 @@ typedef PVOID (WINAPI *pfRtlCreateHeap)
 // ******************************************************************
 // * XINPUT_POLLING_PARAMETERS
 // ******************************************************************
+#pragma pack(push, 1)
+
 typedef struct _XINPUT_POLLING_PARAMETERS
 {
     BYTE       fAutoPoll        : 1;
@@ -240,6 +242,13 @@ typedef struct _XINPUT_FEEDBACK
     };
 }
 XINPUT_FEEDBACK, *PXINPUT_FEEDBACK;
+
+#pragma pack(pop)
+
+static_assert(sizeof(XINPUT_GAMEPAD) == 18, "Xbox XINPUT_GAMEPAD ABI mismatch");
+static_assert(sizeof(XINPUT_STATE) == 22, "Xbox XINPUT_STATE ABI mismatch");
+static_assert(sizeof(XINPUT_CAPABILITIES) == 25, "Xbox XINPUT_CAPABILITIES ABI mismatch");
+static_assert(sizeof(XINPUT_FEEDBACK) == 70, "Xbox XINPUT_FEEDBACK ABI mismatch");
 
 // ******************************************************************
 // * RTL_HEAP_PARAMETERS

@@ -820,16 +820,18 @@ void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
                         Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_DPAD_RIGHT;
                     break;
                 case XBCTRL_OBJECT_BACK:
-                    if(wValue > 0)
-                        Controller->Gamepad.wButtons |= XINPUT_GAMEPAD_START;
-                    else
-                        Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_START;
+                    if (wValue > 0) {
+                        Controller->Gamepad.wButtons |= XINPUT_GAMEPAD_BACK;
+                    } else {
+                        Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_BACK;
+                    }
                     break;
                 case XBCTRL_OBJECT_START:
-                    if(wValue > 0)
-                        Controller->Gamepad.wButtons |= XINPUT_GAMEPAD_BACK;
-                    else
-                        Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_BACK;
+                    if (wValue > 0) {
+                        Controller->Gamepad.wButtons |= XINPUT_GAMEPAD_START;
+                    } else {
+                        Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_START;
+                    }
                     break;
                 case XBCTRL_OBJECT_LTHUMB:
                     if(wValue > 0)
@@ -866,6 +868,11 @@ void XBController::ListenEnd()
     m_CurrentState = XBCTRL_STATE_NONE;
 
     return;
+}
+
+bool XBController::HasInputDevice() const
+{
+    return m_dwInputDeviceCount > 0;
 }
 
 // ******************************************************************
