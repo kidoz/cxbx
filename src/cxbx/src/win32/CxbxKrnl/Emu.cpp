@@ -67,6 +67,11 @@ namespace XTL
 #include "EmuShared.h"
 #include "HLEDataBase.h"
 
+// Forward-declare HostInput::Initialize to avoid pulling STL headers into the
+// XTL namespace scope (HostInput.h includes <array>/<cstdint> which conflict
+// with the Xbox declarations inside namespace XTL).
+namespace HostInput { bool Initialize(); }
+
 // ******************************************************************
 // * global / static
 // ******************************************************************
@@ -6962,6 +6967,17 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // handler) because CreateThread inside the vectored-exception path wedges
     // the faulting thread.
     EmuAciStartDmaThread();
+
+    // Initialize the host XInput backend before the guest thread starts.
+    // LoadLibrary/GetProcAddress inside the host XInput DLLs uses CRT
+    // synchronization whose C++ throws have no catch frame across the
+    // patched-call/FS-swap boundary; doing it here (on the init thread,
+    // before FS-swap is active) avoids that entirely.
+    {
+        bool ok = HostInput::Initialize();
+        printf("Emu (0x%X): Host XInput backend %s.\n",
+               GetCurrentThreadId(), ok ? "initialized" : "unavailable");
+    }
 
     printf("Emu (0x%X): Initializing Direct3D.\n", GetCurrentThreadId());
 
