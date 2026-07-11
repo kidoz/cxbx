@@ -45,6 +45,7 @@ namespace xboxkrnl
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
+#include "core/Yuy2Converter.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -3007,31 +3008,12 @@ static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const EmuYuy2TextureInfo *p
     if(FAILED(g_pYuvConvertTexture->LockRect(0, &lr, NULL, 0)))
         return NULL;
 
-    for(DWORD y = 0; y < h; y++)
-    {
-        const uint08 *s = pInfo->pPixels + (size_t)y * pInfo->Pitch;
-        uint08 *d = (uint08*)lr.pBits + (size_t)y * lr.Pitch;
-        for(DWORD x = 0; x < w; x += 2)
-        {
-            float Y0 = s[0], U = s[1], Y1 = s[2], V = s[3];
-            s += 4;
-            for(int k = 0; k < 2; k++)
-            {
-                float Y = k ? Y1 : Y0;
-                float R = Y + 1.402f * (V - 128.0f);
-                float G = Y - 0.344f * (U - 128.0f) - 0.714f * (V - 128.0f);
-                float B = Y + 1.772f * (U - 128.0f);
-                d[0] = (uint08)(B < 0 ? 0 : (B > 255 ? 255 : B));   // B
-                d[1] = (uint08)(G < 0 ? 0 : (G > 255 ? 255 : G));   // G
-                d[2] = (uint08)(R < 0 ? 0 : (R > 255 ? 255 : R));   // R
-                d[3] = 0xFF;                                        // A
-                d += 4;
-            }
-        }
-    }
+    const bool converted = CxbxVideo::ConvertYuy2ToBgra(
+        pInfo->pPixels, pInfo->Pitch, static_cast<uint08*>(lr.pBits),
+        static_cast<size_t>(lr.Pitch), w, h);
 
     g_pYuvConvertTexture->UnlockRect(0);
-    return g_pYuvConvertTexture;
+    return converted ? g_pYuvConvertTexture : NULL;
 }
 
 // ******************************************************************

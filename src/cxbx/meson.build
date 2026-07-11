@@ -20,6 +20,7 @@ cxbx_launcher_src = files(
 )
 
 cxbx_runtime_src = files(
+  'src/core/Yuy2Converter.cpp',
   'src/win32/EmuShared.cpp',
   'src/win32/HostInput.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
