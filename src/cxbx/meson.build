@@ -107,8 +107,6 @@ cxbx_launcher_resources = custom_target(
   depend_files : files(
     '../../docs/branding/cxbx.ico',
     '../../include/cxbx/include/win32/cxbx/ResCxbx.h',
-    '../../Resource/About.bmp',
-    '../../Resource/Logo.bmp',
     '../../Resource/Splash.bmp',
   ),
 )

@@ -265,20 +265,23 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 			// ******************************************************************
 			// * initialize back buffer
 			// ******************************************************************
-			{
+            {
                 HDC hDC = GetDC(hwnd);
 
-                m_BackBmp  = (HBITMAP)LoadImage(m_hInstance, MAKEINTRESOURCE(IDB_SPLASH), IMAGE_BITMAP, 0, 0, 0);
-                m_LogoBmp  = (HBITMAP)LoadImage(m_hInstance, MAKEINTRESOURCE(IDB_LOGO), IMAGE_BITMAP, 0, 0, 0);
-                
-                m_BackDC   = CreateCompatibleDC(hDC);
-                m_LogoDC   = CreateCompatibleDC(hDC);
+                m_BackBmp = (HBITMAP)LoadImage(m_hInstance, MAKEINTRESOURCE(IDB_SPLASH), IMAGE_BITMAP, 0, 0, 0);
+                m_LogoBmp = CreateCompatibleBitmap(hDC, 100, 17);
 
-                m_OrigBmp  = (HBITMAP)SelectObject(m_BackDC, m_BackBmp);
+                m_BackDC = CreateCompatibleDC(hDC);
+                m_LogoDC = CreateCompatibleDC(hDC);
+
+                m_OrigBmp = (HBITMAP)SelectObject(m_BackDC, m_BackBmp);
                 m_OrigLogo = (HBITMAP)SelectObject(m_LogoDC, m_LogoBmp);
+                PatBlt(m_LogoDC, 0, 0, 100, 17, BLACKNESS);
 
                 if(hDC != NULL)
+                {
                     ReleaseDC(hwnd, hDC);
+                }
             }
 
             SetClassLong(hwnd, GCL_HICON, (LONG)LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_CXBX)));
