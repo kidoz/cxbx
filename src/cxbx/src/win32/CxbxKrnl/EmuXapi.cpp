@@ -68,20 +68,21 @@ static bool EmuXInputInjectionConfigured()
 
 static DWORD EmuXInputConnectedMask()
 {
-    // Injected input needs no host devices -- and skipping the host query
-    // keeps headless runs off the host-input path entirely.
     if(EmuXInputInjectionConfigured()) {
         return 1u;
     }
 
-    // The host XInput backend is initialized during EmuInit (before the
-    // FS-swap is active), so LoadLibrary/GetProcAddress has already resolved.
-    // The per-call XInputGetState is a plain C ABI call that does not throw.
-    // The SEH guard remains as defense-in-depth: if a driver-level fault
-    // occurs, we report zero devices rather than killing the process.
     DWORD connectedMask = 0;
     __try {
         connectedMask = XTL::EmuDInputGetConnectedMask();
+        {
+            static LONG s_FirstCall = 0;
+            if(InterlockedExchange(&s_FirstCall, 1) == 0) {
+                printf("EmuXapi (0x%X): XInput connected mask = 0x%X.\n",
+                       GetCurrentThreadId(), connectedMask);
+                fflush(stdout);
+            }
+        }
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         static LONG s_Warned = 0;
         if(InterlockedExchange(&s_Warned, 1) == 0) {
