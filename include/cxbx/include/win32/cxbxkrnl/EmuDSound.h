@@ -63,6 +63,12 @@ struct X_CDirectSoundBuffer
     };
 
     BYTE    UnknownB[0x0C];     // Offset: 0x24
+
+    // The title believes this is a full guest CDirectSoundBuffer, which is
+    // considerably larger than the fields above; un-hooked inline guest code
+    // that stores into later fields must land in memory we own, not in the
+    // next heap block.
+    BYTE    EmuGuardTail[0x200];
 };
 
 // ******************************************************************
