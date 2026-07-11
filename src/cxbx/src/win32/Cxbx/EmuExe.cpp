@@ -57,7 +57,13 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
         m_Header.m_symbol_table_addr        = 0;                                        // unused
         m_Header.m_symbols                  = 0;                                        // unused
         m_Header.m_sizeof_optional_header   = sizeof(OptionalHeader);                   // size of optional header
-        m_Header.m_characteristics          = 0x010F;                                   // should be fine..
+        // 0x010F (relocs stripped, executable, line/local syms stripped,
+        // 32-bit) plus IMAGE_FILE_LARGE_ADDRESS_AWARE (0x0020): the emulator
+        // backs parts of the Xbox physical window at 0x80000000+ with real
+        // mappings (see EmuInit's page-0 window), which the OS only grants to
+        // large-address-aware processes. The launcher reserves the trap
+        // apertures before the heap can claim them (see WinMain.cpp).
+        m_Header.m_characteristics          = 0x012F;
 
         printf("OK\n");
     }
