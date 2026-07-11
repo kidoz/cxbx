@@ -5743,6 +5743,24 @@ static DWORD g_EmuInitialThreadId = 0;
 static uint32_t g_Crc32BpAddr = 0;
 static uint8_t g_Crc32OrigByte = 0;
 static volatile LONG g_Crc32SingleStep = 0;
+
+// Single-step trace mode (CXBX_SS_TRACE=<count>): each breakpoint hit arms a
+// budget of <count> single-stepped instructions logged as "SS| eip esp" lines,
+// turning the CRC hook into an instruction tracer. Instructions the fault
+// handlers emulate (MMIO/physical accesses) are not logged but the trap flag
+// survives them, so the trace continues on the other side.
+static LONG g_SsTraceLimit = -1;
+static volatile LONG g_SsTraceBudget = 0;
+
+static LONG EmuSsTraceLimit()
+{
+    if(g_SsTraceLimit < 0)
+    {
+        const char *Value = getenv("CXBX_SS_TRACE");
+        g_SsTraceLimit = Value != NULL ? (LONG)strtoul(Value, NULL, 10) : 0;
+    }
+    return g_SsTraceLimit;
+}
 static const uint32_t crc32_table[256] = {
     0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,0xE963A535,0x9E6495A3,
     0x0EDB8832,0x79DCB8A4,0xE0D5E91E,0x97D2D988,0x09B64C2B,0x7EB17CBD,0xE7B82D07,0x90BF1D91,
@@ -5783,10 +5801,17 @@ static const uint32_t crc32_table[256] = {
 // [esp+8] is believed to be the length -- when it does not look like one,
 // fall back to the NUL terminator. Guarded because the string can cross into
 // an unmapped page even when the pointer itself passes the range check.
-static void EmuCrc32TraceLog(ULONG Esp)
+static void EmuCrc32TraceLog(ULONG Esp, const CONTEXT *Ctx)
 {
     __try
     {
+        if(Ctx != NULL)
+        {
+            printf("CRC32| regs eax=0x%08lX ecx=0x%08lX edx=0x%08lX ebx=0x%08lX esp=0x%08lX\n",
+                   Ctx->Eax, Ctx->Ecx, Ctx->Edx, Ctx->Ebx, Esp);
+            fflush(stdout);
+        }
+
         uint32_t str_ptr = *(uint32_t*)(Esp + 4);
         uint32_t str_len = *(uint32_t*)(Esp + 8);
 
@@ -5995,8 +6020,20 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     if(e->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP &&
        g_Crc32SingleStep > 0)
     {
+        if(g_SsTraceBudget > 0)
+        {
+            InterlockedDecrement(&g_SsTraceBudget);
+            printf("SS| eip=0x%08lX esp=0x%08lX\n",
+                   e->ContextRecord->Eip, e->ContextRecord->Esp);
+            if((g_SsTraceBudget & 0x3F) == 0)
+                fflush(stdout);
+            e->ContextRecord->EFlags |= 0x100; // keep stepping
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
         InterlockedDecrement(&g_Crc32SingleStep);
         *(uint8_t*)g_Crc32BpAddr = 0xCC;
+        fflush(stdout);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
@@ -6016,7 +6053,10 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         // check above re-arms the breakpoint after one instruction.
         if(g_Crc32BpAddr != 0 && (ULONG)e->ContextRecord->Eip == g_Crc32BpAddr)
         {
-            EmuCrc32TraceLog(e->ContextRecord->Esp);
+            EmuCrc32TraceLog(e->ContextRecord->Esp, e->ContextRecord);
+
+            if(EmuSsTraceLimit() > 0)
+                g_SsTraceBudget = EmuSsTraceLimit();
 
             *(uint8_t*)g_Crc32BpAddr = g_Crc32OrigByte;
             e->ContextRecord->EFlags |= 0x100; // Trap Flag
