@@ -5911,6 +5911,27 @@ static volatile LONG g_VectoredRepeatCount = 0;
 
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
+    // Opt-in firehose (CXBX_EXC_TRACE=1): one line per exception BEFORE any
+    // emulation attempt, so the primary fault that precedes a corrupted SEH
+    // dispatch can be identified even when a later wild jump overwrites the
+    // evidence.
+    {
+        static int s_ExcTrace = -1;
+        if(s_ExcTrace < 0)
+            s_ExcTrace = getenv("CXBX_EXC_TRACE") != NULL ? 1 : 0;
+        if(s_ExcTrace &&
+           e->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP &&
+           e->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
+        {
+            printf("EXC| code=0x%08lX eip=0x%08lX addr=0x%08lX esp=0x%08lX\n",
+                   e->ExceptionRecord->ExceptionCode, (ULONG)e->ContextRecord->Eip,
+                   e->ExceptionRecord->NumberParameters >= 2 ?
+                       (ULONG)e->ExceptionRecord->ExceptionInformation[1] : 0,
+                   (ULONG)e->ContextRecord->Esp);
+            fflush(stdout);
+        }
+    }
+
     // Under the LDT-less content-swap an SEH unwind (e.g. a guest __except
     // catching a fault raised inside a host-side HLE call) skips the balancing
     // EmuSwapFS calls, leaving the shared FS slots in the wrong role for the
