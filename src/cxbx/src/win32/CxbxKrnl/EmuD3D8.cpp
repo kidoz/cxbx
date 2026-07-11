@@ -104,6 +104,22 @@ static uint08                      *g_pD3DPerfStatistics = NULL;
 static volatile DWORD              *g_pD3DSingleStepPusher = NULL;
 static bool                         g_bD3DDebugGlobalsScanned = false;
 
+// Last D3D wrapper entered -- a lightweight (single store) entry trace so the
+// vectored-exception dump can name the HLE wrapper that was on the call path
+// when host d3d8 throws (e.g. the 0xE06D7363/D3DERR_NOTAVAILABLE storm on the
+// Turok Evolution render path). Printed by the vectored handler in Emu.cpp via
+// EmuGetLastD3DCall(). Opt-in: the store is compiled only when
+// CXBX_D3D_ENTRY_TRACE is set, so it adds zero overhead to normal/CI builds;
+// the getter always exists (returns NULL when the trace is off) so the call
+// site is unconditional.
+static volatile const char        *g_LastD3DCall = NULL;
+#ifdef CXBX_D3D_ENTRY_TRACE
+#define D3D_TRACE(name) (g_LastD3DCall = (name))
+#else
+#define D3D_TRACE(name) ((void)0)
+#endif
+extern "C" const char *EmuGetLastD3DCall(void) { return (const char *)g_LastD3DCall; }
+
 // XDK 5849 D3DPERF_APICounters values used by the HLE debug bridge.
 enum EmuD3DPerfApiCounter
 {
@@ -1262,6 +1278,7 @@ VOID WINAPI XTL::EmuIDirect3D8_KickOffAndWaitForIdle()
 ULONG WINAPI XTL::EmuIDirect3DDevice8_AddRef()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("AddRef");
 
     // ******************************************************************
     // * debug trace
@@ -1285,6 +1302,7 @@ ULONG WINAPI XTL::EmuIDirect3DDevice8_AddRef()
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_BeginStateBlock()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("BeginStateBlock");
 
     // ******************************************************************
     // * debug trace
@@ -1308,6 +1326,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BeginStateBlock()
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_CaptureStateBlock(DWORD Token)
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CaptureStateBlock");
 
     // ******************************************************************
     // * debug trace
@@ -1335,6 +1354,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CaptureStateBlock(DWORD Token)
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_ApplyStateBlock(DWORD Token)
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("ApplyStateBlock");
 
     // ******************************************************************
     // * debug trace
@@ -1362,6 +1382,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_ApplyStateBlock(DWORD Token)
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndStateBlock(DWORD *pToken)
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("EndStateBlock");
 
     // ******************************************************************
     // * debug trace
@@ -1444,6 +1465,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateImageSurface
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CreateImageSurface");
 
     // ******************************************************************
     // * debug trace
@@ -1481,6 +1503,7 @@ XTL::X_D3DSurface* WINAPI XTL::EmuIDirect3DDevice8_GetBackBuffer2
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetBackBuffer2");
 
     // ******************************************************************
     // * debug trace
@@ -1585,6 +1608,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetViewport");
 
     // ******************************************************************
     // * debug trace
@@ -1668,6 +1692,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetShaderConstantMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetShaderConstantMode");
 
     // ******************************************************************
     // * debug trace
@@ -1698,6 +1723,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetRenderTarget
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetRenderTarget");
 
     // ******************************************************************
     // * debug trace
@@ -1729,6 +1755,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetRenderTarget
 XTL::X_D3DSurface * WINAPI XTL::EmuIDirect3DDevice8_GetRenderTarget2()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetRenderTarget2");
 
     // ******************************************************************
     // * debug trace
@@ -1758,6 +1785,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetDepthStencilSurface
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetDepthStencilSurface");
 
     // ******************************************************************
     // * debug trace
@@ -1790,6 +1818,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetDepthStencilSurface
 XTL::X_D3DSurface * WINAPI XTL::EmuIDirect3DDevice8_GetDepthStencilSurface2()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetDepthStencilSurface2");
 
     // ******************************************************************
     // * debug trace
@@ -1821,6 +1850,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetTile
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetTile");
 
     // ******************************************************************
     // * debug trace
@@ -1854,6 +1884,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTileNoWait
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTileNoWait");
 
     // ******************************************************************
     // * debug trace
@@ -1889,6 +1920,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CreateVertexShader");
 
     // ******************************************************************
     // * debug trace
@@ -1986,6 +2018,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetVertexShaderConstant");
 
     // ******************************************************************
     // * debug trace
@@ -2204,6 +2237,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CreatePixelShader");
 
     // ******************************************************************
     // * debug trace
@@ -2257,6 +2291,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetPixelShader");
 
     // ******************************************************************
     // * debug trace
@@ -2310,6 +2345,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderConstant
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetPixelShaderConstant");
 
     #ifdef _DEBUG_TRACE
     printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_SetPixelShaderConstant\n"
@@ -2338,6 +2374,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTextureState_BorderColor");
 
     HRESULT Result = g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_BORDERCOLOR, Value);
 
@@ -2384,6 +2421,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetVisibilityTestResult
 VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("DeletePixelShader");
 
     #ifdef _DEBUG_TRACE
     {
@@ -2754,6 +2792,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetIndices");
 
     // ******************************************************************
     // * debug trace
@@ -2855,6 +2894,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTexture");
 
     // ******************************************************************
     // * debug trace
@@ -2961,6 +3001,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetDisplayMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetDisplayMode");
 
     // ******************************************************************
     // * debug trace
@@ -3006,6 +3047,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetDisplayFieldStatus");
 
     // ******************************************************************
     // * debug trace
@@ -3164,6 +3206,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 DWORD WINAPI XTL::EmuIDirect3DDevice8_SetDebugMarker(DWORD Marker)
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetDebugMarker");
     DWORD PreviousMarker = g_D3DDebugMarker;
     g_D3DDebugMarker = Marker;
     EmuSwapFS();   // XBox FS
@@ -3173,6 +3216,7 @@ DWORD WINAPI XTL::EmuIDirect3DDevice8_SetDebugMarker(DWORD Marker)
 DWORD WINAPI XTL::EmuIDirect3DDevice8_GetDebugMarker()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetDebugMarker");
     DWORD Marker = g_D3DDebugMarker;
     EmuSwapFS();   // XBox FS
     return Marker;
@@ -3276,6 +3320,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("Present");
 
     // ******************************************************************
     // * debug trace
@@ -3314,6 +3359,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("Swap");
 
     // ******************************************************************
     // * debug trace
@@ -3382,6 +3428,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_Begin
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("Begin");
 
     #ifdef _DEBUG_TRACE
     printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_Begin(%d)\n", GetCurrentThreadId(), PrimitiveType);
@@ -3485,6 +3532,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexDataColor
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetVertexDataColor");
 
     if(Register == 3)
         g_EmuImCur.Diffuse = Color;
@@ -3495,6 +3543,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexDataColor
 VOID WINAPI XTL::EmuIDirect3DDevice8_End()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("End");
 
     #ifdef _DEBUG_TRACE
     printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_End() verts=%d\n", GetCurrentThreadId(), g_EmuImCount);
@@ -3537,6 +3586,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
 VOID WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("MakeSpace");
 
     // ******************************************************************
     // * debug trace
@@ -4587,6 +4637,7 @@ HRESULT WINAPI XTL::EmuIDirect3DCubeTexture8_LockRect
 ULONG WINAPI XTL::EmuIDirect3DDevice8_Release()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("Release");
 
     // ******************************************************************
     // * debug trace
@@ -4631,6 +4682,7 @@ XTL::X_D3DVertexBuffer* WINAPI XTL::EmuIDirect3DDevice8_CreateVertexBuffer2
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CreateVertexBuffer2");
 
     // ******************************************************************
     // * debug trace
@@ -4672,6 +4724,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("EnableOverlay");
 
     // ******************************************************************
     // * debug trace
@@ -4944,6 +4997,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay
 BOOL WINAPI XTL::EmuIDirect3DDevice8_GetOverlayUpdateStatus()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetOverlayUpdateStatus");
 
     // ******************************************************************
     // * debug trace
@@ -4967,6 +5021,7 @@ BOOL WINAPI XTL::EmuIDirect3DDevice8_GetOverlayUpdateStatus()
 VOID WINAPI XTL::EmuIDirect3DDevice8_BlockUntilVerticalBlank()
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("BlockUntilVerticalBlank");
 
     // ******************************************************************
     // * debug trace
@@ -4992,6 +5047,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_BlockUntilVerticalBlank()
 VOID WINAPI XTL::EmuIDirect3DDevice8_SetVerticalBlankCallback(PVOID pCallback)
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetVerticalBlankCallback");
 
     // ******************************************************************
     // * debug trace
@@ -5023,6 +5079,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_TexCoordIndex
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTextureState_TexCoordIndex");
 
     // ******************************************************************
     // * debug trace
@@ -5057,6 +5114,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_NormalizeNormals
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_NormalizeNormals");
 
     // ******************************************************************
     // * debug trace
@@ -5087,6 +5145,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_TextureFactor
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_TextureFactor");
 
     // ******************************************************************
     // * debug trace
@@ -5117,6 +5176,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ZBias
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_ZBias");
 
     // ******************************************************************
     // * debug trace
@@ -5147,6 +5207,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_EdgeAntiAlias
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_EdgeAntiAlias");
 
     // ******************************************************************
     // * debug trace
@@ -5180,6 +5241,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_FillMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_FillMode");
 
     // ******************************************************************
     // * debug trace
@@ -5210,6 +5272,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_FogColor
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_FogColor");
 
     // ******************************************************************
     // * debug trace
@@ -5240,6 +5303,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_Dxt1NoiseEnable
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_Dxt1NoiseEnable");
 
     // ******************************************************************
     // * debug trace
@@ -5358,6 +5422,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_VertexBlend
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_VertexBlend");
 
     // ******************************************************************
     // * debug trace
@@ -5400,6 +5465,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_CullMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_CullMode");
 
     // ******************************************************************
     // * debug trace
@@ -5449,6 +5515,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ZEnable
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_ZEnable");
 
     // ******************************************************************
     // * debug trace
@@ -5479,6 +5546,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_StencilEnable
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_StencilEnable");
 
     // ******************************************************************
     // * debug trace
@@ -5509,6 +5577,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_StencilFail
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_StencilFail");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5534,6 +5603,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_MultiSampleAntiAlias");
 
     // ******************************************************************
     // * debug trace
@@ -5564,6 +5634,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ShadowFunc
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_ShadowFunc");
 
     // ******************************************************************
     // * debug trace
@@ -5602,6 +5673,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_YuvEnable
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_YuvEnable");
 
     // ******************************************************************
     // * debug trace
@@ -5650,6 +5722,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_FrontFace
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_FrontFace");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5675,6 +5748,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_LineWidth
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_LineWidth");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5700,6 +5774,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_LogicOp
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_LogicOp");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5725,6 +5800,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_BackFillMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_BackFillMode");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5750,6 +5826,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_TwoSidedLighting
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_TwoSidedLighting");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5775,6 +5852,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_MultiSampleMode");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5800,6 +5878,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleRenderTargetMode
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_MultiSampleRenderTargetMode");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5827,6 +5906,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleMask
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_MultiSampleMask");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5854,6 +5934,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_SampleAlpha
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_SampleAlpha");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5879,6 +5960,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_PSTextureModes
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_PSTextureModes");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5913,6 +5995,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderStateNotInline
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderStateNotInline");
 
     #ifdef _DEBUG_TRACE
     {
@@ -5940,6 +6023,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTransform");
 
     // ******************************************************************
     // * debug trace
@@ -5974,6 +6058,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetTransform
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetTransform");
 
     // ******************************************************************
     // * debug trace
@@ -6085,6 +6170,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetStreamSource
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetStreamSource");
 
     // ******************************************************************
     // * debug trace
@@ -6127,6 +6213,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetVertexShader");
 
     // ******************************************************************
     // * debug trace
@@ -6174,6 +6261,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_LoadVertexShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("LoadVertexShader");
 
     #ifdef _DEBUG_TRACE
     {
@@ -6205,6 +6293,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SelectVertexShader");
 
     #ifdef _DEBUG_TRACE
     {
@@ -6246,6 +6335,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeleteVertexShader
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("DeleteVertexShader");
 
     #ifdef _DEBUG_TRACE
     {
@@ -6283,6 +6373,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetVertexShaderSize
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetVertexShaderSize");
 
     #ifdef _DEBUG_TRACE
     {
@@ -6721,6 +6812,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("RunPushBuffer");
 
     HRESULT Result = D3D_OK;
 
@@ -6767,6 +6859,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("DrawVertices");
 
     // ******************************************************************
     // * debug trace
@@ -6832,6 +6925,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("DrawVerticesUP");
 
     // ******************************************************************
     // * debug trace
@@ -6914,6 +7008,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("DrawIndexedVertices");
 
     // ******************************************************************
     // * debug trace
@@ -6974,6 +7069,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetLight
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetLight");
 
     // ******************************************************************
     // * debug trace
@@ -7005,6 +7101,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetMaterial
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetMaterial");
 
     // ******************************************************************
     // * debug trace
@@ -7036,6 +7133,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_LightEnable
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("LightEnable");
 
     // ******************************************************************
     // * debug trace
@@ -7068,6 +7166,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderTarget");
 
     // ******************************************************************
     // * debug trace
@@ -7157,6 +7256,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePalette
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CreatePalette");
 
     // ******************************************************************
     // * debug trace
@@ -7201,6 +7301,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPalette
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetPalette");
 
     // ******************************************************************
     // * debug trace
@@ -7232,6 +7333,7 @@ void WINAPI XTL::EmuIDirect3DDevice8_SetFlickerFilter
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetFlickerFilter");
 
     // ******************************************************************
     // * debug trace
@@ -7262,6 +7364,7 @@ void WINAPI XTL::EmuIDirect3DDevice8_SetSoftDisplayFilter
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetSoftDisplayFilter");
 
     // ******************************************************************
     // * debug trace
