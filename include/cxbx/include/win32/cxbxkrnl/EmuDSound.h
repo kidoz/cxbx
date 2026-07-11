@@ -680,4 +680,82 @@ HRESULT WINAPI EmuCDirectSound_CommitDeferredSettings
     X_CDirectSound         *pThis
 );
 
+// ******************************************************************
+// * func: EmuIDirectSound8_GetCaps
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSound8_GetCaps
+(
+    LPDIRECTSOUND8          pThis,
+    PVOID                   pDSCaps
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Release
+// ******************************************************************
+ULONG WINAPI EmuIDirectSoundBuffer8_Release
+(
+    X_CDirectSoundBuffer   *pThis
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetMixBinVolumes
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetMixBinVolumes
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPVOID                  pMixBins
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetFrequency
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetFrequency
+(
+    X_CDirectSoundBuffer   *pThis,
+    DWORD                   dwFrequency
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetConeAngles
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetConeAngles
+(
+    X_CDirectSoundBuffer   *pThis,
+    DWORD                   dwInsideConeAngle,
+    DWORD                   dwOutsideConeAngle,
+    DWORD                   dwApply
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetI3DL2Source
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetI3DL2Source
+(
+    X_CDirectSoundBuffer   *pThis,
+    LPVOID                  pds3db,
+    DWORD                   dwApply
+);
+
+// ******************************************************************
+// * func: EmuCDirectSoundBuffer_SetDeferred3dVector
+// ******************************************************************
+HRESULT WINAPI EmuCDirectSoundBuffer_SetDeferred3dVector
+(
+    X_CDirectSoundBuffer   *pThis,
+    FLOAT                   x,
+    FLOAT                   y,
+    FLOAT                   z,
+    DWORD                   dwApply
+);
+
+// ******************************************************************
+// * func: EmuCDirectSoundBuffer_SetDeferred3dParam
+// ******************************************************************
+HRESULT WINAPI EmuCDirectSoundBuffer_SetDeferred3dParam
+(
+    X_CDirectSoundBuffer   *pThis,
+    DWORD                   dwArg1,
+    DWORD                   dwArg2
+);
+
 #endif
