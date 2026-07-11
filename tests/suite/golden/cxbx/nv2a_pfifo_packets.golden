@@ -1,0 +1,10 @@
+#suite xbox-conformance v1
+#probe nv2a_pfifo_packets
+CHK nv2a.packets.get_eq_put PASS
+CHK nv2a.packets.inc_0 PASS
+CHK nv2a.packets.inc_1 PASS
+CHK nv2a.packets.inc_2 PASS
+CHK nv2a.packets.noninc_last PASS
+CHK nv2a.packets.noninc_no_advance PASS
+CHK nv2a.packets.subchannel_3 PASS
+#result nv2a_pfifo_packets verdict=PASS checks=7 fail=0

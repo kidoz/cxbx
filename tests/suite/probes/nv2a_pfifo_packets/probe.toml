@@ -1,0 +1,2 @@
+# Requires a target with an NV2A PFIFO DMA pusher.
+tags = ["nv2a"]

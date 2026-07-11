@@ -1,0 +1,8 @@
+#suite xbox-conformance v1
+#probe nv2a_ramht
+CHK nv2a.ramht.collision_hash PASS
+CHK nv2a.ramht.direct_instance PASS
+CHK nv2a.ramht.collision_instance PASS
+CHK nv2a.ramht.invalid_not_translated PASS
+CHK nv2a.ramht.get_eq_put PASS
+#result nv2a_ramht verdict=PASS checks=5 fail=0
