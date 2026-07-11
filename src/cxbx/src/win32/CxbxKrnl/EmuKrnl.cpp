@@ -4753,6 +4753,8 @@ static void EmuSetDpcRoutineActive(ULONG Value)
     *(ULONG*)((BYTE*)NtCurrentTeb() + 0x58) = Value;
 }
 
+static bool EmuDpcRoutineLooksValid(xboxkrnl::PKDPC Dpc);
+
 static void EmuDispatchPendingDpc()
 {
     if(g_EmuPendingDpc == NULL || EmuGetDpcRoutineActive() != 0)
@@ -4763,6 +4765,12 @@ static void EmuDispatchPendingDpc()
 
     if(Dpc->Number == 0)
         return;
+
+    if(!EmuDpcRoutineLooksValid(Dpc))
+    {
+        Dpc->Number = 0;
+        return;
+    }
 
     ULONG PreviousActive = EmuGetDpcRoutineActive();
     EmuSetDpcRoutineActive(1);
@@ -5363,6 +5371,23 @@ extern "C" VOID NTAPI EmuKeInitializeInterrupt(PVOID InterruptObject, PVOID Serv
     EmuSwapFS();   // Xbox FS
 }
 
+// A DPC routine must look like guest code before it is called: a KDPC that was
+// never KeInitializeDpc'd (or lives in freed/stack memory) carries a garbage
+// DeferredRoutine, and calling it is a wild jump the crash dump attributes to
+// nonsense (KOF2002's USB bring-up jumped onto its own stack this way).
+static bool EmuDpcRoutineLooksValid(xboxkrnl::PKDPC Dpc)
+{
+    ULONG Routine = (ULONG)Dpc->DeferredRoutine;
+
+    if(Routine >= 0x00010000 && Routine < 0x10000000)
+        return true;
+
+    printf("EmuKrnl (0x%lX): *WARNING* skipping DPC 0x%.08lX with non-guest routine 0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)Dpc, Routine);
+    fflush(stdout);
+    return false;
+}
+
 extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemArgument1, PVOID SystemArgument2)
 {
     if(Dpc == NULL || Dpc->Number != 0)
@@ -5372,9 +5397,20 @@ extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemAr
     Dpc->SystemArgument2 = SystemArgument2;
     Dpc->Number = 1;
 
-    if(EmuGetDpcRoutineActive() != 0)
+    // Defer while a DPC is running OR while the caller holds a raised IRQL:
+    // NT/Xbox semantics run DPCs only when IRQL drops below DISPATCH_LEVEL.
+    // Dispatching synchronously from inside a KeRaiseIrqlToDpcLevel window
+    // reenters the guest's own critical section (KOF2002's USB device-arrival
+    // path queues its worker DPC exactly there).
+    if(EmuGetDpcRoutineActive() != 0 || g_EmuCurrentIrql >= 2)
     {
         g_EmuPendingDpc = Dpc;
+        return TRUE;
+    }
+
+    if(!EmuDpcRoutineLooksValid(Dpc))
+    {
+        Dpc->Number = 0;
         return TRUE;
     }
 
