@@ -1337,6 +1337,9 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
 #define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
 #define NV097_DRAW_ARRAYS                   0x1810u
+#define NV097_SET_CONTEXT_DMA_SEMAPHORE     0x01A4u
+#define NV097_SET_SEMAPHORE_OFFSET          0x1D6Cu
+#define NV097_BACK_END_WRITE_SEMAPHORE_RELEASE 0x1D70u
 #define EmuNv2aVertexAttrCount              16u
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
@@ -1360,6 +1363,8 @@ struct EmuNv2aVertexArrayState
 static EmuNv2aVertexArrayState g_EmuNv2aVertexArray[EmuNv2aVertexAttrCount] = {};
 static ULONG g_EmuNv2aContextDmaColor = 0;
 static ULONG g_EmuNv2aContextDmaVertex = 0;
+static ULONG g_EmuNv2aContextDmaSemaphore = 0;
+static ULONG g_EmuNv2aSemaphoreOffset = 0;
 static ULONG g_EmuNv2aSurfaceColorOffset = 0;
 static ULONG g_EmuNv2aSurfacePitchColor = 0;
 static ULONG g_EmuNv2aSurfaceClipW = 0;
@@ -1420,6 +1425,7 @@ static ULONG g_EmuNv2aStencilOpZPass = 0x1E00;
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count);
+static void EmuNv2aWriteBackendSemaphore(ULONG Data);
 
 // Opt-in PGRAPH method histogram (CXBX_NV2A_METHOD_STATS=1): count every
 // dispatched method per object class so a title's method vocabulary — in
@@ -1608,6 +1614,11 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_CONTEXT_DMA_COLOR:    g_EmuNv2aContextDmaColor = Data; break;
             case NV097_SET_CONTEXT_DMA_VERTEX_A: g_EmuNv2aContextDmaVertex = Data; break;
             case NV097_SET_CONTEXT_DMA_ZETA:     g_EmuNv2aContextDmaZeta = Data; break;
+            case NV097_SET_CONTEXT_DMA_SEMAPHORE: g_EmuNv2aContextDmaSemaphore = Data; break;
+            case NV097_SET_SEMAPHORE_OFFSET:     g_EmuNv2aSemaphoreOffset = Data; break;
+            case NV097_BACK_END_WRITE_SEMAPHORE_RELEASE:
+                EmuNv2aWriteBackendSemaphore(Data);
+                break;
             case NV097_SET_SURFACE_CLIP_HORIZONTAL: g_EmuNv2aSurfaceClipW = (Data >> 16) & 0xFFFF; break;
             case NV097_SET_SURFACE_CLIP_VERTICAL:   g_EmuNv2aSurfaceClipH = (Data >> 16) & 0xFFFF; break;
             case NV097_SET_SURFACE_FORMAT:       g_EmuNv2aSurfaceZetaFormat = (Data >> 4) & 0xF; break;
@@ -2533,6 +2544,52 @@ static ULONG EmuNv2aResolveDmaBase(ULONG Handle)
     ULONG Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance);
     ULONG Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 8);
     return (Frame & 0x07FFFFFF) | (Flags & 0x00000FFF);
+}
+
+// Execute NV097_BACK_END_WRITE_SEMAPHORE_RELEASE: real hardware writes the
+// release value into the bound semaphore DMA object's memory once the back end
+// drains; D3D's fence spins on that dword, so a model that ignores the method
+// stalls the title forever after its first pushbuffer (KOF2002's exact hang).
+// The bound handle has usually already been RAMHT-resolved to an instance by
+// the 0x180-0x200 rewrite in EmuNv2aHandlePgraphMethod, so try the handle path
+// first and fall back to reading the DMA object straight from RAMIN.
+static void EmuNv2aWriteBackendSemaphore(ULONG Data)
+{
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaSemaphore);
+    ULONG Flags = 0, Limit = 0, Frame = 0;
+
+    if(Base == 0 && g_EmuNv2aContextDmaSemaphore + 12 <= EmuNv2aRaminSize)
+    {
+        Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + g_EmuNv2aContextDmaSemaphore);
+        Limit = EmuNv2aReadRamin32(EmuNv2aRaminBase + g_EmuNv2aContextDmaSemaphore + 4);
+        Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + g_EmuNv2aContextDmaSemaphore + 8);
+        // NV_DMA_IN_MEMORY object: word0 = class | adjust<<20, word2 = page
+        // frame | target bits. The XDK D3D semaphore object carries the
+        // sub-page offset in adjust, so honor it (frame|class-bits is wrong).
+        Base = (Frame & 0xFFFFF000) + ((Flags >> 20) & 0x00000FFF);
+    }
+
+    ULONG Host = EmuNv2aHostPointer(Base + g_EmuNv2aSemaphoreOffset);
+
+    if(Host == 0)
+    {
+        printf("Emu (0x%lX): NV2A semaphore release unresolved (dma=0x%.08lX obj={0x%.08lX,0x%.08lX,0x%.08lX} base=0x%.08lX off=0x%.08lX val=0x%.08lX).\n",
+               GetCurrentThreadId(), g_EmuNv2aContextDmaSemaphore, Flags, Limit, Frame,
+               Base, g_EmuNv2aSemaphoreOffset, Data);
+        fflush(stdout);
+        return;
+    }
+
+    *(volatile ULONG *)(uintptr_t)Host = Data;
+
+    static ULONG s_ReleaseCount = 0;
+    if(s_ReleaseCount < 8 || (s_ReleaseCount % 1000) == 0)
+    {
+        printf("Emu (0x%lX): NV2A semaphore release #%lu: [0x%.08lX+0x%lX] <- 0x%.08lX.\n",
+               GetCurrentThreadId(), s_ReleaseCount, Base, g_EmuNv2aSemaphoreOffset, Data);
+        fflush(stdout);
+    }
+    s_ReleaseCount++;
 }
 
 // Interleave the low bits of x and y (Morton / Z-order) to locate a texel inside
@@ -3861,9 +3918,11 @@ static void EmuNv2aRunPusher()
                              EmuNv2aCachedRegister(EmuNv2aPfifoCache1Status, 0) | 0x10);
 
     // Titles that stall waiting on GPU write-back never reach the EmuCleanup
-    // dump, so flush the opt-in histogram after every consumed batch — the
-    // interesting stream is often a single early pushbuffer.
-    EmuNv2aDumpMethodStats("pusher");
+    // dump, so flush the opt-in histogram after early batches (and periodically
+    // once the title is submitting at frame rate) — the interesting stream is
+    // often a single early pushbuffer.
+    if(g_EmuNv2aPusherRunCount <= 8 || (g_EmuNv2aPusherRunCount % 500) == 0)
+        EmuNv2aDumpMethodStats("pusher");
 }
 
 static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
