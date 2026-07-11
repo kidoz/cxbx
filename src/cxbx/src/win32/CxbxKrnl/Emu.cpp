@@ -2152,6 +2152,40 @@ static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
     return NULL;
 }
 
+// Physical-map aliases in the 0x80000000 identity view frequently target real
+// host contiguous allocations: the guest takes the physical address D3D stored
+// in a resource, adds the identity-map base, and streams data through it
+// (XGRAPHCL swizzle copies do this with MMX moves). Those bytes must land in
+// the real allocation -- the NV2A model reads textures and pushbuffers through
+// raw host pointers -- so resolve the alias to its host backing first; the
+// shadow pool stays the fallback for unbacked physical ranges (kernel-image
+// decode, the probe apertures at 0xF0000000+).
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize);
+extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
+
+static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
+{
+    if(Address < EmuPhysicalMapBase || Address > EmuPhysicalMapEnd || Size == 0)
+        return NULL;
+
+    ULONG Physical = Address - EmuPhysicalMapBase;
+    ULONG BlockSize = 0;
+    ULONG Base = EmuContiguousBlockBase(Physical, &BlockSize);
+
+    if(Base != 0 && Physical + Size <= Base + BlockSize)
+        return (BYTE *)(uintptr_t)Physical;
+
+    ULONG Host = EmuContiguousHostFromPhysical(Physical);
+    if(Host != 0)
+    {
+        Base = EmuContiguousBlockBase(Host, &BlockSize);
+        if(Base != 0 && Host + Size <= Base + BlockSize)
+            return (BYTE *)(uintptr_t)Host;
+    }
+
+    return NULL;
+}
+
 static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
 {
     ULONG End = Address + Size - 1;
@@ -2159,6 +2193,16 @@ static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
        !EmuIsPhysicalMapAddress(End))
     {
         return false;
+    }
+
+    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    if(Host != NULL)
+    {
+        ULONG Result = 0;
+        for(ULONG i = 0; i < Size; i++)
+            Result |= (ULONG)Host[i] << (i * 8);
+        *Value = Result;
+        return true;
     }
 
     ULONG Result = 0;
@@ -2183,6 +2227,14 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
        !EmuIsPhysicalMapAddress(End))
     {
         return false;
+    }
+
+    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    if(Host != NULL)
+    {
+        for(ULONG i = 0; i < Size; i++)
+            Host[i] = (BYTE)(Value >> (i * 8));
+        return true;
     }
 
     for(ULONG i = 0; i < Size; i++)
@@ -2370,6 +2422,13 @@ static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size
        !EmuIsPhysicalMapAddress(End))
     {
         return false;
+    }
+
+    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    if(Host != NULL)
+    {
+        memcpy(Host, Data, Size);
+        return true;
     }
 
     for(ULONG i = 0; i < Size; i++)
@@ -2566,6 +2625,13 @@ static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
        !EmuIsPhysicalMapAddress(Address) || !EmuIsPhysicalMapAddress(End))
     {
         return false;
+    }
+
+    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    if(Host != NULL)
+    {
+        memcpy(Dst, Host, Size);
+        return true;
     }
 
     ULONG Copied = 0;
@@ -4209,6 +4275,41 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 }
 
                 g_EmuPhysicalMovntpsLogCount++;
+
+                return true;
+            }
+        }
+
+        // 0x0F 0x7F /r = movq m64, mmN : MMX 8-byte store (XGRAPHCL's swizzle
+        // copies stream texture data through the 0x80000000 write-combined
+        // alias with MMX moves). The MMX registers alias the x87 register
+        // file: after any MMX instruction the stack top is 0, so mmN is the
+        // low 8 bytes of FloatSave.RegisterArea slot N (10 bytes per slot).
+        if((AccessType == 1 || MayBePhysicalStoreFault) && Instruction[0] == 0x0F && Instruction[1] == 0x7F)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               ((FaultIsPhysicalMap && Address == FaultAddress) ||
+                (MayBePhysicalStoreFault && EmuIsPhysicalMapAddress(Address))))
+            {
+                ULONG RegisterIndex = (Instruction[2] >> 3) & 0x07;
+                const BYTE *Mm = (const BYTE *)&e->ContextRecord->FloatSave.RegisterArea[RegisterIndex * 10];
+
+                if(!EmuWritePhysicalMapBytes(Address, Mm, 8))
+                    return false;
+
+                e->ContextRecord->Eip += 1 + OperandLength;
+
+                static ULONG s_MovqLogCount = 0;
+                if(s_MovqLogCount < 8)
+                {
+                    printf("Emu (0x%lX): Emulated physical movq store 0x%.08lX <- mm%lu.\n",
+                           GetCurrentThreadId(), Address, RegisterIndex);
+                    fflush(stdout);
+                    s_MovqLogCount++;
+                }
 
                 return true;
             }
