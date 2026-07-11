@@ -7512,7 +7512,19 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
 
     EmuUntrackContiguousMemoryAllocation(BaseAddress);
     if(EmuIsLowXboxRam(BaseAddress))
-        VirtualFree(BaseAddress, 0, MEM_DECOMMIT);   // low Xbox-RAM window (VirtualAlloc-backed)
+    {
+        // Deliberately keep the pages committed. Two reasons:
+        // - VirtualFree(Base, 0, MEM_DECOMMIT) decommits from Base to the END
+        //   of the reservation (the whole low window is ONE reservation), so
+        //   it silently destroyed every live allocation above the freed one.
+        // - Titles free blocks that still have fire-and-forget async reads
+        //   outstanding (Turok Evolution's video teardown); the kernel's
+        //   canceled-IO completion then writes the IOSB into this memory, and
+        //   a decommitted page turns that into an access violation raised at
+        //   the title's next syscall.
+        // The window is a fixed 48 MiB arena; leaving freed pages committed
+        // costs at most that.
+    }
     else
         delete[] (unsigned char *)BaseAddress;
 
