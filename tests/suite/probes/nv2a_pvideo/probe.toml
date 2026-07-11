@@ -1,0 +1,10 @@
+# Requires a target with an NV2A GPU model (traps 0xFD000000 MMIO).
+#
+# PVIDEO is the NV2A video-port overlay/capture engine. This probe documents
+# that Cxbx's NV2A model does NOT implement it: the PVIDEO registers are not
+# special-cased in the MMIO decoder and fall through to the cache-backed
+# default (reads return the last written value, 0 on first read; no overlay,
+# buffer, or DMA behavior). On a rasterizing target that models PVIDEO the
+# gap checks would flip when overlay/buffer behavior lands -- update the
+# expectations and the golden then, exactly like d3d_tex_swizzle.
+tags = ["nv2a"]

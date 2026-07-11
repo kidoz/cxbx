@@ -185,6 +185,7 @@ after locking the backbuffer.
 | `nv2a_pmc`   | NV2A PMC / RAMIN     | `PMC_BOOT_0` chip ID, `PMC_ENABLE`, RAMIN write/readback (0xFD MMIO) |
 | `nv2a_intr`  | NV2A interrupts      | `INTR_EN` latch, `PMC_INTR_0` aggregation, write-1-to-clear |
 | `nv2a_pfifo` | NV2A PFIFO / PGRAPH  | DMA object + pushbuffer → pusher → PGRAPH method dispatch   |
+| `nv2a_pvideo`| NV2A PVIDEO (gap)    | documents the video-port overlay/capture gap: registers are cache-backed (round-trip) but not modeled (expectations flip when PVIDEO lands) |
 | `xdk_smoke`  | XDK runtime (HLE)    | XDK-5849-built XBE boots via xapilib, file I/O, clean exit  |
 | `hle_resolve`| OOVPA/HLE database   | per-function: the HLE pass patched this real d3d8/dsound.lib function (expect=0 entries = documented signature debt) |
 | `d3d_clear_present` | D3D8 HLE (host GPU) | CreateDevice → Clear → Swap → pixel-exact backbuffer readback |
