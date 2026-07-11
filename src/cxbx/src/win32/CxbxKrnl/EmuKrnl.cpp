@@ -8038,6 +8038,32 @@ XBSYSAPI EXPORTNUM(189) NTSTATUS NTAPI xboxkrnl::NtCreateEvent
     return ret;
 }
 
+// Opt-in file-IO trace (CXBX_FILEIO_TRACE): logs every open, read and
+// file-position set as one-line "FIO|" records so a title's disc activity can
+// be reconstructed from the run log. Read failure statuses are logged even
+// without the switch — they were previously invisible passthroughs.
+// CXBX_FILEIO_TRACE=2 additionally polls the IoStatusBlock of a PENDING
+// async read (up to 2 s, without touching the title's event) and logs the
+// completion status; it delays the guest's NtReadFile return, so it is a
+// diagnostic mode only.
+static int EmuFileIoTraceLevel()
+{
+    static int Level = -1;
+
+    if(Level < 0)
+    {
+        const char *v = getenv("CXBX_FILEIO_TRACE");
+        Level = (v == NULL) ? 0 : max(1, atoi(v));
+    }
+
+    return Level;
+}
+
+static bool EmuFileIoTraceEnabled()
+{
+    return EmuFileIoTraceLevel() >= 1;
+}
+
 // ******************************************************************
 // * 0x00BE - NtCreateFile
 // ******************************************************************
@@ -8238,6 +8264,14 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
         EmuWarning("NtCreateFile Failed (0x%.08X)", ret);
         printf("EmuKrnl (0x%X): NtCreateFile failed path=\"%s\" translated=\"%s\" status=0x%.08X\n",
                (uint32)GetCurrentThreadId(), szOriginalBuffer, szBuffer, (uint32)ret);
+    }
+
+    if(EmuFileIoTraceEnabled())
+    {
+        printf("FIO| open tid=0x%X path=\"%s\" access=0x%.08X disp=0x%X opts=0x%X status=0x%.08X handle=0x%X\n",
+               (uint32)GetCurrentThreadId(), szOriginalBuffer, (uint32)DesiredAccess,
+               (uint32)CreateDisposition, (uint32)CreateOptions, (uint32)ret,
+               FAILED(ret) ? 0 : (uint32)*FileHandle);
     }
 
     // ******************************************************************
@@ -8675,6 +8709,13 @@ XBSYSAPI EXPORTNUM(197) NTSTATUS NTAPI xboxkrnl::NtDuplicateObject
 
     if(ret != STATUS_SUCCESS)
         printf("*Warning* Object was not duplicated\n");
+
+    if(EmuFileIoTraceEnabled())
+    {
+        printf("FIO| dup tid=0x%X src=0x%X dst=0x%X status=0x%.08X\n",
+               (uint32)GetCurrentThreadId(), SourceHandle,
+               (TargetHandle != NULL) ? (uint32)*TargetHandle : 0, (uint32)ret);
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -9299,6 +9340,36 @@ XBSYSAPI EXPORTNUM(219) NTSTATUS NTAPI xboxkrnl::NtReadFile
 
     NTSTATUS ret = NtDll::NtReadFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, (NtDll::LARGE_INTEGER*)ByteOffset, 0);
 
+    // A failed read is a prime "dirty disc" trigger for titles — log it even
+    // without the opt-in trace. STATUS_PENDING (0x103) is not a failure.
+    if(EmuFileIoTraceEnabled() || FAILED(ret))
+    {
+        xboxkrnl::PIO_STATUS_BLOCK iosb = (xboxkrnl::PIO_STATUS_BLOCK)IoStatusBlock;
+        uint32 info = (iosb != NULL && !IsBadReadPtr(iosb, sizeof(*iosb))) ? (uint32)iosb->Information : 0xFFFFFFFF;
+
+        if(ByteOffset != NULL)
+            printf("FIO| read tid=0x%X handle=0x%X off=0x%.08X%.08X len=0x%X event=0x%X apc=0x%X status=0x%.08X info=0x%X\n",
+                   (uint32)GetCurrentThreadId(), FileHandle, (uint32)ByteOffset->u.HighPart,
+                   (uint32)ByteOffset->u.LowPart, Length, Event, ApcRoutine, (uint32)ret, info);
+        else
+            printf("FIO| read tid=0x%X handle=0x%X off=current len=0x%X event=0x%X apc=0x%X status=0x%.08X info=0x%X\n",
+                   (uint32)GetCurrentThreadId(), FileHandle, Length, Event, ApcRoutine, (uint32)ret, info);
+
+        if(ret == 0x00000103 && EmuFileIoTraceLevel() >= 2 &&
+           iosb != NULL && !IsBadReadPtr(iosb, sizeof(*iosb)))
+        {
+            // Wait on the FILE handle, not the title's event — a
+            // synchronization event would be consumed by our wait, but a file
+            // object stays signaled until the next IO starts.
+            DWORD start = GetTickCount();
+            DWORD wr = WaitForSingleObject(FileHandle, 2000);
+
+            printf("FIO| read-completion tid=0x%X handle=0x%X wait=0x%lX status=0x%.08X info=0x%X waited=%lums\n",
+                   (uint32)GetCurrentThreadId(), FileHandle, wr, (uint32)iosb->u1.Status,
+                   (uint32)iosb->Information, GetTickCount() - start);
+        }
+    }
+
     EmuSwapFS();   // Xbox FS
 
     return ret;
@@ -9559,6 +9630,24 @@ XBSYSAPI EXPORTNUM(226) NTSTATUS NTAPI xboxkrnl::NtSetInformationFile
     #endif
 
     NTSTATUS ret = NtDll::NtSetInformationFile(FileHandle, IoStatusBlock, FileInformation, Length, FileInformationClass);
+
+    if(EmuFileIoTraceEnabled())
+    {
+        // Class 14 = FilePositionInformation: the payload is the new file
+        // offset, the piece needed to reconstruct offset-less reads.
+        if(FileInformationClass == 14 && FileInformation != NULL && Length >= sizeof(LONGLONG))
+        {
+            PLARGE_INTEGER pos = (PLARGE_INTEGER)FileInformation;
+            printf("FIO| seek tid=0x%X handle=0x%X pos=0x%.08X%.08X status=0x%.08X\n",
+                   (uint32)GetCurrentThreadId(), FileHandle, (uint32)pos->u.HighPart,
+                   (uint32)pos->u.LowPart, (uint32)ret);
+        }
+        else
+        {
+            printf("FIO| setinfo tid=0x%X handle=0x%X class=%u status=0x%.08X\n",
+                   (uint32)GetCurrentThreadId(), FileHandle, (uint32)FileInformationClass, (uint32)ret);
+        }
+    }
 
     EmuSwapFS();   // Xbox FS
 
