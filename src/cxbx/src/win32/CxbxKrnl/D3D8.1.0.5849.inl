@@ -899,6 +899,22 @@ SOOVPA<8> D3DDevice_GetPushBufferOffset_1_0_5849 =
     }
 };
 
+// _D3DDevice_IsFencePending@4 (d3d8.lib, 30 bytes)
+SOOVPA<8> D3DDevice_IsFencePending_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x8B },
+        { 0x08, 0x8B },
+        { 0x0C, 0x09 },
+        { 0x10, 0xD1 },
+        { 0x14, 0x04 },
+        { 0x18, 0xC0 },
+        { 0x1D, 0x00 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // D3DDevice::CreatePushBuffer2
@@ -939,6 +955,14 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_GetPushBufferOffset,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_GetPushBufferOffset"
+        #endif
+    },
+    // D3DDevice::IsFencePending
+    {
+        (OOVPA*)&D3DDevice_IsFencePending_1_0_5849,
+        XTL::EmuIDirect3DDevice8_IsFencePending,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_IsFencePending"
         #endif
     },
     // IDirect3DDevice8::GetDisplayFieldStatus

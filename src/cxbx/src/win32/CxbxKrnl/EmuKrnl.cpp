@@ -4903,6 +4903,34 @@ extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistrat
     printf("EmuKrnl (0x%lX): HalRegisterShutdownNotification registration=%p register=%lu.\n",
            GetCurrentThreadId(), ShutdownRegistration, (ULONG)Register);
 
+    // An UNregister mid-boot is a teardown-on-failure tell (an LTCG D3D device
+    // that could not finish CreateDevice unwinds through here first). Print
+    // the guest return-address candidates from the caller's stack so the
+    // failing init function's error path is attributed without a guest
+    // debugger.
+    if(!Register)
+    {
+        ULONG *Stack = (ULONG *)&ShutdownRegistration;
+        int Printed = 0;
+
+        for(int i = 0; i < 512 && Printed < 24; i++)
+        {
+            if(IsBadReadPtr(&Stack[i], sizeof(ULONG)))
+                break;
+
+            ULONG Word = Stack[i];
+
+            if(Word >= 0x00011000 && Word < 0x00400000)
+            {
+                printf("EmuKrnl (0x%lX): HalShutdown unwind stack[%03d] = 0x%.08lX\n",
+                       GetCurrentThreadId(), i, Word);
+                Printed++;
+            }
+        }
+
+        fflush(stdout);
+    }
+
     EmuSwapFS();   // Xbox FS
 }
 
