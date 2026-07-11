@@ -1,0 +1,12 @@
+#suite xbox-conformance v1
+#probe nv2a_pvideo
+CHK nv2a.pmc_boot0 PASS
+CHK nv2a.pvideo_size_in.read_zero PASS
+CHK nv2a.pvideo_format.read_zero PASS
+CHK nv2a.pvideo_base.read_zero PASS
+CHK nv2a.pvideo_limit.read_zero PASS
+CHK nv2a.pvideo_size_in.roundtrip PASS
+CHK nv2a.pvideo_point_in.roundtrip PASS
+CHK nv2a.pvideo_base.roundtrip PASS
+CHK nv2a.pvideo_limit.roundtrip PASS
+#result nv2a_pvideo verdict=PASS checks=9 fail=0
