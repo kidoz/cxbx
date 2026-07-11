@@ -9025,6 +9025,8 @@ XBSYSAPI EXPORTNUM(207) NTSTATUS NTAPI xboxkrnl::NtQueryDirectoryFile
     char    *mbstr = FileInformation->FileName;
     wchar_t *wcstr = FileDirInfo->FileName;
 
+    BOOLEAN bFirstIteration = RestartScan;
+
     do
     {
         ZeroMemory(wcstr, 160*2);
@@ -9032,8 +9034,10 @@ XBSYSAPI EXPORTNUM(207) NTSTATUS NTAPI xboxkrnl::NtQueryDirectoryFile
         ret = NtDll::NtQueryDirectoryFile
         (
             FileHandle, Event, (NtDll::PIO_APC_ROUTINE)ApcRoutine, ApcContext, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock, FileDirInfo,
-            0x40+160*2, (NtDll::FILE_INFORMATION_CLASS)FileInformationClass, TRUE, &NtFileMask, RestartScan
+            0x40+160*2, (NtDll::FILE_INFORMATION_CLASS)FileInformationClass, bFirstIteration, &NtFileMask, bFirstIteration
         );
+
+        bFirstIteration = FALSE;
 
         // ******************************************************************
         // * Convert from PC to Xbox
