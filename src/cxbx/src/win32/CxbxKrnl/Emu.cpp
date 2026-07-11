@@ -93,6 +93,8 @@ static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static bool  EmuLooksLikeReturnAddress(ULONG Address);
 static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, size_t BufferSize);
 static bool  EmuIsReadableRange(ULONG Address, ULONG Bytes);
+// Optional D3D wrapper entry trace (EmuD3D8.cpp); NULL when the trace is off.
+extern "C" const char *EmuGetLastD3DCall(void);
 static void  EmuInstallAutoBootLaunchData();
 static void  EmuInstallFakeKernelImage();
 static void  EmuXRefFailure();
@@ -5664,6 +5666,12 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
            GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
     printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
            GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+    {
+        const char *last = EmuGetLastD3DCall();
+        if(last != NULL)
+            printf("Emu (0x%lX): Vectored last D3D call: %s\n",
+                   GetCurrentThreadId(), last);
+    }
 
     // TIB sanity: RtlDispatchException rejects the whole SEH chain (and the
     // exception goes unhandled) when a registration record lies outside
