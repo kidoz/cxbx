@@ -74,46 +74,77 @@ struct X_CDirectSoundBuffer
 // ******************************************************************
 // * X_CDirectSoundStream
 // ******************************************************************
+struct X_DSoundStreamState;
+
+struct X_XMEDIAPACKET
+{
+    LPVOID pvBuffer;
+    DWORD dwMaxSize;
+    LPDWORD pdwCompletedSize;
+    LPDWORD pdwStatus;
+    union
+    {
+        HANDLE hCompletionEvent;
+        LPVOID pContext;
+    };
+    LONGLONG* prtTimestamp;
+};
+
+struct X_XMEDIAINFO
+{
+    DWORD dwFlags;
+    DWORD dwInputSize;
+    DWORD dwOutputSize;
+    DWORD dwMaxLookahead;
+};
+
+typedef VOID(CALLBACK* X_LPFNXMEDIAOBJECTCALLBACK)(LPVOID pStreamContext, LPVOID pPacketContext, DWORD dwStatus);
+
 class X_CDirectSoundStream
 {
     public:
         // ******************************************************************
         // * Construct VTable (or grab ptr to existing)
         // ******************************************************************
-        X_CDirectSoundStream() : pVtbl(&vtbl) {};
+      X_CDirectSoundStream() : pVtbl(&vtbl), EmuState(NULL), EmuRefCount(1) {};
 
-    private:
-        // ******************************************************************
-        // * VTable (cached by each instance, via constructor)
-        // ******************************************************************
-        struct _vtbl
-        {
-            ULONG (WINAPI *AddRef)(X_CDirectSoundStream *pThis);            // 0x00
-            ULONG (WINAPI *Release)(X_CDirectSoundStream *pThis);           // 0x04
-            DWORD Unknown[0x02];                                            // 0x08
-            HRESULT (WINAPI *Process)                                       // 0x10
-            (
-                X_CDirectSoundStream   *pThis,
-                PVOID                   pInputBuffer,                       // TODO: Fillout params
-                PVOID                   pOutputBuffer                       // TODO: Fillout params
-            );
-            HRESULT (WINAPI *Discontinuity)(X_CDirectSoundStream *pThis);   // 0x14
-            HRESULT (WINAPI *Flush)(X_CDirectSoundStream *pThis);           // 0x18
-        }
-        *pVtbl;
+      // ******************************************************************
+      // * VTable (cached by each instance, via constructor)
+      // ******************************************************************
+      struct _vtbl
+      {
+          ULONG(WINAPI* AddRef)(X_CDirectSoundStream* pThis);                         // 0x00
+          ULONG(WINAPI* Release)(X_CDirectSoundStream* pThis);                        // 0x04
+          HRESULT(WINAPI* GetInfo)(X_CDirectSoundStream* pThis, X_XMEDIAINFO* pInfo); // 0x08
+          HRESULT(WINAPI* GetStatus)(X_CDirectSoundStream* pThis, LPDWORD pdwStatus); // 0x0C
+          HRESULT(WINAPI* Process)                                                    // 0x10
+          (
+              X_CDirectSoundStream* pThis,
+              const X_XMEDIAPACKET* pInputBuffer,
+              const X_XMEDIAPACKET* pOutputBuffer);
+          HRESULT(WINAPI* Discontinuity)(X_CDirectSoundStream* pThis); // 0x14
+          HRESULT(WINAPI* Flush)(X_CDirectSoundStream* pThis);         // 0x18
+      }* pVtbl;
 
-        // ******************************************************************
-        // * Global Vtbl for this class
-        // ******************************************************************
-        static _vtbl vtbl;
+      // Host-only state. Guest addresses and host DirectSound objects never
+      // share a representation.
+      X_DSoundStreamState* EmuState;
+      volatile LONG EmuRefCount;
 
-        // ******************************************************************
-        // * Debug Mode guard for detecting naughty data accesses
-        // ******************************************************************
-        #ifdef _DEBUG
-        DWORD DebugGuard[256];
-        #endif
+      // ******************************************************************
+      // * Global Vtbl for this class
+      // ******************************************************************
+      static _vtbl vtbl;
+
+      // ******************************************************************
+      // * Debug Mode guard for detecting naughty data accesses
+      // ******************************************************************
+      BYTE EmuGuardTail[0x200];
 };
+
+static_assert(sizeof(X_XMEDIAPACKET) == 0x18, "Xbox XMEDIAPACKET ABI size changed");
+static_assert(offsetof(X_XMEDIAPACKET, prtTimestamp) == 0x14, "Xbox XMEDIAPACKET ABI layout changed");
+static_assert(offsetof(X_CDirectSoundStream, pVtbl) == 0x00, "Xbox stream vtable must remain first");
 
 // ******************************************************************
 // * X_DSBUFFERDESC
@@ -136,10 +167,12 @@ struct X_DSSTREAMDESC
     DWORD                       dwFlags;
     DWORD                       dwMaxAttachedPackets;
     LPWAVEFORMATEX              lpwfxFormat;
-    PVOID                       lpfnCallback;   // TODO: Correct Parameter
+    X_LPFNXMEDIAOBJECTCALLBACK lpfnCallback;
     LPVOID                      lpvContext;
     PVOID                       lpMixBins;      // TODO: Correct Parameter
-}; 
+};
+
+static_assert(sizeof(X_DSSTREAMDESC) == 0x18, "Xbox DSSTREAMDESC ABI size changed");
 
 // ******************************************************************
 // * func: EmuDirectSoundCreate
@@ -219,12 +252,18 @@ ULONG WINAPI EmuCDirectSoundStream_Release(X_CDirectSoundStream *pThis);
 // ******************************************************************
 // * func: EmuCDirectSoundStream_Process
 // ******************************************************************
-HRESULT WINAPI EmuCDirectSoundStream_Process
-(
-    X_CDirectSoundStream   *pThis,
-    PVOID                   pInputBuffer,   // TODO: Fillout params
-    PVOID                   pOutputBuffer   // TODO: Fillout params
-);
+HRESULT WINAPI EmuCDirectSoundStream_Process(
+    X_CDirectSoundStream* pThis,
+    const X_XMEDIAPACKET* pInputBuffer,
+    const X_XMEDIAPACKET* pOutputBuffer);
+
+HRESULT WINAPI EmuCDirectSoundStream_GetInfo(
+    X_CDirectSoundStream* pThis,
+    X_XMEDIAINFO* pInfo);
+
+HRESULT WINAPI EmuCDirectSoundStream_GetStatus(
+    X_CDirectSoundStream* pThis,
+    LPDWORD pdwStatus);
 
 // ******************************************************************
 // * func: EmuCDirectSoundStream_Discontinuity

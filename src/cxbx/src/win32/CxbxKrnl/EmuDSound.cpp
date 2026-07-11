@@ -42,6 +42,10 @@ namespace xboxkrnl
     #include <xboxkrnl/xboxkrnl.h>
 };
 
+#include <cstdint>
+#include <cstring>
+#include <new>
+
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
@@ -64,17 +68,428 @@ namespace XTL
 // ******************************************************************
 static XTL::LPDIRECTSOUND8 g_pDSound8 = NULL;
 
+namespace
+{
+constexpr DWORD kStreamBufferMinimumBytes = 64 * 1024;
+constexpr DWORD kStreamBufferMaximumBytes = 4 * 1024 * 1024;
+constexpr DWORD kStreamMaximumPackets = 1024;
+constexpr DWORD kXMediaPacketStatusPending = static_cast<DWORD>(E_PENDING);
+constexpr DWORD kXMediaPacketStatusSuccess = static_cast<DWORD>(S_OK);
+constexpr DWORD kXMediaPacketStatusFlushed = static_cast<DWORD>(E_ABORT);
+constexpr DWORD kXMediaPacketStatusFailure = static_cast<DWORD>(E_FAIL);
+constexpr DWORD kXmoStatusAcceptInput = 0x00000001;
+constexpr DWORD kDsStreamStatusPlaying = 0x00010000;
+constexpr DWORD kDsStreamStatusPaused = 0x00020000;
+constexpr DWORD kDsStreamStatusStarved = 0x00040000;
+
+struct StreamPacket
+{
+    LPDWORD CompletedSize;
+    LPDWORD Status;
+    HANDLE CompletionEvent;
+    LPVOID Context;
+    DWORD Size;
+    uint64_t EndPosition;
+};
+} // namespace
+
+struct XTL::X_DSoundStreamState
+{
+    X_CDirectSoundStream* Owner;
+    IDirectSoundBuffer* HostBuffer;
+    WAVEFORMATEX* Format;
+    X_LPFNXMEDIAOBJECTCALLBACK Callback;
+    LPVOID CallbackContext;
+    StreamPacket* Packets;
+    DWORD PacketCapacity;
+    DWORD PacketHead;
+    DWORD PacketCount;
+    DWORD BufferBytes;
+    DWORD LastPlayCursor;
+    uint64_t PlayedBytes;
+    uint64_t WrittenBytes;
+    LONG Volume;
+    bool Playing;
+    bool Paused;
+    CRITICAL_SECTION Lock;
+    X_DSoundStreamState* Next;
+};
+
+namespace
+{
+SRWLOCK g_DSoundStreamListLock = SRWLOCK_INIT;
+XTL::X_DSoundStreamState* g_DSoundStreams = NULL;
+
+HRESULT EnsureDirectSoundDevice()
+{
+    if(g_pDSound8 != NULL)
+    {
+        return DS_OK;
+    }
+
+    HRESULT result = DirectSoundCreate8(NULL, &g_pDSound8, NULL);
+    if(SUCCEEDED(result) && g_pDSound8 != NULL)
+    {
+        result = g_pDSound8->SetCooperativeLevel(XTL::g_hEmuWindow, DSSCL_PRIORITY);
+    }
+
+    return result;
+}
+
+void RegisterStream(XTL::X_DSoundStreamState* state)
+{
+    AcquireSRWLockExclusive(&g_DSoundStreamListLock);
+    state->Next = g_DSoundStreams;
+    g_DSoundStreams = state;
+    ReleaseSRWLockExclusive(&g_DSoundStreamListLock);
+}
+
+void UnregisterStream(XTL::X_DSoundStreamState* state)
+{
+    AcquireSRWLockExclusive(&g_DSoundStreamListLock);
+
+    XTL::X_DSoundStreamState** link = &g_DSoundStreams;
+    while(*link != NULL)
+    {
+        if(*link == state)
+        {
+            *link = state->Next;
+            break;
+        }
+
+        link = &((*link)->Next);
+    }
+
+    ReleaseSRWLockExclusive(&g_DSoundStreamListLock);
+}
+
+XTL::X_CDirectSoundStream* ResolveStream(const void* streamPointer)
+{
+    if(streamPointer == NULL)
+    {
+        return NULL;
+    }
+
+    const uintptr_t candidate = reinterpret_cast<uintptr_t>(streamPointer);
+    XTL::X_CDirectSoundStream* result = NULL;
+
+    AcquireSRWLockShared(&g_DSoundStreamListLock);
+    for(XTL::X_DSoundStreamState* state = g_DSoundStreams; state != NULL; state = state->Next)
+    {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(state->Owner);
+        if(candidate >= base && candidate < base + sizeof(*state->Owner))
+        {
+            result = state->Owner;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_DSoundStreamListLock);
+
+    return result;
+}
+
+void ClearStreamBuffer(XTL::X_DSoundStreamState* state)
+{
+    LPVOID first = NULL;
+    LPVOID second = NULL;
+    DWORD firstSize = 0;
+    DWORD secondSize = 0;
+
+    const HRESULT result = state->HostBuffer->Lock(
+        0, state->BufferBytes, &first, &firstSize, &second, &secondSize, DSBLOCK_ENTIREBUFFER);
+    if(FAILED(result))
+    {
+        return;
+    }
+
+    const int silence = state->Format->wBitsPerSample == 8 ? 0x80 : 0x00;
+    if(first != NULL)
+    {
+        std::memset(first, silence, firstSize);
+    }
+    if(second != NULL)
+    {
+        std::memset(second, silence, secondSize);
+    }
+
+    state->HostBuffer->Unlock(first, firstSize, second, secondSize);
+}
+
+void FinishStreamPacket(XTL::X_DSoundStreamState* state, const StreamPacket& packet, DWORD status)
+{
+    if(packet.CompletedSize != NULL)
+    {
+        *packet.CompletedSize = status == kXMediaPacketStatusSuccess ? packet.Size : 0;
+    }
+    if(packet.Status != NULL)
+    {
+        *packet.Status = status;
+    }
+
+    if(state->Callback != NULL)
+    {
+        EmuSwapFS();
+        state->Callback(state->CallbackContext, packet.Context, status);
+        EmuSwapFS();
+    }
+    else if(packet.CompletionEvent != NULL)
+    {
+        SetEvent(packet.CompletionEvent);
+    }
+}
+
+void ResetStoppedStream(XTL::X_DSoundStreamState* state)
+{
+    state->HostBuffer->Stop();
+    state->HostBuffer->SetCurrentPosition(0);
+    state->LastPlayCursor = 0;
+    state->PlayedBytes = 0;
+    state->WrittenBytes = 0;
+    state->Playing = false;
+    ClearStreamBuffer(state);
+}
+
+void PumpStream(XTL::X_DSoundStreamState* state)
+{
+    for(;;)
+    {
+        StreamPacket completed = {};
+        bool hasCompletion = false;
+
+        EnterCriticalSection(&state->Lock);
+
+        if(state->Playing && !state->Paused)
+        {
+            DWORD playCursor = 0;
+            DWORD writeCursor = 0;
+            if(SUCCEEDED(state->HostBuffer->GetCurrentPosition(&playCursor, &writeCursor)))
+            {
+                const DWORD delta = playCursor >= state->LastPlayCursor
+                                        ? playCursor - state->LastPlayCursor
+                                        : state->BufferBytes - state->LastPlayCursor + playCursor;
+                state->PlayedBytes += delta;
+                state->LastPlayCursor = playCursor;
+            }
+        }
+
+        if(state->PacketCount != 0)
+        {
+            StreamPacket& front = state->Packets[state->PacketHead];
+            if(front.EndPosition <= state->PlayedBytes)
+            {
+                completed = front;
+                state->PacketHead = (state->PacketHead + 1) % state->PacketCapacity;
+                state->PacketCount--;
+                hasCompletion = true;
+            }
+        }
+
+        if(!hasCompletion && state->PacketCount == 0 && state->Playing && state->PlayedBytes >= state->WrittenBytes)
+        {
+            ResetStoppedStream(state);
+        }
+
+        LeaveCriticalSection(&state->Lock);
+
+        if(!hasCompletion)
+        {
+            break;
+        }
+
+        FinishStreamPacket(state, completed, kXMediaPacketStatusSuccess);
+    }
+}
+
+void FlushStream(XTL::X_DSoundStreamState* state, bool invokeCallbacks)
+{
+    for(;;)
+    {
+        StreamPacket flushed = {};
+        bool hasPacket = false;
+
+        EnterCriticalSection(&state->Lock);
+        if(state->PacketCount != 0)
+        {
+            flushed = state->Packets[state->PacketHead];
+            state->PacketHead = (state->PacketHead + 1) % state->PacketCapacity;
+            state->PacketCount--;
+            hasPacket = true;
+        }
+        else
+        {
+            ResetStoppedStream(state);
+            state->Paused = false;
+        }
+        LeaveCriticalSection(&state->Lock);
+
+        if(!hasPacket)
+        {
+            break;
+        }
+
+        if(invokeCallbacks)
+        {
+            FinishStreamPacket(state, flushed, kXMediaPacketStatusFlushed);
+        }
+        else
+        {
+            if(flushed.CompletedSize != NULL)
+            {
+                *flushed.CompletedSize = 0;
+            }
+            if(flushed.Status != NULL)
+            {
+                *flushed.Status = kXMediaPacketStatusFlushed;
+            }
+            if(state->Callback == NULL && flushed.CompletionEvent != NULL)
+            {
+                SetEvent(flushed.CompletionEvent);
+            }
+        }
+    }
+}
+
+void DestroyStream(XTL::X_CDirectSoundStream* stream)
+{
+    XTL::X_DSoundStreamState* state = stream->EmuState;
+    if(state == NULL)
+    {
+        delete stream;
+        return;
+    }
+
+    UnregisterStream(state);
+    stream->EmuState = NULL;
+    FlushStream(state, false);
+
+    if(state->HostBuffer != NULL)
+    {
+        state->HostBuffer->Release();
+    }
+
+    DeleteCriticalSection(&state->Lock);
+    delete[] reinterpret_cast<BYTE*>(state->Format);
+    delete[] state->Packets;
+    delete state;
+    delete stream;
+}
+
+ULONG ReleaseStreamReference(XTL::X_CDirectSoundStream* stream)
+{
+    const LONG count = InterlockedDecrement(&stream->EmuRefCount);
+    if(count == 0)
+    {
+        DestroyStream(stream);
+    }
+
+    return count > 0 ? static_cast<ULONG>(count) : 0;
+}
+
+HRESULT CreateHostStream(const XTL::X_DSSTREAMDESC* descriptor, XTL::X_CDirectSoundStream** streamOut)
+{
+    if(descriptor == NULL || streamOut == NULL || descriptor->lpwfxFormat == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    *streamOut = NULL;
+
+    HRESULT result = EnsureDirectSoundDevice();
+    if(FAILED(result))
+    {
+        return result;
+    }
+
+    const DWORD packetCapacity = descriptor->dwMaxAttachedPackets == 0
+                                     ? 1
+                                     : descriptor->dwMaxAttachedPackets;
+    if(packetCapacity > kStreamMaximumPackets)
+    {
+        return E_INVALIDARG;
+    }
+
+    const size_t formatBytes = sizeof(WAVEFORMATEX) + descriptor->lpwfxFormat->cbSize;
+    if(formatBytes > sizeof(WAVEFORMATEX) + 256)
+    {
+        return E_INVALIDARG;
+    }
+
+    XTL::X_CDirectSoundStream* stream = new(std::nothrow) XTL::X_CDirectSoundStream();
+    XTL::X_DSoundStreamState* state = new(std::nothrow) XTL::X_DSoundStreamState();
+    BYTE* formatStorage = new(std::nothrow) BYTE[formatBytes];
+    StreamPacket* packets = new(std::nothrow) StreamPacket[packetCapacity];
+    if(stream == NULL || state == NULL || formatStorage == NULL || packets == NULL)
+    {
+        delete stream;
+        delete state;
+        delete[] formatStorage;
+        delete[] packets;
+        return E_OUTOFMEMORY;
+    }
+
+    std::memset(state, 0, sizeof(*state));
+    std::memset(packets, 0, sizeof(*packets) * packetCapacity);
+    std::memcpy(formatStorage, descriptor->lpwfxFormat, formatBytes);
+
+    state->Owner = stream;
+    state->Format = reinterpret_cast<WAVEFORMATEX*>(formatStorage);
+    state->Callback = descriptor->lpfnCallback;
+    state->CallbackContext = descriptor->lpvContext;
+    state->Packets = packets;
+    state->PacketCapacity = packetCapacity;
+    state->Volume = DSBVOLUME_MAX;
+    InitializeCriticalSection(&state->Lock);
+
+    uint64_t desiredBytes = static_cast<uint64_t>(state->Format->nAvgBytesPerSec) * 2;
+    if(desiredBytes < kStreamBufferMinimumBytes)
+    {
+        desiredBytes = kStreamBufferMinimumBytes;
+    }
+    if(desiredBytes > kStreamBufferMaximumBytes)
+    {
+        desiredBytes = kStreamBufferMaximumBytes;
+    }
+
+    const DWORD blockAlign = state->Format->nBlockAlign == 0 ? 1 : state->Format->nBlockAlign;
+    state->BufferBytes = static_cast<DWORD>(desiredBytes) / blockAlign * blockAlign;
+
+    XTL::DSBUFFERDESC hostDescriptor = {};
+    hostDescriptor.dwSize = sizeof(hostDescriptor);
+    hostDescriptor.dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLFREQUENCY | DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_GLOBALFOCUS;
+    hostDescriptor.dwBufferBytes = state->BufferBytes;
+    hostDescriptor.lpwfxFormat = state->Format;
+
+    result = g_pDSound8->CreateSoundBuffer(&hostDescriptor, &state->HostBuffer, NULL);
+    if(FAILED(result))
+    {
+        DeleteCriticalSection(&state->Lock);
+        delete stream;
+        delete state;
+        delete[] formatStorage;
+        delete[] packets;
+        return result;
+    }
+
+    ClearStreamBuffer(state);
+    stream->EmuState = state;
+    RegisterStream(state);
+    *streamOut = stream;
+
+    return DS_OK;
+}
+} // namespace
+
 // ******************************************************************
 // * EmuStatic Variable(s)
 // ******************************************************************
-XTL::X_CDirectSoundStream::_vtbl XTL::X_CDirectSoundStream::vtbl = 
-{
-    &XTL::EmuCDirectSoundStream_AddRef,         // 0x00 - AddRef
-    &XTL::EmuCDirectSoundStream_Release,        // 0x04
-    {0xCDCDCDCD, 0xCDCDCDCD},                   // 0x08 - Unknown
-    &XTL::EmuCDirectSoundStream_Process,        // 0x10 - Process
-    &XTL::EmuCDirectSoundStream_Discontinuity,  // 0x14 - Discontinuity
-    &XTL::EmuCDirectSoundStream_Flush           // 0x18 - Flush
+XTL::X_CDirectSoundStream::_vtbl XTL::X_CDirectSoundStream::vtbl = {
+    &XTL::EmuCDirectSoundStream_AddRef,        // 0x00 - AddRef
+    &XTL::EmuCDirectSoundStream_Release,       // 0x04
+    &XTL::EmuCDirectSoundStream_GetInfo,       // 0x08 - GetInfo
+    &XTL::EmuCDirectSoundStream_GetStatus,     // 0x0C - GetStatus
+    &XTL::EmuCDirectSoundStream_Process,       // 0x10 - Process
+    &XTL::EmuCDirectSoundStream_Discontinuity, // 0x14 - Discontinuity
+    &XTL::EmuCDirectSoundStream_Flush          // 0x18 - Flush
 };
 
 // ******************************************************************
@@ -216,11 +631,24 @@ HRESULT WINAPI XTL::EmuDirectSoundCreateStream
     }
     #endif
 
-    *ppStream = new X_CDirectSoundStream();
+    HRESULT hRet = CreateHostStream(pdssd, ppStream);
+
+#ifdef _DEBUG_TRACE
+    if(pdssd != NULL && pdssd->lpwfxFormat != NULL)
+    {
+        printf("EmuDSound: stream format tag=0x%.04X channels=%u rate=%u bits=%u packet_cap=%u result=0x%.08X\n",
+               pdssd->lpwfxFormat->wFormatTag,
+               pdssd->lpwfxFormat->nChannels,
+               pdssd->lpwfxFormat->nSamplesPerSec,
+               pdssd->lpwfxFormat->wBitsPerSample,
+               pdssd->dwMaxAttachedPackets,
+               hRet);
+    }
+#endif
 
     EmuSwapFS();   // XBox FS
 
-    return DS_OK;
+    return hRet;
 }
 
 // ******************************************************************
@@ -252,11 +680,11 @@ HRESULT WINAPI XTL::EmuIDirectSound8_CreateStream
     }
     #endif
 
-    *ppStream = new X_CDirectSoundStream();
+    HRESULT hRet = CreateHostStream(pdssd, ppStream);
 
     EmuSwapFS();   // XBox FS
 
-    return DS_OK;
+    return hRet;
 }
 
 
@@ -315,11 +743,20 @@ ULONG WINAPI XTL::EmuCDirectSoundStream_SetVolume(X_CDirectSoundStream *pThis, L
     }
     #endif
 
-    // TODO: Actually SetVolume
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    HRESULT hRet = E_INVALIDARG;
+    if(stream != NULL && stream->EmuState != NULL)
+    {
+        X_DSoundStreamState* state = stream->EmuState;
+        EnterCriticalSection(&state->Lock);
+        state->Volume = lVolume;
+        hRet = state->HostBuffer->SetVolume(lVolume);
+        LeaveCriticalSection(&state->Lock);
+    }
 
     EmuSwapFS();   // XBox FS
 
-    return DS_OK;
+    return hRet;
 }
 
 // ******************************************************************
@@ -376,11 +813,16 @@ ULONG WINAPI XTL::EmuCDirectSoundStream_AddRef(X_CDirectSoundStream *pThis)
     }
     #endif
 
-    // TODO: Actually AddRef
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    ULONG count = 0;
+    if(stream != NULL)
+    {
+        count = static_cast<ULONG>(InterlockedIncrement(&stream->EmuRefCount));
+    }
 
     EmuSwapFS();   // XBox FS
 
-    return DS_OK;
+    return count;
 }
 
 // ******************************************************************
@@ -403,22 +845,25 @@ ULONG WINAPI XTL::EmuCDirectSoundStream_Release(X_CDirectSoundStream *pThis)
     }
     #endif
 
-    // TODO: Actually Release
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    ULONG count = 0;
+    if(stream != NULL)
+    {
+        count = ReleaseStreamReference(stream);
+    }
 
     EmuSwapFS();   // XBox FS
 
-    return DS_OK;
+    return count;
 }
 
 // ******************************************************************
 // * func: EmuCDirectSoundStream_Process
 // ******************************************************************
-HRESULT WINAPI XTL::EmuCDirectSoundStream_Process
-(
-    X_CDirectSoundStream   *pThis,
-    PVOID                   pInputBuffer,   // TODO: Fillout params
-    PVOID                   pOutputBuffer   // TODO: Fillout params
-)
+HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
+    X_CDirectSoundStream* pThis,
+    const X_XMEDIAPACKET* pInputBuffer,
+    const X_XMEDIAPACKET* pOutputBuffer)
 {
     EmuSwapFS();   // Win2k/XP FS
 
@@ -437,10 +882,168 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process
     }
     #endif
 
-    // TODO: Actually Process
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    if(stream == NULL || stream->EmuState == NULL || pInputBuffer == NULL || pInputBuffer->pvBuffer == NULL || pOutputBuffer != NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
+
+    InterlockedIncrement(&stream->EmuRefCount);
+    X_DSoundStreamState* state = stream->EmuState;
+    PumpStream(state);
+
+    HRESULT hRet = DS_OK;
+    EnterCriticalSection(&state->Lock);
+
+    const uint64_t bufferedBytes = state->WrittenBytes - state->PlayedBytes;
+    if(state->PacketCount >= state->PacketCapacity || pInputBuffer->dwMaxSize > state->BufferBytes || bufferedBytes + pInputBuffer->dwMaxSize > state->BufferBytes)
+    {
+        hRet = DSERR_OUTOFMEMORY;
+    }
+    else
+    {
+        LPVOID first = NULL;
+        LPVOID second = NULL;
+        DWORD firstSize = 0;
+        DWORD secondSize = 0;
+        const DWORD writeOffset = static_cast<DWORD>(state->WrittenBytes % state->BufferBytes);
+
+        hRet = state->HostBuffer->Lock(
+            writeOffset,
+            pInputBuffer->dwMaxSize,
+            &first,
+            &firstSize,
+            &second,
+            &secondSize,
+            0);
+        if(SUCCEEDED(hRet))
+        {
+            std::memcpy(first, pInputBuffer->pvBuffer, firstSize);
+            if(second != NULL && secondSize != 0)
+            {
+                const BYTE* source = static_cast<const BYTE*>(pInputBuffer->pvBuffer);
+                std::memcpy(second, source + firstSize, secondSize);
+            }
+
+            hRet = state->HostBuffer->Unlock(first, firstSize, second, secondSize);
+        }
+
+        if(SUCCEEDED(hRet))
+        {
+            const DWORD packetIndex = (state->PacketHead + state->PacketCount) % state->PacketCapacity;
+            StreamPacket& packet = state->Packets[packetIndex];
+            packet.CompletedSize = pInputBuffer->pdwCompletedSize;
+            packet.Status = pInputBuffer->pdwStatus;
+            packet.CompletionEvent = state->Callback == NULL ? pInputBuffer->hCompletionEvent : NULL;
+            packet.Context = state->Callback != NULL ? pInputBuffer->pContext : NULL;
+            packet.Size = pInputBuffer->dwMaxSize;
+            state->WrittenBytes += pInputBuffer->dwMaxSize;
+            packet.EndPosition = state->WrittenBytes;
+            state->PacketCount++;
+
+            if(packet.CompletedSize != NULL)
+            {
+                *packet.CompletedSize = 0;
+            }
+            if(packet.Status != NULL)
+            {
+                *packet.Status = kXMediaPacketStatusPending;
+            }
+
+            if(!state->Playing && !state->Paused)
+            {
+                DWORD playCursor = 0;
+                DWORD writeCursor = 0;
+                state->HostBuffer->GetCurrentPosition(&playCursor, &writeCursor);
+                state->LastPlayCursor = playCursor;
+                hRet = state->HostBuffer->Play(0, 0, DSBPLAY_LOOPING);
+                state->Playing = SUCCEEDED(hRet);
+            }
+
+            if(FAILED(hRet))
+            {
+                state->PacketCount--;
+                state->WrittenBytes -= pInputBuffer->dwMaxSize;
+                if(packet.Status != NULL)
+                {
+                    *packet.Status = kXMediaPacketStatusFailure;
+                }
+            }
+        }
+    }
+
+    LeaveCriticalSection(&state->Lock);
+    ReleaseStreamReference(stream);
+
+    EmuSwapFS(); // XBox FS
+
+    return hRet;
+}
+
+HRESULT WINAPI XTL::EmuCDirectSoundStream_GetInfo(
+    X_CDirectSoundStream* pThis,
+    X_XMEDIAINFO* pInfo)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    if(stream == NULL || stream->EmuState == NULL || pInfo == NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
+
+    X_DSoundStreamState* state = stream->EmuState;
+    pInfo->dwFlags = 0x00000004;
+    pInfo->dwInputSize = state->Format->nBlockAlign;
+    pInfo->dwOutputSize = 0;
+    pInfo->dwMaxLookahead = 0;
 
     EmuSwapFS();   // XBox FS
+    return DS_OK;
+}
 
+HRESULT WINAPI XTL::EmuCDirectSoundStream_GetStatus(
+    X_CDirectSoundStream* pThis,
+    LPDWORD pdwStatus)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    if(stream == NULL || stream->EmuState == NULL || pdwStatus == NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
+
+    InterlockedIncrement(&stream->EmuRefCount);
+    X_DSoundStreamState* state = stream->EmuState;
+    PumpStream(state);
+
+    EnterCriticalSection(&state->Lock);
+    DWORD status = 0;
+    if(state->PacketCount < state->PacketCapacity)
+    {
+        status |= kXmoStatusAcceptInput;
+    }
+    if(state->Playing)
+    {
+        status |= kDsStreamStatusPlaying;
+    }
+    if(state->Paused)
+    {
+        status |= kDsStreamStatusPaused;
+    }
+    if(state->PacketCount == 0)
+    {
+        status |= kDsStreamStatusStarved;
+    }
+    *pdwStatus = status;
+    LeaveCriticalSection(&state->Lock);
+
+    ReleaseStreamReference(stream);
+    EmuSwapFS(); // XBox FS
     return DS_OK;
 }
 
@@ -464,7 +1067,12 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Discontinuity(X_CDirectSoundStream *pT
     }
     #endif
 
-    // TODO: Actually Process
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    if(stream == NULL || stream->EmuState == NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -496,9 +1104,46 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Pause
     }
     #endif
 
+    X_CDirectSoundStream* stream = ResolveStream(pStream);
+    if(stream == NULL || stream->EmuState == NULL || dwPause > 1)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
+
+    InterlockedIncrement(&stream->EmuRefCount);
+    X_DSoundStreamState* state = stream->EmuState;
+    PumpStream(state);
+
+    EnterCriticalSection(&state->Lock);
+    HRESULT hRet = DS_OK;
+    if(dwPause != 0)
+    {
+        hRet = state->HostBuffer->Stop();
+        if(SUCCEEDED(hRet))
+        {
+            state->Paused = true;
+        }
+    }
+    else
+    {
+        state->Paused = false;
+        if(state->PacketCount != 0)
+        {
+            DWORD playCursor = 0;
+            DWORD writeCursor = 0;
+            state->HostBuffer->GetCurrentPosition(&playCursor, &writeCursor);
+            state->LastPlayCursor = playCursor;
+            hRet = state->HostBuffer->Play(0, 0, DSBPLAY_LOOPING);
+            state->Playing = SUCCEEDED(hRet);
+        }
+    }
+    LeaveCriticalSection(&state->Lock);
+
+    ReleaseStreamReference(stream);
     EmuSwapFS();   // XBox FS
 
-    return DS_OK;
+    return hRet;
 }
 
 // ******************************************************************
@@ -1775,11 +2420,31 @@ VOID WINAPI XTL::EmuDirectSoundDoWork()
     printf("EmuDSound (0x%X): EmuDirectSoundDoWork();\n", GetCurrentThreadId());
     #endif
 
-    // The XDK requires titles to pump this every frame to advance the Xbox
-    // DSound engine. The host DSound mixes on its own thread, so there is
-    // nothing to pump -- but this MUST be hooked: the guest implementation
-    // walks voice lists that were never initialized (DirectSoundCreate is
-    // HLE'd) and NULL-derefs.
+    X_DSoundStreamState* state = NULL;
+    AcquireSRWLockShared(&g_DSoundStreamListLock);
+    state = g_DSoundStreams;
+    if(state != NULL)
+    {
+        InterlockedIncrement(&state->Owner->EmuRefCount);
+    }
+    ReleaseSRWLockShared(&g_DSoundStreamListLock);
+
+    while(state != NULL)
+    {
+        X_DSoundStreamState* next = NULL;
+        AcquireSRWLockShared(&g_DSoundStreamListLock);
+        next = state->Next;
+        if(next != NULL)
+        {
+            InterlockedIncrement(&next->Owner->EmuRefCount);
+        }
+        ReleaseSRWLockShared(&g_DSoundStreamListLock);
+
+        X_CDirectSoundStream* owner = state->Owner;
+        PumpStream(state);
+        ReleaseStreamReference(owner);
+        state = next;
+    }
 
     EmuSwapFS();   // XBox FS
 }
@@ -1795,7 +2460,16 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Flush(X_CDirectSoundStream *pThis)
     printf("EmuDSound (0x%X): EmuCDirectSoundStream_Flush(0x%.08X);\n", GetCurrentThreadId(), pThis);
     #endif
 
-    // Streams are not host-backed yet; nothing to flush.
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    if(stream == NULL || stream->EmuState == NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
+
+    InterlockedIncrement(&stream->EmuRefCount);
+    FlushStream(stream->EmuState, true);
+    ReleaseStreamReference(stream);
 
     EmuSwapFS();   // XBox FS
 
@@ -1818,7 +2492,16 @@ HRESULT WINAPI XTL::EmuIDirectSoundStream_FlushEx
     printf("EmuDSound (0x%X): EmuIDirectSoundStream_FlushEx(0x%.08X, 0x%.08X);\n", GetCurrentThreadId(), pThis, dwFlags);
     #endif
 
-    // Streams are not host-backed yet; nothing to flush.
+    X_CDirectSoundStream* stream = ResolveStream(pThis);
+    if(stream == NULL || stream->EmuState == NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return E_INVALIDARG;
+    }
+
+    InterlockedIncrement(&stream->EmuRefCount);
+    FlushStream(stream->EmuState, true);
+    ReleaseStreamReference(stream);
 
     EmuSwapFS();   // XBox FS
 
