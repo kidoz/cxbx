@@ -1,0 +1,13 @@
+#suite xbox-conformance v1
+#probe nv2a_interrupt_sources
+CHK nv2a.intr_sources.pfifo_pending PASS
+CHK nv2a.intr_sources.pfifo_masked PASS
+CHK nv2a.intr_sources.pfifo_aggregated PASS
+CHK nv2a.intr_sources.pfifo_w1c PASS
+CHK nv2a.intr_sources.pfifo_aggregate_clear PASS
+CHK nv2a.intr_sources.pgraph_pending PASS
+CHK nv2a.intr_sources.pgraph_masked PASS
+CHK nv2a.intr_sources.pgraph_aggregated PASS
+CHK nv2a.intr_sources.pgraph_mask_after_pending PASS
+CHK nv2a.intr_sources.pgraph_w1c PASS
+#result nv2a_interrupt_sources verdict=PASS checks=10 fail=0

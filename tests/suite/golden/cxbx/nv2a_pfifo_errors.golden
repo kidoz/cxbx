@@ -1,0 +1,15 @@
+#suite xbox-conformance v1
+#probe nv2a_pfifo_errors
+CHK nv2a.errors.reserved_state PASS
+CHK nv2a.errors.reserved_get PASS
+CHK nv2a.errors.reserved_suspended PASS
+CHK nv2a.errors.reserved_intr PASS
+CHK nv2a.errors.protection_state PASS
+CHK nv2a.errors.protection_get PASS
+CHK nv2a.errors.protection_count PASS
+CHK nv2a.errors.protection_intr PASS
+CHK nv2a.errors.recovery_get PASS
+CHK nv2a.errors.recovery_state PASS
+CHK nv2a.errors.recovery_data PASS
+CHK nv2a.errors.recovery_intr_clear PASS
+#result nv2a_pfifo_errors verdict=PASS checks=12 fail=0
