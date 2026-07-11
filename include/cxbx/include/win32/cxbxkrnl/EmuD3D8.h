@@ -1494,6 +1494,31 @@ DWORD WINAPI EmuIDirect3DDevice8_GetPushBufferOffset
 );
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_InsertFence
+// ******************************************************************
+DWORD WINAPI EmuIDirect3DDevice8_InsertFence(VOID);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_IsFencePending
+// ******************************************************************
+BOOL WINAPI EmuIDirect3DDevice8_IsFencePending(DWORD Fence);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BlockOnFence
+// ******************************************************************
+HRESULT WINAPI EmuIDirect3DDevice8_BlockOnFence(DWORD Fence);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_KickPushBuffer
+// ******************************************************************
+HRESULT WINAPI EmuIDirect3DDevice8_KickPushBuffer(VOID);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BlockUntilIdle
+// ******************************************************************
+HRESULT WINAPI EmuIDirect3DDevice8_BlockUntilIdle(VOID);
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetLight
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DDevice8_SetLight

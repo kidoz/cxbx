@@ -7218,7 +7218,105 @@ DWORD WINAPI XTL::EmuIDirect3DDevice8_GetPushBufferOffset
 }
 
 // ******************************************************************
-// * func: EmuIDirect3DDevice8_RunPushBuffer
+// * func: EmuIDirect3DDevice8_InsertFence
+// ******************************************************************
+DWORD WINAPI XTL::EmuIDirect3DDevice8_InsertFence(VOID)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("InsertFence");
+
+    // On real hardware, InsertFence inserts a fence token into the GPU command
+    // stream and returns a handle. The host runtime has no equivalent fence
+    // mechanism accessible through IDirect3DDevice8, so we return a monotonically
+    // increasing handle that IsFencePending always reports as completed (not
+    // pending). This is correct for titles that use fences only to wait for GPU
+    // completion -- the host GPU processes commands synchronously within each
+    // Present/Clear, so by the time InsertFence returns the prior work is done.
+    static DWORD s_NextFence = 1;
+    DWORD fence = s_NextFence++;
+
+    EmuSwapFS();   // XBox FS
+
+    return fence;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_IsFencePending
+// ******************************************************************
+BOOL WINAPI XTL::EmuIDirect3DDevice8_IsFencePending(DWORD Fence)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("IsFencePending");
+
+    // The host GPU processes commands synchronously within each Present/Clear,
+    // so by the time a title checks IsFencePending the prior work is already
+    // complete. Report FALSE (not pending) for all fences.
+    BOOL pending = FALSE;
+
+    EmuSwapFS();   // XBox FS
+
+    return pending;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BlockOnFence
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_BlockOnFence(DWORD Fence)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("BlockOnFence");
+
+    // The host GPU processes synchronously, so there is nothing to block on.
+
+    EmuSwapFS();   // XBox FS
+
+    return D3D_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_KickPushBuffer
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_KickPushBuffer(VOID)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("KickPushBuffer");
+
+    // KickPushBuffer tells the GPU to start processing the current push buffer.
+    // The host runtime submits commands immediately, so this is a no-op.
+
+    EmuSwapFS();   // XBox FS
+
+    return D3D_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BlockUntilIdle
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_BlockUntilIdle(VOID)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("BlockUntilIdle");
+
+    // BlockUntilIdle waits for the GPU to finish all pending work. The host
+    // runtime processes synchronously, so use the D3D single-step pusher
+    // idle barrier if available, otherwise this is a no-op.
+    if(g_pD3DSingleStepPusher != NULL && (*g_pD3DSingleStepPusher & 1) != 0)
+    {
+        IDirect3DSurface8 *pRT = NULL;
+        if(SUCCEEDED(g_pD3DDevice8->GetRenderTarget(&pRT)) && pRT != NULL)
+        {
+            D3DLOCKED_RECT lr;
+            RECT px = {0, 0, 1, 1};
+            if(SUCCEEDED(pRT->LockRect(&lr, &px, D3DLOCK_READONLY)))
+                pRT->UnlockRect();
+            pRT->Release();
+        }
+    }
+
+    EmuSwapFS();   // XBox FS
+
+    return D3D_OK;
+}
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer
 (

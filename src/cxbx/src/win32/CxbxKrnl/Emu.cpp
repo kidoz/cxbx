@@ -1928,10 +1928,19 @@ static ULONG EmuReadMmio(ULONG Address, ULONG Size)
     ULONG Shift = (Address & 3) * 8;
 
     if(Size == 1)
-        return (Value >> Shift) & 0xFF;
+        Value = (Value >> Shift) & 0xFF;
+    else if(Size == 2)
+        Value = (Value >> Shift) & 0xFFFF;
 
-    if(Size == 2)
-        return (Value >> Shift) & 0xFFFF;
+    // One value-carrying line per read regardless of which opcode decoder
+    // serviced it — the per-site traces name the access shape but omit the
+    // value, which is exactly what's needed to spot a failed guest poll.
+    if(EmuMmioTraceEnabled())
+    {
+        printf("Emu (0x%lX): MMIO rd%lu 0x%.08lX -> 0x%.08lX\n",
+               GetCurrentThreadId(), Size, Address, Value);
+        fflush(stdout);
+    }
 
     return Value;
 }
