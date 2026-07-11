@@ -2620,18 +2620,36 @@ static ULONG EmuNv2aResolveDmaBase(ULONG Handle)
 // first and fall back to reading the DMA object straight from RAMIN.
 static void EmuNv2aWriteBackendSemaphore(ULONG Data)
 {
-    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaSemaphore);
+    ULONG DmaInstance = g_EmuNv2aContextDmaSemaphore;
+    ULONG ResolvedInstance = 0;
+    ULONG ObjectClass = 0;
+    ULONG Base = 0;
     ULONG Flags = 0, Limit = 0, Frame = 0;
 
-    if(Base == 0 && g_EmuNv2aContextDmaSemaphore + 12 <= EmuNv2aRaminSize)
+    if(EmuNv2aRamhtLookup(g_EmuNv2aContextDmaSemaphore,
+                          &ResolvedInstance, &ObjectClass))
     {
-        Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + g_EmuNv2aContextDmaSemaphore);
-        Limit = EmuNv2aReadRamin32(EmuNv2aRaminBase + g_EmuNv2aContextDmaSemaphore + 4);
-        Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + g_EmuNv2aContextDmaSemaphore + 8);
+        DmaInstance = ResolvedInstance;
+    }
+
+    if(DmaInstance <= EmuNv2aRaminSize - 12)
+    {
+        Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + DmaInstance);
+        Limit = EmuNv2aReadRamin32(EmuNv2aRaminBase + DmaInstance + 4);
+        Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + DmaInstance + 8);
         // NV_DMA_IN_MEMORY object: word0 = class | adjust<<20, word2 = page
         // frame | target bits. The XDK D3D semaphore object carries the
         // sub-page offset in adjust, so honor it (frame|class-bits is wrong).
         Base = (Frame & 0xFFFFF000) + ((Flags >> 20) & 0x00000FFF);
+    }
+
+    if(g_EmuNv2aSemaphoreOffset > Limit ||
+       Limit - g_EmuNv2aSemaphoreOffset < sizeof(ULONG) - 1)
+    {
+        printf("Emu (0x%lX): NV2A semaphore release out of range (limit=0x%.08lX off=0x%.08lX val=0x%.08lX).\n",
+               GetCurrentThreadId(), Limit, g_EmuNv2aSemaphoreOffset, Data);
+        fflush(stdout);
+        return;
     }
 
     ULONG Host = EmuNv2aHostPointer(Base + g_EmuNv2aSemaphoreOffset);
