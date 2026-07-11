@@ -700,7 +700,7 @@ static DWORD WINAPI EmuUpdateTickCount(LPVOID)
 {
     printf("EmuD3D8 (0x%X): Timing thread is running.\n", GetCurrentThreadId());
 
-    timeBeginPeriod(0);
+    timeBeginPeriod(1);
 
     while(true)
     {
@@ -708,7 +708,7 @@ static DWORD WINAPI EmuUpdateTickCount(LPVOID)
         Sleep(1);
     }
 
-    timeEndPeriod(0);
+    timeEndPeriod(1);
 }
 
 // ******************************************************************
@@ -3622,6 +3622,32 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
+
+    // Pace software-overlay frames so XMV video doesn't race ahead of the
+    // audio clock. Without this the guest's frame loop spins at full CPU
+    // speed (because KeWaitForSingleObject timing is approximate), producing
+    // video stutter and audio desync.
+    if(g_pOverlayFrameTexture != NULL)
+    {
+        static LARGE_INTEGER s_Freq = {};
+        static LARGE_INTEGER s_Next = {};
+        if(s_Freq.QuadPart == 0)
+        {
+            QueryPerformanceFrequency(&s_Freq);
+            timeBeginPeriod(1);
+        }
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        if(s_Next.QuadPart == 0)
+            s_Next = now;
+        if(now.QuadPart < s_Next.QuadPart)
+        {
+            DWORD dwMs = (DWORD)((s_Next.QuadPart - now.QuadPart) * 1000 / s_Freq.QuadPart);
+            if(dwMs > 0 && dwMs < 100)
+                Sleep(dwMs);
+        }
+        s_Next.QuadPart = now.QuadPart + s_Freq.QuadPart / 60;
+    }
 
     // The debug runtime scopes markers to one presented frame.
     g_D3DDebugMarker = 0;
