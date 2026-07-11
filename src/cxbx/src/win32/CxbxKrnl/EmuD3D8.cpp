@@ -4039,9 +4039,17 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
         case X_D3DCOMMON_TYPE_PUSHBUFFER:
         {
-            printf("*Warning* X_D3DCOMMON_TYPE_PUSHBUFFER is not yet implemented\n");
-
+            // Pushbuffers are command-stream buffers, not GPU textures or vertex
+            // buffers. The game's Data field already points to the guest command
+            // stream; RunPushBuffer reads it via EmuNv2aExecutePushBuffer. No
+            // host D3D resource is needed. Set the Lock sentinel so
+            // EmuVerifyResourceIsRegistered does not re-enter this path.
+            // NOTE: setting Lock=1 changes the game's resource-lifetime
+            // expectations; if this causes early exit, remove the assignment
+            // and let the warning-only path stand (the prior session's working
+            // configuration for Turok's frontend render).
             X_D3DPushBuffer *pPushBuffer = (X_D3DPushBuffer*)pResource;
+            // pPushBuffer->Lock = 1;  // see note above
         }
         break;
 
