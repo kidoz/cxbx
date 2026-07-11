@@ -255,6 +255,40 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     printf("cxbx: child Xbox-RAM window 0x01000000 size 0x%lX (%s).\n",
            reserveSize, pReserved ? "ok" : "failed");
 
+    // The generated exe is large-address-aware so the emulator can back parts
+    // of the Xbox physical window with real memory (EmuInit's page-0 window).
+    // LAA also makes the high half allocatable by the child's own heap, which
+    // must never land inside a trap-emulated aperture -- the emu range checks
+    // would misclassify such host pointers. Fence the trapped windows off with
+    // PAGE_NOACCESS reservations before the child runs: reserved-untouchable
+    // pages still fault on guest access, so trap-and-emulate is unchanged.
+    // Best-effort per 16 MiB chunk; on a non-LAA image these fail closed.
+    {
+        static const struct { ULONG Base; ULONG Size; } kFences[] = {
+            { 0x80000000, 0x10000000 },   // Xbox physical identity view
+            { 0xF0000000, 0x04000000 },   // physical shadow aperture
+            { 0xFD000000, 0x01000000 },   // NV2A MMIO
+            { 0xFE800000, 0x00100000 },   // APU
+            { 0xFEC00000, 0x00100000 },   // ACI/AC97
+            { 0xFED00000, 0x00100000 },   // USB0 OHCI
+        };
+        for(unsigned f = 0; f < sizeof(kFences) / sizeof(kFences[0]); f++)
+        {
+            ULONG Done = 0;
+            for(ULONG Off = 0; Off < kFences[f].Size; Off += 0x01000000)
+            {
+                ULONG Chunk = kFences[f].Size - Off;
+                if(Chunk > 0x01000000)
+                    Chunk = 0x01000000;
+                if(VirtualAllocEx(pi.hProcess, (void*)(uintptr_t)(kFences[f].Base + Off),
+                                  Chunk, MEM_RESERVE, PAGE_NOACCESS) != NULL)
+                    Done += Chunk;
+            }
+            printf("cxbx: child trap fence 0x%08lX size 0x%lX reserved 0x%lX.\n",
+                   kFences[f].Base, kFences[f].Size, Done);
+        }
+    }
+
     ResumeThread(pi.hThread);
 
     printf("cxbx: batch launched %s.\n", szExePath);

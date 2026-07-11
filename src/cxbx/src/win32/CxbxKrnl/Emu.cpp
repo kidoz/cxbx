@@ -6523,8 +6523,13 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // starts at 0x80010000. Failure (no large-address space) falls back to the
     // trap path unchanged.
     {
+        // Commit into the launcher's trap-fence reservation; fall back to a
+        // fresh reserve+commit when launched without the fence.
         PVOID PhysPageZero = VirtualAlloc((LPVOID)0x80000000, 0x10000,
-                                          MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                                          MEM_COMMIT, PAGE_READWRITE);
+        if(PhysPageZero == NULL)
+            PhysPageZero = VirtualAlloc((LPVOID)0x80000000, 0x10000,
+                                        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         printf("Emu (0x%X): physical page-0 window at 0x80000000 %s.\n",
                GetCurrentThreadId(), PhysPageZero != NULL ? "mapped" : "unavailable (trap path)");
     }
