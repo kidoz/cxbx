@@ -9592,19 +9592,37 @@ XBSYSAPI EXPORTNUM(232) VOID NTAPI xboxkrnl::NtUserIoApcDispatcher
     }
     #endif
 
+    // XAPI overlapped IO passes this kernel export as the NtReadFile /
+    // NtWriteFile ApcRoutine with the title's completion routine as
+    // ApcContext. The real dispatcher (xboxkrnl 5455 NtUserIoApcDispatcher)
+    // computes FileIOCompletionRoutine-style arguments from the IOSB:
+    //   success: ApcContext(0, Information, IoStatusBlock)
+    //   error  : ApcContext(RtlNtStatusToDosError(Status), 0, IoStatusBlock)
+    // The old shim here always passed the 0xC0000000 severity MASK as
+    // dwErrorCode (and Status as the byte count), so titles saw every
+    // completed read as failed — Turok Evolution mapped that to its
+    // dirty-disc screen.
+    ULONG dwErrorCode = 0;
+    ULONG dwBytes = 0;
+
+    if(((ULONG)IoStatusBlock->u1.Status & 0xC0000000) == 0xC0000000)
+        dwErrorCode = NtDll::RtlNtStatusToDosError(IoStatusBlock->u1.Status);
+    else
+        dwBytes = (ULONG)IoStatusBlock->Information;
+
     EmuSwapFS();   // Xbox FS
 
     __asm
     {
         pushad
 
-        mov esi, IoStatusBlock
-        mov ecx, [esi]
-        mov eax, 0x0C0000000
+        mov eax, IoStatusBlock
+        mov ecx, dwBytes
+        mov edx, dwErrorCode
 
-        push esi
-        push ecx
         push eax
+        push ecx
+        push edx
         call ApcContext
 
         popad
