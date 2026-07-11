@@ -177,6 +177,7 @@ after locking the backbuffer.
 | `cpu_flags`  | CPU / x86            | value + EFLAGS (CF/PF/AF/ZF/SF/OF) for add/sub/and/or/xor   |
 | `memory`     | RAM / allocator      | contiguous alloc, page alignment, byte/word write-readback |
 | `fileio`     | FATX / file system   | create/write/reopen/size/read/seek/delete on `D:`          |
+| `fileio_vfs` | FATX / VFS metadata  | gap probe: `GetFileSize` (works) vs the broken VFS layer above leaf I/O -- `CreateDirectory` never materializes a dir, `GetFileAttributes` returns INVALID for an existing file, `MoveFile` fails; `FindFirstFile`/`NtQueryDirectoryFile` hangs (not exercised) |
 | `kernel_cov` | kernel HLE           | time sources monotonic, `Rtl` string/memory ops            |
 | `kernel_trap`| kernel HLE (missing) | calling an unimplemented export is trapped, not crashed     |
 | `gfx`        | graphics / video mem | framebuffer get/write/readback + FNV-1a fingerprint         |
