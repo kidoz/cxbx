@@ -6118,6 +6118,11 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         if(WasXboxFS)
             EmuSwapFS();
 
+        // Keep an active single-step trace alive across the emulated
+        // instruction: the AV delivery dropped the trap flag.
+        if(g_SsTraceBudget > 0 && g_Crc32SingleStep > 0)
+            e->ContextRecord->EFlags |= 0x100;
+
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
@@ -6125,6 +6130,9 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     {
         if(WasXboxFS)
             EmuSwapFS();
+
+        if(g_SsTraceBudget > 0 && g_Crc32SingleStep > 0)
+            e->ContextRecord->EFlags |= 0x100;
 
         return EXCEPTION_CONTINUE_EXECUTION;
     }
