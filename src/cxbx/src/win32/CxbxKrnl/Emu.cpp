@@ -5446,15 +5446,22 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     // truth, and the eventual resume returns the interrupted side its values.
     EmuFsSwapEnsureRole((ULONG)e->ContextRecord->Eip < 0x10000000);
 
-    // SEH self-heal (host-side exceptions only): RtlDispatchException walks
-    // the FS:[0] chain AFTER this handler returns and rejects it wholesale if
-    // a registration record lies outside the TIB's [StackLimit, StackBase].
-    // The FS content-swap can leave a guest-role stack value in those slots
-    // (seen as StackBase below StackLimit), which turns any recoverable host
-    // C++ throw -- e.g. d3d8's internal D3DERR_INVALIDCALL -- into process
-    // death. The chain itself is intact, so recompute the real stack extent
-    // from ESP and repair the bounds before dispatch continues.
-    if((ULONG)e->ContextRecord->Eip >= 0x10000000)
+    // SEH self-heal (host-side exceptions, content-swap mode only):
+    // RtlDispatchException walks the FS:[0] chain AFTER this handler returns
+    // and rejects it wholesale if a registration record lies outside the
+    // TIB's [StackLimit, StackBase], turning any recoverable host C++ throw
+    // -- e.g. d3d8's internal D3DERR_INVALIDCALL -- into process death. The
+    // chain itself is intact, so recompute the real stack extent from ESP and
+    // repair the bounds before dispatch continues.
+    //
+    // MUST stay gated on the content-swap: in legacy (non-swap) mode
+    // NtTib.StackBase permanently holds the guest TLS pointer (fs:[0x04], see
+    // EmuGenerateFS), and overwriting it here destroys the thread's XAPI TLS
+    // -- the guest's SetLastError then dereferences stack garbage and dies
+    // (seen on Turok Evolution and NestopiaX 1.3). Under the swap the slots
+    // are re-applied from per-role storage at every boundary, so a backstop
+    // repair of the live TIB is safe.
+    if(g_bEmuFSContentSwap && (ULONG)e->ContextRecord->Eip >= 0x10000000)
     {
         NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
         ULONG Esp = e->ContextRecord->Esp;
