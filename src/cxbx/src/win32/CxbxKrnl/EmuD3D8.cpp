@@ -2083,13 +2083,21 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
-    HRESULT hRet = g_pD3DDevice8->CreateVertexShader
-    (
-        pHostDeclaration,
-        pHostFunction,
-        &pD3DVertexShader->Handle,
-        g_dwVertexShaderUsage   // TODO: HACK: Xbox has extensions!
-    );
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->CreateVertexShader
+        (
+            pHostDeclaration,
+            pHostFunction,
+            &pD3DVertexShader->Handle,
+            g_dwVertexShaderUsage
+        );
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
 
     delete[] pRecompiled;
 
@@ -2376,11 +2384,19 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
     // shows the textures and lighting instead of a black silhouette.
     static DWORD s_PixelShaderFallbackCounter = 0;
 
-    HRESULT hRet = g_pD3DDevice8->CreatePixelShader
-    (
-        pFunction,
-        pHandle
-    );
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->CreatePixelShader
+        (
+            pFunction,
+            pHandle
+        );
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
 
     if(FAILED(hRet))
     {
@@ -2653,12 +2669,19 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
         // ******************************************************************
         // * redirect to windows d3d
         // ******************************************************************
-        hRet = g_pD3DDevice8->CreateTexture
-        (
-            Width, Height, Levels, 
-            0,  // TODO: Xbox Allows a border to be drawn (maybe hack this in software ;[)
-            PCFormat, D3DPOOL_MANAGED, &((*ppTexture)->EmuTexture8)
-        );
+        __try
+        {
+            hRet = g_pD3DDevice8->CreateTexture
+            (
+                Width, Height, Levels,
+                0,
+                PCFormat, D3DPOOL_MANAGED, &((*ppTexture)->EmuTexture8)
+            );
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            hRet = D3DERR_INVALIDCALL;
+        }
 
         if(FAILED(hRet))
             printf("*Warning* CreateTexture FAILED\n");
@@ -2936,7 +2959,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
         pIndexBuffer = pIndexData->EmuIndexBuffer8;
     }
 
-    HRESULT hRet = g_pD3DDevice8->SetIndices(pIndexBuffer, BaseVertexIndex);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetIndices(pIndexBuffer, BaseVertexIndex);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -3057,7 +3088,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     if(Stage == 0)
         g_bStage0ConvertedYuv = bConvertedYuv;
 
-    HRESULT hRet = g_pD3DDevice8->SetTexture(Stage, pBaseTexture8);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetTexture(Stage, pBaseTexture8);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -6249,7 +6288,11 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform
 
     State = EmuXB2PC_D3DTS(State);
 
-    g_pD3DDevice8->SetTransform(State, pMatrix);
+    __try
+    {
+        g_pD3DDevice8->SetTransform(State, pMatrix);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {}
 
     EmuSwapFS();   // XBox FS
 
@@ -6407,7 +6450,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetStreamSource
         pVertexBuffer8->Unlock();
     }
 
-    HRESULT hRet = g_pD3DDevice8->SetStreamSource(StreamNumber, pVertexBuffer8, Stride);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetStreamSource(StreamNumber, pVertexBuffer8, Stride);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -6447,7 +6498,15 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader
     if(g_EmuCurrentVertexShaderIsCustom)
         HostHandle = ((X_D3DVertexShader*)Handle)->Handle;
 
-    HRESULT hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     if(FAILED(hRet))
         EmuWarning("SetVertexShader failed (Handle = 0x%.08X, Host = 0x%.08X)", Handle, HostHandle);
@@ -6523,7 +6582,15 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader
     if(Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader)))
         HostHandle = ((X_D3DVertexShader*)Handle)->Handle;
 
-    HRESULT hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetVertexShader(HostHandle);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     if(FAILED(hRet))
         EmuWarning("SelectVertexShader failed (Handle = 0x%.08X, Host = 0x%.08X)", Handle, HostHandle);
@@ -7462,7 +7529,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetLight
     }
     #endif
 
-    HRESULT hRet = g_pD3DDevice8->SetLight(Index, pLight);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetLight(Index, pLight);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -7493,7 +7568,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetMaterial
     }
     #endif
 
-    HRESULT hRet = g_pD3DDevice8->SetMaterial(pMaterial);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->SetMaterial(pMaterial);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -7526,7 +7609,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_LightEnable
     }
     #endif
 
-    HRESULT hRet = g_pD3DDevice8->LightEnable(Index, bEnable);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->LightEnable(Index, bEnable);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3D_OK;
+    }
 
     EmuSwapFS();   // XBox FS
     
