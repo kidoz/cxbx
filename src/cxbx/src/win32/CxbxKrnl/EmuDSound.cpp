@@ -1980,11 +1980,20 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Lock
         {
             // New buffer (or one that grew): allocate generously so repeat
             // locks reuse the region; the old region (if any) is deliberately
-            // leaked because the title may still write through it.
-            DWORD dwAlloc = (dwBytes < 0x10000) ? 0x10000 : dwBytes;
-            pMem = new BYTE[dwAlloc];
+            // leaked because the title may still write through it. Page
+            // allocations (not the CRT heap) with a trailing PAGE_NOACCESS
+            // guard: an overrunning writer faults AT the write instead of
+            // silently corrupting the host heap.
+            DWORD dwAlloc = (dwBytes < 0x10000) ? 0x10000 : ((dwBytes + 0xFFF) & ~0xFFFu);
+            pMem = (BYTE*)VirtualAlloc(NULL, dwAlloc + 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
-            if(iFree >= 0)
+            if(pMem != NULL)
+            {
+                DWORD dwOld;
+                VirtualProtect(pMem + dwAlloc, 0x1000, PAGE_NOACCESS, &dwOld);
+            }
+
+            if(pMem != NULL && iFree >= 0)
             {
                 s_Scratch[iFree].pThis = pThis;
                 s_Scratch[iFree].pMem = pMem;
