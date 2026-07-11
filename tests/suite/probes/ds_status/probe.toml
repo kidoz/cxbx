@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): DSOUND HLE buffer state machine --
+# GetStatus playing/looping/stopped transitions + Lock/Unlock write-readback.
+# Uses the XRef-chained buffer-method hooks (IDirectSoundBuffer_* thin wrappers).
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
