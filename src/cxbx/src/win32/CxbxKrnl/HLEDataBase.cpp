@@ -481,6 +481,10 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS4627_BUF_SETI3DL2SRC_T
     -1, // XREF_DS4627_BUF_SETI3DL2SRC
     -1, // XREF_DS4627_BUF_STOP
+    -1, // XREF_SETFENCE
+    -1, // XREF_BLOCKONTIME
+    -1, // XREF_KICKOFF
+    -1, // XREF_KICKOFFANDWAITFORIDLE
 };
 
 // ******************************************************************

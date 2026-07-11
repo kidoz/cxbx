@@ -915,6 +915,82 @@ SOOVPA<8> D3DDevice_IsFencePending_1_0_5849 =
     }
 };
 
+// XRef chain: InsertFence -> SetFence
+SOOVPA<8> SetFence_1_0_5849 =
+{
+    0, 8, XREF_SETFENCE, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x1A, 0xA3 },
+        { 0x34, 0x0B },
+        { 0x4E, 0x10 },
+        { 0x68, 0xE9 },
+        { 0x82, 0xCD },
+        { 0x9C, 0xC2 },
+        { 0xB7, 0x00 }
+    }
+};
+
+SOOVPA<5> D3DDevice_InsertFence_1_0_5849 =
+{
+    0, 5, -1, 1,
+    {
+        { 0x03, XREF_SETFENCE },
+        { 0x00, 0x6A },
+        { 0x01, 0x00 },
+        { 0x02, 0xE8 },
+        { 0x07, 0xC3 }
+    }
+};
+
+// XRef chain: BlockOnFence -> BlockOnTime
+SOOVPA<8> BlockOnTime_1_0_5849 =
+{
+    0, 8, XREF_BLOCKONTIME, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x24, 0x3B },
+        { 0x49, 0x8B },
+        { 0x6D, 0x00 },
+        { 0x91, 0x6A },
+        { 0xB6, 0x00 },
+        { 0xDA, 0xE8 },
+        { 0xFF, 0x18 }
+    }
+};
+
+SOOVPA<9> D3DDevice_BlockOnFence_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x08, XREF_BLOCKONTIME },
+        { 0x00, 0x8B },
+        { 0x01, 0x44 },
+        { 0x02, 0x24 },
+        { 0x04, 0x6A },
+        { 0x06, 0x50 },
+        { 0x07, 0xE8 },
+        { 0x0C, 0xC2 },
+        { 0x0E, 0x00 }
+    }
+};
+
+// KickOffAndWaitForIdle (BlockUntilIdle delegates to this via tail jump)
+SOOVPA<8> KickOffAndWaitForIdle_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x8B },
+        { 0x06, 0x48 },
+        { 0x07, 0x2C },
+        { 0x08, 0x6A },
+        { 0x09, 0x02 },
+        { 0x0B, 0xE8 },
+        { 0x10, 0xC3 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // D3DDevice::CreatePushBuffer2
@@ -963,6 +1039,44 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_IsFencePending,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_IsFencePending"
+        #endif
+    },
+    // D3DDevice::InsertFence (XRef chain: SetFence -> InsertFence)
+    {
+        (OOVPA*)&SetFence_1_0_5849,
+        XTL::EmuIDirect3DDevice8_InsertFence,
+        #ifdef _DEBUG_TRACE
+        "SetFence (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_InsertFence_1_0_5849,
+        XTL::EmuIDirect3DDevice8_InsertFence,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_InsertFence"
+        #endif
+    },
+    // D3DDevice::BlockOnFence (XRef chain: BlockOnTime -> BlockOnFence)
+    {
+        (OOVPA*)&BlockOnTime_1_0_5849,
+        XTL::EmuIDirect3DDevice8_BlockOnFence,
+        #ifdef _DEBUG_TRACE
+        "BlockOnTime (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_BlockOnFence_1_0_5849,
+        XTL::EmuIDirect3DDevice8_BlockOnFence,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BlockOnFence"
+        #endif
+    },
+    // KickOffAndWaitForIdle (BlockUntilIdle delegates to this)
+    {
+        (OOVPA*)&KickOffAndWaitForIdle_1_0_5849,
+        XTL::EmuIDirect3DDevice8_BlockUntilIdle,
+        #ifdef _DEBUG_TRACE
+        "KickOffAndWaitForIdle"
         #endif
     },
     // IDirect3DDevice8::GetDisplayFieldStatus
