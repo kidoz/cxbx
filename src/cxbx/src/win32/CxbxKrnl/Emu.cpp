@@ -2099,7 +2099,7 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
         DWORD Self = GetCurrentThreadId();
         HANDLE Snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
         if(Snap == INVALID_HANDLE_VALUE)
-            return 0;
+            continue; // transient failure must not end the watchdog
 
         THREADENTRY32 Te;
         Te.dwSize = sizeof(Te);
