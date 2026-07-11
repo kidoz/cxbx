@@ -93,6 +93,11 @@ static XTL::LPDIRECTDRAWSURFACE7    g_pDDSPrimary   = NULL; // DirectDraw7 Prima
 static XTL::LPDIRECTDRAWSURFACE7    g_pDDSOverlay7  = NULL; // DirectDraw7 Overlay Surface
 static DWORD                        g_dwOverlayW    = 640;  // Cached Overlay Width
 static DWORD                        g_dwOverlayH    = 480;  // Cached Overlay Height
+
+// Converted RGB copy of the latest UpdateOverlay frame (owned by the YUY2
+// conversion cache, do not Release); composited over the backbuffer at Swap
+// while the title keeps the overlay enabled.
+static XTL::IDirect3DTexture8      *g_pOverlayFrameTexture = NULL;
 static Xbe::Header                 *g_XbeHeader     = NULL; // XbeHeader
 static uint32                       g_XbeHeaderSize = 0;    // XbeHeaderSize
 static XTL::D3DCAPS8                g_D3DCaps;              // Direct3D8 Caps
@@ -108,16 +113,57 @@ static bool                         g_bD3DDebugGlobalsScanned = false;
 // vectored-exception dump can name the HLE wrapper that was on the call path
 // when host d3d8 throws (e.g. the 0xE06D7363/D3DERR_NOTAVAILABLE storm on the
 // Turok Evolution render path). Printed by the vectored handler in Emu.cpp via
-// EmuGetLastD3DCall(). Opt-in: the store is compiled only when
-// CXBX_D3D_ENTRY_TRACE is set, so it adds zero overhead to normal/CI builds;
-// the getter always exists (returns NULL when the trace is off) so the call
-// site is unconditional.
+// EmuGetLastD3DCall(). The store is now unconditional (it earned its keep on
+// every Turok crash triage); CXBX_D3D_CALL_STATS additionally counts the
+// calls per wrapper and dumps the table every 128 Swaps, which shows what a
+// title's frame is actually made of (e.g. a black screen: are draws even
+// running?).
 static volatile const char        *g_LastD3DCall = NULL;
-#ifdef CXBX_D3D_ENTRY_TRACE
-#define D3D_TRACE(name) (g_LastD3DCall = (name))
-#else
-#define D3D_TRACE(name) ((void)0)
-#endif
+
+#define EMU_D3D_CALL_STATS_SLOTS 96
+struct EmuD3DCallStat { const char *Name; DWORD Count; };
+static EmuD3DCallStat g_D3DCallStats[EMU_D3D_CALL_STATS_SLOTS] = {0};
+static int g_D3DCallStatsEnabled = -1;
+
+static void EmuD3DTraceEntry(const char *Name)
+{
+    g_LastD3DCall = Name;
+
+    if(g_D3DCallStatsEnabled < 0)
+        g_D3DCallStatsEnabled = (getenv("CXBX_D3D_CALL_STATS") != NULL) ? 1 : 0;
+
+    if(!g_D3DCallStatsEnabled)
+        return;
+
+    // Names are string literals, so pointer identity suffices.
+    for(int i = 0; i < EMU_D3D_CALL_STATS_SLOTS; i++)
+    {
+        if(g_D3DCallStats[i].Name == Name)
+        {
+            g_D3DCallStats[i].Count++;
+            return;
+        }
+
+        if(g_D3DCallStats[i].Name == NULL)
+        {
+            g_D3DCallStats[i].Name = Name;
+            g_D3DCallStats[i].Count = 1;
+            return;
+        }
+    }
+}
+
+static void EmuD3DDumpCallStats(void)
+{
+    printf("D3DSTAT| ---- calls since last dump ----\n");
+    for(int i = 0; i < EMU_D3D_CALL_STATS_SLOTS && g_D3DCallStats[i].Name != NULL; i++)
+    {
+        printf("D3DSTAT| %-32s %u\n", g_D3DCallStats[i].Name, g_D3DCallStats[i].Count);
+        g_D3DCallStats[i].Count = 0;
+    }
+}
+
+#define D3D_TRACE(name) EmuD3DTraceEntry(name)
 extern "C" const char *EmuGetLastD3DCall(void) { return (const char *)g_LastD3DCall; }
 
 // XDK 5849 D3DPERF_APICounters values used by the HLE debug bridge.
@@ -1077,6 +1123,7 @@ HRESULT WINAPI XTL::EmuIDirect3D8_CreateDevice
     IDirect3DDevice8          **ppReturnedDeviceInterface
 )
 {
+    D3D_TRACE("CreateDevice");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -1124,6 +1171,7 @@ UINT WINAPI XTL::EmuIDirect3D8_GetAdapterModeCount
     UINT                        Adapter
 )
 {
+    D3D_TRACE("GetAdapterModeCount");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -1161,6 +1209,7 @@ HRESULT WINAPI XTL::EmuIDirect3D8_GetAdapterDisplayMode
     X_D3DDISPLAYMODE           *pMode
 )
 {
+    D3D_TRACE("GetAdapterDisplayMode");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -1218,6 +1267,7 @@ HRESULT WINAPI XTL::EmuIDirect3D8_EnumAdapterModes
     X_D3DDISPLAYMODE           *pMode
 )
 {
+    D3D_TRACE("EnumAdapterModes");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -1267,6 +1317,7 @@ HRESULT WINAPI XTL::EmuIDirect3D8_EnumAdapterModes
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3D8_KickOffAndWaitForIdle()
 {
+    D3D_TRACE("KickOffAndWaitForIdle");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -1429,6 +1480,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CopyRects
     CONST POINT        *pDestPointsArray
 )
 {
+    D3D_TRACE("CopyRects");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -1590,6 +1642,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetBackBuffer
     X_D3DSurface      **ppBackBuffer
 )
 {
+    D3D_TRACE("GetBackBuffer");
     // ******************************************************************
     // * debug trace
     // ******************************************************************
@@ -2438,12 +2491,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_BeginVisibilityTest()
 {
+    D3D_TRACE("BeginVisibilityTest");
     // Direct3D 8 on Windows has no occlusion-query equivalent. The matching
     // result wrapper reports a conservative visible result when implemented.
 }
 
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndVisibilityTest(DWORD Index)
 {
+    D3D_TRACE("EndVisibilityTest");
     (void)Index;
     return D3D_OK;
 }
@@ -2455,6 +2510,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetVisibilityTestResult
     ULONGLONG *pTimeStamp
 )
 {
+    D3D_TRACE("GetVisibilityTestResult");
     (void)Index;
 
     if(pResult != NULL)
@@ -2508,6 +2564,7 @@ XTL::X_D3DResource * WINAPI XTL::EmuIDirect3DDevice8_CreateTexture2
     D3DRESOURCETYPE     D3DResource
 )
 {
+    D3D_TRACE("CreateTexture2");
     X_D3DTexture *pTexture;
 
     EmuIDirect3DDevice8_CreateTexture(Width, Height, Levels, Usage, Format, D3DPOOL_MANAGED, &pTexture);
@@ -2529,6 +2586,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
     X_D3DTexture  **ppTexture
 )
 {
+    D3D_TRACE("CreateTexture");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -2624,6 +2682,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVolumeTexture
     X_D3DVolumeTexture **ppVolumeTexture
 )
 {
+    D3D_TRACE("CreateVolumeTexture");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -2719,6 +2778,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateCubeTexture
     X_D3DCubeTexture  **ppCubeTexture
 )
 {
+    D3D_TRACE("CreateCubeTexture");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -2795,6 +2855,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateIndexBuffer
     X_D3DIndexBuffer   **ppIndexBuffer
 )
 {
+    D3D_TRACE("CreateIndexBuffer");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -3143,6 +3204,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
     DWORD           Stencil
 )
 {
+    D3D_TRACE("Clear");
     EmuSwapFS();   // Win2k/XP FS
 
     EmuLocateD3DDebugGlobals();
@@ -3274,6 +3336,7 @@ DWORD WINAPI XTL::EmuIDirect3DDevice8_GetDebugMarker()
 
 VOID WINAPI XTL::EmuD3DPERF_Reset()
 {
+    D3D_TRACE("D3DPERF_Reset");
     EmuSwapFS();   // Win2k/XP FS
     EmuLocateD3DDebugGlobals();
     if(g_pD3DPerfStatistics != NULL)
@@ -3401,6 +3464,80 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
 }
 
 // ******************************************************************
+// * EmuComposeOverlay
+// ******************************************************************
+// Draw the latest converted overlay frame as a fullscreen quad right before
+// Present. The touched device state is saved and restored so the title's
+// HLE-managed state is unaffected.
+static void EmuComposeOverlay()
+{
+    using namespace XTL;
+
+    if(g_pOverlayFrameTexture == NULL)
+        return;
+
+    IDirect3DSurface8 *pBackBuffer = NULL;
+    if(FAILED(g_pD3DDevice8->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &pBackBuffer)) || pBackBuffer == NULL)
+        return;
+
+    D3DSURFACE_DESC Desc;
+    pBackBuffer->GetDesc(&Desc);
+    pBackBuffer->Release();
+
+    struct { FLOAT x, y, z, rhw, u, v; } Quad[4] =
+    {
+        {           -0.5f,            -0.5f, 0.0f, 1.0f, 0.0f, 0.0f },
+        { Desc.Width-0.5f,            -0.5f, 0.0f, 1.0f, 1.0f, 0.0f },
+        { Desc.Width-0.5f, Desc.Height-0.5f, 0.0f, 1.0f, 1.0f, 1.0f },
+        {           -0.5f, Desc.Height-0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+    };
+
+    // Save the state the quad needs.
+    DWORD OldVS = 0, OldPS = 0, OldZ = 0, OldBlend = 0, OldCull = 0;
+    DWORD OldColorOp = 0, OldColorArg1 = 0, OldMag = 0, OldMin = 0;
+    IDirect3DBaseTexture8 *pOldTexture = NULL;
+
+    g_pD3DDevice8->GetVertexShader(&OldVS);
+    g_pD3DDevice8->GetPixelShader(&OldPS);
+    g_pD3DDevice8->GetRenderState(D3DRS_ZENABLE, &OldZ);
+    g_pD3DDevice8->GetRenderState(D3DRS_ALPHABLENDENABLE, &OldBlend);
+    g_pD3DDevice8->GetRenderState(D3DRS_CULLMODE, &OldCull);
+    g_pD3DDevice8->GetTextureStageState(0, D3DTSS_COLOROP, &OldColorOp);
+    g_pD3DDevice8->GetTextureStageState(0, D3DTSS_COLORARG1, &OldColorArg1);
+    g_pD3DDevice8->GetTextureStageState(0, D3DTSS_MAGFILTER, &OldMag);
+    g_pD3DDevice8->GetTextureStageState(0, D3DTSS_MINFILTER, &OldMin);
+    g_pD3DDevice8->GetTexture(0, &pOldTexture);
+
+    g_pD3DDevice8->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_TEX1);
+    g_pD3DDevice8->SetPixelShader(0);
+    g_pD3DDevice8->SetRenderState(D3DRS_ZENABLE, FALSE);
+    g_pD3DDevice8->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    g_pD3DDevice8->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_MINFILTER, D3DTEXF_LINEAR);
+    g_pD3DDevice8->SetTexture(0, g_pOverlayFrameTexture);
+
+    g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, Quad, sizeof(Quad[0]));
+
+    // Restore.
+    g_pD3DDevice8->SetVertexShader(OldVS);
+    g_pD3DDevice8->SetPixelShader(OldPS);
+    g_pD3DDevice8->SetRenderState(D3DRS_ZENABLE, OldZ);
+    g_pD3DDevice8->SetRenderState(D3DRS_ALPHABLENDENABLE, OldBlend);
+    g_pD3DDevice8->SetRenderState(D3DRS_CULLMODE, OldCull);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLOROP, OldColorOp);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLORARG1, OldColorArg1);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_MAGFILTER, OldMag);
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_MINFILTER, OldMin);
+    g_pD3DDevice8->SetTexture(0, pOldTexture);
+
+    if(pOldTexture != NULL)
+        pOldTexture->Release();
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_Swap
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
@@ -3432,12 +3569,21 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
         EmuWarning("EmuIDirect3DDevice8_Swap: Flags = 0x%.08X (ignored)", Flags);
 
     EmuFlushTiledSurfaceLocks();
+    EmuComposeOverlay();
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
 
     // The debug runtime scopes markers to one presented frame.
     g_D3DDebugMarker = 0;
+
+    if(g_D3DCallStatsEnabled == 1)
+    {
+        static DWORD s_dwSwapCount = 0;
+
+        if((++s_dwSwapCount & 127) == 0)
+            EmuD3DDumpCallStats();
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -3504,6 +3650,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexData4f
     FLOAT   d
 )
 {
+    D3D_TRACE("SetVertexData4f");
     EmuSwapFS();   // Win2k/XP FS
 
     switch(Register)
@@ -3571,6 +3718,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexData2f
     FLOAT   b
 )
 {
+    D3D_TRACE("SetVertexData2f");
     // 2f writes to the position register leave z=0, w=1
     XTL::EmuIDirect3DDevice8_SetVertexData4f(Register, a, b, 0.0f, 1.0f);
 }
@@ -3664,6 +3812,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
     PVOID               pBase
 )
 {
+    D3D_TRACE("Resource_Register");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -3841,7 +3990,8 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 dwPitch  = dwWidth*4;
                 dwBPP = 4;
             }
-            else if(X_Format == 0x05 /* X_D3DFMT_R5G6B5 */ || X_Format == 0x04 /* X_D3DFMT_A4R4G4B4 */)
+            else if(X_Format == 0x05 /* X_D3DFMT_R5G6B5 */ || X_Format == 0x04 /* X_D3DFMT_A4R4G4B4 */ ||
+                    X_Format == 0x28 /* X_D3DFMT_G8B8 */   || X_Format == 0x1A /* X_D3DFMT_A8L8 */)
             {
                 bSwizzled = TRUE;
 
@@ -3887,7 +4037,18 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             }
             else
             {
-                EmuCleanup("0x%.08X is not a supported format!\n", X_Format);
+                // Degrade instead of dying: create a swizzled-32-bit-sized
+                // texture and skip the pixel copy (the source interpretation
+                // is unknown). One wrong texture beats a dead process.
+                printf("*Warning* Register: unhandled format 0x%.08X, texture left blank\n", X_Format);
+
+                bSwizzled = TRUE;
+                dwWidth  = 1 << ((pPixelContainer->Format & X_D3DFORMAT_USIZE_MASK) >> X_D3DFORMAT_USIZE_SHIFT);
+                dwHeight = 1 << ((pPixelContainer->Format & X_D3DFORMAT_VSIZE_MASK) >> X_D3DFORMAT_VSIZE_SHIFT);
+                dwDepth  = 1 << ((pPixelContainer->Format & X_D3DFORMAT_PSIZE_MASK) >> X_D3DFORMAT_PSIZE_SHIFT);
+                dwPitch  = dwWidth*4;
+                dwBPP = 4;
+                pBase = NULL;   // the source-validation guard below skips the copy
             }
 
             // ******************************************************************
@@ -3945,11 +4106,25 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             RECT  iRect  = {0,0,0,0};
             POINT iPoint = {0,0};
 
-            if(bSwizzled)
+            // Validate the source before copying: titles register the odd
+            // degenerate resource whose data pointer/offset doesn't resolve
+            // (Turok Evolution's frontend registers a 1x2 DXT1 whose source
+            // lands in unmapped memory). A skipped copy leaves one texture
+            // blank; an unguarded copy killed the process through the title's
+            // last-resort exception handler.
+            DWORD dwSourceSize = bCompressed ? (DWORD)dwCompressedSize
+                                             : (dwPitch != 0 ? dwPitch : dwWidth*dwBPP) * dwHeight;
+
+            if(pBase == NULL || dwSourceSize == 0 || IsBadReadPtr(pBase, dwSourceSize))
+            {
+                printf("*Warning* Register skipped copying a texture with an unreadable source (base=0x%.08X size=0x%X)\n",
+                       (DWORD)pBase, dwSourceSize);
+            }
+            else if(bSwizzled)
             {
                 XTL::EmuXGUnswizzleRect
                 (
-                    pBase, dwWidth, dwHeight, dwDepth, LockedRect.pBits, 
+                    pBase, dwWidth, dwHeight, dwDepth, LockedRect.pBits,
                     LockedRect.Pitch, iRect, iPoint, dwBPP
                 );
             }
@@ -4025,6 +4200,7 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_AddRef
     X_D3DResource      *pThis
 )
 {
+    D3D_TRACE("Resource_AddRef");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4070,6 +4246,7 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
     X_D3DResource      *pThis
 )
 {
+    D3D_TRACE("Resource_Release");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4150,6 +4327,7 @@ BOOL WINAPI XTL::EmuIDirect3DResource8_IsBusy
     X_D3DResource      *pThis
 )
 {
+    D3D_TRACE("Resource_IsBusy");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4184,6 +4362,7 @@ VOID WINAPI XTL::EmuGet2DSurfaceDesc
     X_D3DSURFACE_DESC   *pDesc
 )
 {
+    D3D_TRACE("Get2DSurfaceDesc");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4252,6 +4431,7 @@ VOID WINAPI XTL::EmuGet2DSurfaceDescD
     X_D3DSURFACE_DESC   *pDesc
 )
 {
+    D3D_TRACE("Get2DSurfaceDescD");
     // ******************************************************************
     // * debug trace
     // ******************************************************************
@@ -4282,6 +4462,7 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_GetDesc
     X_D3DSURFACE_DESC  *pDesc
 )
 {
+    D3D_TRACE("Surface_GetDesc");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4364,6 +4545,7 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
     DWORD               Flags
 )
 {
+    D3D_TRACE("Surface_LockRect");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4441,6 +4623,7 @@ DWORD WINAPI XTL::EmuIDirect3DBaseTexture8_GetLevelCount
     X_D3DBaseTexture   *pThis
 )
 {
+    D3D_TRACE("BaseTexture_GetLevelCount");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4482,6 +4665,7 @@ XTL::X_D3DResource * WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel2
     UINT            Level
 )
 {
+    D3D_TRACE("Texture_GetSurfaceLevel2");
     X_D3DSurface *pSurfaceLevel;
 
     // In a special situation, we are actually returning a memory ptr with high bit set
@@ -4508,6 +4692,7 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_LockRect
     DWORD           Flags
 )
 {
+    D3D_TRACE("Texture_LockRect");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4568,6 +4753,7 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel
     X_D3DSurface      **ppSurfaceLevel
 )
 {
+    D3D_TRACE("Texture_GetSurfaceLevel");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4622,6 +4808,7 @@ HRESULT WINAPI XTL::EmuIDirect3DVolumeTexture8_LockBox
     DWORD               Flags
 )
 {
+    D3D_TRACE("VolumeTexture_LockBox");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4665,6 +4852,7 @@ HRESULT WINAPI XTL::EmuIDirect3DCubeTexture8_LockRect
     DWORD               Flags
 )
 {
+    D3D_TRACE("CubeTexture_LockRect");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4733,6 +4921,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexBuffer
     X_D3DVertexBuffer **ppVertexBuffer
 )
 {
+    D3D_TRACE("CreateVertexBuffer");
     *ppVertexBuffer = EmuIDirect3DDevice8_CreateVertexBuffer2(Length);
 
     return D3D_OK;
@@ -4803,6 +4992,11 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay
                GetCurrentThreadId(), Enable);
     }
     #endif
+
+    // Stop compositing the software-overlay frame once the title turns the
+    // overlay off (end of a video).
+    if(!Enable)
+        g_pOverlayFrameTexture = NULL;
 
     if(g_bSupportsYUY2)
     {
@@ -4883,6 +5077,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay
     D3DCOLOR      ColorKey
 )
 {
+    D3D_TRACE("UpdateOverlay");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -4965,91 +5160,15 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay
     }
     else
     {
-        // TODO: dont assume X8R8G8B8 ?
-        D3DLOCKED_RECT LockedRectDest;
+        // No DirectDraw hardware overlays on modern hosts. Convert the YUY2
+        // frame into the shared RGB texture and let Swap composite it over
+        // the backbuffer every frame until EnableOverlay(FALSE). The old
+        // fallback wrote the pixels straight into the backbuffer HERE, which
+        // stayed invisible: the title clears the backbuffer at the top of
+        // every frame, wiping the overlay before its Swap presented it.
+        EmuYuy2TextureInfo *pInfo = EmuFindYuy2Texture((X_D3DResource*)pSurface);
 
-        IDirect3DSurface8 *pBackBuffer=0;
-
-        HRESULT hRet = g_pD3DDevice8->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &pBackBuffer);
-
-        // if we obtained the backbuffer, manually translate the YUY2 into the backbuffer format
-        if(hRet == D3D_OK && pBackBuffer->LockRect(&LockedRectDest, NULL, NULL) == D3D_OK)
-        {
-            uint08 *pCurByte = (uint08*)((uint32)pSurface & 0x7FFFFFFF);
-
-            uint08 *pDest = (uint08*)LockedRectDest.pBits;
-
-            uint32 dx=0, dy=0;
-
-            uint32 dwImageSize = (g_dwOverlayW * g_dwOverlayH) * 2;
-
-            // grayscale
-            if(false)
-            {
-                for(uint32 y=0;y<g_dwOverlayH;y++)
-                {
-                    uint32 stop = g_dwOverlayW*4;
-                    for(uint32 x=0;x<stop;x+=4)
-                    {
-                        uint08 Y = *pCurByte;
-
-                        pDest[x+0] = Y;
-                        pDest[x+1] = Y;
-                        pDest[x+2] = Y;
-                        pDest[x+3] = 0xFF;
-
-                        pCurByte+=2;
-                    }
-
-                    pDest += LockedRectDest.Pitch;
-                }
-            }
-            // full color conversion (YUY2->XRGB)
-            else
-            {
-                for(uint32 v=0;v<dwImageSize;v+=4)
-                {
-                    float Y[2], U, V;
-
-                    Y[0] = *pCurByte++;
-                    U    = *pCurByte++;
-                    Y[1] = *pCurByte++;
-                    V    = *pCurByte++;
-
-                    int a=0;
-                    for(int x=0;x<2;x++)
-                    {
-                        float R = Y[a] + 1.402f*(V-128);
-                        float G = Y[a] - 0.344f*(U-128) - 0.714f*(V-128);
-                        float B = Y[a] + 1.772f*(U-128);
-
-                        R = (R < 0) ? 0 : ((R > 255) ? 255 : R);
-                        G = (G < 0) ? 0 : ((G > 255) ? 255 : G);
-                        B = (B < 0) ? 0 : ((B > 255) ? 255 : B);
-
-                        uint32 i = (dy*LockedRectDest.Pitch+(dx+x)*4);
-
-                        pDest[i+0] = (uint08)B;
-                        pDest[i+1] = (uint08)G;
-                        pDest[i+2] = (uint08)R;
-                        pDest[i+3] = 0xFF;
-
-                        a++;
-                    }
-
-                    dx+=2;
-
-                    if((dx % g_dwOverlayW) == 0)
-                    {
-                        dy++;
-                        dx=0;
-                    }
-
-                }
-            }
-
-            pBackBuffer->UnlockRect();
-        }
+        g_pOverlayFrameTexture = EmuConvertYuy2Texture(pInfo);
     }
 
     EmuSwapFS();   // XBox FS
@@ -5076,8 +5195,8 @@ BOOL WINAPI XTL::EmuIDirect3DDevice8_GetOverlayUpdateStatus()
 
     EmuSwapFS();   // XBox FS
 
-    // TODO: Actually check for update status
-    return FALSE;
+    // Overlay updates complete synchronously in the software path.
+    return TRUE;
 }
 
 // ******************************************************************
@@ -6160,6 +6279,7 @@ VOID WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock
     DWORD               Flags
 )
 {
+    D3D_TRACE("VertexBuffer_Lock");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -6197,6 +6317,7 @@ BYTE* WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock2
     DWORD               Flags
 )
 {
+    D3D_TRACE("VertexBuffer_Lock2");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
@@ -6876,6 +6997,136 @@ VOID EmuQuadHackB(uint32 nStride, XTL::IDirect3DVertexBuffer8 *&pOrigVertexBuffe
 }
 
 // ******************************************************************
+// * Pushbuffer recording (CreatePushBuffer2 / BeginPushBuffer / EndPushBuffer)
+// ******************************************************************
+// Turok Evolution's frontend records every menu widget's draws into D3D
+// pushbuffers and replays them with RunPushBuffer. The guest library's
+// recording redirects the guest device's internal NV2A pusher, which does
+// not exist under HLE, so un-hooked recording silently produced nothing and
+// the frontend stayed black. The v1 semantics here are EXECUTE-AT-RECORD:
+// every D3D wrapper called between Begin and End simply runs against the
+// host device immediately, and the created pushbuffer stays permanently
+// empty (Size == 0) -- RunPushBuffer treats that as a successful no-op, and
+// a title that checks the recorded size re-records each frame instead of
+// replaying stale content, which is exactly what immediate execution needs.
+static XTL::X_D3DPushBuffer *g_pRecordingPushBuffer = NULL;
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_CreatePushBuffer2
+// ******************************************************************
+XTL::X_D3DPushBuffer* WINAPI XTL::EmuIDirect3DDevice8_CreatePushBuffer2
+(
+    DWORD Size,
+    BOOL  RunUsingCpuCopy
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CreatePushBuffer2");
+
+    // ******************************************************************
+    // * debug trace
+    // ******************************************************************
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_CreatePushBuffer2\n"
+               "(\n"
+               "   Size                : 0x%.08X\n"
+               "   RunUsingCpuCopy     : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Size, RunUsingCpuCopy);
+    }
+    #endif
+
+    X_D3DPushBuffer *pPushBuffer = new X_D3DPushBuffer();
+
+    pPushBuffer->Common = 1;    // refcount 1
+    pPushBuffer->Data = 0;
+    pPushBuffer->Lock = 0;
+    pPushBuffer->Size = 0;      // stays 0: see the execute-at-record note
+    pPushBuffer->AllocationSize = Size;
+
+    EmuSwapFS();   // XBox FS
+
+    return pPushBuffer;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BeginPushBuffer
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_BeginPushBuffer
+(
+    X_D3DPushBuffer *pPushBuffer
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("BeginPushBuffer");
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_BeginPushBuffer\n"
+               "(\n"
+               "   pPushBuffer         : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pPushBuffer);
+    }
+    #endif
+
+    static bool bLogged = false;
+    if(!bLogged)
+    {
+        printf("EmuD3D8 (0x%X): BeginPushBuffer: recording runs against the host device immediately.\n",
+               GetCurrentThreadId());
+        bLogged = true;
+    }
+
+    g_pRecordingPushBuffer = pPushBuffer;
+
+    EmuSwapFS();   // XBox FS
+
+    return D3D_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_EndPushBuffer
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndPushBuffer(VOID)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("EndPushBuffer");
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_EndPushBuffer();\n", GetCurrentThreadId());
+    #endif
+
+    g_pRecordingPushBuffer = NULL;
+
+    EmuSwapFS();   // XBox FS
+
+    return D3D_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_GetPushBufferOffset
+// ******************************************************************
+DWORD WINAPI XTL::EmuIDirect3DDevice8_GetPushBufferOffset
+(
+    X_D3DPushBuffer *pPushBuffer
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetPushBufferOffset");
+
+    DWORD dwOffset = 0;
+
+    if(pPushBuffer != NULL)
+        dwOffset = pPushBuffer->Size;
+
+    EmuSwapFS();   // XBox FS
+
+    return dwOffset;
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_RunPushBuffer
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer
@@ -7469,6 +7720,7 @@ HRESULT WINAPI XTL::EmuIDirect3DPalette8_Lock
     DWORD           Flags
 )
 {
+    D3D_TRACE("Palette_Lock");
     EmuSwapFS();   // Win2k/XP FS
 
     // ******************************************************************
