@@ -1,0 +1,19 @@
+#suite xbox-conformance v1
+#probe nv2a_pfifo_dma_state
+CHK nv2a.dma_state.first_get PASS
+CHK nv2a.dma_state.first_count PASS
+CHK nv2a.dma_state.first_method PASS
+CHK nv2a.dma_state.first_dcount PASS
+CHK nv2a.dma_state.first_data PASS
+CHK nv2a.dma_state.next_untouched PASS
+CHK nv2a.dma_state.second_count PASS
+CHK nv2a.dma_state.second_method PASS
+CHK nv2a.dma_state.second_dcount PASS
+CHK nv2a.dma_state.second_data PASS
+CHK nv2a.dma_state.final_get PASS
+CHK nv2a.dma_state.final_count PASS
+CHK nv2a.dma_state.final_dcount PASS
+CHK nv2a.dma_state.final_data PASS
+CHK nv2a.dma_state.noninc_method PASS
+CHK nv2a.dma_state.noninc_last PASS
+#result nv2a_pfifo_dma_state verdict=PASS checks=16 fail=0

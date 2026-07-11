@@ -1,0 +1,9 @@
+#suite xbox-conformance v1
+#probe nv2a_pgraph_bind
+CHK nv2a.bind.alloc PASS
+CHK nv2a.bind.kelvin_executes PASS
+CHK nv2a.bind.non_kelvin_ignored PASS
+CHK nv2a.bind.subchannel0_persists PASS
+CHK nv2a.bind.invalid_does_not_rebind PASS
+CHK nv2a.bind.get_eq_put PASS
+#result nv2a_pgraph_bind verdict=PASS checks=6 fail=0

@@ -1,0 +1,10 @@
+#suite xbox-conformance v1
+#probe nv2a_semaphore
+CHK nv2a.semaphore.alloc PASS
+CHK nv2a.semaphore.before_untouched PASS
+CHK nv2a.semaphore.release PASS
+CHK nv2a.semaphore.get_eq_put PASS
+CHK nv2a.semaphore.repeat_release PASS
+CHK nv2a.semaphore.invalid_dma_safe PASS
+CHK nv2a.semaphore.limit_safe PASS
+#result nv2a_semaphore verdict=PASS checks=7 fail=0
