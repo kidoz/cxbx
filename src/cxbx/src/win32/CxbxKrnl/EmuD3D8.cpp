@@ -1504,14 +1504,22 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CopyRects
     // ******************************************************************
     // * Redirect to PC D3D
     // ******************************************************************
-    HRESULT hRet = g_pD3DDevice8->CopyRects
-    (
-        pSourceSurface->EmuSurface8, 
-        pSourceRectsArray,
-        cRects,
-        pDestinationSurface->EmuSurface8,
-        pDestPointsArray
-    );
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->CopyRects
+        (
+            pSourceSurface->EmuSurface8,
+            pSourceRectsArray,
+            cRects,
+            pDestinationSurface->EmuSurface8,
+            pDestPointsArray
+        );
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -3454,7 +3462,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
     EmuFlushTiledSurfaceLocks();
     EmuMirrorPresentToWindow();
 
-    HRESULT hRet = g_pD3DDevice8->Present(pSourceRect, pDestRect, (HWND)pDummy1, (CONST RGNDATA*)pDummy2);
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->Present(pSourceRect, pDestRect, (HWND)pDummy1, (CONST RGNDATA*)pDummy2);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
 
     g_D3DDebugMarker = 0;
 
@@ -3762,13 +3778,21 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                 Tris[n++] = v[0]; Tris[n++] = v[1]; Tris[n++] = v[2];
                 Tris[n++] = v[0]; Tris[n++] = v[2]; Tris[n++] = v[3];
             }
-            g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+            __try
+            {
+                g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER) {}
         }
         else
         {
             D3DPRIMITIVETYPE PCPrim = EmuPrimitiveType((X_D3DPRIMITIVETYPE)g_EmuImPrim);
             UINT PrimCount = EmuD3DVertex2PrimitiveCount((X_D3DPRIMITIVETYPE)g_EmuImPrim, g_EmuImCount);
-            g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+            __try
+            {
+                g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER) {}
         }
     }
 
@@ -7221,12 +7245,24 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices
         nStride = EmuQuadHackA(PrimitiveCount, pOrigVertexBuffer8, pHackVertexBuffer8, StartVertex, 0, 0, 0);
     }
 
-    g_pD3DDevice8->DrawPrimitive
-    (
-        PCPrimitiveType,
-        StartVertex,
-        PrimitiveCount
-    );
+    // Host d3d8 throws when bound state is invalid (e.g. null texture from an
+    // unresolved archive path, or an incompatible vertex format). Guard so the
+    // throw is caught locally rather than escaping the FS content-swap.
+    __try
+    {
+        g_pD3DDevice8->DrawPrimitive
+        (
+            PCPrimitiveType,
+            StartVertex,
+            PrimitiveCount
+        );
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        static LONG s_DrawGuardCount = 0;
+        if(InterlockedIncrement(&s_DrawGuardCount) <= 3)
+            EmuWarning("DrawVertices: host d3d8 threw during DrawPrimitive (caught)");
+    }
 
     // TODO: use original stride here (duh!)
     if(PrimitiveType == 8)  // Quad List
@@ -7291,13 +7327,21 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP
         nStride = EmuQuadHackA(PrimitiveCount, pOrigVertexBuffer8, pHackVertexBuffer8, 0, pVertexStreamZeroData, VertexStreamZeroStride, &pNewVertexStreamZeroData);
     }
 
-    HRESULT hRet = g_pD3DDevice8->DrawPrimitiveUP
-    (
-        PCPrimitiveType,
-        PrimitiveCount,
-        pNewVertexStreamZeroData,
-        VertexStreamZeroStride
-    );
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->DrawPrimitiveUP
+        (
+            PCPrimitiveType,
+            PrimitiveCount,
+            pNewVertexStreamZeroData,
+            VertexStreamZeroStride
+        );
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
 
     if(FAILED(hRet))
     {
@@ -7370,10 +7414,19 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices
         nStride = EmuQuadHackA(PrimitiveCount, pOrigVertexBuffer8, pHackVertexBuffer8, 0, 0, 0, 0);
     }
 
-    g_pD3DDevice8->DrawIndexedPrimitive
-    (
-        PCPrimitiveType, 0, VertexCount, ((DWORD)pIndexData)/2, PrimitiveCount
-    );
+    __try
+    {
+        g_pD3DDevice8->DrawIndexedPrimitive
+        (
+            PCPrimitiveType, 0, VertexCount, ((DWORD)pIndexData)/2, PrimitiveCount
+        );
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        static LONG s_DrawGuardCount = 0;
+        if(InterlockedIncrement(&s_DrawGuardCount) <= 3)
+            EmuWarning("DrawIndexedVertices: host d3d8 threw during DrawIndexedPrimitive (caught)");
+    }
 
     if(PrimitiveType == 8)  // Quad List
         EmuQuadHackB(nStride, pOrigVertexBuffer8, pHackVertexBuffer8);
