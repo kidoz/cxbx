@@ -6298,6 +6298,9 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
             if(EmuHostAddressToModuleOffset(Stack[Slot], Where, sizeof(Where)) != NULL)
                 printf("Emu (0x%lX): Vectored stack[%03lu] 0x%.08lX = %s\n",
                        GetCurrentThreadId(), Slot, Stack[Slot], Where);
+            else if(Stack[Slot] >= 0x00011000 && Stack[Slot] < 0x00400000)
+                printf("Emu (0x%lX): Vectored stack[%03lu] 0x%.08lX = guest\n",
+                       GetCurrentThreadId(), Slot, Stack[Slot]);
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
