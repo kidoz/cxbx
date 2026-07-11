@@ -975,6 +975,33 @@ SOOVPA<9> D3DDevice_BlockOnFence_1_0_5849 =
     }
 };
 
+// XRef chain: KickPushBuffer -> KickOff
+SOOVPA<8> KickOff_1_0_5849 =
+{
+    0, 8, XREF_KICKOFF, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x19, 0xA1 },
+        { 0x32, 0x00 },
+        { 0x4B, 0xF4 },
+        { 0x64, 0xE8 },
+        { 0x7D, 0x83 },
+        { 0x96, 0x44 },
+        { 0xAF, 0xC3 }
+    }
+};
+
+SOOVPA<4> D3DDevice_KickPushBuffer_1_0_5849 =
+{
+    0, 4, -1, 1,
+    {
+        { 0x07, XREF_KICKOFF },
+        { 0x00, 0x8B },
+        { 0x01, 0x0D },
+        { 0x06, 0xE9 }
+    }
+};
+
 // KickOffAndWaitForIdle (BlockUntilIdle delegates to this via tail jump)
 SOOVPA<8> KickOffAndWaitForIdle_1_0_5849 =
 {
@@ -1077,6 +1104,21 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_BlockUntilIdle,
         #ifdef _DEBUG_TRACE
         "KickOffAndWaitForIdle"
+        #endif
+    },
+    // D3DDevice::KickPushBuffer (XRef chain: KickOff -> KickPushBuffer)
+    {
+        (OOVPA*)&KickOff_1_0_5849,
+        XTL::EmuIDirect3DDevice8_KickPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "KickOff (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_KickPushBuffer_1_0_5849,
+        XTL::EmuIDirect3DDevice8_KickPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_KickPushBuffer"
         #endif
     },
     // IDirect3DDevice8::GetDisplayFieldStatus
