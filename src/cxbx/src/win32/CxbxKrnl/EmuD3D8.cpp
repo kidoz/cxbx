@@ -1909,6 +1909,41 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTileNoWait
 }
 
 // ******************************************************************
+// * EmuLiveVertexShaders
+// ******************************************************************
+// Live X_D3DVertexShader wrappers handed out by CreateVertexShader. Titles
+// can delete a shader handle twice or pass a stale one; IsBadReadPtr cannot
+// detect freed heap memory, so an unregistered-pointer check is the only
+// reliable guard against a double delete corrupting the host heap.
+static XTL::X_D3DVertexShader *g_EmuLiveVertexShaders[256] = {0};
+
+static void EmuVshRegisterLive(XTL::X_D3DVertexShader *pShader)
+{
+    for(int i=0;i<256;i++)
+    {
+        if(g_EmuLiveVertexShaders[i] == 0)
+        {
+            g_EmuLiveVertexShaders[i] = pShader;
+            return;
+        }
+    }
+}
+
+static bool EmuVshUnregisterLive(XTL::X_D3DVertexShader *pShader)
+{
+    for(int i=0;i<256;i++)
+    {
+        if(g_EmuLiveVertexShaders[i] == pShader)
+        {
+            g_EmuLiveVertexShaders[i] = 0;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_CreateVertexShader
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
@@ -1983,6 +2018,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     );
 
     delete[] pRecompiled;
+
+    EmuVshRegisterLive(pD3DVertexShader);
 
     *pHandle = (DWORD)pD3DVertexShader;
 
@@ -6347,11 +6384,19 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeleteVertexShader
     }
     #endif
 
-    if(Handle >= 0x00010000 && !IsBadReadPtr((void*)Handle, sizeof(X_D3DVertexShader)))
+    if(Handle >= 0x00010000 && EmuVshUnregisterLive((X_D3DVertexShader*)Handle))
     {
         X_D3DVertexShader *pShader = (X_D3DVertexShader*)Handle;
         g_pD3DDevice8->DeleteVertexShader(pShader->Handle);
         delete pShader;
+    }
+    else if(Handle >= 0x00010000)
+    {
+        // Not (or no longer) a live wrapper: stale/double delete from the
+        // title, or a handle we never created. Deleting it would corrupt the
+        // host heap.
+        printf("EmuD3D8 (0x%X): DeleteVertexShader skipped a non-live handle 0x%.08X.\n",
+               GetCurrentThreadId(), Handle);
     }
 
     EmuSwapFS();   // XBox FS
