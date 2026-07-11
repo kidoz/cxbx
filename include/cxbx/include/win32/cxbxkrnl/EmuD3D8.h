@@ -1490,7 +1490,7 @@ HRESULT WINAPI EmuIDirect3DDevice8_EndPushBuffer(VOID);
 // ******************************************************************
 DWORD WINAPI EmuIDirect3DDevice8_GetPushBufferOffset
 (
-    X_D3DPushBuffer    *pPushBuffer
+    DWORD              *pOffset
 );
 
 // ******************************************************************

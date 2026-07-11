@@ -366,6 +366,7 @@ static HRESULT EmuLockYuy2Texture(EmuYuy2TextureInfo *pInfo,
 // ******************************************************************
 static XTL::X_D3DSurface      *g_pCachedRenderTarget = NULL;
 static XTL::X_D3DSurface      *g_pCachedZStencilSurface = NULL;
+static XTL::X_D3DPushBuffer   *g_pRecordingPushBuffer = NULL;
 static DWORD                   g_dwVertexShaderUsage = 0;
 
 // ******************************************************************
@@ -1905,6 +1906,12 @@ XTL::X_D3DSurface * WINAPI XTL::EmuIDirect3DDevice8_GetDepthStencilSurface2()
     }
     #endif
 
+    if(g_pCachedZStencilSurface == NULL)
+    {
+        EmuSwapFS();   // Xbox FS
+        return NULL;
+    }
+
     IDirect3DSurface8 *pSurface8 = g_pCachedZStencilSurface->EmuSurface8;
 
     if(pSurface8 != 0)
@@ -3313,6 +3320,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
     if(Flags != 0)
         ret = g_pD3DDevice8->Clear(Count, pRects, Flags, Color, Z, Stencil);
 
+    // Advance the recording pushbuffer offset to reflect the bytes this call
+    // would have consumed in a real NV2A command stream.
+    if(g_pRecordingPushBuffer != NULL)
+        g_pRecordingPushBuffer->Size += 4;
+
     if(FAILED(ret))
     {
         static LONG WarnCount = 0;
@@ -3574,60 +3586,6 @@ static void EmuComposeOverlay()
         pOldTexture->Release();
 }
 
-static bool g_bOverlayTimerResolutionActive = false;
-static LARGE_INTEGER g_OverlayPerformanceFrequency = {};
-static LARGE_INTEGER g_OverlayNextPresent = {};
-
-static void EmuResetSoftwareOverlayPacing()
-{
-    if(g_bOverlayTimerResolutionActive)
-    {
-        timeEndPeriod(1);
-        g_bOverlayTimerResolutionActive = false;
-    }
-    g_OverlayPerformanceFrequency.QuadPart = 0;
-    g_OverlayNextPresent.QuadPart = 0;
-}
-
-static void EmuPaceSoftwareOverlay()
-{
-    if(g_pOverlayFrameTexture == NULL)
-    {
-        return;
-    }
-
-    if(g_OverlayPerformanceFrequency.QuadPart == 0)
-    {
-        if(!QueryPerformanceFrequency(&g_OverlayPerformanceFrequency))
-        {
-            return;
-        }
-        g_bOverlayTimerResolutionActive = timeBeginPeriod(1) == TIMERR_NOERROR;
-    }
-
-    LARGE_INTEGER now = {};
-    QueryPerformanceCounter(&now);
-    const LONGLONG interval = g_OverlayPerformanceFrequency.QuadPart / 60;
-    if(g_OverlayNextPresent.QuadPart == 0 ||
-       now.QuadPart > g_OverlayNextPresent.QuadPart + interval * 4)
-    {
-        g_OverlayNextPresent.QuadPart = now.QuadPart + interval;
-    }
-    else
-    {
-        g_OverlayNextPresent.QuadPart += interval;
-    }
-
-    while(now.QuadPart < g_OverlayNextPresent.QuadPart)
-    {
-        const LONGLONG remainingMilliseconds =
-            (g_OverlayNextPresent.QuadPart - now.QuadPart) * 1000 /
-            g_OverlayPerformanceFrequency.QuadPart;
-        Sleep(remainingMilliseconds > 1 ? static_cast<DWORD>(remainingMilliseconds - 1) : 1);
-        QueryPerformanceCounter(&now);
-    }
-}
-
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_Swap
 // ******************************************************************
@@ -3664,11 +3622,6 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     EmuMirrorPresentToWindow();
 
     HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
-
-    // Windowed Direct3D 8 Present does not reliably honor the Xbox COPY_VSYNC
-    // swap effect on modern hosts. Pace XMV-style software overlays explicitly
-    // so audio-clocked frames are presented at a stable display cadence.
-    EmuPaceSoftwareOverlay();
 
     // The debug runtime scopes markers to one presented frame.
     g_D3DDebugMarker = 0;
@@ -5151,7 +5104,6 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay
     if(!Enable)
     {
         g_pOverlayFrameTexture = NULL;
-        EmuResetSoftwareOverlayPacing();
     }
 
     if(g_bSupportsYUY2)
@@ -7193,7 +7145,7 @@ VOID EmuQuadHackB(uint32 nStride, XTL::IDirect3DVertexBuffer8 *&pOrigVertexBuffe
 // empty (Size == 0) -- RunPushBuffer treats that as a successful no-op, and
 // a title that checks the recorded size re-records each frame instead of
 // replaying stale content, which is exactly what immediate execution needs.
-static XTL::X_D3DPushBuffer *g_pRecordingPushBuffer = NULL;
+// (g_pRecordingPushBuffer is declared with the cached D3D state above.)
 
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_CreatePushBuffer2
@@ -7265,6 +7217,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BeginPushBuffer
 
     g_pRecordingPushBuffer = pPushBuffer;
 
+    if(pPushBuffer != NULL)
+        pPushBuffer->Size = 0;
+
     EmuSwapFS();   // XBox FS
 
     return D3D_OK;
@@ -7282,6 +7237,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndPushBuffer(VOID)
     printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_EndPushBuffer();\n", GetCurrentThreadId());
     #endif
 
+    if(g_pRecordingPushBuffer != NULL)
+        g_pRecordingPushBuffer->Size += 4;
+
     g_pRecordingPushBuffer = NULL;
 
     EmuSwapFS();   // XBox FS
@@ -7294,7 +7252,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndPushBuffer(VOID)
 // ******************************************************************
 DWORD WINAPI XTL::EmuIDirect3DDevice8_GetPushBufferOffset
 (
-    X_D3DPushBuffer *pPushBuffer
+    DWORD *pOffset
 )
 {
     EmuSwapFS();   // Win2k/XP FS
@@ -7302,10 +7260,13 @@ DWORD WINAPI XTL::EmuIDirect3DDevice8_GetPushBufferOffset
 
     DWORD dwOffset = 0;
 
-    if(pPushBuffer != NULL)
-        dwOffset = pPushBuffer->Size;
+    if(g_pRecordingPushBuffer != NULL)
+        dwOffset = g_pRecordingPushBuffer->Size;
 
-    EmuSwapFS();   // XBox FS
+    if(pOffset != NULL)
+        *pOffset = dwOffset;
+
+    EmuSwapFS();   // XBox FS;
 
     return dwOffset;
 }
@@ -7882,6 +7843,17 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget
     HRESULT hRet = D3D_OK;
     if(HostCompatible)
         hRet = g_pD3DDevice8->SetRenderTarget(pPCRenderTarget, pPCNewZStencil);
+
+    // Update the cached guest-side pointers so GetRenderTarget2 /
+    // GetDepthStencilSurface2 return what the title just set, even when the
+    // host call was skipped (host-incompatible surfaces). On real hardware
+    // these always succeed.
+    if(pRenderTarget != 0)
+        g_pCachedRenderTarget = pRenderTarget;
+    if(pNewZStencil != 0)
+        g_pCachedZStencilSurface = pNewZStencil;
+    else
+        g_pCachedZStencilSurface = NULL;
 
     EmuSwapFS();   // XBox FS
 
