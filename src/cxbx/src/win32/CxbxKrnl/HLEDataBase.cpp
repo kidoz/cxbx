@@ -73,6 +73,11 @@ namespace XTL
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
 #include "DSound.1.0.5849.inl"
+#include "DSound.1.0.5344.inl"
+#include "DSound.1.0.5558.inl"
+#include "DSound.1.0.5659.inl"
+#include "DSound.1.0.5788.inl"
+#include "DSound.1.0.3911.inl"
 #include "XG.1.0.4361.inl"
 #include "XG.1.0.4627.inl"
 #include "XG.1.0.5849.inl"
@@ -244,6 +249,41 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         DSound_1_0_4627,
         DSound_1_0_4627_SIZE
+    },
+    // DSound Version 1.0.3911 (generated from XDK 3911 dsound.lib)
+    {
+        "DSOUND",
+        1, 0, 3911,
+        DSound_1_0_3911,
+        DSound_1_0_3911_SIZE
+    },
+    // DSound Version 1.0.5344 (generated from XDK 5344 dsound.lib)
+    {
+        "DSOUND",
+        1, 0, 5344,
+        DSound_1_0_5344,
+        DSound_1_0_5344_SIZE
+    },
+    // DSound Version 1.0.5558 (generated from XDK 5558 dsound.lib)
+    {
+        "DSOUND",
+        1, 0, 5558,
+        DSound_1_0_5558,
+        DSound_1_0_5558_SIZE
+    },
+    // DSound Version 1.0.5659 (generated from XDK 5659 dsound.lib)
+    {
+        "DSOUND",
+        1, 0, 5659,
+        DSound_1_0_5659,
+        DSound_1_0_5659_SIZE
+    },
+    // DSound Version 1.0.5788 (generated from XDK 5788 dsound.lib)
+    {
+        "DSOUND",
+        1, 0, 5788,
+        DSound_1_0_5788,
+        DSound_1_0_5788_SIZE
     },
     // DSound Version 1.0.5849 (generated from XDK 5849 dsound.lib; the
     // create/setter/buffer-method surface plus DoWork -- see
