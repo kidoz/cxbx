@@ -90,6 +90,9 @@ static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
 extern "C" void EmuAciStartDmaThread();   // EmuKrnl.cpp: AC97 DMA delivery thread
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
 static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
+static bool  EmuLooksLikeReturnAddress(ULONG Address);
+static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, size_t BufferSize);
+static bool  EmuIsReadableRange(ULONG Address, ULONG Bytes);
 static void  EmuInstallAutoBootLaunchData();
 static void  EmuInstallFakeKernelImage();
 static void  EmuXRefFailure();
@@ -2075,45 +2078,87 @@ static bool EmuMaybeSatisfyNv2aNotifier(ULONG Address, ULONG ComparedValue, ULON
 // process and log its EIP/ESP, so a stalled title's thread landscape is visible.
 static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
 {
-    Sleep(14000);
-
-    DWORD Pid = GetCurrentProcessId();
-    DWORD Self = GetCurrentThreadId();
-    HANDLE Snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if(Snap == INVALID_HANDLE_VALUE)
-        return 0;
-
-    THREADENTRY32 Te;
-    Te.dwSize = sizeof(Te);
-    printf("WATCHDOG: --- thread EIP snapshot ---\n");
-    if(Thread32First(Snap, &Te))
+    // CXBX_FENCE_DUMP holds the snapshot interval in seconds; anything
+    // unparsable keeps the legacy one-shot-ish default of 14s. Snapshots
+    // repeat so a stall that develops minutes in (e.g. after a title's asset
+    // load) is still captured.
+    ULONG IntervalMs = 14000;
+    const char *Value = getenv("CXBX_FENCE_DUMP");
+    if(Value != NULL)
     {
-        do
-        {
-            if(Te.th32OwnerProcessID != Pid || Te.th32ThreadID == Self)
-                continue;
-
-            HANDLE Th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, Te.th32ThreadID);
-            if(Th == NULL)
-                continue;
-
-            SuspendThread(Th);
-            CONTEXT Ctx;
-            Ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-            if(GetThreadContext(Th, &Ctx))
-                printf("WATCHDOG: tid 0x%lX eip=0x%08X esp=0x%08X eax=0x%08X ecx=0x%08X edx=0x%08X esi=0x%08X edi=0x%08X\n",
-                       Te.th32ThreadID, (unsigned)Ctx.Eip, (unsigned)Ctx.Esp,
-                       (unsigned)Ctx.Eax, (unsigned)Ctx.Ecx, (unsigned)Ctx.Edx,
-                       (unsigned)Ctx.Esi, (unsigned)Ctx.Edi);
-            ResumeThread(Th);
-            CloseHandle(Th);
-        }
-        while(Thread32Next(Snap, &Te));
+        ULONG Seconds = strtoul(Value, NULL, 10);
+        if(Seconds >= 1 && Seconds <= 3600)
+            IntervalMs = Seconds * 1000;
     }
-    CloseHandle(Snap);
-    printf("WATCHDOG: --- end ---\n");
-    fflush(stdout);
-    return 0;
+
+    for(;;)
+    {
+        Sleep(IntervalMs);
+
+        DWORD Pid = GetCurrentProcessId();
+        DWORD Self = GetCurrentThreadId();
+        HANDLE Snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if(Snap == INVALID_HANDLE_VALUE)
+            return 0;
+
+        THREADENTRY32 Te;
+        Te.dwSize = sizeof(Te);
+        printf("WATCHDOG: --- thread EIP snapshot ---\n");
+        if(Thread32First(Snap, &Te))
+        {
+            do
+            {
+                if(Te.th32OwnerProcessID != Pid || Te.th32ThreadID == Self)
+                    continue;
+
+                HANDLE Th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, Te.th32ThreadID);
+                if(Th == NULL)
+                    continue;
+
+                SuspendThread(Th);
+                CONTEXT Ctx;
+                Ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                if(GetThreadContext(Th, &Ctx))
+                {
+                    printf("WATCHDOG: tid 0x%lX eip=0x%08X esp=0x%08X eax=0x%08X ecx=0x%08X edx=0x%08X esi=0x%08X edi=0x%08X\n",
+                           Te.th32ThreadID, (unsigned)Ctx.Eip, (unsigned)Ctx.Esp,
+                           (unsigned)Ctx.Eax, (unsigned)Ctx.Ecx, (unsigned)Ctx.Edx,
+                           (unsigned)Ctx.Esi, (unsigned)Ctx.Edi);
+
+                    // Attribute the wait: scan the top of the thread's stack
+                    // for return addresses into loaded modules or guest code,
+                    // so a blocked thread names who is waiting, not just that
+                    // it waits in ntdll.
+                    char Where[MAX_PATH + 16];
+                    ULONG Shown = 0;
+                    for(ULONG Slot = 0; Slot < 96 && Shown < 8; Slot++)
+                    {
+                        ULONG SlotAddr = Ctx.Esp + Slot * 4;
+                        if(!EmuIsReadableRange(SlotAddr, 4))
+                            break;
+                        ULONG Value = *(ULONG*)SlotAddr;
+                        if(EmuHostAddressToModuleOffset(Value, Where, sizeof(Where)) != NULL)
+                        {
+                            printf("WATCHDOG:   [%02lu] 0x%08lX = %s\n", Slot, Value, Where);
+                            Shown++;
+                        }
+                        else if(Value >= 0x00010000 && Value < 0x10000000 &&
+                                EmuLooksLikeReturnAddress(Value))
+                        {
+                            printf("WATCHDOG:   [%02lu] 0x%08lX = guest return\n", Slot, Value);
+                            Shown++;
+                        }
+                    }
+                }
+                ResumeThread(Th);
+                CloseHandle(Th);
+            }
+            while(Thread32Next(Snap, &Te));
+        }
+        CloseHandle(Snap);
+        printf("WATCHDOG: --- end ---\n");
+        fflush(stdout);
+    }
 }
 
 static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size)
@@ -5952,6 +5997,14 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     if(g_hEmuVectoredExceptionHandler == NULL)
         g_hEmuVectoredExceptionHandler = AddVectoredExceptionHandler(1, EmuVectoredExceptionHandler);
 
+    // Thread-EIP watchdog (opt-in via CXBX_FENCE_DUMP=<interval seconds>):
+    // periodic snapshots of every thread's EIP so a stalled title's thread
+    // landscape can be read. Started here, before FS emulation touches this
+    // thread -- a bare CreateThread after the FS content-swap is armed hangs
+    // the boot (the loader reads TEB fields the swap has repurposed).
+    if(getenv("CXBX_FENCE_DUMP") != NULL)
+        CreateThread(NULL, 0, EmuThreadEipWatchdog, NULL, 0, NULL);
+
     // ******************************************************************
     // * debug trace
     // ******************************************************************
@@ -6317,12 +6370,6 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // handler) because CreateThread inside the vectored-exception path wedges
     // the faulting thread.
     EmuAciStartDmaThread();
-
-    // Thread-EIP watchdog (opt-in via CXBX_FENCE_DUMP): after a delay, snapshot
-    // every thread's EIP so a stalled title's thread landscape can be read
-    // (which thread is the render loop, what each is blocked on).
-    if(getenv("CXBX_FENCE_DUMP") != NULL)
-        CreateThread(NULL, 0, EmuThreadEipWatchdog, NULL, 0, NULL);
 
     printf("Emu (0x%X): Initializing Direct3D.\n", GetCurrentThreadId());
 
