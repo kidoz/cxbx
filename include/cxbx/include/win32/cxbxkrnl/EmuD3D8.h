@@ -205,11 +205,31 @@ inline D3DFORMAT EmuXB2PC_D3DFormat(X_D3DFORMAT Format)
         case 0x30: // Linear     (X_D3DFMT_LIN_D16)
         case 0x2C: // Swizzled   (X_D3DFMT_D16)
             return D3DFMT_D16;
+
+        case 0x28: // Swizzled   (X_D3DFMT_G8B8 / V8U8, dual-channel bump-env)
+        case 0x17: // Linear     (X_D3DFMT_LIN_G8B8)
+            return D3DFMT_V8U8;
+
+        case 0x19: // Swizzled   (X_D3DFMT_A8)
+            return D3DFMT_A8;
+
+        case 0x1A: // Swizzled   (X_D3DFMT_A8L8)
+        case 0x20: // Linear     (X_D3DFMT_LIN_A8L8)
+            return D3DFMT_A8L8;
+
+        // 0x00 (X_D3DFMT_L8) is handled by the null-format case above.
+        case 0x13: // Linear     (X_D3DFMT_LIN_L8)
+            return D3DFMT_L8;
     }
 
-    EmuCleanup("EmuXB2PC_D3DFormat: Unknown Format (0x%.08X)", Format);
+    // An exotic texture format should degrade to one broken texture, not
+    // kill the process: titles register bump/luminance formats we cannot
+    // express and never miss them (Turok Evolution's frontend registers a
+    // G8B8 the menu does not visibly use).
+    EmuWarning("EmuXB2PC_D3DFormat: Unknown Format (0x%.08X) -> A8R8G8B8", Format);
+    printf("*Warning* EmuXB2PC_D3DFormat: Unknown Format (0x%.08X) -> A8R8G8B8\n", Format);
 
-    return (D3DFORMAT)Format;
+    return D3DFMT_A8R8G8B8;
 }
 
 // ******************************************************************
@@ -1441,6 +1461,36 @@ HRESULT WINAPI EmuIDirect3DDevice8_RunPushBuffer
 (
     X_D3DPushBuffer    *pPushBuffer,
     PVOID               pFixup
+);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_CreatePushBuffer2
+// ******************************************************************
+X_D3DPushBuffer* WINAPI EmuIDirect3DDevice8_CreatePushBuffer2
+(
+    DWORD               Size,
+    BOOL                RunUsingCpuCopy
+);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_BeginPushBuffer
+// ******************************************************************
+HRESULT WINAPI EmuIDirect3DDevice8_BeginPushBuffer
+(
+    X_D3DPushBuffer    *pPushBuffer
+);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_EndPushBuffer
+// ******************************************************************
+HRESULT WINAPI EmuIDirect3DDevice8_EndPushBuffer(VOID);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_GetPushBufferOffset
+// ******************************************************************
+DWORD WINAPI EmuIDirect3DDevice8_GetPushBufferOffset
+(
+    X_D3DPushBuffer    *pPushBuffer
 );
 
 // ******************************************************************
