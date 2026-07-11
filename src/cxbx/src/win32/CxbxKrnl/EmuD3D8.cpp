@@ -1599,9 +1599,62 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport
     }
     #endif
 
-    HRESULT hRet = g_pD3DDevice8->SetViewport(pViewport);
+    // On Xbox the NV2A imposes no relationship between the viewport and the
+    // render target: a viewport may extend past the framebuffer (it just
+    // clips), and MinZ/MaxZ may lie outside [0,1]. Host d3d8 validates
+    // SetViewport strictly -- X+Width and Y+Height must fit the bound render
+    // target and the depth range must be within [0,1] -- and rejects a
+    // violation by throwing the HRESULT internally (a bare C++ `throw`), which
+    // does not unwind across our FS content-swap: the process dies
+    // 0xE06D7363/D3DERR_NOTAVAILABLE. Turok Evolution's render-to-texture path
+    // sets a 512x512 viewport against a 640x480 backbuffer and hits this on
+    // every frame. Clamp the viewport into the host-valid range and forward
+    // the clamped copy; report success, as real hardware would have accepted
+    // the call. (Same guard discipline as SetRenderTarget / Clear.)
+    D3DVIEWPORT8 vp = *pViewport;
+
+    bool Clamped = false;
+
+    // Depth range: host requires MinZ/MaxZ within [0,1].
+    if(vp.MinZ < 0.0f) { vp.MinZ = 0.0f; Clamped = true; }
+    if(vp.MinZ > 1.0f) { vp.MinZ = 1.0f; Clamped = true; }
+    if(vp.MaxZ < 0.0f) { vp.MaxZ = 0.0f; Clamped = true; }
+    if(vp.MaxZ > 1.0f) { vp.MaxZ = 1.0f; Clamped = true; }
+
+    // Extents: host requires X+Width <= RT width and Y+Height <= RT height.
+    IDirect3DSurface8 *pRT = NULL;
+    if(SUCCEEDED(g_pD3DDevice8->GetRenderTarget(&pRT)) && pRT != NULL)
+    {
+        D3DSURFACE_DESC RTDesc;
+        if(SUCCEEDED(pRT->GetDesc(&RTDesc)))
+        {
+            if((DWORD)vp.X > RTDesc.Width) { vp.X = RTDesc.Width; Clamped = true; }
+            if((DWORD)vp.Y > RTDesc.Height) { vp.Y = RTDesc.Height; Clamped = true; }
+            DWORD MaxW = RTDesc.Width - vp.X;
+            DWORD MaxH = RTDesc.Height - vp.Y;
+            if(vp.Width > MaxW) { vp.Width = MaxW; Clamped = true; }
+            if(vp.Height > MaxH) { vp.Height = MaxH; Clamped = true; }
+        }
+        pRT->Release();
+    }
+
+    if(Clamped)
+    {
+        static LONG WarnCount = 0;
+        if(InterlockedIncrement(&WarnCount) <= 5)
+            EmuWarning("SetViewport clamped to host bounds: in{x=%lu y=%lu w=%lu h=%lu minz=%g maxz=%g} -> out{x=%lu y=%lu w=%lu h=%lu minz=%g maxz=%g}",
+                       pViewport->X, pViewport->Y, pViewport->Width, pViewport->Height, pViewport->MinZ, pViewport->MaxZ,
+                       vp.X, vp.Y, vp.Width, vp.Height, vp.MinZ, vp.MaxZ);
+    }
+
+    HRESULT hRet = g_pD3DDevice8->SetViewport(&vp);
 
     EmuSwapFS();   // Xbox FS
+
+    // The title's call would have succeeded on hardware; do not feed it an
+    // error path it never takes there.
+    if(FAILED(hRet))
+        hRet = D3D_OK;
 
     return hRet;
 }
