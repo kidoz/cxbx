@@ -50,6 +50,12 @@ struct GamepadState
 };
 
 void TranslateXInputGamepad(const XInputGamepad& host, GamepadState& guest);
+
+// Initialize the host XInput backend. Safe to call from the launcher thread
+// before the FS-swap is active; subsequent GetConnectedMask/Poll/SetRumble
+// calls from the guest thread then avoid the LoadLibrary/GetProcAddress path
+// whose CRT throws cross the FS boundary.
+bool Initialize();
 std::uint32_t GetConnectedMask();
 bool Poll(std::uint32_t port, GamepadState& state);
 std::uint32_t SetRumble(std::uint32_t port, std::uint16_t leftMotorSpeed,

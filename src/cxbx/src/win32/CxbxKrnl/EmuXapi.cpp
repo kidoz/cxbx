@@ -70,22 +70,21 @@ static DWORD EmuXInputConnectedMask()
 {
     // Injected input needs no host devices -- and skipping the host query
     // keeps headless runs off the host-input path entirely.
-    if (EmuXInputInjectionConfigured()) {
+    if(EmuXInputInjectionConfigured()) {
         return 1u;
     }
 
-    // The host query runs xinput loading and CRT synchronization whose C++
-    // throws have no catch frame across the patched-call boundary (same
-    // throw-across-FS-swap class as the guarded host D3D8 calls): an escaped
-    // throw dispatches through the guest SEH chain and kills the process
-    // (KOF2002 died inside its first XGetDevices this way). Absorb and report
-    // instead -- worst case the title sees no pads.
+    // The host XInput backend is initialized during EmuInit (before the
+    // FS-swap is active), so LoadLibrary/GetProcAddress has already resolved.
+    // The per-call XInputGetState is a plain C ABI call that does not throw.
+    // The SEH guard remains as defense-in-depth: if a driver-level fault
+    // occurs, we report zero devices rather than killing the process.
     DWORD connectedMask = 0;
     __try {
         connectedMask = XTL::EmuDInputGetConnectedMask();
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         static LONG s_Warned = 0;
-        if (InterlockedExchange(&s_Warned, 1) == 0) {
+        if(InterlockedExchange(&s_Warned, 1) == 0) {
             printf("EmuXapi (0x%X): *WARNING* host input query faulted (0x%08lX); reporting no devices.\n",
                    GetCurrentThreadId(), GetExceptionCode());
             fflush(stdout);
@@ -714,10 +713,16 @@ DWORD WINAPI XTL::EmuXInputGetState
     } else if (EmuXInputHandleToPort(hDevice, &port)) {
         if (port == 0 && EmuXInputInjectState(pState)) {
             ret = ERROR_SUCCESS;
-        } else if (EmuDInputPoll(port, pState)) {
-            ret = ERROR_SUCCESS;
         } else {
-            ret = ERROR_DEVICE_NOT_CONNECTED;
+            __try {
+                if (EmuDInputPoll(port, pState)) {
+                    ret = ERROR_SUCCESS;
+                } else {
+                    ret = ERROR_DEVICE_NOT_CONNECTED;
+                }
+            } __except(EXCEPTION_EXECUTE_HANDLER) {
+                ret = ERROR_DEVICE_NOT_CONNECTED;
+            }
         }
     }
 

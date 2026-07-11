@@ -104,6 +104,12 @@ bool InitializeUnlocked()
 }
 } // namespace
 
+bool HostInput::Initialize()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return InitializeUnlocked();
+}
+
 void HostInput::TranslateXInputGamepad(const XInputGamepad& host,
                                        GamepadState& guest)
 {
