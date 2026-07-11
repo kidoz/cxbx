@@ -78,6 +78,7 @@
 #define NV_PFIFO_CACHE1_DMA_INSTANCE 0x00322Cu
 #define NV_PFIFO_CACHE1_DMA_PUT      0x003240u // CPU writes; pusher target
 #define NV_PFIFO_CACHE1_DMA_GET      0x003244u // pusher progress
+#define NV_PFIFO_CACHE1_DMA_SUBROUTINE 0x00324Cu
 #define NV_PGRAPH_INTR               0x400100u
 #define NV_PGRAPH_INTR_EN            0x400140u
 #define NV_PGRAPH_STATUS             0x400700u // busy/idle
