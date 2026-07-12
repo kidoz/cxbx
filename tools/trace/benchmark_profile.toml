@@ -1,0 +1,12 @@
+[reference]
+cpu = "AMD Ryzen 9 9950X3D 16-Core Processor"
+compiler = "clang-22.1.8"
+power_scheme_guid = "381b4222-f694-41f0-9685-ff5bb260df2e"
+iterations = 10000000
+optimization = "3"
+
+[targets_ns]
+optional_gate = 5.0
+flight = 40.0
+binary_one = 75.0
+binary_four = 175.0
