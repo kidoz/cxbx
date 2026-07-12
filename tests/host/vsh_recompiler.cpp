@@ -347,6 +347,22 @@ constexpr DWORD kRccProgram[] = {
     0x00000000u,
     0x2000F805u,
 };
+
+constexpr DWORD kR11R12Program[] = {
+    0x00032078u,
+    0x00000000u,
+    0x0020021Bu,
+    0x08000000u,
+    0x0FB00000u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0FC0F800u,
+    0x00000000u,
+    0x0020001Bu,
+    0xB4000000u,
+    0x0000F819u,
+};
 } // namespace
 
 int RunTests()
@@ -382,6 +398,23 @@ int RunTests()
           "DPH without a free temporary requires CPU fallback");
     Check(fallbackReason == "dph_no_scratch", "DPH CPU fallback reason is stable");
 
+    std::vector<DWORD> noPositionScratch(1 + 13 * 4, 0);
+    noPositionScratch[0] = 0x000D2078u;
+    for(DWORD reg = 0; reg < 12; ++reg)
+    {
+        noPositionScratch[1 + reg * 4 + 1] = 0x0020001Bu;
+        noPositionScratch[1 + reg * 4 + 2] = 0x08000000u;
+        noPositionScratch[1 + reg * 4 + 3] = 0x0F000000u | (reg << 20);
+    }
+    noPositionScratch[1 + 12 * 4 + 1] = 0x0020001Bu;
+    noPositionScratch[1 + 12 * 4 + 2] = 0x08000000u;
+    noPositionScratch[1 + 12 * 4 + 3] = 0x0000F801u;
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noPositionScratch.data(), fallbackReason),
+          "R12 position alias without a free temporary requires CPU fallback");
+    Check(fallbackReason == "position_alias_no_scratch",
+          "R12 position-alias CPU fallback reason is stable");
+
     fallbackReason.clear();
     Check(XTL::VshDiagnostics::RequiresCpuFallback(kRccProgram, fallbackReason),
           "RCC requires exact CPU fallback");
@@ -412,6 +445,43 @@ int RunTests()
     checkRcc(0x1p-80f, 0x1p64f, "RCC clamps tiny positive input to positive 2^64");
     checkRcc(-0x1p-80f, -0x1p64f, "RCC clamps tiny negative input to negative 2^64");
     checkRcc(0.0f, 0x1p64f, "RCC clamps zero to positive 2^64");
+
+    std::array<float, 16 * 4> r11R12Inputs{};
+    r11R12Inputs[0] = 1.0f;
+    r11R12Inputs[1] = 2.0f;
+    r11R12Inputs[2] = 3.0f;
+    r11R12Inputs[3] = 4.0f;
+    r11R12Inputs[4] = 11.0f;
+    r11R12Inputs[5] = 12.0f;
+    r11R12Inputs[6] = 13.0f;
+    r11R12Inputs[7] = 14.0f;
+    ShaderOutputs cpuR11R12Outputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kR11R12Program, rccConstants.data(), r11R12Inputs.data(),
+              cpuR11R12Outputs.position.data(), cpuR11R12Outputs.colors.data(),
+              cpuR11R12Outputs.colors.size(), cpuR11R12Outputs.texCoords.data(),
+              cpuR11R12Outputs.texCoords.size()),
+          "CPU R11/R12 independence shader executes");
+    DWORD* r11R12Translation = XTL::EmuVshRecompileXboxFunction(kR11R12Program);
+    Check(r11R12Translation != nullptr, "R11/R12 independence shader translates");
+    if(r11R12Translation != nullptr)
+    {
+        std::array<float, 96 * 4> hostConstants{};
+        ShaderOutputs d3dR11R12Outputs{};
+        Check(ExecuteD3D8Bytecode(r11R12Translation, 16 + 3 * 20, hostConstants.data(),
+                                  r11R12Inputs.data(), d3dR11R12Outputs),
+              "translated R11/R12 bytecode executes independently");
+        bool firstColorMatches = true;
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            firstColorMatches = firstColorMatches &&
+                                NearlyEqual(cpuR11R12Outputs.colors[component],
+                                            d3dR11R12Outputs.colors[component]);
+        }
+        Check(PositionsEqual(cpuR11R12Outputs, d3dR11R12Outputs) && firstColorMatches,
+              "guest R11 remains independent from the R12 position alias");
+        delete[] r11R12Translation;
+    }
 
     const std::vector<std::string> xboxListing = XTL::VshDiagnostics::DecodeXboxFunction(kXboxProgram);
     const std::vector<std::string> d3dListing =
