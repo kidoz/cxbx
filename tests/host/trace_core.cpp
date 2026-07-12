@@ -109,6 +109,13 @@ void CheckEventFile(const char* path)
     bool d3dReturn = false;
     bool nv2aMethod = false;
     bool singleStep = false;
+    bool mediaUpdate = false;
+    bool mediaPresent = false;
+    bool audioQueued = false;
+    bool audioCompleted = false;
+    bool audioStarved = false;
+    bool waitSatisfied = false;
+    bool waitTimeout = false;
     for(std::size_t index = 0; index < records.size(); ++index)
     {
         const cxbx::trace::TraceRecord& item = records[index];
@@ -153,9 +160,36 @@ void CheckEventFile(const char* path)
         {
             singleStep = item.argument == 0x1000 && records[index + 1].argument == 0x2000;
         }
+        mediaUpdate |=
+            item.event ==
+                static_cast<std::uint16_t>(cxbx::trace::Event::MediaOverlayUpdate) &&
+            item.argument == 41;
+        mediaPresent |=
+            item.event == static_cast<std::uint16_t>(cxbx::trace::Event::MediaPresent) &&
+            item.argument == 41;
+        audioQueued |=
+            item.event ==
+                static_cast<std::uint16_t>(cxbx::trace::Event::AudioPacketQueued) &&
+            item.argument == 4096;
+        audioCompleted |=
+            item.event ==
+                static_cast<std::uint16_t>(cxbx::trace::Event::AudioPacketCompleted) &&
+            item.argument == 4096;
+        audioStarved |=
+            item.event == static_cast<std::uint16_t>(cxbx::trace::Event::AudioStarved) &&
+            item.argument == 8192;
+        waitSatisfied |=
+            item.event ==
+                static_cast<std::uint16_t>(cxbx::trace::Event::SyncWaitSatisfied) &&
+            item.argument == 2;
+        waitTimeout |=
+            item.event ==
+                static_cast<std::uint16_t>(cxbx::trace::Event::SyncWaitTimeout) &&
+            item.argument == 16;
     }
     if(!d3d || !mmio || !attached || !d3dCall || !d3dWait || !d3dReturn ||
-       !nv2aMethod || !singleStep)
+       !nv2aMethod || !singleStep || !mediaUpdate || !mediaPresent || !audioQueued ||
+       !audioCompleted || !audioStarved || !waitSatisfied || !waitTimeout)
     {
         Fail("binary trace records are incomplete");
     }
@@ -192,6 +226,9 @@ int Run()
     cxbx::trace::SetEnabled(cxbx::trace::Channel::Mmio, true);
     cxbx::trace::SetEnabled(cxbx::trace::Channel::Nv2a, true);
     cxbx::trace::SetEnabled(cxbx::trace::Channel::SingleStep, true);
+    cxbx::trace::SetEnabled(cxbx::trace::Channel::Media, true);
+    cxbx::trace::SetEnabled(cxbx::trace::Channel::Audio, true);
+    cxbx::trace::SetEnabled(cxbx::trace::Channel::Sync, true);
     cxbx::trace::RecordBinary(cxbx::trace::Event::D3dBoundary, 0x1234U);
     const std::uint32_t d3dSequence =
         cxbx::trace::RecordD3dCall(cxbx::trace::D3dApi::Clear, 1, 0xD3D0BEEFU);
@@ -226,6 +263,13 @@ int Run()
     cxbx::trace::Warn(cxbx::trace::Channel::D3d, "ret", "api=Clear hr=0x%08X", 0U);
     const std::string longPayload(400, 'x');
     CXBX_TRACE_TEXT(cxbx::trace::Channel::D3d, "call", "payload=%s", longPayload.c_str());
+    cxbx::trace::RecordBinary(cxbx::trace::Event::MediaOverlayUpdate, 41);
+    cxbx::trace::RecordBinary(cxbx::trace::Event::MediaPresent, 41);
+    cxbx::trace::RecordBinary(cxbx::trace::Event::AudioPacketQueued, 4096);
+    cxbx::trace::RecordBinary(cxbx::trace::Event::AudioPacketCompleted, 4096);
+    cxbx::trace::RecordBinary(cxbx::trace::Event::AudioStarved, 8192);
+    cxbx::trace::RecordBinary(cxbx::trace::Event::SyncWaitSatisfied, 2);
+    cxbx::trace::RecordBinary(cxbx::trace::Event::SyncWaitTimeout, 16);
     cxbx::trace::Flush();
     cxbx::trace::DumpFlightEmergency();
     cxbx::trace::Shutdown();

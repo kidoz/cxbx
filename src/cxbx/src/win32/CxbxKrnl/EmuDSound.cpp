@@ -49,6 +49,7 @@ namespace xboxkrnl
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
+#include "core/trace.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -226,6 +227,13 @@ void FinishStreamPacket(XTL::X_DSoundStreamState* state, const StreamPacket& pac
         *packet.Status = status;
     }
 
+    if(status == kXMediaPacketStatusSuccess &&
+       cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+    {
+        cxbx::trace::RecordBinary(cxbx::trace::Event::AudioPacketCompleted,
+                                  packet.Size);
+    }
+
     if(state->Callback != NULL)
     {
         EmuSwapFS();
@@ -286,6 +294,12 @@ void PumpStream(XTL::X_DSoundStreamState* state)
 
         if(!hasCompletion && state->PacketCount == 0 && state->Playing && state->PlayedBytes >= state->WrittenBytes)
         {
+            if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+            {
+                cxbx::trace::RecordBinary(
+                    cxbx::trace::Event::AudioStarved,
+                    static_cast<std::uint32_t>(state->PlayedBytes));
+            }
             ResetStoppedStream(state);
         }
 
@@ -941,6 +955,12 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
             state->WrittenBytes += pInputBuffer->dwMaxSize;
             packet.EndPosition = state->WrittenBytes;
             state->PacketCount++;
+
+            if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+            {
+                cxbx::trace::RecordBinary(cxbx::trace::Event::AudioPacketQueued,
+                                          pInputBuffer->dwMaxSize);
+            }
 
             if(packet.CompletedSize != NULL)
             {
