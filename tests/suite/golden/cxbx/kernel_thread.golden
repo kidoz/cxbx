@@ -7,5 +7,9 @@ CHK ke.setevent_sets_one PASS
 CHK ke.resetevent_prev_one PASS
 CHK ke.resetevent_sets_zero PASS
 CHK ke.wait_success PASS
+CHK ke.wait_sync_consumed PASS
+CHK ke.wait_notification_success PASS
+CHK ke.wait_notification_retained PASS
+CHK ke.wait_zero_timeout PASS
 CHK ke.delay_success PASS
-#result kernel_thread verdict=PASS checks=8 fail=0
+#result kernel_thread verdict=PASS checks=12 fail=0

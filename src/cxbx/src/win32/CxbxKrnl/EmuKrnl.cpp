@@ -63,6 +63,7 @@ namespace NtDll
 #include "EmuDes.h"
 #include "EmuFS.h"
 #include "EmuFile.h"
+#include "core/trace.h"
 
 extern "C" uint32 __cdecl EmuDbgPrint(const char *Format, ...)
 {
@@ -645,7 +646,7 @@ extern "C" NTSTATUS NTAPI EmuObCreateObject
 
     if(Object == NULL || ObjectType == NULL)
     {
-        EmuSwapFS();   // Xbox FS
+        EmuSwapFS(); // Xbox FS
         return EmuStatusInvalidParameter;
     }
 
@@ -714,7 +715,7 @@ extern "C" NTSTATUS NTAPI EmuObInsertObject
     {
         if(!EmuIsValidObjectName(Name) && !EmuIsValidSymbolicLinkName(Name))
         {
-            EmuSwapFS();   // Xbox FS
+            EmuSwapFS(); // Xbox FS
             return EmuStatusObjectNameInvalid;
         }
 
@@ -5570,8 +5571,8 @@ extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait)
 
     if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)))
     {
-        PreviousState = Header->SignalState;
-        Header->SignalState = 1;   // signaled
+        PreviousState = InterlockedExchange(
+            reinterpret_cast<volatile LONG*>(&Header->SignalState), 1);
     }
 
     static ULONG s_LogCount = 0;
@@ -5601,8 +5602,8 @@ extern "C" LONG NTAPI EmuKePulseEvent(PVOID Event, LONG Increment, BOOLEAN Wait)
     xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Event;
     if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)))
     {
-        PreviousState = Header->SignalState;
-        Header->SignalState = 0;
+        PreviousState = InterlockedExchange(
+            reinterpret_cast<volatile LONG*>(&Header->SignalState), 0);
     }
 
     EmuSwapFS();   // Xbox FS
@@ -5700,10 +5701,33 @@ extern "C" LONG NTAPI EmuKeReleaseSemaphore(PVOID Semaphore, LONG Increment, LON
     EmuSimpleDispatcherObject *Object = (EmuSimpleDispatcherObject*)Semaphore;
     if(Object != NULL && EmuIsWritableMemoryRange(Object, sizeof(*Object)))
     {
-        PreviousState = Object->Header.SignalState;
-        Object->Header.SignalState += Adjustment;
-        if(Object->Limit != 0 && Object->Header.SignalState > Object->Limit)
-            Object->Header.SignalState = Object->Limit;
+        volatile LONG* const SignalState =
+            reinterpret_cast<volatile LONG*>(&Object->Header.SignalState);
+        PreviousState = InterlockedCompareExchange(SignalState, 0, 0);
+        for(;;)
+        {
+            LONGLONG UpdatedState = static_cast<LONGLONG>(PreviousState) + Adjustment;
+            if(UpdatedState < 0)
+            {
+                UpdatedState = 0;
+            }
+            if(Object->Limit != 0 && UpdatedState > Object->Limit)
+            {
+                UpdatedState = Object->Limit;
+            }
+            if(UpdatedState > 0x7FFFFFFFLL)
+            {
+                UpdatedState = 0x7FFFFFFFLL;
+            }
+
+            const LONG Observed = InterlockedCompareExchange(
+                SignalState, static_cast<LONG>(UpdatedState), PreviousState);
+            if(Observed == PreviousState)
+            {
+                break;
+            }
+            PreviousState = Observed;
+        }
     }
 
     EmuSwapFS();   // Xbox FS
@@ -7128,6 +7152,76 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects
     return STATUS_SUCCESS;
 }
 
+static bool EmuDispatcherObjectSupportsWait(const xboxkrnl::DISPATCHER_HEADER* Header)
+{
+    // NotificationEvent, SynchronizationEvent, and SemaphoreObject are the
+    // dispatcher types whose signal semantics are modelled by this HLE.
+    return Header->Type == 0 || Header->Type == 1 || Header->Type == 0x05;
+}
+
+static bool EmuTrySatisfyDispatcherWait(xboxkrnl::DISPATCHER_HEADER* Header)
+{
+    volatile LONG* const SignalState =
+        reinterpret_cast<volatile LONG*>(&Header->SignalState);
+    LONG State = InterlockedCompareExchange(SignalState, 0, 0);
+    if(State <= 0)
+    {
+        return false;
+    }
+
+    // Notification events remain signalled until KeResetEvent. Synchronization
+    // events and semaphores consume one signal when a waiter succeeds.
+    if(Header->Type == 0)
+    {
+        return true;
+    }
+
+    while(State > 0)
+    {
+        const LONG Previous = InterlockedCompareExchange(SignalState, State - 1, State);
+        if(Previous == State)
+        {
+            return true;
+        }
+        State = Previous;
+    }
+    return false;
+}
+
+static DWORD EmuDispatcherTimeoutMilliseconds(const xboxkrnl::LARGE_INTEGER& Timeout)
+{
+    ULONGLONG Timeout100Ns = 0;
+    if(Timeout.QuadPart < 0)
+    {
+        Timeout100Ns = static_cast<ULONGLONG>(-(Timeout.QuadPart + 1)) + 1;
+    }
+    else
+    {
+        FILETIME CurrentFileTime = {};
+        GetSystemTimeAsFileTime(&CurrentFileTime);
+        const ULONGLONG Current100Ns =
+            (static_cast<ULONGLONG>(CurrentFileTime.dwHighDateTime) << 32) |
+            CurrentFileTime.dwLowDateTime;
+        const ULONGLONG Absolute100Ns = static_cast<ULONGLONG>(Timeout.QuadPart);
+        if(Absolute100Ns <= Current100Ns)
+        {
+            return 0;
+        }
+        Timeout100Ns = Absolute100Ns - Current100Ns;
+    }
+
+    const ULONGLONG Milliseconds = (Timeout100Ns + 9999) / 10000;
+    return Milliseconds >= MAXDWORD ? MAXDWORD - 1 : static_cast<DWORD>(Milliseconds);
+}
+
+static void EmuTraceDispatcherWait(cxbx::trace::Event Event, DWORD Started)
+{
+    if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Sync))
+    {
+        cxbx::trace::RecordBinary(Event, GetTickCount() - Started);
+    }
+}
+
 extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
 (
     IN PVOID Object,
@@ -7140,43 +7234,42 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
     EmuSwapFS();   // Win2k/XP FS
 
     xboxkrnl::DISPATCHER_HEADER *Header = (xboxkrnl::DISPATCHER_HEADER*)Object;
-    bool AlreadySignaled = false;
-
-    if(Header != NULL && EmuIsWritableMemoryRange(Header, sizeof(*Header)) && Header->SignalState > 0 &&
-       (Header->Type == 1 || Header->Type == 0x05))
+    if(Header == NULL || !EmuIsWritableMemoryRange(Header, sizeof(*Header)) ||
+       !EmuDispatcherObjectSupportsWait(Header))
     {
-        Header->SignalState--;
-        AlreadySignaled = true;
+        // Preserve the legacy permissive result for dispatcher types that the
+        // HLE does not model yet. Blocking an unknown object would introduce a
+        // new indefinite hang without implementing its wake mechanism.
+        EmuSwapFS(); // Xbox FS
+        return STATUS_SUCCESS;
     }
 
-    NTSTATUS Result = STATUS_SUCCESS;
+    const DWORD Started = GetTickCount();
+    const bool HasTimeout = Timeout != NULL;
+    const DWORD TimeoutMilliseconds =
+        HasTimeout ? EmuDispatcherTimeoutMilliseconds(*Timeout) : 0;
 
-    if(!AlreadySignaled && Timeout != NULL)
+    for(;;)
     {
-        // Object is unsignaled and a timeout was given. Convert the Xbox
-        // relative timeout (negative 100-ns units) to a host wait. This paces
-        // guest threads that wait on kernel dispatcher objects (events,
-        // semaphores) for frame/audio timing. Without this the guest's decode
-        // loop spins at full speed, starving audio and causing video stutter.
-        if(Timeout->QuadPart < 0)
+        if(EmuTrySatisfyDispatcherWait(Header))
         {
-            // Relative timeout: convert 100-ns units to milliseconds for Sleep
-            DWORD dwMs = (DWORD)(-Timeout->QuadPart / 10000);
-            if(dwMs == 0) dwMs = 1;
+            EmuTraceDispatcherWait(cxbx::trace::Event::SyncWaitSatisfied, Started);
             EmuSwapFS();   // Xbox FS
-            Sleep(dwMs);
-            EmuSwapFS();   // Win2k/XP FS
-            Result = STATUS_TIMEOUT;
+            return STATUS_SUCCESS;
         }
-        else if(Timeout->QuadPart == 0)
+
+        if(HasTimeout && GetTickCount() - Started >= TimeoutMilliseconds)
         {
-            Result = STATUS_TIMEOUT;
+            EmuTraceDispatcherWait(cxbx::trace::Event::SyncWaitTimeout, Started);
+            EmuSwapFS(); // Xbox FS
+            return STATUS_TIMEOUT;
         }
+
+        // Keep Win32 FS active while invoking the host scheduler. The previous
+        // implementation swapped to Xbox FS before Sleep, making a Win32 API
+        // run with guest thread state installed.
+        Sleep(1);
     }
-
-    EmuSwapFS();   // Xbox FS
-
-    return Result;
 }
 
 extern "C" VOID NTAPI EmuKiUnlockDispatcherDatabase(UCHAR OldIrql)

@@ -7,10 +7,11 @@
 //
 // This is a kernel-HLE probe (like kernel_cov), so it is untagged and runs
 // everywhere -- no GPU, no XDK libraries. Ground truth is encoded as checks
-// against the CURRENT documented HLE semantics, not idealized Xbox hardware:
+// against dispatcher-object semantics that are observable through the kernel
+// API:
 //
-//   * KeWaitForSingleObject is non-blocking on this HLE and always returns
-//     STATUS_SUCCESS (it only decrements SignalState for Type 1/5 objects).
+//   * waits consume synchronization-event signals, retain notification-event
+//     signals, and return STATUS_TIMEOUT for an elapsed deadline.
 //   * KeSetEvent/KeResetEvent return the previous SignalState; KeSetEvent
 //     ignores its Increment/Wait arguments for behavior.
 //
@@ -32,6 +33,9 @@
 
 #ifndef STATUS_SUCCESS
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
+#endif
+#ifndef STATUS_TIMEOUT
+#define STATUS_TIMEOUT ((NTSTATUS)0x00000102L)
 #endif
 
 int main(void)
@@ -68,14 +72,31 @@ int main(void)
     xt_check_u32("ke.resetevent_prev_one", 1u, (uint32_t)prev_reset);
     xt_check_u32("ke.resetevent_sets_zero", 0u, (uint32_t)ss_after_reset);
 
-    // --- KeWaitForSingleObject: signaled sync event -> STATUS_SUCCESS -------
-    // The HLE never blocks; a signaled SynchronizationEvent (Type 1) makes the
-    // call decrement SignalState and return STATUS_SUCCESS.
+    // --- KeWaitForSingleObject dispatcher semantics -------------------------
     KEVENT ev2;
     KeInitializeEvent(&ev2, SynchronizationEvent, TRUE);
     NTSTATUS wait_st = KeWaitForSingleObject(&ev2, Executive, KernelMode, FALSE, NULL);
     xt_ev("KeWaitForSingleObject = 0x%08lX", (unsigned long)wait_st);
     xt_check_u32("ke.wait_success", (uint32_t)STATUS_SUCCESS, (uint32_t)wait_st);
+    xt_check_u32("ke.wait_sync_consumed", 0u, (uint32_t)ev2.Header.SignalState);
+
+    KEVENT notification;
+    KeInitializeEvent(&notification, NotificationEvent, TRUE);
+    NTSTATUS notification_st =
+        KeWaitForSingleObject(&notification, Executive, KernelMode, FALSE, NULL);
+    xt_check_u32("ke.wait_notification_success", (uint32_t)STATUS_SUCCESS,
+                 (uint32_t)notification_st);
+    xt_check_u32("ke.wait_notification_retained", 1u,
+                 (uint32_t)notification.Header.SignalState);
+
+    KEVENT unsignaled;
+    LARGE_INTEGER zero_timeout;
+    KeInitializeEvent(&unsignaled, SynchronizationEvent, FALSE);
+    zero_timeout.QuadPart = 0;
+    NTSTATUS timeout_st =
+        KeWaitForSingleObject(&unsignaled, Executive, KernelMode, FALSE, &zero_timeout);
+    xt_check_u32("ke.wait_zero_timeout", (uint32_t)STATUS_TIMEOUT,
+                 (uint32_t)timeout_st);
 
     // --- KeDelayExecutionThread: short relative wait -> STATUS_SUCCESS ------
     // A negative Interval is relative; -100000 (100ns units) is ~10 ms.
