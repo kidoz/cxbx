@@ -1,5 +1,6 @@
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -160,8 +162,27 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
         {
             continue;
         }
-        const std::size_t sourceCount = opcode == 1 ? 1 : opcode == 4 ? 3
-                                                                      : 2;
+        std::size_t sourceCount = 0;
+        switch(opcode)
+        {
+            case 1:
+            case 6:
+            case 7:
+            case 14:
+            case 15:
+            case 16: sourceCount = 1; break;
+            case 2:
+            case 5:
+            case 8:
+            case 9:
+            case 10:
+            case 11:
+            case 12:
+            case 13:
+            case 17: sourceCount = 2; break;
+            case 4: sourceCount = 3; break;
+            default: return false;
+        }
         if(tokenIndex + 1 + sourceCount > maxTokens)
         {
             return false;
@@ -197,6 +218,25 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
                 result[component] = sources[0][component] + sources[1][component];
             }
         }
+        else if(opcode == 4)
+        {
+            for(std::size_t component = 0; component < 4; ++component)
+            {
+                result[component] = sources[0][component] * sources[1][component] +
+                                    sources[2][component];
+            }
+        }
+        else if(opcode == 6)
+        {
+            const float reciprocal = sources[0][0] != 0.0f ? 1.0f / sources[0][0] : 0.0f;
+            result[0] = result[1] = result[2] = result[3] = reciprocal;
+        }
+        else if(opcode == 7)
+        {
+            const float magnitude = std::fabs(sources[0][0]);
+            const float reciprocalRoot = magnitude > 0.0f ? 1.0f / std::sqrt(magnitude) : 0.0f;
+            result[0] = result[1] = result[2] = result[3] = reciprocalRoot;
+        }
         else if(opcode == 8)
         {
             const float dot = sources[0][0] * sources[1][0] + sources[0][1] * sources[1][1] +
@@ -208,6 +248,61 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
             const float dot = sources[0][0] * sources[1][0] + sources[0][1] * sources[1][1] +
                               sources[0][2] * sources[1][2] + sources[0][3] * sources[1][3];
             result[0] = result[1] = result[2] = result[3] = dot;
+        }
+        else if(opcode == 10 || opcode == 11 || opcode == 12 || opcode == 13)
+        {
+            for(std::size_t component = 0; component < 4; ++component)
+            {
+                if(opcode == 10)
+                {
+                    result[component] = sources[0][component] < sources[1][component]
+                                            ? sources[0][component]
+                                            : sources[1][component];
+                }
+                else if(opcode == 11)
+                {
+                    result[component] = sources[0][component] > sources[1][component]
+                                            ? sources[0][component]
+                                            : sources[1][component];
+                }
+                else if(opcode == 12)
+                {
+                    result[component] =
+                        sources[0][component] < sources[1][component] ? 1.0f : 0.0f;
+                }
+                else
+                {
+                    result[component] =
+                        sources[0][component] >= sources[1][component] ? 1.0f : 0.0f;
+                }
+            }
+        }
+        else if(opcode == 14 || opcode == 15)
+        {
+            const float scalar = opcode == 14
+                                     ? std::exp2(sources[0][0])
+                                     : (sources[0][0] > 0.0f ? std::log2(sources[0][0]) : 0.0f);
+            result[0] = result[1] = result[2] = result[3] = scalar;
+        }
+        else if(opcode == 16)
+        {
+            const float diffuse = sources[0][0];
+            const float specular = sources[0][1];
+            const float power =
+                std::max(-127.9961f, std::min(127.9961f, sources[0][3]));
+            result[0] = 1.0f;
+            result[1] = diffuse > 0.0f ? diffuse : 0.0f;
+            result[2] = diffuse > 0.0f && specular > 0.0f
+                            ? std::exp2(power * std::log2(specular))
+                            : 0.0f;
+            result[3] = 1.0f;
+        }
+        else if(opcode == 17)
+        {
+            result[0] = 1.0f;
+            result[1] = sources[0][1] * sources[1][1];
+            result[2] = sources[0][2];
+            result[3] = sources[1][3];
         }
         else
         {
@@ -235,6 +330,123 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
         }
     }
     return tokenIndex < maxTokens && function[tokenIndex] == 0x0000FFFFu;
+}
+
+struct NvTestSource
+{
+    DWORD mux = 0;
+    DWORD reg = 0;
+    bool negate = false;
+    std::array<DWORD, 4> swizzle{ 0, 1, 2, 3 };
+};
+
+std::array<DWORD, 4> EncodeNvTestInstruction(DWORD mac, DWORD ilu, DWORD vertex,
+                                             const NvTestSource& sourceA,
+                                             const NvTestSource& sourceB,
+                                             const NvTestSource& sourceC, DWORD macMask,
+                                             DWORD outputR, DWORD iluMask, DWORD outputMask,
+                                             DWORD outputAddress, DWORD outputMux, bool final)
+{
+    std::array<DWORD, 4> instruction{};
+    instruction[1] = (ilu << 25) | (mac << 21) | (vertex << 9) |
+                     (static_cast<DWORD>(sourceA.negate) << 8) |
+                     (sourceA.swizzle[0] << 6) | (sourceA.swizzle[1] << 4) |
+                     (sourceA.swizzle[2] << 2) | sourceA.swizzle[3];
+    instruction[2] = (sourceA.reg << 28) | (sourceA.mux << 26) |
+                     (static_cast<DWORD>(sourceB.negate) << 25) |
+                     (sourceB.swizzle[0] << 23) | (sourceB.swizzle[1] << 21) |
+                     (sourceB.swizzle[2] << 19) | (sourceB.swizzle[3] << 17) |
+                     (sourceB.reg << 13) | (sourceB.mux << 11) |
+                     (static_cast<DWORD>(sourceC.negate) << 10) |
+                     (sourceC.swizzle[0] << 8) | (sourceC.swizzle[1] << 6) |
+                     (sourceC.swizzle[2] << 4) | (sourceC.swizzle[3] << 2) |
+                     ((sourceC.reg >> 2) & 0x3u);
+    instruction[3] = ((sourceC.reg & 0x3u) << 30) | (sourceC.mux << 28) |
+                     (macMask << 24) | (outputR << 20) | (iluMask << 16) |
+                     (outputMask << 12) | (1u << 11) | (outputAddress << 3) |
+                     (outputMux << 2) | static_cast<DWORD>(final);
+    return instruction;
+}
+
+void AppendNvTestInstruction(std::vector<DWORD>& program,
+                             const std::array<DWORD, 4>& instruction)
+{
+    program.insert(program.end(), instruction.begin(), instruction.end());
+}
+
+std::vector<DWORD> BuildMacDifferentialProgram(DWORD mac, const NvTestSource& sourceA,
+                                               DWORD outputMask = 0xFu)
+{
+    const NvTestSource unused{};
+    const NvTestSource vertexSource{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource r1{ 1, 1, false, { 0, 1, 2, 3 } };
+    const NvTestSource r2{ 1, 2, false, { 0, 1, 2, 3 } };
+    std::vector<DWORD> program{ 0x00042078u };
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 1, vertexSource, unused, unused, 0xF, 1, 0, 0,
+                                         9, 0, false));
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 2, vertexSource, unused, unused, 0xF, 2, 0, 0,
+                                         9, 0, false));
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         mac, 0, 0, sourceA, r1, r2, 0, 0, 0, outputMask, 9, 0,
+                                         false));
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 0, vertexSource, unused, unused, 0, 0, 0, 0xF,
+                                         0, 0, true));
+    return program;
+}
+
+std::vector<DWORD> BuildIluDifferentialProgram(DWORD ilu, const NvTestSource& sourceC,
+                                               DWORD outputMask = 0xFu)
+{
+    const NvTestSource unused{};
+    const NvTestSource vertexSource{ 2, 0, false, { 0, 1, 2, 3 } };
+    std::vector<DWORD> program{ 0x00022078u };
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         0, ilu, 0, unused, unused, sourceC, 0, 0, 0,
+                                         outputMask, 9, 1, false));
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 0, vertexSource, unused, unused, 0, 0, 0, 0xF,
+                                         0, 0, true));
+    return program;
+}
+
+bool DifferentialTexCoordMatches(const std::vector<DWORD>& program, const float* hardwareConstants,
+                                 const float* hostConstants, const float* inputs)
+{
+    ShaderOutputs cpuOutputs{};
+    if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
+           program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
+           cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
+           cpuOutputs.texCoords.size()))
+    {
+        return false;
+    }
+
+    DWORD* translated = XTL::EmuVshRecompileXboxFunction(program.data());
+    if(translated == nullptr)
+    {
+        return false;
+    }
+    const XTL::VshDiagnostics::ValidationResult validation =
+        XTL::VshDiagnostics::ValidateD3D8Translation(program.data(), translated);
+    ShaderOutputs hostOutputs{};
+    const bool executed = ExecuteD3D8Bytecode(translated, 16 + program.size() * 24,
+                                              hostConstants, inputs, hostOutputs);
+    delete[] translated;
+    if(!validation.valid || !executed)
+    {
+        return false;
+    }
+    for(std::size_t component = 0; component < 4; ++component)
+    {
+        if(!NearlyEqual(cpuOutputs.texCoords[component], hostOutputs.texCoords[component]))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 constexpr DWORD kXboxProgram[] = {
@@ -478,6 +690,104 @@ int RunTests()
         XTL::VshDiagnostics::ValidateD3D8Translation(kXboxProgram, translated);
     Check(validation.valid, "generated bytecode validates");
     Check(validation.message == "ok", "validator success reason");
+
+    std::array<float, 192 * 4> opcodeHardwareConstants{};
+    std::array<float, 96 * 4> opcodeHostConstants{};
+    std::array<float, 16 * 4> opcodeInputs{};
+    const std::array<float, 4> input0{ 0.5f, 0.25f, 2.0f, 2.0f };
+    const std::array<float, 4> input1{ 2.0f, 3.0f, -1.0f, 0.5f };
+    const std::array<float, 4> input2{ 1.0f, -2.0f, 0.25f, 3.0f };
+    std::copy(input0.begin(), input0.end(), opcodeInputs.begin());
+    std::copy(input1.begin(), input1.end(), opcodeInputs.begin() + 4);
+    std::copy(input2.begin(), input2.end(), opcodeInputs.begin() + 8);
+
+    struct OpcodeCase
+    {
+        DWORD opcode;
+        const char* name;
+    };
+    const std::array<OpcodeCase, 12> macCases{ {
+        { 1, "MOV" },
+        { 2, "MUL" },
+        { 3, "ADD" },
+        { 4, "MAD" },
+        { 5, "DP3" },
+        { 6, "DPH" },
+        { 7, "DP4" },
+        { 8, "DST" },
+        { 9, "MIN" },
+        { 10, "MAX" },
+        { 11, "SLT" },
+        { 12, "SGE" },
+    } };
+    const NvTestSource vertex0{ 2, 0, false, { 0, 1, 2, 3 } };
+    for(const OpcodeCase& opcodeCase : macCases)
+    {
+        const std::vector<DWORD> program =
+            BuildMacDifferentialProgram(opcodeCase.opcode, vertex0);
+        const std::string name =
+            std::string("CPU and translated ") + opcodeCase.name + " semantics match";
+        Check(DifferentialTexCoordMatches(program, opcodeHardwareConstants.data(),
+                                          opcodeHostConstants.data(), opcodeInputs.data()),
+              name.c_str());
+    }
+
+    const NvTestSource swizzledNegatedVertex0{ 2, 0, true, { 3, 2, 1, 0 } };
+    const std::vector<DWORD> swizzleMaskProgram =
+        BuildMacDifferentialProgram(1, swizzledNegatedVertex0, 0xAu);
+    Check(DifferentialTexCoordMatches(swizzleMaskProgram, opcodeHardwareConstants.data(),
+                                      opcodeHostConstants.data(), opcodeInputs.data()),
+          "CPU and translator preserve source swizzle, negation, and partial output mask");
+
+    const std::array<OpcodeCase, 6> iluCases{ {
+        { 1, "ILU MOV" },
+        { 2, "RCP" },
+        { 4, "RSQ" },
+        { 5, "EXP" },
+        { 6, "LOG" },
+        { 7, "LIT" },
+    } };
+    for(const OpcodeCase& opcodeCase : iluCases)
+    {
+        const std::vector<DWORD> program =
+            BuildIluDifferentialProgram(opcodeCase.opcode, vertex0);
+        const std::string name =
+            std::string("CPU and translated ") + opcodeCase.name + " semantics match";
+        Check(DifferentialTexCoordMatches(program, opcodeHardwareConstants.data(),
+                                          opcodeHostConstants.data(), opcodeInputs.data()),
+              name.c_str());
+    }
+
+    const auto checkUnsupportedProgram = [](const std::vector<DWORD>& program,
+                                            const char* expectedReason, const char* name)
+    {
+        std::string reason;
+        Check(XTL::VshDiagnostics::RequiresCpuFallback(program.data(), reason), name);
+        Check(reason == expectedReason, name);
+        DWORD* rejectedTranslation = XTL::EmuVshRecompileXboxFunction(program.data());
+        Check(rejectedTranslation == nullptr, name);
+        delete[] rejectedTranslation;
+    };
+
+    std::vector<DWORD> reservedMacProgram = BuildMacDifferentialProgram(1, vertex0);
+    reservedMacProgram[10] = (reservedMacProgram[10] & ~(0xFu << 21)) | (14u << 21);
+    checkUnsupportedProgram(reservedMacProgram, "unsupported_mac_opcode",
+                            "reserved MAC opcode fails closed");
+
+    std::vector<DWORD> invalidSourceProgram = BuildMacDifferentialProgram(1, vertex0);
+    invalidSourceProgram[11] &= ~(0x3u << 26);
+    checkUnsupportedProgram(invalidSourceProgram, "unsupported_source_mux",
+                            "active source with reserved mux fails closed");
+
+    std::vector<DWORD> invalidTempProgram = BuildMacDifferentialProgram(1, vertex0);
+    invalidTempProgram[4] = (invalidTempProgram[4] & ~(0xFu << 20)) | (13u << 20);
+    checkUnsupportedProgram(invalidTempProgram, "unsupported_temp_register",
+                            "reserved temporary destination fails closed");
+
+    std::vector<DWORD> invalidOutputProgram = BuildMacDifferentialProgram(1, vertex0);
+    invalidOutputProgram[12] &= ~(1u << 11);
+    checkUnsupportedProgram(invalidOutputProgram, "unsupported_output_route",
+                            "constant-bank output route fails closed");
 
     std::vector<DWORD> noScratchDph(1 + 12 * 4, 0);
     noScratchDph[0] = 0x000C2078u;
