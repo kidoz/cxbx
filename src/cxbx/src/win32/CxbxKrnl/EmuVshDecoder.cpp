@@ -211,8 +211,10 @@ struct VshScratchPlan
     bool valid = false;
     bool needsPosition = false;
     bool hasDph = false;
+    bool needsPairedIlu = false;
     DWORD position = 0;
     DWORD dph = 0;
+    DWORD pairedIlu = 0;
     const char* failureReason = nullptr;
 };
 
@@ -231,6 +233,31 @@ static void VshMarkTempSource(const VshSrc& Source, std::array<bool, VSH_HOST_TE
     {
         Used[Source.R] = true;
     }
+}
+
+static bool VshNeedsPairedIluScratch(const DWORD* Instruction, DWORD Mac, DWORD Ilu,
+                                     DWORD MacMask, DWORD OutputR, DWORD OutputMask,
+                                     const VshSrc& IluSource)
+{
+    if(Mac == MAC_NOP || Ilu == ILU_NOP)
+    {
+        return false;
+    }
+    if(Mac == MAC_ARL && IluSource.Mux == PARAM_C && VshGetField(Instruction, FLD_A0X) != 0)
+    {
+        return true;
+    }
+    if(IluSource.Mux != PARAM_R)
+    {
+        return false;
+    }
+    if(MacMask != 0 && OutputR == IluSource.R)
+    {
+        return true;
+    }
+    return OutputMask != 0 && VshGetField(Instruction, FLD_OUT_MUX) == OMUX_MAC &&
+           VshGetField(Instruction, FLD_OUT_ORB) == OUTPUT_O &&
+           VshGetField(Instruction, FLD_OUT_ADDRESS) == 0 && IluSource.R == 12;
 }
 
 static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
@@ -265,6 +292,9 @@ static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
         {
             VshDecodeSrc(encoded, source, &sources[source]);
         }
+        plan.needsPairedIlu =
+            plan.needsPairedIlu ||
+            VshNeedsPairedIluScratch(encoded, mac, ilu, macMask, outputR, outputMask, sources[2]);
         if(mac == MAC_MOV || mac == MAC_ARL)
         {
             VshMarkTempSource(sources[0], used, plan.needsPosition);
@@ -345,6 +375,11 @@ static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
     if(plan.hasDph && !allocateScratch(plan.dph))
     {
         plan.failureReason = "dph_no_scratch";
+        return plan;
+    }
+    if(plan.needsPairedIlu && !allocateScratch(plan.pairedIlu))
+    {
+        plan.failureReason = "paired_ilu_no_scratch";
         return plan;
     }
     plan.valid = true;
@@ -1022,7 +1057,7 @@ XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Translati
                                                                                    const void* d3dFunction)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
-    const std::size_t maxD3dTokens = 16 + VshXboxInstructionCount(xboxFunction) * 20;
+    const std::size_t maxD3dTokens = 16 + VshXboxInstructionCount(xboxFunction) * 24;
     return ValidateD3D8Function(d3dFunction, maxD3dTokens);
 }
 
@@ -1243,7 +1278,7 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
 
     const std::uint32_t hash = HashXboxFunction(xboxFunction);
     const std::size_t xboxInstructionCount = VshXboxInstructionCount(xboxFunction);
-    const std::size_t maxD3dTokens = 16 + xboxInstructionCount * 20;
+    const std::size_t maxD3dTokens = 16 + xboxInstructionCount * 24;
     const ValidationResult validation = ValidateD3D8Translation(xboxFunction, d3dFunction);
     std::fprintf(stream, "VSH| rejected hash=%08X xbox_instructions=%zu validation=%s at=%zu reason=%s\n",
                  hash, xboxInstructionCount, validation.valid ? "pass" : "fail",
@@ -1307,8 +1342,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         return NULL;
     }
 
-    // Worst case each Xbox instruction becomes 4 PC instructions of 5 tokens
-    DWORD* Out = new DWORD[16 + InstrCount * 20];
+    // Paired DPH+ILU can require a staged source plus six result instructions.
+    DWORD* Out = new DWORD[16 + InstrCount * 24];
     int n = 0;
     bool NeedsPosEpilogue = false;
     VshEmit(Out, &n, 0xFFFE0101);   // vs.1.1
@@ -1345,6 +1380,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         VshDecodeSrc(I, 0, &SrcA);
         VshDecodeSrc(I, 1, &SrcB);
         VshDecodeSrc(I, 2, &SrcC);
+        VshSrc StagedIluSource{ PARAM_R, ScratchPlan.pairedIlu, FALSE, { 0, 1, 2, 3 } };
 
         // Screen-space transform removal: the Xbox library appends a position
         // epilogue that reads oPos back (the R12 alias) and rescales it by 1/w
@@ -1362,6 +1398,18 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                 break;
             }
             continue;
+        }
+
+        const bool StageIluSource =
+            VshNeedsPairedIluScratch(I, Mac, Ilu, MacMask, OutR, OMask, SrcC);
+        if(StageIluSource)
+        {
+            // NV2A's paired pipelines read their operands before either result
+            // is committed. Preserve C before the sequential host MAC can
+            // overwrite its temporary, R12 alias, or relative-address base.
+            VshEmit(Out, &n, SIO_MOV);
+            VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.pairedIlu, 0xF));
+            VshEmit(Out, &n, VshEmitSrc(I, &SrcC, A0x, ScratchPlan.position));
         }
 
         if(Mac != MAC_NOP)
@@ -1482,7 +1530,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
             {
                 // RCP/RSQ/EXP/LOG require a replicate swizzle on PC; the
                 // microcode is normally already replicated -- enforce it.
-                VshSrc SrcIlu = SrcC;
+                VshSrc SrcIlu = StageIluSource ? StagedIluSource : SrcC;
                 if(Opcode == SIO_RCP || Opcode == SIO_RSQ || Opcode == SIO_EXP || Opcode == SIO_LOG)
                 {
                     SrcIlu.Swz[1] = SrcIlu.Swz[0];
