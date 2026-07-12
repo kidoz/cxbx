@@ -383,6 +383,139 @@ int VshD3dSourceCount(DWORD opcode)
     }
 }
 
+struct VshD3dInstruction
+{
+    std::size_t tokenIndex = 0;
+    std::size_t tokenCount = 0;
+    DWORD opcode = 0;
+    int sourceCount = 0;
+    DWORD optimizedDestination = 0;
+    bool keep = true;
+};
+
+using VshD3dLiveness = std::array<std::array<DWORD, 16>, 7>;
+
+DWORD* VshD3dLiveMask(VshD3dLiveness& liveness, DWORD type, DWORD number)
+{
+    if(type >= liveness.size() || number >= liveness[type].size())
+    {
+        return nullptr;
+    }
+    return &liveness[type][number];
+}
+
+DWORD* VshD3dDestinationLiveMask(VshD3dLiveness& liveness, DWORD type, DWORD number)
+{
+    switch(type)
+    {
+        case SPR_TEMP:
+            return number <= 11 ? VshD3dLiveMask(liveness, type, number) : nullptr;
+        case SPR_ADDR:
+            return number == 0 ? VshD3dLiveMask(liveness, type, number) : nullptr;
+        case SPR_RASTOUT:
+            return number <= 2 ? VshD3dLiveMask(liveness, type, number) : nullptr;
+        case SPR_ATTROUT:
+            return number <= 1 ? VshD3dLiveMask(liveness, type, number) : nullptr;
+        case SPR_TEXCRDOUT:
+            return number <= 7 ? VshD3dLiveMask(liveness, type, number) : nullptr;
+        default:
+            return nullptr;
+    }
+}
+
+DWORD VshD3dSwizzledMask(DWORD sourceToken, DWORD laneMask)
+{
+    DWORD sourceMask = 0;
+    for(DWORD lane = 0; lane < 4; ++lane)
+    {
+        if((laneMask & (1u << lane)) != 0)
+        {
+            sourceMask |= 1u << ((sourceToken >> (16 + lane * 2)) & 3u);
+        }
+    }
+    return sourceMask;
+}
+
+DWORD VshD3dSourceReadMask(DWORD opcode, DWORD destinationMask, DWORD sourceToken)
+{
+    switch(opcode)
+    {
+        case SIO_DP3:
+            return VshD3dSwizzledMask(sourceToken, 0x7u);
+        case SIO_DP4:
+            return VshD3dSwizzledMask(sourceToken, 0xFu);
+        case SIO_RCP:
+        case SIO_RSQ:
+        case SIO_EXP:
+        case SIO_LOG:
+            return VshD3dSwizzledMask(sourceToken, 0x1u);
+        case SIO_LIT:
+        case SIO_DST:
+            // These instructions have component-specific semantics. Keeping all
+            // source lanes live is conservative and cannot remove a dependency.
+            return VshD3dSwizzledMask(sourceToken, 0xFu);
+        default:
+            return VshD3dSwizzledMask(sourceToken, destinationMask);
+    }
+}
+
+void VshD3dMarkSourceLive(VshD3dLiveness& liveness, DWORD opcode, DWORD destinationMask,
+                          DWORD sourceToken)
+{
+    const DWORD type = (sourceToken >> 28) & 7u;
+    const DWORD number = sourceToken & 0x7FFu;
+    if(DWORD* liveMask = VshD3dLiveMask(liveness, type, number))
+    {
+        *liveMask |= VshD3dSourceReadMask(opcode, destinationMask, sourceToken);
+    }
+    if((sourceToken & (1u << 13)) != 0)
+    {
+        liveness[SPR_ADDR][0] |= 0x1u;
+    }
+}
+
+bool VshParseD3dInstructions(const DWORD* function, std::size_t maxTokens,
+                             std::vector<VshD3dInstruction>& instructions)
+{
+    if(function == nullptr || maxTokens < 2 || function[0] != VSH_D3D_VERSION)
+    {
+        return false;
+    }
+
+    std::size_t tokenIndex = 1;
+    while(tokenIndex < maxTokens)
+    {
+        const DWORD instructionToken = function[tokenIndex];
+        if(instructionToken == VSH_D3D_END)
+        {
+            return true;
+        }
+
+        const DWORD opcode = instructionToken & 0xFFFFu;
+        const int sourceCount = VshD3dSourceCount(opcode);
+        if(sourceCount < 0)
+        {
+            return false;
+        }
+        const std::size_t parameterCount = sourceCount == 0 ? 0 : static_cast<std::size_t>(sourceCount + 1);
+        const std::size_t tokenCount = 1 + parameterCount;
+        if(tokenCount > maxTokens - tokenIndex)
+        {
+            return false;
+        }
+
+        VshD3dInstruction instruction{};
+        instruction.tokenIndex = tokenIndex;
+        instruction.tokenCount = tokenCount;
+        instruction.opcode = opcode;
+        instruction.sourceCount = sourceCount;
+        instruction.optimizedDestination = sourceCount == 0 ? 0 : function[tokenIndex + 1];
+        instructions.push_back(instruction);
+        tokenIndex += tokenCount;
+    }
+    return false;
+}
+
 const char* VshD3dRegisterName(DWORD type)
 {
     static constexpr std::array<const char*, 8> names = {
@@ -521,6 +654,95 @@ std::uint32_t XTL::VshDiagnostics::HashXboxFunction(const void* xboxFunctionData
         }
     }
     return hash;
+}
+
+XTL::VshDiagnostics::OptimizationResult XTL::VshDiagnostics::OptimizeD3D8Function(void* d3dFunctionData,
+                                                                                  std::size_t maxTokens)
+{
+    DWORD* function = static_cast<DWORD*>(d3dFunctionData);
+    OptimizationResult result{};
+    std::vector<VshD3dInstruction> instructions;
+    if(!VshParseD3dInstructions(function, maxTokens, instructions))
+    {
+        return result;
+    }
+
+    result.valid = true;
+    result.beforeInstructionCount = instructions.size();
+
+    VshD3dLiveness liveness{};
+    for(DWORD number = 0; number < 3; ++number)
+    {
+        liveness[SPR_RASTOUT][number] = 0xFu;
+    }
+    for(DWORD number = 0; number < 2; ++number)
+    {
+        liveness[SPR_ATTROUT][number] = 0xFu;
+    }
+    for(DWORD number = 0; number < 8; ++number)
+    {
+        liveness[SPR_TEXCRDOUT][number] = 0xFu;
+    }
+
+    for(auto instruction = instructions.rbegin(); instruction != instructions.rend(); ++instruction)
+    {
+        if(instruction->sourceCount == 0)
+        {
+            instruction->keep = false;
+            continue;
+        }
+
+        const DWORD destination = function[instruction->tokenIndex + 1];
+        const DWORD destinationType = (destination >> 28) & 7u;
+        const DWORD destinationNumber = destination & 0x7FFu;
+        const DWORD destinationMask = (destination >> 16) & 0xFu;
+        DWORD* liveMask = VshD3dDestinationLiveMask(liveness, destinationType, destinationNumber);
+        if(liveMask == nullptr)
+        {
+            // Preserve instructions using a register outside the optimizer's
+            // model. The validator will provide the precise rejection reason.
+            for(int sourceIndex = 0; sourceIndex < instruction->sourceCount; ++sourceIndex)
+            {
+                const DWORD source = function[instruction->tokenIndex + 2 + static_cast<std::size_t>(sourceIndex)];
+                VshD3dMarkSourceLive(liveness, instruction->opcode, destinationMask, source);
+            }
+            continue;
+        }
+
+        const DWORD neededMask = *liveMask & destinationMask;
+        if(neededMask == 0)
+        {
+            instruction->keep = false;
+            continue;
+        }
+
+        instruction->optimizedDestination = (destination & ~(0xFu << 16)) | (neededMask << 16);
+        *liveMask &= ~neededMask;
+        for(int sourceIndex = 0; sourceIndex < instruction->sourceCount; ++sourceIndex)
+        {
+            const DWORD source = function[instruction->tokenIndex + 2 + static_cast<std::size_t>(sourceIndex)];
+            VshD3dMarkSourceLive(liveness, instruction->opcode, neededMask, source);
+        }
+    }
+
+    std::size_t writeIndex = 1;
+    for(const VshD3dInstruction& instruction : instructions)
+    {
+        if(!instruction.keep)
+        {
+            continue;
+        }
+        for(std::size_t offset = 0; offset < instruction.tokenCount; ++offset)
+        {
+            function[writeIndex + offset] = function[instruction.tokenIndex + offset];
+        }
+        function[writeIndex + 1] = instruction.optimizedDestination;
+        writeIndex += instruction.tokenCount;
+        ++result.afterInstructionCount;
+    }
+    function[writeIndex++] = VSH_D3D_END;
+    result.tokenCount = writeIndex;
+    return result;
 }
 
 XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Function(const void* d3dFunctionData,
@@ -982,10 +1204,19 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         VshEmit(Out, &n, VshSrcToken(SPR_TEMP, VSH_POS_SCRATCH, IdSwz, FALSE, FALSE));
     }
 
-    VshEmit(Out, &n, 0x0000FFFF);   // end
+    VshEmit(Out, &n, 0x0000FFFF); // end
 
-    printf("EmuD3D8: VshDecoder recompiled %lu NV2A instructions into %d vs.1.1 tokens.\n",
-           static_cast<unsigned long>(InstrCount), n);
+    const VshDiagnostics::OptimizationResult optimization =
+        VshDiagnostics::OptimizeD3D8Function(Out, static_cast<std::size_t>(n));
+    if(optimization.valid)
+    {
+        n = static_cast<int>(optimization.tokenCount);
+    }
+
+    printf("VSH| optimized hash=%08X xbox_instructions=%lu before=%zu after=%zu tokens=%d\n",
+           static_cast<unsigned int>(VshDiagnostics::HashXboxFunction(pXboxFunction)),
+           static_cast<unsigned long>(InstrCount), optimization.beforeInstructionCount,
+           optimization.afterInstructionCount, n);
     fflush(stdout);
 
     return Out;

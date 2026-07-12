@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <iterator>
 #include <string>
 
 namespace
@@ -70,9 +71,9 @@ int RunTests()
     const std::vector<std::string> d3dListing =
         XTL::VshDiagnostics::DecodeD3D8Function(translated, 4 + 5 * 20);
     Check(xboxListing.size() == 5, "decoded NV2A instruction count");
-    Check(d3dListing.size() == 7, "decoded D3D8 instruction count");
+    Check(d3dListing.size() == 6, "decoded optimized D3D8 instruction count");
     Check(xboxListing.front().find("mac=dp4") != std::string::npos, "NV2A listing names DP4");
-    Check(d3dListing.front().find("op=mov") != std::string::npos, "D3D8 listing names seed MOV");
+    Check(d3dListing.front().find("op=dp4") != std::string::npos, "dead position seed removed");
     Check(d3dListing.back().find("dst=oR0.xyzw") != std::string::npos, "D3D8 listing identifies oPos");
 
     const DWORD unknownOpcode[] = { 0xFFFE0101u, 0x00001234u, 0x0000FFFFu };
@@ -80,6 +81,11 @@ int RunTests()
         XTL::VshDiagnostics::ValidateD3D8Function(unknownOpcode, 3);
     Check(!unknownValidation.valid, "unknown opcode rejected");
     Check(unknownValidation.instructionIndex == 0, "unknown opcode location");
+    DWORD unknownOptimizationInput[] = { 0xFFFE0101u, 0x00001234u, 0x0000FFFFu };
+    const XTL::VshDiagnostics::OptimizationResult unknownOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(unknownOptimizationInput, std::size(unknownOptimizationInput));
+    Check(!unknownOptimization.valid, "unknown opcode is not optimized");
+    Check(unknownOptimizationInput[1] == 0x00001234u, "failed optimization leaves bytecode unchanged");
 
     const DWORD truncatedInstruction[] = { 0xFFFE0101u, 0x00000001u, 0x800F0000u };
     const XTL::VshDiagnostics::ValidationResult truncatedValidation =
@@ -112,6 +118,93 @@ int RunTests()
     Check(!positionValidation.valid, "missing oPos rejected");
     Check(positionValidation.message == "shader never writes oPos", "missing oPos reason");
 
+    DWORD overwrittenTemporary[] = {
+        0xFFFE0101u,
+        0x00000001u,
+        0x800F0000u,
+        0x90E40000u,
+        0x00000001u,
+        0x800F0000u,
+        0x90E40001u,
+        0x00000001u,
+        0xC00F0000u,
+        0x80E40000u,
+        0x0000FFFFu,
+    };
+    const XTL::VshDiagnostics::OptimizationResult overwriteOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(overwrittenTemporary, std::size(overwrittenTemporary));
+    Check(overwriteOptimization.valid, "dead-write optimization succeeds");
+    Check(overwriteOptimization.beforeInstructionCount == 3, "dead-write input count");
+    Check(overwriteOptimization.afterInstructionCount == 2, "overwritten temporary removed");
+    Check((overwrittenTemporary[3] & 0x7FFu) == 1, "remaining temporary uses latest input");
+
+    DWORD partialTemporary[] = {
+        0xFFFE0101u,
+        0x00000001u,
+        0x80030000u,
+        0x90E40000u,
+        0x00000001u,
+        0xC0010000u,
+        0x80E40000u,
+        0x0000FFFFu,
+    };
+    const XTL::VshDiagnostics::OptimizationResult partialOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(partialTemporary, std::size(partialTemporary));
+    Check(partialOptimization.valid, "partial-mask optimization succeeds");
+    Check(((partialTemporary[2] >> 16) & 0xFu) == 0x1u, "dead destination component removed");
+
+    DWORD dotProductDependency[] = {
+        0xFFFE0101u,
+        0x00000001u,
+        0x80020000u,
+        0x90550000u,
+        0x00000008u,
+        0xC0010000u,
+        0x80E40000u,
+        0x80E40000u,
+        0x0000FFFFu,
+    };
+    const XTL::VshDiagnostics::OptimizationResult dotOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(dotProductDependency, std::size(dotProductDependency));
+    Check(dotOptimization.afterInstructionCount == 2, "dot product preserves all source lanes");
+    Check(((dotProductDependency[2] >> 16) & 0xFu) == 0x2u, "dot product preserves Y dependency");
+
+    DWORD relativeAddress[] = {
+        0xFFFE0101u,
+        0x00000001u,
+        0xB0010000u,
+        0x90E40000u,
+        0x00000001u,
+        0x800F0000u,
+        0xA0E42000u,
+        0x00000001u,
+        0xC00F0000u,
+        0x80E40000u,
+        0x0000FFFFu,
+    };
+    const XTL::VshDiagnostics::OptimizationResult relativeOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(relativeAddress, std::size(relativeAddress));
+    Check(relativeOptimization.valid, "relative-address optimization succeeds");
+    Check(relativeOptimization.afterInstructionCount == 3, "relative addressing preserves a0 write");
+
+    DWORD unusedAddress[] = {
+        0xFFFE0101u,
+        0x00000001u,
+        0xB0010000u,
+        0x90E40000u,
+        0x00000001u,
+        0x800F0000u,
+        0xA0E40000u,
+        0x00000001u,
+        0xC00F0000u,
+        0x80E40000u,
+        0x0000FFFFu,
+    };
+    const XTL::VshDiagnostics::OptimizationResult addressOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(unusedAddress, std::size(unusedAddress));
+    Check(addressOptimization.valid, "unused-address optimization succeeds");
+    Check(addressOptimization.afterInstructionCount == 2, "unused a0 write removed");
+
     std::vector<DWORD> oversizedShader = {
         0xFFFE0101u,
         0x00000001u,
@@ -126,6 +219,13 @@ int RunTests()
     Check(oversizedValidation.instructionIndex == 128, "instruction-limit location");
     Check(oversizedValidation.message.find("limit of 128") != std::string::npos,
           "instruction-limit reason");
+    const XTL::VshDiagnostics::OptimizationResult oversizedOptimization =
+        XTL::VshDiagnostics::OptimizeD3D8Function(oversizedShader.data(), oversizedShader.size());
+    Check(oversizedOptimization.beforeInstructionCount == 129, "oversized optimizer input count");
+    Check(oversizedOptimization.afterInstructionCount == 1, "dead NOP instructions removed");
+    const XTL::VshDiagnostics::ValidationResult optimizedOversizedValidation =
+        XTL::VshDiagnostics::ValidateD3D8Function(oversizedShader.data(), oversizedOptimization.tokenCount);
+    Check(optimizedOversizedValidation.valid, "optimized shader meets instruction limit");
 
     DWORD translatedDeclaration[8] = {};
     const int declarationTokens =
