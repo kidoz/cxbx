@@ -363,6 +363,22 @@ constexpr DWORD kR11R12Program[] = {
     0xB4000000u,
     0x0000F819u,
 };
+
+constexpr DWORD kPairedReadBeforeWriteProgram[] = {
+    0x00032078u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0F000000u,
+    0x00000000u,
+    0x0220021Bu,
+    0x0800006Cu,
+    0x1F0FF81Cu,
+    0x00000000u,
+    0x0020021Bu,
+    0x08000000u,
+    0x0000F801u,
+};
 } // namespace
 
 int RunTests()
@@ -414,6 +430,23 @@ int RunTests()
           "R12 position alias without a free temporary requires CPU fallback");
     Check(fallbackReason == "position_alias_no_scratch",
           "R12 position-alias CPU fallback reason is stable");
+
+    std::vector<DWORD> noPairedScratch(1 + 12 * 4, 0);
+    noPairedScratch[0] = 0x000C2078u;
+    for(DWORD reg = 0; reg < 11; ++reg)
+    {
+        noPairedScratch[1 + reg * 4 + 1] = 0x0020001Bu;
+        noPairedScratch[1 + reg * 4 + 2] = 0x08000000u;
+        noPairedScratch[1 + reg * 4 + 3] = 0x0F000000u | (reg << 20);
+    }
+    noPairedScratch[1 + 11 * 4 + 1] = 0x0220001Bu;
+    noPairedScratch[1 + 11 * 4 + 2] = 0x0800006Cu;
+    noPairedScratch[1 + 11 * 4 + 3] = 0x1F0FF801u;
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noPairedScratch.data(), fallbackReason),
+          "paired hazard without a free temporary requires CPU fallback");
+    Check(fallbackReason == "paired_ilu_no_scratch",
+          "paired-hazard CPU fallback reason is stable");
 
     fallbackReason.clear();
     Check(XTL::VshDiagnostics::RequiresCpuFallback(kRccProgram, fallbackReason),
@@ -481,6 +514,35 @@ int RunTests()
         Check(PositionsEqual(cpuR11R12Outputs, d3dR11R12Outputs) && firstColorMatches,
               "guest R11 remains independent from the R12 position alias");
         delete[] r11R12Translation;
+    }
+
+    ShaderOutputs cpuPairedOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kPairedReadBeforeWriteProgram, rccConstants.data(), r11R12Inputs.data(),
+              cpuPairedOutputs.position.data(), cpuPairedOutputs.colors.data(),
+              cpuPairedOutputs.colors.size(), cpuPairedOutputs.texCoords.data(),
+              cpuPairedOutputs.texCoords.size()),
+          "CPU paired read-before-write shader executes");
+    DWORD* pairedTranslation =
+        XTL::EmuVshRecompileXboxFunction(kPairedReadBeforeWriteProgram);
+    Check(pairedTranslation != nullptr, "paired read-before-write shader translates");
+    if(pairedTranslation != nullptr)
+    {
+        std::array<float, 96 * 4> hostConstants{};
+        ShaderOutputs d3dPairedOutputs{};
+        Check(ExecuteD3D8Bytecode(pairedTranslation, 16 + 3 * 24, hostConstants.data(),
+                                  r11R12Inputs.data(), d3dPairedOutputs),
+              "translated paired bytecode executes independently");
+        bool firstColorMatches = true;
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            firstColorMatches = firstColorMatches &&
+                                NearlyEqual(cpuPairedOutputs.colors[component],
+                                            d3dPairedOutputs.colors[component]);
+        }
+        Check(PositionsEqual(cpuPairedOutputs, d3dPairedOutputs) && firstColorMatches,
+              "paired ILU reads the pre-MAC temporary value");
+        delete[] pairedTranslation;
     }
 
     const std::vector<std::string> xboxListing = XTL::VshDiagnostics::DecodeXboxFunction(kXboxProgram);
