@@ -2053,7 +2053,10 @@ constexpr std::size_t EMU_VSH_MAX_DECLARATION_TOKENS = 128;
 struct EmuVshCpuFallback
 {
     bool enabled = false;
+    bool bindLogged = false;
+    bool unbindLogged = false;
     bool drawLogged = false;
+    bool rejectionLogged = false;
     std::uint32_t hash = 0;
     std::size_t instructionCount = 0;
     std::size_t declarationTokenCount = 0;
@@ -2080,6 +2083,34 @@ static EmuVshCpuFallback* EmuVshFindLive(XTL::X_D3DVertexShader* pShader)
         }
     }
     return nullptr;
+}
+
+static void EmuVshLogCpuBinding(EmuVshCpuFallback* metadata, const char* api, bool bound)
+{
+    if(metadata == nullptr || !metadata->enabled)
+    {
+        return;
+    }
+    bool& logged = bound ? metadata->bindLogged : metadata->unbindLogged;
+    if(logged)
+    {
+        return;
+    }
+    printf("VSH| cpu_bind hash=%08X api=%s state=%s\n",
+           static_cast<unsigned int>(metadata->hash), api, bound ? "bound" : "unbound");
+    fflush(stdout);
+    logged = true;
+}
+
+static void EmuVshSetCurrentCpuShader(EmuVshCpuFallback* metadata, const char* api)
+{
+    if(g_EmuCurrentCpuVertexShader == metadata)
+    {
+        return;
+    }
+    EmuVshLogCpuBinding(g_EmuCurrentCpuVertexShader, api, false);
+    g_EmuCurrentCpuVertexShader = metadata;
+    EmuVshLogCpuBinding(g_EmuCurrentCpuVertexShader, api, true);
 }
 
 static bool EmuVshRegisterLive(XTL::X_D3DVertexShader* pShader, bool cpuFallback,
@@ -2134,7 +2165,7 @@ static bool EmuVshUnregisterLive(XTL::X_D3DVertexShader* pShader)
     }
     if(g_EmuCurrentCpuVertexShader == metadata)
     {
-        g_EmuCurrentCpuVertexShader = nullptr;
+        EmuVshSetCurrentCpuShader(nullptr, "DeleteVertexShader");
     }
     const std::size_t index = static_cast<std::size_t>(metadata - g_EmuCpuVertexShaders);
     g_EmuLiveVertexShaders[index] = nullptr;
@@ -6922,7 +6953,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader(
                                       ? EmuVshFindLive(reinterpret_cast<X_D3DVertexShader*>(Handle))
                                       : nullptr;
     g_EmuCurrentVertexShaderIsCustom = metadata != nullptr;
-    g_EmuCurrentCpuVertexShader = metadata != nullptr && metadata->enabled ? metadata : nullptr;
+    EmuVshSetCurrentCpuShader(metadata != nullptr && metadata->enabled ? metadata : nullptr,
+                              "SetVertexShader");
     if(metadata != nullptr)
     {
         HostHandle = reinterpret_cast<X_D3DVertexShader*>(Handle)->Handle;
@@ -7018,7 +7050,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader
                                       ? EmuVshFindLive(reinterpret_cast<X_D3DVertexShader*>(Handle))
                                       : nullptr;
     g_EmuCurrentVertexShaderIsCustom = metadata != nullptr;
-    g_EmuCurrentCpuVertexShader = metadata != nullptr && metadata->enabled ? metadata : nullptr;
+    EmuVshSetCurrentCpuShader(metadata != nullptr && metadata->enabled ? metadata : nullptr,
+                              "SelectVertexShader");
     if(metadata != nullptr)
     {
         HostHandle = reinterpret_cast<X_D3DVertexShader*>(Handle)->Handle;
@@ -8024,16 +8057,24 @@ static DWORD EmuVshPackColor(const float color[4])
     return (channels[3] << 24) | (channels[0] << 16) | (channels[1] << 8) | channels[2];
 }
 
-static void EmuVshLogCpuDraw(const char* api, UINT vertexCount)
+static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveType,
+                             UINT vertexCount, bool rendered, const char* reason)
 {
-    if(g_EmuCurrentCpuVertexShader == nullptr || g_EmuCurrentCpuVertexShader->drawLogged)
+    if(g_EmuCurrentCpuVertexShader == nullptr)
     {
         return;
     }
-    printf("VSH| cpu_draw hash=%08X api=%s vertices=%u\n",
-           static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), api, vertexCount);
+    bool& logged = rendered ? g_EmuCurrentCpuVertexShader->drawLogged
+                            : g_EmuCurrentCpuVertexShader->rejectionLogged;
+    if(logged)
+    {
+        return;
+    }
+    printf("VSH| cpu_draw hash=%08X api=%s vertices=%u primitive=%lu result=%s reason=%s\n",
+           static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), api, vertexCount,
+           static_cast<unsigned long>(primitiveType), rendered ? "success" : "rejected", reason);
     fflush(stdout);
-    g_EmuCurrentCpuVertexShader->drawLogged = true;
+    logged = true;
 }
 
 static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamView* streams,
@@ -8252,6 +8293,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
 
     if(!EmuVshIsValidPrimitiveType(PrimitiveType))
     {
+        EmuVshLogCpuDraw("DrawVertices", PrimitiveType, VertexCount, false, "invalid_primitive");
         EmuWarning("DrawVertices rejected invalid primitive type %lu", static_cast<unsigned long>(PrimitiveType));
         EmuSwapFS(); // XBox FS
         return;
@@ -8267,11 +8309,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
 
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
-        const bool rendered = PrimitiveType != 8 &&
+        const bool quadList = PrimitiveType == 8;
+        const bool rendered = !quadList &&
                               EmuVshTryDrawCpuBound(PCPrimitiveType, PrimitiveCount, StartVertex,
                                                     VertexCount, nullptr);
         if(!rendered)
         {
+            EmuVshLogCpuDraw("DrawVertices", PrimitiveType, VertexCount, false,
+                             quadList ? "quad_list_unsupported" : "execution_failed");
             static LONG warningCount = 0;
             if(InterlockedIncrement(&warningCount) <= 5)
             {
@@ -8280,7 +8325,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
         }
         else
         {
-            EmuVshLogCpuDraw("DrawVertices", VertexCount);
+            EmuVshLogCpuDraw("DrawVertices", PrimitiveType, VertexCount, true, "none");
         }
         EmuSwapFS(); // XBox FS
         return;
@@ -8356,6 +8401,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
 
     if(!EmuVshIsValidPrimitiveType(PrimitiveType))
     {
+        EmuVshLogCpuDraw("DrawVerticesUP", PrimitiveType, VertexCount, false, "invalid_primitive");
         EmuWarning("DrawVerticesUP rejected invalid primitive type %lu",
                    static_cast<unsigned long>(PrimitiveType));
         EmuSwapFS(); // XBox FS
@@ -8372,11 +8418,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
 
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
-        const bool rendered = PrimitiveType != 8 &&
+        const bool quadList = PrimitiveType == 8;
+        const bool rendered = !quadList &&
                               EmuVshTryDrawCpuUp(PCPrimitiveType, PrimitiveCount, VertexCount,
                                                  pVertexStreamZeroData, VertexStreamZeroStride);
         if(!rendered)
         {
+            EmuVshLogCpuDraw("DrawVerticesUP", PrimitiveType, VertexCount, false,
+                             quadList ? "quad_list_unsupported" : "execution_failed");
             static LONG warningCount = 0;
             if(InterlockedIncrement(&warningCount) <= 5)
             {
@@ -8385,7 +8434,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         }
         else
         {
-            EmuVshLogCpuDraw("DrawVerticesUP", VertexCount);
+            EmuVshLogCpuDraw("DrawVerticesUP", PrimitiveType, VertexCount, true, "none");
         }
         EmuSwapFS(); // XBox FS
         return;
@@ -8469,6 +8518,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
 
     if(!EmuVshIsValidPrimitiveType(PrimitiveType))
     {
+        EmuVshLogCpuDraw("DrawIndexedVertices", PrimitiveType, VertexCount, false, "invalid_primitive");
         EmuWarning("DrawIndexedVertices rejected invalid primitive type %lu",
                    static_cast<unsigned long>(PrimitiveType));
         EmuSwapFS(); // XBox FS
@@ -8485,10 +8535,13 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
 
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
-        const bool rendered = PrimitiveType != 8 &&
+        const bool quadList = PrimitiveType == 8;
+        const bool rendered = !quadList &&
                               EmuVshTryDrawCpuIndexed(PCPrimitiveType, PrimitiveCount, VertexCount, pIndexData);
         if(!rendered)
         {
+            EmuVshLogCpuDraw("DrawIndexedVertices", PrimitiveType, VertexCount, false,
+                             quadList ? "quad_list_unsupported" : "execution_failed");
             static LONG warningCount = 0;
             if(InterlockedIncrement(&warningCount) <= 5)
             {
@@ -8497,7 +8550,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
         }
         else
         {
-            EmuVshLogCpuDraw("DrawIndexedVertices", VertexCount);
+            EmuVshLogCpuDraw("DrawIndexedVertices", PrimitiveType, VertexCount, true, "none");
         }
         EmuSwapFS(); // XBox FS
         return;
