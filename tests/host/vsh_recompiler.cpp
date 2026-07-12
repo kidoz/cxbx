@@ -1,6 +1,7 @@
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -18,6 +19,189 @@ void Check(bool condition, const char* name)
         std::fprintf(stderr, "FAIL %s\n", name);
         ++g_failures;
     }
+}
+
+struct ShaderOutputs
+{
+    std::array<float, 4> position{};
+    std::array<float, 2 * 4> colors{};
+    std::array<float, 4 * 4> texCoords{};
+};
+
+bool NearlyEqual(float left, float right)
+{
+    return std::fabs(left - right) <= 1.0e-5f;
+}
+
+bool OutputsEqual(const ShaderOutputs& left, const ShaderOutputs& right)
+{
+    for(std::size_t component = 0; component < left.position.size(); ++component)
+    {
+        if(!NearlyEqual(left.position[component], right.position[component]))
+        {
+            return false;
+        }
+    }
+    for(std::size_t component = 0; component < left.colors.size(); ++component)
+    {
+        if(!NearlyEqual(left.colors[component], right.colors[component]))
+        {
+            return false;
+        }
+    }
+    for(std::size_t component = 0; component < left.texCoords.size(); ++component)
+    {
+        if(!NearlyEqual(left.texCoords[component], right.texCoords[component]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PositionsEqual(const ShaderOutputs& left, const ShaderOutputs& right)
+{
+    for(std::size_t component = 0; component < left.position.size(); ++component)
+    {
+        if(!NearlyEqual(left.position[component], right.position[component]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ReadD3D8Source(DWORD token, const std::array<std::array<float, 4>, 12>& temporaries,
+                    const float* constants, const float* inputs, float output[4])
+{
+    const DWORD registerType = (token >> 28) & 0x7u;
+    const DWORD registerIndex = token & 0x7FFu;
+    const float* source = nullptr;
+    if(registerType == 0 && registerIndex < temporaries.size())
+    {
+        source = temporaries[registerIndex].data();
+    }
+    else if(registerType == 1 && registerIndex < 16)
+    {
+        source = &inputs[registerIndex * 4];
+    }
+    else if(registerType == 2 && registerIndex < 96 && (token & (1u << 13)) == 0)
+    {
+        source = &constants[registerIndex * 4];
+    }
+    if(source == nullptr)
+    {
+        return false;
+    }
+
+    for(std::size_t component = 0; component < 4; ++component)
+    {
+        const DWORD swizzle = (token >> (16 + component * 2)) & 0x3u;
+        output[component] = source[swizzle];
+        if((token & (1u << 24)) != 0)
+        {
+            output[component] = -output[component];
+        }
+    }
+    return true;
+}
+
+float* ResolveD3D8Destination(DWORD token, std::array<std::array<float, 4>, 12>& temporaries,
+                              ShaderOutputs& outputs)
+{
+    const DWORD registerType = (token >> 28) & 0x7u;
+    const DWORD registerIndex = token & 0x7FFu;
+    if(registerType == 0 && registerIndex < temporaries.size())
+    {
+        return temporaries[registerIndex].data();
+    }
+    if(registerType == 4 && registerIndex == 0)
+    {
+        return outputs.position.data();
+    }
+    if(registerType == 5 && registerIndex < 2)
+    {
+        return &outputs.colors[registerIndex * 4];
+    }
+    if(registerType == 6 && registerIndex < 4)
+    {
+        return &outputs.texCoords[registerIndex * 4];
+    }
+    return nullptr;
+}
+
+bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const float* constants,
+                         const float* inputs, ShaderOutputs& outputs)
+{
+    if(function == nullptr || maxTokens < 2 || function[0] != 0xFFFE0101u)
+    {
+        return false;
+    }
+
+    std::array<std::array<float, 4>, 12> temporaries{};
+    std::size_t tokenIndex = 1;
+    while(tokenIndex < maxTokens && function[tokenIndex] != 0x0000FFFFu)
+    {
+        const DWORD opcode = function[tokenIndex++] & 0xFFFFu;
+        if(opcode == 0)
+        {
+            continue;
+        }
+        const std::size_t sourceCount = opcode == 1 ? 1 : opcode == 4 ? 3
+                                                                      : 2;
+        if(tokenIndex + 1 + sourceCount > maxTokens)
+        {
+            return false;
+        }
+        const DWORD destinationToken = function[tokenIndex++];
+        float sources[3][4] = {};
+        for(std::size_t sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex)
+        {
+            if(!ReadD3D8Source(function[tokenIndex++], temporaries, constants, inputs,
+                               sources[sourceIndex]))
+            {
+                return false;
+            }
+        }
+
+        float result[4] = {};
+        if(opcode == 1)
+        {
+            std::memcpy(result, sources[0], sizeof(result));
+        }
+        else if(opcode == 5)
+        {
+            for(std::size_t component = 0; component < 4; ++component)
+            {
+                result[component] = sources[0][component] * sources[1][component];
+            }
+        }
+        else if(opcode == 9)
+        {
+            const float dot = sources[0][0] * sources[1][0] + sources[0][1] * sources[1][1] +
+                              sources[0][2] * sources[1][2] + sources[0][3] * sources[1][3];
+            result[0] = result[1] = result[2] = result[3] = dot;
+        }
+        else
+        {
+            return false;
+        }
+
+        float* destination = ResolveD3D8Destination(destinationToken, temporaries, outputs);
+        if(destination == nullptr)
+        {
+            return false;
+        }
+        const DWORD writeMask = (destinationToken >> 16) & 0xFu;
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            if((writeMask & (1u << component)) != 0)
+            {
+                destination[component] = result[component];
+            }
+        }
+    }
+    return tokenIndex < maxTokens && function[tokenIndex] == 0x0000FFFFu;
 }
 
 constexpr DWORD kXboxProgram[] = {
@@ -48,6 +232,82 @@ constexpr DWORD kXboxDeclaration[] = {
     0x10000000u,
     0x40020000u,
     0xFFFFFFFFu,
+};
+
+constexpr DWORD kDifferentialPositionProgram[] = {
+    0x00052078u,
+    0x00000000u,
+    0x00EC001Bu,
+    0x0836186Cu,
+    0x00008800u,
+    0x00000000u,
+    0x00EC201Bu,
+    0x0836186Cu,
+    0x00004800u,
+    0x00000000u,
+    0x00EC401Bu,
+    0x0836186Cu,
+    0x00002800u,
+    0x00000000u,
+    0x00EC601Bu,
+    0x0836186Cu,
+    0x00001800u,
+    0x00000000u,
+    0x0020061Bu,
+    0x0836006Cu,
+    0x0000F819u,
+};
+
+constexpr DWORD kDifferentialOutputsProgram[] = {
+    0x00072078u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0000F800u,
+    0x00000000u,
+    0x0020021Bu,
+    0x08000000u,
+    0x0000F818u,
+    0x00000000u,
+    0x0020041Bu,
+    0x08000000u,
+    0x0000F820u,
+    0x00000000u,
+    0x0020061Bu,
+    0x08000000u,
+    0x0000F848u,
+    0x00000000u,
+    0x0020081Bu,
+    0x08000000u,
+    0x0000F850u,
+    0x00000000u,
+    0x00200A1Bu,
+    0x08000000u,
+    0x0000F858u,
+    0x00000000u,
+    0x00200C1Bu,
+    0x08000000u,
+    0x0000F861u,
+};
+
+constexpr DWORD kScreenSpaceEpilogueProgram[] = {
+    0x00022078u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0000F800u,
+    0x00000000u,
+    0x0040021Bu,
+    0xC4361000u,
+    0x0000F801u,
+};
+
+constexpr DWORD kPartialPositionProgram[] = {
+    0x00012078u,
+    0x00000000u,
+    0x0020021Bu,
+    0x08000000u,
+    0x0000C801u,
 };
 } // namespace
 
@@ -312,6 +572,138 @@ int RunTests()
           "CPU fallback transforms position");
     Check(cpuOutputTexCoord.front() == 0.0f && cpuOutputTexCoord.back() == 0.0f,
           "CPU fallback returns all four texture-coordinate outputs");
+
+    std::array<float, 192 * 4> differentialHardwareConstants{};
+    std::array<float, 96 * 4> differentialD3D8Constants{};
+    for(std::size_t row = 0; row < 4; ++row)
+    {
+        differentialHardwareConstants[(96 + row) * 4 + row] = 1.0f;
+        differentialD3D8Constants[row * 4 + row] = 1.0f;
+    }
+    std::array<float, 16 * 4> differentialInputs{};
+    differentialInputs[0] = 2.0f;
+    differentialInputs[1] = 3.0f;
+    differentialInputs[2] = 4.0f;
+    differentialInputs[3] = 1.0f;
+
+    ShaderOutputs cpuPositionOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kDifferentialPositionProgram, differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuPositionOutputs.position.data(),
+              cpuPositionOutputs.colors.data(), cpuPositionOutputs.colors.size(),
+              cpuPositionOutputs.texCoords.data(), cpuPositionOutputs.texCoords.size()),
+          "differential CPU position shader executes");
+    DWORD* differentialPositionD3D8 =
+        XTL::EmuVshRecompileXboxFunction(kDifferentialPositionProgram);
+    Check(differentialPositionD3D8 != nullptr, "differential position shader translates");
+    if(differentialPositionD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8PositionOutputs{};
+        Check(ExecuteD3D8Bytecode(differentialPositionD3D8, 4 + 5 * 20,
+                                  differentialD3D8Constants.data(), differentialInputs.data(),
+                                  d3d8PositionOutputs),
+              "translated position bytecode executes independently");
+        Check(PositionsEqual(cpuPositionOutputs, d3d8PositionOutputs),
+              "CPU and translated position outputs match");
+        delete[] differentialPositionD3D8;
+    }
+
+    for(std::size_t inputRegister = 0; inputRegister < 7; ++inputRegister)
+    {
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            differentialInputs[inputRegister * 4 + component] =
+                static_cast<float>(inputRegister * 10 + component + 1);
+        }
+    }
+    ShaderOutputs cpuFullOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kDifferentialOutputsProgram, differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuFullOutputs.position.data(), cpuFullOutputs.colors.data(),
+              cpuFullOutputs.colors.size(), cpuFullOutputs.texCoords.data(),
+              cpuFullOutputs.texCoords.size()),
+          "differential CPU output shader executes");
+    DWORD* differentialOutputsD3D8 =
+        XTL::EmuVshRecompileXboxFunction(kDifferentialOutputsProgram);
+    Check(differentialOutputsD3D8 != nullptr, "differential output shader translates");
+    if(differentialOutputsD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8FullOutputs{};
+        Check(ExecuteD3D8Bytecode(differentialOutputsD3D8, 4 + 7 * 20,
+                                  differentialD3D8Constants.data(), differentialInputs.data(),
+                                  d3d8FullOutputs),
+              "translated output bytecode executes independently");
+        Check(OutputsEqual(cpuFullOutputs, d3d8FullOutputs),
+              "CPU and translated position/color/texcoord outputs match");
+        delete[] differentialOutputsD3D8;
+    }
+
+    differentialInputs.fill(0.0f);
+    differentialInputs[0] = 0.25f;
+    differentialInputs[1] = -0.5f;
+    differentialInputs[2] = 0.75f;
+    differentialInputs[3] = 1.0f;
+    differentialInputs[4] = 8.0f;
+    differentialInputs[5] = 8.0f;
+    differentialInputs[6] = 8.0f;
+    differentialInputs[7] = 8.0f;
+    ShaderOutputs cpuEpilogueOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kScreenSpaceEpilogueProgram, differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuEpilogueOutputs.position.data(),
+              cpuEpilogueOutputs.colors.data(), cpuEpilogueOutputs.colors.size(),
+              cpuEpilogueOutputs.texCoords.data(), cpuEpilogueOutputs.texCoords.size()),
+          "CPU screen-space epilogue shader executes");
+    DWORD* epilogueD3D8 = XTL::EmuVshRecompileXboxFunction(kScreenSpaceEpilogueProgram);
+    Check(epilogueD3D8 != nullptr, "screen-space epilogue shader translates");
+    if(epilogueD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8EpilogueOutputs{};
+        Check(ExecuteD3D8Bytecode(epilogueD3D8, 4 + 2 * 20,
+                                  differentialD3D8Constants.data(), differentialInputs.data(),
+                                  d3d8EpilogueOutputs),
+              "translated epilogue bytecode executes independently");
+        Check(PositionsEqual(cpuEpilogueOutputs, d3d8EpilogueOutputs),
+              "CPU and translator remove the same screen-space epilogue");
+        Check(NearlyEqual(cpuEpilogueOutputs.position[0], differentialInputs[0]) &&
+                  NearlyEqual(cpuEpilogueOutputs.position[1], differentialInputs[1]) &&
+                  NearlyEqual(cpuEpilogueOutputs.position[2], differentialInputs[2]) &&
+                  NearlyEqual(cpuEpilogueOutputs.position[3], differentialInputs[3]),
+              "screen-space removal preserves clip-space position");
+        delete[] epilogueD3D8;
+    }
+
+    differentialInputs[0] = 0.25f;
+    differentialInputs[1] = -0.5f;
+    differentialInputs[2] = 0.75f;
+    differentialInputs[3] = 1.0f;
+    differentialInputs[4] = 4.0f;
+    differentialInputs[5] = 5.0f;
+    ShaderOutputs cpuPartialOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kPartialPositionProgram, differentialHardwareConstants.data(), differentialInputs.data(),
+              cpuPartialOutputs.position.data(), cpuPartialOutputs.colors.data(),
+              cpuPartialOutputs.colors.size(), cpuPartialOutputs.texCoords.data(),
+              cpuPartialOutputs.texCoords.size()),
+          "CPU partial-position shader executes");
+    DWORD* partialPositionD3D8 = XTL::EmuVshRecompileXboxFunction(kPartialPositionProgram);
+    Check(partialPositionD3D8 != nullptr, "partial-position shader translates");
+    if(partialPositionD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8PartialOutputs{};
+        Check(ExecuteD3D8Bytecode(partialPositionD3D8, 4 + 1 * 20,
+                                  differentialD3D8Constants.data(), differentialInputs.data(),
+                                  d3d8PartialOutputs),
+              "translated partial-position bytecode executes independently");
+        Check(PositionsEqual(cpuPartialOutputs, d3d8PartialOutputs),
+              "CPU and translator preserve the same partial position components");
+        Check(NearlyEqual(cpuPartialOutputs.position[0], differentialInputs[4]) &&
+                  NearlyEqual(cpuPartialOutputs.position[1], differentialInputs[5]) &&
+                  NearlyEqual(cpuPartialOutputs.position[2], differentialInputs[2]) &&
+                  NearlyEqual(cpuPartialOutputs.position[3], differentialInputs[3]),
+              "partial position inherits unwritten Z/W from v0");
+        delete[] partialPositionD3D8;
+    }
 
     DWORD translatedDeclaration[8] = {};
     const int declarationTokens =
