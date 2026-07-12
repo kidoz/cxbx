@@ -693,6 +693,443 @@ bool RunDifferentialMatrixCase(std::size_t caseId, bool reportFailure,
     return true;
 }
 
+using SequenceOutputMasks = std::array<DWORD, 13>;
+
+enum class DifferentialFailureStage
+{
+    None,
+    CpuExecution,
+    Translation,
+    Validation,
+    D3D8Execution,
+    Output,
+};
+
+const char* DifferentialFailureStageName(DifferentialFailureStage stage)
+{
+    switch(stage)
+    {
+        case DifferentialFailureStage::None: return "none";
+        case DifferentialFailureStage::CpuExecution: return "cpu_execution";
+        case DifferentialFailureStage::Translation: return "translation";
+        case DifferentialFailureStage::Validation: return "validation";
+        case DifferentialFailureStage::D3D8Execution: return "d3d8_execution";
+        case DifferentialFailureStage::Output: return "output";
+    }
+    return "unknown";
+}
+
+SequenceOutputMasks CollectSequenceOutputMasks(const std::vector<DWORD>& program)
+{
+    SequenceOutputMasks masks{};
+    if(program.empty())
+    {
+        return masks;
+    }
+    const std::size_t encodedCount = (program[0] >> 16) & 0xFFFFu;
+    const std::size_t availableCount = (program.size() - 1) / 4;
+    const std::size_t instructionCount = std::min(encodedCount, availableCount);
+    for(std::size_t instruction = 0; instruction < instructionCount; ++instruction)
+    {
+        const DWORD outputToken = program[1 + instruction * 4 + 3];
+        const DWORD outputMask = (outputToken >> 12) & 0xFu;
+        const DWORD outputAddress = (outputToken >> 3) & 0xFFu;
+        const bool outputRegisterBank = (outputToken & (1u << 11)) != 0;
+        if(outputRegisterBank && outputMask != 0 && outputAddress < masks.size() &&
+           outputAddress != 0)
+        {
+            masks[outputAddress] |= outputMask;
+        }
+        if((outputToken & 1u) != 0)
+        {
+            break;
+        }
+    }
+    return masks;
+}
+
+bool SequenceOutputsEqual(const ShaderOutputs& left, const ShaderOutputs& right,
+                          const SequenceOutputMasks& masks)
+{
+    if(!PositionsEqual(left, right))
+    {
+        return false;
+    }
+    for(DWORD outputAddress = 0; outputAddress < masks.size(); ++outputAddress)
+    {
+        const DWORD outputMask = masks[outputAddress];
+        if(outputMask == 0)
+        {
+            continue;
+        }
+        const float* leftValues = ResolveMatrixOutput(left, outputAddress);
+        const float* rightValues = ResolveMatrixOutput(right, outputAddress);
+        if(leftValues == nullptr || rightValues == nullptr)
+        {
+            return false;
+        }
+        for(DWORD component = 0; component < 4; ++component)
+        {
+            const DWORD nv2aMaskBit = 1u << (3u - component);
+            if((outputMask & nv2aMaskBit) != 0 &&
+               !NearlyEqual(leftValues[component], rightValues[component]))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+DifferentialFailureStage EvaluateSequenceProgram(std::size_t caseId, bool reportFailure,
+                                                 const std::vector<DWORD>& program,
+                                                 const float* hardwareConstants,
+                                                 const float* hostConstants,
+                                                 const float* inputs)
+{
+    ShaderOutputs cpuOutputs{};
+    if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
+           program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
+           cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
+           cpuOutputs.texCoords.size()))
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "cpu_execution", program, nullptr, 0,
+                                            cpuOutputs, {});
+        }
+        return DifferentialFailureStage::CpuExecution;
+    }
+
+    std::unique_ptr<DWORD[]> translated{ XTL::EmuVshRecompileXboxFunction(program.data()) };
+    const std::size_t maxD3dTokens = 16 + program.size() * 24;
+    if(translated == nullptr)
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "translation", program, nullptr, 0,
+                                            cpuOutputs, {});
+        }
+        return DifferentialFailureStage::Translation;
+    }
+    const XTL::VshDiagnostics::ValidationResult validation =
+        XTL::VshDiagnostics::ValidateD3D8Translation(program.data(), translated.get());
+    if(!validation.valid)
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, validation.message.c_str(), program,
+                                            translated.get(), maxD3dTokens, cpuOutputs, {});
+        }
+        return DifferentialFailureStage::Validation;
+    }
+
+    ShaderOutputs hostOutputs{};
+    if(!ExecuteD3D8Bytecode(translated.get(), maxD3dTokens, hostConstants, inputs,
+                            hostOutputs))
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "d3d8_execution", program,
+                                            translated.get(), maxD3dTokens, cpuOutputs,
+                                            hostOutputs);
+        }
+        return DifferentialFailureStage::D3D8Execution;
+    }
+    const SequenceOutputMasks outputMasks = CollectSequenceOutputMasks(program);
+    if(!SequenceOutputsEqual(cpuOutputs, hostOutputs, outputMasks))
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "output", program, translated.get(),
+                                            maxD3dTokens, cpuOutputs, hostOutputs);
+        }
+        return DifferentialFailureStage::Output;
+    }
+    return DifferentialFailureStage::None;
+}
+
+std::vector<DWORD> ReduceFailingSequence(const std::vector<DWORD>& original,
+                                         DifferentialFailureStage failureStage,
+                                         const float* hardwareConstants,
+                                         const float* hostConstants, const float* inputs)
+{
+    std::vector<DWORD> reduced = original;
+    bool changed = true;
+    while(changed)
+    {
+        changed = false;
+        const std::size_t instructionCount = (reduced.size() - 1) / 4;
+        for(std::size_t instruction = 0; instruction + 1 < instructionCount; ++instruction)
+        {
+            std::vector<DWORD> candidate = reduced;
+            const auto first = candidate.begin() + 1 + static_cast<std::ptrdiff_t>(instruction * 4);
+            candidate.erase(first, first + 4);
+            const std::size_t candidateInstructionCount = (candidate.size() - 1) / 4;
+            candidate[0] = (static_cast<DWORD>(candidateInstructionCount) << 16) | 0x2078u;
+            if(EvaluateSequenceProgram(0, false, candidate, hardwareConstants, hostConstants,
+                                       inputs) == failureStage)
+            {
+                reduced = std::move(candidate);
+                changed = true;
+                break;
+            }
+        }
+    }
+    return reduced;
+}
+
+class DeterministicSequenceRng
+{
+  public:
+    explicit DeterministicSequenceRng(std::uint32_t seed) : m_state(seed == 0 ? 1u : seed)
+    {
+    }
+
+    std::uint32_t Next()
+    {
+        m_state ^= m_state << 13;
+        m_state ^= m_state >> 17;
+        m_state ^= m_state << 5;
+        return m_state;
+    }
+
+  private:
+    std::uint32_t m_state;
+};
+
+NvTestSource GenerateSequenceSource(DeterministicSequenceRng& rng,
+                                    DWORD forcedTemporary = 0xFFFFFFFFu)
+{
+    static constexpr std::array<DWORD, 10> temporaryRegisters{
+        0u,
+        1u,
+        2u,
+        3u,
+        4u,
+        5u,
+        6u,
+        7u,
+        11u,
+        12u,
+    };
+    static constexpr std::array<std::array<DWORD, 4>, 4> swizzles{ {
+        { 0u, 1u, 2u, 3u },
+        { 3u, 2u, 1u, 0u },
+        { 0u, 0u, 0u, 0u },
+        { 1u, 0u, 3u, 2u },
+    } };
+    NvTestSource source{};
+    const DWORD bank = forcedTemporary == 0xFFFFFFFFu ? rng.Next() % 3u : 0u;
+    if(forcedTemporary != 0xFFFFFFFFu)
+    {
+        source.mux = 1;
+        source.reg = forcedTemporary;
+    }
+    else if(bank == 0)
+    {
+        source.mux = 1;
+        source.reg = temporaryRegisters[rng.Next() % temporaryRegisters.size()];
+    }
+    else if(bank == 1)
+    {
+        source.mux = 2;
+    }
+    else
+    {
+        source.mux = 3;
+    }
+    source.negate = (rng.Next() & 3u) == 0;
+    source.swizzle = swizzles[rng.Next() % swizzles.size()];
+    return source;
+}
+
+struct GeneratedSequenceProgram
+{
+    std::vector<DWORD> program;
+    std::uint32_t seed = 0;
+    std::size_t bodyInstructionCount = 0;
+    bool hasDph = false;
+    bool hasPairedInstruction = false;
+    bool hasPositionFeedback = false;
+    bool hasRepeatedDestination = false;
+};
+
+GeneratedSequenceProgram GenerateSequenceProgram(std::size_t caseId)
+{
+    static constexpr std::array<DWORD, 12> macOpcodes{
+        1u,
+        2u,
+        3u,
+        4u,
+        5u,
+        6u,
+        7u,
+        8u,
+        9u,
+        10u,
+        11u,
+        12u,
+    };
+    static constexpr std::array<DWORD, 6> iluOpcodes{ 1u, 2u, 4u, 5u, 6u, 7u };
+    static constexpr std::array<DWORD, 4> masks{ 0x1u, 0x5u, 0xAu, 0xFu };
+    static constexpr std::array<DWORD, 7> outputAddresses{ 0u, 3u, 4u, 9u, 10u, 11u, 12u };
+    static constexpr std::array<DWORD, 10> temporaryRegisters{
+        0u,
+        1u,
+        2u,
+        3u,
+        4u,
+        5u,
+        6u,
+        7u,
+        11u,
+        12u,
+    };
+    const NvTestSource unused{};
+    const std::uint32_t seed =
+        0xC0B8A2D1u ^ (static_cast<std::uint32_t>(caseId) * 0x85EBCA6Bu);
+    DeterministicSequenceRng rng(seed);
+    GeneratedSequenceProgram generated;
+    generated.seed = seed;
+    generated.bodyInstructionCount = 2 + rng.Next() % 7u;
+    if(caseId == 0)
+    {
+        generated.bodyInstructionCount = 3;
+    }
+    generated.program.push_back(0x2078u);
+
+    const std::array<DWORD, 4> seedRegisters{ 0u, 1u, 11u, 12u };
+    for(DWORD seedIndex = 0; seedIndex < seedRegisters.size(); ++seedIndex)
+    {
+        const NvTestSource vertex{ 2, 0, false, { 0, 1, 2, 3 } };
+        AppendNvTestInstruction(generated.program, EncodeNvTestInstruction(
+                                                       1, 0, seedIndex, vertex, unused,
+                                                       unused, 0xFu,
+                                                       seedRegisters[seedIndex], 0, 0, 9, 0,
+                                                       false));
+    }
+
+    DWORD previousDestination = temporaryRegisters[rng.Next() % temporaryRegisters.size()];
+    for(std::size_t bodyIndex = 0; bodyIndex < generated.bodyInstructionCount; ++bodyIndex)
+    {
+        DWORD mac = macOpcodes[rng.Next() % macOpcodes.size()];
+        if(caseId % 5 == 0 && bodyIndex == 0)
+        {
+            mac = 6;
+        }
+        bool paired = (caseId + bodyIndex) % 3 == 0;
+        DWORD ilu = paired ? iluOpcodes[rng.Next() % iluOpcodes.size()] : 0;
+        const DWORD vertex = rng.Next() % 4u;
+        const DWORD constant = 96u + rng.Next() % 4u;
+        DWORD destination = temporaryRegisters[rng.Next() % temporaryRegisters.size()];
+        if(caseId % 7 == 0 && bodyIndex == 1)
+        {
+            destination = previousDestination;
+        }
+        generated.hasRepeatedDestination =
+            generated.hasRepeatedDestination || destination == previousDestination;
+        previousDestination = destination;
+
+        NvTestSource sourceA = GenerateSequenceSource(rng);
+        NvTestSource sourceB = GenerateSequenceSource(rng);
+        NvTestSource sourceC = GenerateSequenceSource(rng);
+        DWORD macMask = masks[rng.Next() % masks.size()];
+        DWORD iluMask = paired ? masks[rng.Next() % masks.size()] : 0;
+        DWORD outputMask =
+            (bodyIndex + 1 == generated.bodyInstructionCount || bodyIndex % 2 == 1)
+                ? masks[rng.Next() % masks.size()]
+                : 0;
+        DWORD outputAddress = outputAddresses[rng.Next() % outputAddresses.size()];
+        DWORD outputMux = paired ? rng.Next() & 1u : 0;
+
+        if(caseId == 0)
+        {
+            paired = false;
+            ilu = 0;
+            if(bodyIndex == 0)
+            {
+                mac = 3;
+                sourceA = NvTestSource{ 1, 12, false, { 0, 1, 2, 3 } };
+                sourceC = NvTestSource{ 1, 0, false, { 0, 1, 2, 3 } };
+                destination = 0;
+                macMask = 0xAu;
+                iluMask = 0;
+                outputMask = 0xFu;
+                outputAddress = 0;
+                outputMux = 0;
+                generated.hasPositionFeedback = true;
+            }
+            else if(bodyIndex == 1)
+            {
+                mac = 1;
+                sourceA = NvTestSource{ 1, 12, false, { 0, 1, 2, 3 } };
+                macMask = 0;
+                iluMask = 0;
+                outputMask = 0xFu;
+                outputAddress = 9;
+                outputMux = 0;
+            }
+            else
+            {
+                mac = 1;
+                sourceA = NvTestSource{ 1, 0, false, { 0, 1, 2, 3 } };
+                macMask = 0;
+                iluMask = 0;
+                outputMask = 0xFu;
+                outputAddress = 10;
+                outputMux = 0;
+            }
+        }
+        else if(caseId % 4 == 0 && bodyIndex == 0)
+        {
+            mac = 1;
+            sourceA = NvTestSource{ 2, 0, false, { 0, 1, 2, 3 } };
+            macMask = 0;
+            iluMask = 0;
+            outputMask = 0xFu;
+            outputAddress = 0;
+            outputMux = 0;
+            generated.hasPositionFeedback = true;
+        }
+        else if(caseId % 4 == 0 && bodyIndex == 1)
+        {
+            mac = 1;
+            sourceA = GenerateSequenceSource(rng, 12);
+            outputMask = 0xFu;
+            outputAddress = 9;
+            outputMux = 0;
+        }
+        else if(paired)
+        {
+            if((caseId + bodyIndex) % 2 == 0)
+            {
+                sourceC = GenerateSequenceSource(rng, destination);
+            }
+            else
+            {
+                sourceA = GenerateSequenceSource(rng, destination);
+                macMask = 0;
+            }
+        }
+        generated.hasDph = generated.hasDph || mac == 6;
+        generated.hasPairedInstruction = generated.hasPairedInstruction || paired;
+
+        AppendNvTestInstruction(generated.program, EncodeNvTestInstruction(
+                                                       mac, ilu, vertex, sourceA, sourceB,
+                                                       sourceC, macMask, destination, iluMask,
+                                                       outputMask, outputAddress, outputMux,
+                                                       false, constant));
+    }
+    const NvTestSource finalPosition{ 2, 0, false, { 0, 1, 2, 3 } };
+    AppendNvTestInstruction(generated.program, EncodeNvTestInstruction(
+                                                   1, 0, 3, finalPosition, unused, unused, 0,
+                                                   0, 0, 0xFu, 0, 0, true));
+    const std::size_t instructionCount = (generated.program.size() - 1) / 4;
+    generated.program[0] = (static_cast<DWORD>(instructionCount) << 16) | 0x2078u;
+    return generated;
+}
+
 constexpr DWORD kXboxProgram[] = {
     0x00052078u,
     0x00000000u,
@@ -1113,6 +1550,69 @@ int RunTests()
     }
     Check(matrixFailures == 0, "deterministic shader matrix preserves CPU semantics");
 
+    const std::array<std::array<float, 4>, 4> sequenceConstants{ {
+        { 1.25f, 0.75f, 3.0f, 0.5f },
+        { 2.0f, 0.5f, 1.5f, 4.0f },
+        { 0.25f, 2.5f, 0.75f, 1.0f },
+        { 3.0f, 1.25f, 0.5f, 2.0f },
+    } };
+    for(std::size_t constant = 0; constant < sequenceConstants.size(); ++constant)
+    {
+        std::copy(sequenceConstants[constant].begin(), sequenceConstants[constant].end(),
+                  opcodeHardwareConstants.data() + (96 + constant) * 4);
+        std::copy(sequenceConstants[constant].begin(), sequenceConstants[constant].end(),
+                  opcodeHostConstants.data() + constant * 4);
+    }
+    const std::array<float, 4> input3{ 0.75f, 1.5f, 0.5f, 2.5f };
+    std::copy(input3.begin(), input3.end(), opcodeInputs.begin() + 12);
+
+    constexpr std::size_t sequenceCaseCount = 256;
+    std::size_t sequenceFailures = 0;
+    std::size_t dphSequences = 0;
+    std::size_t pairedSequences = 0;
+    std::size_t feedbackSequences = 0;
+    std::size_t repeatedDestinationSequences = 0;
+    std::size_t maximumBodyLength = 0;
+    for(std::size_t sequenceCase = 0; sequenceCase < sequenceCaseCount; ++sequenceCase)
+    {
+        const GeneratedSequenceProgram generated = GenerateSequenceProgram(sequenceCase);
+        dphSequences += static_cast<std::size_t>(generated.hasDph);
+        pairedSequences += static_cast<std::size_t>(generated.hasPairedInstruction);
+        feedbackSequences += static_cast<std::size_t>(generated.hasPositionFeedback);
+        repeatedDestinationSequences +=
+            static_cast<std::size_t>(generated.hasRepeatedDestination);
+        maximumBodyLength = std::max(maximumBodyLength, generated.bodyInstructionCount);
+
+        const DifferentialFailureStage failureStage = EvaluateSequenceProgram(
+            sequenceCase, false, generated.program, opcodeHardwareConstants.data(),
+            opcodeHostConstants.data(), opcodeInputs.data());
+        if(failureStage == DifferentialFailureStage::None)
+        {
+            continue;
+        }
+
+        const std::vector<DWORD> reduced = ReduceFailingSequence(
+            generated.program, failureStage, opcodeHardwareConstants.data(),
+            opcodeHostConstants.data(), opcodeInputs.data());
+        std::fprintf(stderr,
+                     "VSHSEQUENCE| mismatch case=%zu seed=%08X stage=%s "
+                     "original_instructions=%zu reduced_instructions=%zu\n",
+                     sequenceCase, generated.seed, DifferentialFailureStageName(failureStage),
+                     (generated.program.size() - 1) / 4, (reduced.size() - 1) / 4);
+        EvaluateSequenceProgram(sequenceCase, true, reduced, opcodeHardwareConstants.data(),
+                                opcodeHostConstants.data(), opcodeInputs.data());
+        ++sequenceFailures;
+        break;
+    }
+    Check(dphSequences != 0, "sequence generator covers DPH scratch allocation");
+    Check(pairedSequences != 0, "sequence generator covers paired MAC and ILU issue");
+    Check(feedbackSequences != 0, "sequence generator covers r12 position feedback");
+    Check(repeatedDestinationSequences != 0,
+          "sequence generator covers repeated temporary destinations");
+    Check(maximumBodyLength == 8, "sequence generator reaches its bounded body length");
+    Check(sequenceFailures == 0,
+          "deterministic multi-instruction sequences preserve CPU semantics");
+
     const auto checkUnsupportedProgram = [&](const std::vector<DWORD>& program,
                                              const char* expectedReason, const char* name)
     {
@@ -1138,6 +1638,20 @@ int RunTests()
     reservedMacProgram[10] = (reservedMacProgram[10] & ~(0xFu << 21)) | (14u << 21);
     checkUnsupportedProgram(reservedMacProgram, "unsupported_mac_opcode",
                             "reserved MAC opcode fails closed");
+    const DifferentialFailureStage reducerFailureStage = EvaluateSequenceProgram(
+        0, false, reservedMacProgram, opcodeHardwareConstants.data(),
+        opcodeHostConstants.data(), opcodeInputs.data());
+    const std::vector<DWORD> reducedInvalidProgram = ReduceFailingSequence(
+        reservedMacProgram, reducerFailureStage, opcodeHardwareConstants.data(),
+        opcodeHostConstants.data(), opcodeInputs.data());
+    Check(reducerFailureStage == DifferentialFailureStage::CpuExecution,
+          "sequence reducer fixture has a stable failure stage");
+    Check(reducedInvalidProgram.size() < reservedMacProgram.size(),
+          "sequence reducer removes irrelevant instructions");
+    Check(EvaluateSequenceProgram(0, false, reducedInvalidProgram,
+                                  opcodeHardwareConstants.data(), opcodeHostConstants.data(),
+                                  opcodeInputs.data()) == reducerFailureStage,
+          "sequence reducer preserves the original failure stage");
 
     std::vector<DWORD> invalidSourceProgram = BuildMacDifferentialProgram(1, vertex0);
     invalidSourceProgram[11] &= ~(0x3u << 26);
@@ -1206,6 +1720,33 @@ int RunTests()
           "paired hazard without a free temporary requires CPU fallback");
     Check(fallbackReason == "paired_ilu_no_scratch",
           "paired-hazard CPU fallback reason is stable");
+
+    std::vector<DWORD> noDualDestinationScratch{ 0x000D2078u };
+    const NvTestSource unusedSource{};
+    const NvTestSource identityVertex{ 2, 0, false, { 0, 1, 2, 3 } };
+    for(DWORD reg = 0; reg <= 10; ++reg)
+    {
+        AppendNvTestInstruction(noDualDestinationScratch, EncodeNvTestInstruction(
+                                                              1, 0, 0, identityVertex,
+                                                              unusedSource, unusedSource, 0xFu,
+                                                              reg, 0, 0, 9, 0, false));
+    }
+    const NvTestSource positionSource{ 1, 12, false, { 0, 1, 2, 3 } };
+    const NvTestSource temporary0Source{ 1, 0, false, { 0, 1, 2, 3 } };
+    AppendNvTestInstruction(noDualDestinationScratch,
+                            EncodeNvTestInstruction(3, 0, 0, positionSource, unusedSource,
+                                                    temporary0Source, 0xFu, 0, 0, 0xFu, 0,
+                                                    0, false));
+    AppendNvTestInstruction(noDualDestinationScratch,
+                            EncodeNvTestInstruction(1, 0, 0, identityVertex, unusedSource,
+                                                    unusedSource, 0, 0, 0, 0xFu, 9, 0,
+                                                    true));
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noDualDestinationScratch.data(),
+                                                   fallbackReason),
+          "dual-destination dependency without a free temporary requires CPU fallback");
+    Check(fallbackReason == "dual_destination_no_scratch",
+          "dual-destination CPU fallback reason is stable");
 
     fallbackReason.clear();
     Check(XTL::VshDiagnostics::RequiresCpuFallback(kRccProgram, fallbackReason),
