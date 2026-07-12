@@ -46,8 +46,10 @@ struct OptimizationResult
 struct DeclarationTranslationResult
 {
     XboxFunctionDisposition disposition = XboxFunctionDisposition::Reject;
+    bool cpuCompatible = true;
     std::size_t tokenCount = 0;
     std::string reason;
+    std::string cpuIncompatibilityReason;
 };
 
 struct VertexStreamView
@@ -82,6 +84,8 @@ bool RequiresCpuFallback(const void* xboxFunction, std::string& reason);
 DeclarationTranslationResult TranslateXboxDeclaration(const void* xboxDeclaration,
                                                       void* d3dDeclaration,
                                                       std::size_t maxTokens);
+bool ApplyXboxDeclarationConstants(const void* xboxDeclaration, const float* baseConstants,
+                                   float* outputConstants, std::size_t constantFloatCount);
 bool ExpandQuadListIndices(const std::uint32_t* sourceIndices, std::size_t sourceIndexCount,
                            std::vector<std::uint32_t>& expandedIndices);
 float SelectRasterOutput(const float values[4], std::uint8_t writeMask, float fallback);

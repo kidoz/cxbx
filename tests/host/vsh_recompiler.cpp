@@ -1273,6 +1273,48 @@ int RunTests()
                                                 cpuInputs.data(), cpuInputs.size()),
           "CPU fallback decodes every accepted PC declaration type");
 
+    const DWORD skippedDeclaration[] = {
+        0x20000000u,
+        0x40120000u,
+        0x50020000u,
+        0x40120001u,
+        0xFFFFFFFFu,
+    };
+    const std::array<float, 4> skippedVertex = { 1.0f, 99.0f, 98.0f, 7.0f };
+    const XTL::VshDiagnostics::VertexStreamView skippedStream = {
+        skippedVertex.data(),
+        sizeof(skippedVertex),
+        sizeof(skippedVertex),
+    };
+    Check(XTL::VshDiagnostics::DecodeXboxVertex(skippedDeclaration, &skippedStream, 1, 0,
+                                                cpuInputs.data(), cpuInputs.size()) &&
+              cpuInputs[0] == 1.0f && cpuInputs[4] == 7.0f,
+          "CPU declaration skip advances by DWORDs");
+    XTL::VshDiagnostics::VertexStreamView shortSkippedStream = skippedStream;
+    shortSkippedStream.stride -= sizeof(float);
+    Check(!XTL::VshDiagnostics::DecodeXboxVertex(skippedDeclaration, &shortSkippedStream, 1, 0,
+                                                 cpuInputs.data(), cpuInputs.size()),
+          "CPU declaration skip cannot cross the vertex stride");
+
+    const DWORD multiStreamDeclaration[] = {
+        0x20000000u,
+        0x40120000u,
+        0x20000001u,
+        0x40120001u,
+        0xFFFFFFFFu,
+    };
+    const float streamZeroValue = 3.0f;
+    const float streamOneValue = 5.0f;
+    const std::array<XTL::VshDiagnostics::VertexStreamView, 2> multiStreams = { {
+        { &streamZeroValue, sizeof(streamZeroValue), sizeof(streamZeroValue) },
+        { &streamOneValue, sizeof(streamOneValue), sizeof(streamOneValue) },
+    } };
+    Check(XTL::VshDiagnostics::DecodeXboxVertex(
+              multiStreamDeclaration, multiStreams.data(), multiStreams.size(), 0,
+              cpuInputs.data(), cpuInputs.size()) &&
+              cpuInputs[0] == streamZeroValue && cpuInputs[4] == streamOneValue,
+          "CPU declaration decoder maintains independent stream offsets");
+
     const DWORD packedDeclaration[] = {
         0x20000000u,
         0x40350000u,
@@ -1647,6 +1689,94 @@ int RunTests()
                   XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
               constantPayloadResult.tokenCount == std::size(constantPayloadDeclaration),
           "constant payload data cannot terminate declaration parsing");
+    std::array<float, 192 * 4> baseDeclarationConstants{};
+    std::array<float, 192 * 4> appliedDeclarationConstants{};
+    baseDeclarationConstants[(96 + 1) * 4] = 9.0f;
+    Check(XTL::VshDiagnostics::ApplyXboxDeclarationConstants(
+              constantPayloadDeclaration, baseDeclarationConstants.data(),
+              appliedDeclarationConstants.data(), appliedDeclarationConstants.size()),
+          "embedded declaration constants apply to CPU constant snapshot");
+    DWORD appliedFirstConstantBits = 0;
+    std::memcpy(&appliedFirstConstantBits, &appliedDeclarationConstants[96 * 4], sizeof(DWORD));
+    Check(appliedFirstConstantBits == 0xFFFFFFFFu &&
+              appliedDeclarationConstants[96 * 4 + 1] == 1.0f &&
+              appliedDeclarationConstants[96 * 4 + 2] == 2.0f &&
+              appliedDeclarationConstants[96 * 4 + 3] == 3.0f &&
+              appliedDeclarationConstants[(96 + 1) * 4] == 9.0f,
+          "embedded constants override only their declared hardware range");
+
+    const DWORD constantThenStreamDeclaration[] = {
+        0x82000000u,
+        0x3F800000u,
+        0x40000000u,
+        0x40400000u,
+        0x40800000u,
+        0x20000000u,
+        0x40120000u,
+        0xFFFFFFFFu,
+    };
+    const float constantThenStreamValue = 11.0f;
+    const XTL::VshDiagnostics::VertexStreamView constantThenStream = {
+        &constantThenStreamValue,
+        sizeof(constantThenStreamValue),
+        sizeof(constantThenStreamValue),
+    };
+    Check(XTL::VshDiagnostics::DecodeXboxVertex(
+              constantThenStreamDeclaration, &constantThenStream, 1, 0,
+              cpuInputs.data(), cpuInputs.size()) &&
+              cpuInputs[0] == constantThenStreamValue,
+          "CPU vertex decoding skips embedded constant payload tokens");
+
+    const DWORD hostTessellatorDeclaration[] = { 0x60020000u, 0xFFFFFFFFu };
+    DWORD tessellatorOutput[4] = {};
+    const XTL::VshDiagnostics::DeclarationTranslationResult tessellatorResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(
+            hostTessellatorDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+    Check(tessellatorResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
+              !tessellatorResult.cpuCompatible &&
+              tessellatorResult.cpuIncompatibilityReason == "declaration_cpu_tessellator",
+          "host tessellator declaration records CPU incompatibility");
+
+    const DWORD cpuTessellatorDeclaration[] = {
+        0x20000000u,
+        0x40350000u,
+        0x60020000u,
+        0xFFFFFFFFu,
+    };
+    const XTL::VshDiagnostics::DeclarationTranslationResult cpuTessellatorResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(
+            cpuTessellatorDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+    Check(cpuTessellatorResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              cpuTessellatorResult.reason == "declaration_cpu_tessellator",
+          "CPU-only declaration with tessellation is rejected");
+
+    const DWORD extensionDeclaration[] = {
+        0xA1000000u,
+        0x12345678u,
+        0xFFFFFFFFu,
+    };
+    const XTL::VshDiagnostics::DeclarationTranslationResult extensionResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(
+            extensionDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+    Check(extensionResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
+              !extensionResult.cpuCompatible &&
+              extensionResult.cpuIncompatibilityReason == "declaration_cpu_extension",
+          "host extension declaration records CPU incompatibility");
+
+    const DWORD invalidConstantRangeDeclaration[] = {
+        0x8400005Fu,
+        0xFFFFFFFFu,
+    };
+    XTL::VshDiagnostics::DeclarationTranslationResult invalidConstantResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(
+            invalidConstantRangeDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+    Check(invalidConstantResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              invalidConstantResult.reason == "declaration_constant_range",
+          "embedded declaration constant range is validated");
 
     const DWORD unsupportedTypeDeclaration[] = {
         0x20000000u,

@@ -2114,7 +2114,8 @@ static void EmuVshSetCurrentCpuShader(EmuVshCpuFallback* metadata, const char* a
 }
 
 static bool EmuVshRegisterLive(XTL::X_D3DVertexShader* pShader, bool cpuFallback,
-                               const DWORD* xboxFunction, const DWORD* xboxDeclaration)
+                               const DWORD* xboxFunction, const DWORD* xboxDeclaration,
+                               std::size_t declarationTokenCount)
 {
     for(std::size_t index = 0; index < EMU_VSH_LIVE_CAPACITY; ++index)
     {
@@ -2139,19 +2140,18 @@ static bool EmuVshRegisterLive(XTL::X_D3DVertexShader* pShader, bool cpuFallback
                                         : static_cast<std::size_t>(encodedCount);
         std::memcpy(metadata.function.data(), xboxFunction,
                     (1 + metadata.instructionCount * 4) * sizeof(DWORD));
-        for(std::size_t token = 0; token < metadata.declaration.size(); ++token)
+        if(xboxDeclaration == nullptr || declarationTokenCount == 0 ||
+           declarationTokenCount > metadata.declaration.size())
         {
-            metadata.declaration[token] = xboxDeclaration[token];
-            metadata.declarationTokenCount = token + 1;
-            if(xboxDeclaration[token] == 0xFFFFFFFFu)
-            {
-                return true;
-            }
+            metadata.enabled = false;
+            g_EmuLiveVertexShaders[index] = nullptr;
+            metadata = {};
+            return false;
         }
-        metadata.enabled = false;
-        g_EmuLiveVertexShaders[index] = nullptr;
-        metadata = {};
-        return false;
+        metadata.declarationTokenCount = declarationTokenCount;
+        std::memcpy(metadata.declaration.data(), xboxDeclaration,
+                    declarationTokenCount * sizeof(DWORD));
+        return true;
     }
     return false;
 }
@@ -2284,13 +2284,24 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 
     DWORD TranslatedDecl[128];
     const DWORD* pHostDeclaration = pDeclaration;
+    std::size_t declarationTokenCount = 0;
+    bool declarationCpuCompatible = true;
+    std::string declarationCpuIncompatibilityReason;
     if(pDeclaration != NULL)
     {
         const XTL::VshDiagnostics::DeclarationTranslationResult declarationResult =
             XTL::VshDiagnostics::TranslateXboxDeclaration(pDeclaration, TranslatedDecl,
                                                           std::size(TranslatedDecl));
-        if(declarationResult.disposition ==
-           XTL::VshDiagnostics::XboxFunctionDisposition::Reject)
+        declarationTokenCount = declarationResult.tokenCount;
+        declarationCpuCompatible = declarationResult.cpuCompatible;
+        declarationCpuIncompatibilityReason = declarationResult.cpuIncompatibilityReason;
+        if(cpuFallback && !declarationResult.cpuCompatible)
+        {
+            rejectShader = true;
+            rejectionReason = declarationResult.cpuIncompatibilityReason;
+        }
+        else if(declarationResult.disposition ==
+                XTL::VshDiagnostics::XboxFunctionDisposition::Reject)
         {
             rejectShader = true;
             rejectionReason = declarationResult.reason;
@@ -2355,8 +2366,17 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
                     validation.message == "instruction count exceeds the vs.1.1 limit of 128";
                 if(exceedsHostLimit && pDeclaration != nullptr)
                 {
-                    cpuFallback = true;
-                    cpuFallbackReason = "host_instruction_limit";
+                    if(declarationCpuCompatible)
+                    {
+                        cpuFallback = true;
+                        cpuFallbackReason = "host_instruction_limit";
+                    }
+                    else
+                    {
+                        hRet = D3DERR_INVALIDCALL;
+                        translationRejected = true;
+                        rejectionReason = declarationCpuIncompatibilityReason;
+                    }
                 }
                 else
                 {
@@ -2417,7 +2437,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
         return D3DERR_INVALIDCALL;
     }
 
-    if(!EmuVshRegisterLive(pD3DVertexShader, cpuFallback, pFunction, pDeclaration))
+    if(!EmuVshRegisterLive(pD3DVertexShader, cpuFallback, pFunction, pDeclaration,
+                           declarationTokenCount))
     {
         if(pD3DVertexShader->Handle != 0)
         {
@@ -8197,6 +8218,13 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
     }
 
     const float defaultPointSize = EmuVshGetDefaultPointSize();
+    std::array<float, 192 * 4> shaderConstants{};
+    if(!XTL::VshDiagnostics::ApplyXboxDeclarationConstants(
+           g_EmuCurrentCpuVertexShader->declaration.data(), g_EmuVshCpuConstants,
+           shaderConstants.data(), shaderConstants.size()))
+    {
+        return false;
+    }
     output.resize(vertexCount);
     for(UINT outputIndex = 0; outputIndex < vertexCount; ++outputIndex)
     {
@@ -8218,7 +8246,7 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         float texCoords[4 * 4] = {};
         XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
         if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(g_EmuCurrentCpuVertexShader->function.data(),
-                                                         g_EmuVshCpuConstants, input, position, colors,
+                                                         shaderConstants.data(), input, position, colors,
                                                          2 * 4, texCoords, 4 * 4, &rasterOutputs))
         {
             return false;
