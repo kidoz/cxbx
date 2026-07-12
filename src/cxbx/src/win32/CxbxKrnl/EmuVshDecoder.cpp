@@ -22,26 +22,49 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
+#if !defined(CXBX_VSH_HOST_TEST)
 // ******************************************************************
 // * prevent name collisions
 // ******************************************************************
 namespace xboxkrnl
 {
-    #include <xboxkrnl/xboxkrnl.h>
+#include <xboxkrnl/xboxkrnl.h>
 };
 
 #include "Emu.h"
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #include <windows.h>
+#else
+#include <cstdarg>
+#include <cstdio>
+
+#define FALSE 0
+
+static void EmuWarning(const char* format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    std::vfprintf(stderr, format, arguments);
+    std::fputc('\n', stderr);
+    va_end(arguments);
+}
+#endif
+
+#include "EmuVshDecoder.h"
+
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
 
 namespace XTL
 {
-    DWORD *EmuVshRecompileXboxFunction(const DWORD *pXboxFunction);
-    int    EmuVshTranslateXboxDeclaration(const DWORD *pXboxDecl, DWORD *pPcDecl, int MaxTokens);
-};
+DWORD* EmuVshRecompileXboxFunction(const DWORD* xboxFunction);
+int EmuVshTranslateXboxDeclaration(const DWORD* xboxDeclaration, DWORD* pcDeclaration, int maxTokens);
+} // namespace XTL
 
 // ******************************************************************
 // * NV2A microcode field layout (from nxdk vp20compiler main.c)
@@ -227,18 +250,500 @@ static bool VshMapOutput(DWORD Address, DWORD *RegType, DWORD *RegNum)
         case 3:  *RegType = SPR_ATTROUT;   *RegNum = 0; return true;   // oD0
         case 4:  *RegType = SPR_ATTROUT;   *RegNum = 1; return true;   // oD1
         case 5:  *RegType = SPR_RASTOUT;   *RegNum = 1; return true;   // oFog
-        case 6:  *RegType = SPR_RASTOUT;   *RegNum = 2; return true;   // oPts
-        case 9: case 10: case 11: case 12:
-                 *RegType = SPR_TEXCRDOUT; *RegNum = Address - 9; return true;   // oT0..3
+        case 6:
+            *RegType = SPR_RASTOUT;
+            *RegNum = 2;
+            return true; // oPts
+        case 9:
+        case 10:
+        case 11:
+        case 12:
+            *RegType = SPR_TEXCRDOUT;
+            *RegNum = Address - 9;
+            return true; // oT0..3
         default:
             // 7/8 = back-face colors (no PC equivalent), anything else unknown
             return false;
     }
 }
 
-static void VshEmit(DWORD *Out, int *n, DWORD Token)
+static void VshEmit(DWORD* Out, int* n, DWORD Token)
 {
     Out[(*n)++] = Token;
+}
+
+namespace
+{
+constexpr DWORD VSH_D3D_VERSION = 0xFFFE0101u;
+constexpr DWORD VSH_D3D_END = 0x0000FFFFu;
+constexpr DWORD VSH_XBOX_VERSION = 0x2078u;
+constexpr std::size_t VSH_MAX_XBOX_INSTRUCTIONS = 136;
+constexpr std::size_t VSH_MAX_D3D8_INSTRUCTIONS = 128;
+
+std::string VshHex(DWORD value)
+{
+    std::ostringstream stream;
+    stream << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << value;
+    return stream.str();
+}
+
+std::size_t VshXboxInstructionCapacity(const DWORD* xboxFunction)
+{
+    if(xboxFunction == nullptr || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    {
+        return 0;
+    }
+
+    const DWORD encodedCount = (xboxFunction[0] >> 16) & 0xFFFFu;
+    if(encodedCount == 0 || encodedCount > VSH_MAX_XBOX_INSTRUCTIONS)
+    {
+        return VSH_MAX_XBOX_INSTRUCTIONS;
+    }
+    return static_cast<std::size_t>(encodedCount);
+}
+
+std::size_t VshXboxInstructionCount(const DWORD* xboxFunction)
+{
+    const std::size_t capacity = VshXboxInstructionCapacity(xboxFunction);
+    for(std::size_t index = 0; index < capacity; ++index)
+    {
+        const DWORD* instruction = &xboxFunction[1 + index * 4];
+        if(VshGetField(instruction, FLD_FINAL) != 0)
+        {
+            return index + 1;
+        }
+    }
+    return capacity;
+}
+
+const char* VshMacName(DWORD opcode)
+{
+    static constexpr std::array<const char*, 15> names = {
+        "nop", "mov", "mul", "add", "mad", "dp3", "dph", "dp4",
+        "dst", "min", "max", "slt", "sge", "arl", "unknown"
+    };
+    return opcode < names.size() - 1 ? names[opcode] : names.back();
+}
+
+const char* VshIluName(DWORD opcode)
+{
+    static constexpr std::array<const char*, 9> names = {
+        "nop", "mov", "rcp", "rcc", "rsq", "exp", "log", "lit", "unknown"
+    };
+    return opcode < names.size() - 1 ? names[opcode] : names.back();
+}
+
+const char* VshD3dOpcodeName(DWORD opcode)
+{
+    switch(opcode)
+    {
+        case SIO_NOP: return "nop";
+        case SIO_MOV: return "mov";
+        case SIO_ADD: return "add";
+        case SIO_MAD: return "mad";
+        case SIO_MUL: return "mul";
+        case SIO_RCP: return "rcp";
+        case SIO_RSQ: return "rsq";
+        case SIO_DP3: return "dp3";
+        case SIO_DP4: return "dp4";
+        case SIO_MIN: return "min";
+        case SIO_MAX: return "max";
+        case SIO_SLT: return "slt";
+        case SIO_SGE: return "sge";
+        case SIO_EXP: return "exp";
+        case SIO_LOG: return "log";
+        case SIO_LIT: return "lit";
+        case SIO_DST: return "dst";
+        default: return "unknown";
+    }
+}
+
+int VshD3dSourceCount(DWORD opcode)
+{
+    switch(opcode)
+    {
+        case SIO_NOP: return 0;
+        case SIO_MOV:
+        case SIO_RCP:
+        case SIO_RSQ:
+        case SIO_EXP:
+        case SIO_LOG:
+        case SIO_LIT: return 1;
+        case SIO_ADD:
+        case SIO_MUL:
+        case SIO_DP3:
+        case SIO_DP4:
+        case SIO_MIN:
+        case SIO_MAX:
+        case SIO_SLT:
+        case SIO_SGE:
+        case SIO_DST: return 2;
+        case SIO_MAD: return 3;
+        default: return -1;
+    }
+}
+
+const char* VshD3dRegisterName(DWORD type)
+{
+    static constexpr std::array<const char*, 8> names = {
+        "r", "v", "c", "a", "oR", "oD", "oT", "reserved"
+    };
+    return names[type & 7u];
+}
+
+std::string VshFormatD3dParameter(DWORD token, bool destination)
+{
+    const DWORD type = (token >> 28) & 7u;
+    const DWORD number = token & 0x7FFu;
+    std::ostringstream stream;
+    stream << VshD3dRegisterName(type) << std::dec << number;
+    if(destination)
+    {
+        static constexpr char components[] = "xyzw";
+        const DWORD mask = (token >> 16) & 0xFu;
+        stream << '.';
+        for(DWORD component = 0; component < 4; ++component)
+        {
+            if((mask & (1u << component)) != 0)
+            {
+                stream << components[component];
+            }
+        }
+    }
+    else
+    {
+        static constexpr char components[] = "xyzw";
+        stream << '.';
+        for(DWORD component = 0; component < 4; ++component)
+        {
+            stream << components[(token >> (16 + component * 2)) & 3u];
+        }
+        if((token & (1u << 24)) != 0)
+        {
+            stream << " neg";
+        }
+        if((token & (1u << 13)) != 0)
+        {
+            stream << " rel";
+        }
+    }
+    return stream.str();
+}
+
+bool VshValidateRegister(DWORD token, bool destination, std::string& message)
+{
+    if((token & 0x80000000u) == 0)
+    {
+        message = "parameter token does not have bit 31 set";
+        return false;
+    }
+
+    const DWORD type = (token >> 28) & 7u;
+    const DWORD number = token & 0x7FFu;
+    if(destination && ((token >> 16) & 0xFu) == 0)
+    {
+        message = "destination has an empty write mask";
+        return false;
+    }
+    if(destination && (type == SPR_INPUT || type == SPR_CONST || type == 7))
+    {
+        message = "register type is not writable";
+        return false;
+    }
+    if(!destination && type > SPR_CONST)
+    {
+        message = "register type is not readable";
+        return false;
+    }
+    if(type == SPR_TEMP && number > 11)
+    {
+        message = "temporary register exceeds r11";
+        return false;
+    }
+    if(type == SPR_INPUT && number > 15)
+    {
+        message = "input register exceeds v15";
+        return false;
+    }
+    if(type == SPR_CONST && number > 95)
+    {
+        message = "constant register exceeds c95";
+        return false;
+    }
+    if(type == SPR_ADDR && number != 0)
+    {
+        message = "address register is not a0";
+        return false;
+    }
+    if(type == SPR_RASTOUT && number > 2)
+    {
+        message = "raster output register is out of range";
+        return false;
+    }
+    if(type == SPR_ATTROUT && number > 1)
+    {
+        message = "attribute output register is out of range";
+        return false;
+    }
+    if(type == SPR_TEXCRDOUT && number > 7)
+    {
+        message = "texture-coordinate output register is out of range";
+        return false;
+    }
+    if(!destination && (token & (1u << 13)) != 0 && type != SPR_CONST)
+    {
+        message = "relative addressing is used on a non-constant source";
+        return false;
+    }
+    return true;
+}
+} // namespace
+
+std::uint32_t XTL::VshDiagnostics::HashXboxFunction(const void* xboxFunctionData)
+{
+    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    if(xboxFunction == nullptr)
+    {
+        return 0;
+    }
+
+    constexpr std::uint32_t offsetBasis = 2166136261u;
+    constexpr std::uint32_t prime = 16777619u;
+    std::uint32_t hash = offsetBasis;
+    const std::size_t wordCount = 1 + VshXboxInstructionCount(xboxFunction) * 4;
+    for(std::size_t wordIndex = 0; wordIndex < wordCount; ++wordIndex)
+    {
+        const std::uint32_t word = static_cast<std::uint32_t>(xboxFunction[wordIndex]);
+        for(unsigned int byteIndex = 0; byteIndex < 4; ++byteIndex)
+        {
+            hash ^= (word >> (byteIndex * 8)) & 0xFFu;
+            hash *= prime;
+        }
+    }
+    return hash;
+}
+
+XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Function(const void* d3dFunctionData,
+                                                                                std::size_t maxTokens)
+{
+    const DWORD* d3dFunction = static_cast<const DWORD*>(d3dFunctionData);
+    ValidationResult result{};
+    if(d3dFunction == nullptr)
+    {
+        result.message = "function is null";
+        return result;
+    }
+    if(maxTokens < 2 || d3dFunction[0] != VSH_D3D_VERSION)
+    {
+        result.message = "missing vs.1.1 version token";
+        return result;
+    }
+
+    std::size_t tokenIndex = 1;
+    std::size_t instructionIndex = 0;
+    bool writesPosition = false;
+    while(tokenIndex < maxTokens)
+    {
+        const DWORD instructionToken = d3dFunction[tokenIndex];
+        if(instructionToken == VSH_D3D_END)
+        {
+            result.valid = writesPosition;
+            result.instructionIndex = instructionIndex;
+            result.message = writesPosition ? "ok" : "shader never writes oPos";
+            return result;
+        }
+        if(instructionIndex >= VSH_MAX_D3D8_INSTRUCTIONS)
+        {
+            result.instructionIndex = instructionIndex;
+            result.message = "instruction count exceeds the vs.1.1 limit of 128";
+            return result;
+        }
+
+        const DWORD opcode = instructionToken & 0xFFFFu;
+        const int sourceCount = VshD3dSourceCount(opcode);
+        if(sourceCount < 0)
+        {
+            result.instructionIndex = instructionIndex;
+            result.message = "unknown opcode " + VshHex(opcode);
+            return result;
+        }
+
+        const std::size_t parameterCount = sourceCount == 0 ? 0 : static_cast<std::size_t>(sourceCount + 1);
+        if(tokenIndex + 1 + parameterCount > maxTokens)
+        {
+            result.instructionIndex = instructionIndex;
+            result.message = "instruction is truncated";
+            return result;
+        }
+        if(parameterCount != 0)
+        {
+            std::string message;
+            const DWORD destination = d3dFunction[tokenIndex + 1];
+            if(!VshValidateRegister(destination, true, message))
+            {
+                result.instructionIndex = instructionIndex;
+                result.message = "invalid destination: " + message;
+                return result;
+            }
+            const DWORD destinationType = (destination >> 28) & 7u;
+            const DWORD destinationNumber = destination & 0x7FFu;
+            writesPosition = writesPosition || (destinationType == SPR_RASTOUT && destinationNumber == 0);
+
+            for(int sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex)
+            {
+                const DWORD source = d3dFunction[tokenIndex + 2 + static_cast<std::size_t>(sourceIndex)];
+                if(!VshValidateRegister(source, false, message))
+                {
+                    result.instructionIndex = instructionIndex;
+                    result.message = "invalid source " + std::to_string(sourceIndex) + ": " + message;
+                    return result;
+                }
+            }
+        }
+
+        tokenIndex += 1 + parameterCount;
+        ++instructionIndex;
+    }
+
+    result.instructionIndex = instructionIndex;
+    result.message = "missing END token";
+    return result;
+}
+
+XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Translation(const void* xboxFunctionData,
+                                                                                   const void* d3dFunction)
+{
+    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    const std::size_t maxD3dTokens = 4 + VshXboxInstructionCount(xboxFunction) * 20;
+    return ValidateD3D8Function(d3dFunction, maxD3dTokens);
+}
+
+std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xboxFunctionData)
+{
+    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    std::vector<std::string> listing;
+    const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
+    listing.reserve(instructionCount);
+    for(std::size_t index = 0; index < instructionCount; ++index)
+    {
+        const DWORD* instruction = &xboxFunction[1 + index * 4];
+        std::ostringstream line;
+        line << "pc=" << std::dec << std::setw(3) << std::setfill('0') << index
+             << " raw=" << VshHex(instruction[0]) << ',' << VshHex(instruction[1]) << ','
+             << VshHex(instruction[2]) << ',' << VshHex(instruction[3])
+             << " mac=" << VshMacName(VshGetField(instruction, FLD_MAC))
+             << " ilu=" << VshIluName(VshGetField(instruction, FLD_ILU))
+             << " c=" << VshGetField(instruction, FLD_CONST)
+             << " v=" << VshGetField(instruction, FLD_V)
+             << " out_r=" << VshGetField(instruction, FLD_OUT_R)
+             << " mac_mask=0x" << std::hex << VshGetField(instruction, FLD_OUT_MAC_MASK)
+             << " ilu_mask=0x" << VshGetField(instruction, FLD_OUT_ILU_MASK)
+             << " out_mask=0x" << VshGetField(instruction, FLD_OUT_O_MASK)
+             << " orb=" << VshGetField(instruction, FLD_OUT_ORB)
+             << " out_addr=" << std::dec << VshGetField(instruction, FLD_OUT_ADDRESS)
+             << " out_mux=" << VshGetField(instruction, FLD_OUT_MUX)
+             << " a0x=" << VshGetField(instruction, FLD_A0X)
+             << " final=" << VshGetField(instruction, FLD_FINAL);
+        listing.push_back(line.str());
+    }
+    return listing;
+}
+
+std::vector<std::string> XTL::VshDiagnostics::DecodeD3D8Function(const void* d3dFunctionData,
+                                                                 std::size_t maxTokens)
+{
+    const DWORD* d3dFunction = static_cast<const DWORD*>(d3dFunctionData);
+    std::vector<std::string> listing;
+    if(d3dFunction == nullptr || maxTokens == 0)
+    {
+        return listing;
+    }
+
+    std::size_t tokenIndex = 1;
+    std::size_t instructionIndex = 0;
+    while(tokenIndex < maxTokens && d3dFunction[tokenIndex] != VSH_D3D_END)
+    {
+        const DWORD token = d3dFunction[tokenIndex];
+        const DWORD opcode = token & 0xFFFFu;
+        const int sourceCount = VshD3dSourceCount(opcode);
+        std::ostringstream line;
+        line << "pc=" << std::dec << std::setw(3) << std::setfill('0') << instructionIndex
+             << " token=" << VshHex(token) << " op=" << VshD3dOpcodeName(opcode);
+        if(sourceCount < 0)
+        {
+            line << " invalid=unknown_opcode";
+            listing.push_back(line.str());
+            break;
+        }
+        const std::size_t parameterCount = sourceCount == 0 ? 0 : static_cast<std::size_t>(sourceCount + 1);
+        if(tokenIndex + 1 + parameterCount > maxTokens)
+        {
+            line << " invalid=truncated";
+            listing.push_back(line.str());
+            break;
+        }
+        if(parameterCount != 0)
+        {
+            line << " dst=" << VshFormatD3dParameter(d3dFunction[tokenIndex + 1], true);
+            for(int sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex)
+            {
+                line << " src" << sourceIndex << '='
+                     << VshFormatD3dParameter(d3dFunction[tokenIndex + 2 + static_cast<std::size_t>(sourceIndex)], false);
+            }
+        }
+        listing.push_back(line.str());
+        tokenIndex += 1 + parameterCount;
+        ++instructionIndex;
+    }
+    return listing;
+}
+
+void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture)
+{
+    const DWORD* xboxFunction = static_cast<const DWORD*>(capture.xboxFunction);
+    const DWORD* d3dFunction = static_cast<const DWORD*>(capture.d3dFunction);
+    const DWORD* xboxDeclaration = static_cast<const DWORD*>(capture.xboxDeclaration);
+    const DWORD* d3dDeclaration = static_cast<const DWORD*>(capture.d3dDeclaration);
+    if(stream == nullptr)
+    {
+        return;
+    }
+
+    const std::uint32_t hash = HashXboxFunction(xboxFunction);
+    const std::size_t xboxInstructionCount = VshXboxInstructionCount(xboxFunction);
+    const std::size_t maxD3dTokens = 4 + xboxInstructionCount * 20;
+    const ValidationResult validation = ValidateD3D8Translation(xboxFunction, d3dFunction);
+    std::fprintf(stream, "VSH| rejected hash=%08X xbox_instructions=%zu validation=%s at=%zu reason=%s\n",
+                 hash, xboxInstructionCount, validation.valid ? "pass" : "fail",
+                 validation.instructionIndex, validation.message.c_str());
+
+    for(const std::string& line : DecodeXboxFunction(xboxFunction))
+    {
+        std::fprintf(stream, "VSH| nv2a hash=%08X %s\n", hash, line.c_str());
+    }
+    for(const std::string& line : DecodeD3D8Function(d3dFunction, maxD3dTokens))
+    {
+        std::fprintf(stream, "VSH| d3d8 hash=%08X %s\n", hash, line.c_str());
+    }
+
+    if(xboxDeclaration == nullptr || d3dDeclaration == nullptr)
+    {
+        std::fprintf(stream, "VSH| declaration hash=%08X unavailable\n", hash);
+        std::fflush(stream);
+        return;
+    }
+
+    for(std::size_t index = 0; index < 128; ++index)
+    {
+        std::fprintf(stream, "VSH| declaration hash=%08X token=%zu xbox=%08X d3d8=%08X\n",
+                     hash, index, static_cast<unsigned int>(xboxDeclaration[index]),
+                     static_cast<unsigned int>(d3dDeclaration[index]));
+        if(xboxDeclaration[index] == 0xFFFFFFFFu || d3dDeclaration[index] == 0xFFFFFFFFu)
+        {
+            break;
+        }
+    }
+    std::fflush(stream);
 }
 
 // ******************************************************************
@@ -290,7 +795,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         DWORD OutMux  = VshGetField(I, FLD_OUT_MUX);
         bool  A0x     = VshGetField(I, FLD_A0X) != 0;
 
-        VshSrc SrcA, SrcB, SrcC;
+        VshSrc SrcA{}, SrcB{}, SrcC{};
         VshDecodeSrc(I, 0, &SrcA);
         VshDecodeSrc(I, 1, &SrcB);
         VshDecodeSrc(I, 2, &SrcC);
@@ -480,7 +985,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     VshEmit(Out, &n, 0x0000FFFF);   // end
 
     printf("EmuD3D8: VshDecoder recompiled %lu NV2A instructions into %d vs.1.1 tokens.\n",
-           InstrCount, n);
+           static_cast<unsigned long>(InstrCount), n);
     fflush(stdout);
 
     return Out;
@@ -655,10 +1160,12 @@ static float VshInvSqrt(float x)
 static float VshLog2(float x)
 {
     if(x <= 0.0f) return 0.0f;
-    int bits; memcpy(&bits, &x, 4);
-    int e = ((bits >> 23) & 0xFF) - 127;
-    bits = (bits & 0x807FFFFF) | 0x3F800000; // mantissa m in [1,2)
-    float m; memcpy(&m, &bits, 4);
+    std::uint32_t bits;
+    memcpy(&bits, &x, 4);
+    int e = static_cast<int>((bits >> 23) & 0xFFu) - 127;
+    bits = (bits & 0x807FFFFFu) | 0x3F800000u; // mantissa m in [1,2)
+    float m;
+    memcpy(&m, &bits, 4);
     float p = -1.7417939f + (2.8212026f + (-1.4699568f + (0.4471900f - 0.0568825f * m) * m) * m) * m;
     return p + (float)e;
 }
@@ -759,10 +1266,10 @@ extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int S
         DWORD OutAddr = VshGetField(I, FLD_OUT_ADDRESS);
         DWORD OutMux  = VshGetField(I, FLD_OUT_MUX);
         bool  Relative= VshGetField(I, FLD_A0X) != 0;
-        DWORD Vfield  = VshGetField(I, FLD_V);
-        bool  Final   = VshGetField(I, FLD_FINAL) != 0;
+        DWORD Vfield = VshGetField(I, FLD_V);
+        bool Final = VshGetField(I, FLD_FINAL) != 0;
 
-        VshSrc SA, SB, SC;
+        VshSrc SA{}, SB{}, SC{};
         VshDecodeSrc(I, 0, &SA);
         VshDecodeSrc(I, 1, &SB);
         VshDecodeSrc(I, 2, &SC);
