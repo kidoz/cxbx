@@ -1896,6 +1896,14 @@ XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
         if(token == 0xFFFFFFFFu)
         {
             d3dDeclaration[result.tokenCount++] = token;
+            if(result.disposition == XboxFunctionDisposition::ExecuteOnCpu &&
+               !result.cpuCompatible)
+            {
+                result.disposition = XboxFunctionDisposition::Reject;
+                result.tokenCount = 0;
+                result.reason = result.cpuIncompatibilityReason;
+                return result;
+            }
             if(result.disposition == XboxFunctionDisposition::ExecuteOnCpu)
             {
                 result.reason = "declaration_cpu_vertex_type";
@@ -1913,6 +1921,16 @@ XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
         }
 
         DWORD translatedToken = token;
+        if(tokenType == 3)
+        {
+            result.cpuCompatible = false;
+            result.cpuIncompatibilityReason = "declaration_cpu_tessellator";
+        }
+        else if(tokenType == 5)
+        {
+            result.cpuCompatible = false;
+            result.cpuIncompatibilityReason = "declaration_cpu_extension";
+        }
         if(tokenType == 2 && (token & 0x10000000u) == 0)
         {
             const DWORD reg = token & 0x1Fu;
@@ -1947,7 +1965,16 @@ XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
         std::size_t payloadCount = 0;
         if(tokenType == 4)
         {
-            payloadCount = static_cast<std::size_t>((token >> 25) & 0xFu) * 4;
+            const std::size_t constantCount = (token >> 25) & 0xFu;
+            const std::size_t constantAddress = token & 0x7Fu;
+            if(constantAddress > 95 || constantCount > 96 - constantAddress)
+            {
+                result.disposition = XboxFunctionDisposition::Reject;
+                result.tokenCount = 0;
+                result.reason = "declaration_constant_range";
+                return result;
+            }
+            payloadCount = constantCount * 4;
         }
         else if(tokenType == 5)
         {
@@ -1985,6 +2012,63 @@ int XTL::EmuVshTranslateXboxDeclaration(const DWORD* pXboxDecl, DWORD* pPcDecl, 
     return result.disposition == VshDiagnostics::XboxFunctionDisposition::Reject
                ? 0
                : static_cast<int>(result.tokenCount);
+}
+
+bool XTL::VshDiagnostics::ApplyXboxDeclarationConstants(const void* xboxDeclarationData,
+                                                        const float* baseConstants,
+                                                        float* outputConstants,
+                                                        std::size_t constantFloatCount)
+{
+    constexpr std::size_t HardwareConstantFloatCount = 192 * 4;
+    if(xboxDeclarationData == nullptr || baseConstants == nullptr || outputConstants == nullptr ||
+       constantFloatCount < HardwareConstantFloatCount)
+    {
+        return false;
+    }
+
+    std::memmove(outputConstants, baseConstants, HardwareConstantFloatCount * sizeof(float));
+    const DWORD* declaration = static_cast<const DWORD*>(xboxDeclarationData);
+    for(std::size_t tokenIndex = 0; tokenIndex < VSH_MAX_DECLARATION_TOKENS;)
+    {
+        const DWORD token = declaration[tokenIndex++];
+        if(token == 0xFFFFFFFFu)
+        {
+            return true;
+        }
+        const DWORD tokenType = token >> 29;
+        if(tokenType == 6 || tokenType == 7)
+        {
+            return false;
+        }
+
+        std::size_t payloadCount = 0;
+        if(tokenType == 4)
+        {
+            const std::size_t constantCount = (token >> 25) & 0xFu;
+            const std::size_t constantAddress = token & 0x7Fu;
+            if(constantAddress > 95 || constantCount > 96 - constantAddress)
+            {
+                return false;
+            }
+            payloadCount = constantCount * 4;
+            if(payloadCount > VSH_MAX_DECLARATION_TOKENS - tokenIndex)
+            {
+                return false;
+            }
+            std::memcpy(&outputConstants[(96 + constantAddress) * 4],
+                        &declaration[tokenIndex], payloadCount * sizeof(DWORD));
+        }
+        else if(tokenType == 5)
+        {
+            payloadCount = (token >> 24) & 0x1Fu;
+        }
+        if(payloadCount > VSH_MAX_DECLARATION_TOKENS - tokenIndex)
+        {
+            return false;
+        }
+        tokenIndex += payloadCount;
+    }
+    return false;
 }
 
 namespace
@@ -2156,6 +2240,29 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, cons
     const DWORD* declaration = static_cast<const DWORD*>(xboxDeclarationData);
     std::array<std::size_t, 16> streamOffsets{};
     DWORD currentStream = 0;
+    const auto consumeStreamBytes = [&](DWORD streamIndex, std::size_t byteCount)
+    {
+        if(streamIndex >= streamCount)
+        {
+            return false;
+        }
+        const VertexStreamView& stream = streams[streamIndex];
+        if(stream.data == nullptr || stream.stride == 0 ||
+           vertexIndex > (std::numeric_limits<std::size_t>::max)() / stream.stride)
+        {
+            return false;
+        }
+        const std::size_t vertexOffset = vertexIndex * stream.stride;
+        const std::size_t streamOffset = streamOffsets[streamIndex];
+        if(streamOffset > stream.stride || byteCount > stream.stride - streamOffset ||
+           vertexOffset > stream.byteSize || streamOffset > stream.byteSize - vertexOffset ||
+           byteCount > stream.byteSize - vertexOffset - streamOffset)
+        {
+            return false;
+        }
+        streamOffsets[streamIndex] += byteCount;
+        return true;
+    };
     for(std::size_t tokenIndex = 0; tokenIndex < 128; ++tokenIndex)
     {
         const DWORD token = declaration[tokenIndex];
@@ -2163,21 +2270,48 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, cons
         {
             return true;
         }
-        if((token >> 29) == 1u)
+        const DWORD tokenType = token >> 29;
+        if(tokenType == 1u)
         {
+            if((token & 0x10000000u) != 0)
+            {
+                return false;
+            }
             currentStream = token & 0xFu;
             continue;
         }
-        if((token >> 29) != 2u || (token & 0x10000000u) != 0)
+        if(tokenType == 3u || tokenType == 5u || tokenType == 6u || tokenType == 7u)
         {
+            return false;
+        }
+        if(tokenType == 4u)
+        {
+            const std::size_t payloadCount = static_cast<std::size_t>((token >> 25) & 0xFu) * 4;
+            if(payloadCount > 127 - tokenIndex)
+            {
+                return false;
+            }
+            tokenIndex += payloadCount;
+            continue;
+        }
+        if(tokenType != 2u)
+        {
+            continue;
+        }
+        if((token & 0x10000000u) != 0)
+        {
+            const std::size_t skipBytes = static_cast<std::size_t>((token >> 16) & 0xFu) * 4;
+            if(!consumeStreamBytes(currentStream, skipBytes))
+            {
+                return false;
+            }
             continue;
         }
 
         const DWORD reg = token & 0x1Fu;
         const DWORD type = (token >> 16) & 0xFFu;
         const std::size_t valueSize = VshXboxVertexTypeSize(type);
-        if(reg >= 16 || currentStream >= streamCount ||
-           valueSize == (std::numeric_limits<std::size_t>::max)())
+        if(reg >= 16 || valueSize == (std::numeric_limits<std::size_t>::max)())
         {
             return false;
         }
@@ -2186,23 +2320,17 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, cons
             continue;
         }
 
-        const VertexStreamView& stream = streams[currentStream];
-        if(stream.data == nullptr || stream.stride == 0 ||
-           vertexIndex > (std::numeric_limits<std::size_t>::max)() / stream.stride)
-        {
-            return false;
-        }
-        const std::size_t vertexOffset = vertexIndex * stream.stride;
-        if(vertexOffset > stream.byteSize || streamOffsets[currentStream] > stream.byteSize - vertexOffset ||
-           valueSize > stream.byteSize - vertexOffset - streamOffsets[currentStream])
+        const std::size_t sourceOffset = streamOffsets[currentStream];
+        if(!consumeStreamBytes(currentStream, valueSize))
         {
             return false;
         }
 
+        const VertexStreamView& stream = streams[currentStream];
+        const std::size_t vertexOffset = vertexIndex * stream.stride;
         const std::uint8_t* source = static_cast<const std::uint8_t*>(stream.data) + vertexOffset +
-                                     streamOffsets[currentStream];
+                                     sourceOffset;
         VshDecodeXboxVertexValue(source, type, &inputRegisters[reg * 4]);
-        streamOffsets[currentStream] += valueSize;
     }
     return false;
 }
