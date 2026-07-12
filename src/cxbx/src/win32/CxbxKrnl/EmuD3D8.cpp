@@ -981,6 +981,45 @@ static DWORD EmuCheckAllocationSize(PVOID pBase)
     return MemoryBasicInfo.RegionSize - ((DWORD)pBase - (DWORD)MemoryBasicInfo.BaseAddress);
 }
 
+static bool EmuD3DIsReadableRange(const void* base, DWORD bytes)
+{
+    if(base == NULL || bytes == 0)
+    {
+        return false;
+    }
+
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(base);
+    const uintptr_t end = begin + bytes;
+    if(end < begin)
+    {
+        return false;
+    }
+
+    uintptr_t current = begin;
+    while(current < end)
+    {
+        MEMORY_BASIC_INFORMATION memory = {};
+        if(VirtualQuery(reinterpret_cast<const void*>(current),
+                        &memory,
+                        sizeof(memory)) != sizeof(memory) ||
+           memory.State != MEM_COMMIT ||
+           (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        {
+            return false;
+        }
+
+        const uintptr_t regionEnd =
+            reinterpret_cast<uintptr_t>(memory.BaseAddress) + memory.RegionSize;
+        if(regionEnd <= current)
+        {
+            return false;
+        }
+        current = regionEnd;
+    }
+
+    return true;
+}
+
 // ******************************************************************
 // * func: EmuVerifyResourceIsRegistered
 // ******************************************************************
@@ -4242,6 +4281,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 // is unknown). One wrong texture beats a dead process.
                 printf("*Warning* Register: unhandled format 0x%.08X, texture left blank\n", X_Format);
 
+                Format = D3DFMT_A8R8G8B8;
                 bSwizzled = TRUE;
                 dwWidth  = 1 << ((pPixelContainer->Format & X_D3DFORMAT_USIZE_MASK) >> X_D3DFORMAT_USIZE_SHIFT);
                 dwHeight = 1 << ((pPixelContainer->Format & X_D3DFORMAT_VSIZE_MASK) >> X_D3DFORMAT_VSIZE_SHIFT);
@@ -4290,7 +4330,39 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 );
 
                 if(FAILED(hRet))
-                    EmuCleanup("CreateTexture failed");
+                {
+                    EmuWarning("Resource_Register: CreateTexture(%lu, %lu, %lu, format=0x%.08lX) failed (0x%.08lX); using a blank placeholder",
+                               dwWidth,
+                               dwHeight,
+                               dwMipMapLevels,
+                               Format,
+                               hRet);
+
+                    pResource->EmuTexture8 = NULL;
+                    hRet = g_pD3DDevice8->CreateTexture(
+                        4,
+                        4,
+                        1,
+                        0,
+                        D3DFMT_A8R8G8B8,
+                        D3DPOOL_MANAGED,
+                        &pResource->EmuTexture8);
+                    if(FAILED(hRet) || pResource->EmuTexture8 == NULL)
+                    {
+                        EmuWarning("Resource_Register: placeholder texture creation failed (0x%.08lX); resource left unbacked",
+                                   hRet);
+                        break;
+                    }
+
+                    dwWidth = 4;
+                    dwHeight = 4;
+                    dwMipMapLevels = 1;
+                    dwPitch = 4 * sizeof(DWORD);
+                    dwBPP = sizeof(DWORD);
+                    bSwizzled = FALSE;
+                    bCompressed = FALSE;
+                    pBase = NULL;
+                }
             }
 
             D3DLOCKED_RECT LockedRect;
@@ -4315,7 +4387,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             DWORD dwSourceSize = bCompressed ? (DWORD)dwCompressedSize
                                              : (dwPitch != 0 ? dwPitch : dwWidth*dwBPP) * dwHeight;
 
-            if(pBase == NULL || dwSourceSize == 0 || IsBadReadPtr(pBase, dwSourceSize))
+            if(!EmuD3DIsReadableRange(pBase, dwSourceSize))
             {
                 printf("*Warning* Register skipped copying a texture with an unreadable source (base=0x%.08X size=0x%X)\n",
                        (DWORD)pBase, dwSourceSize);
