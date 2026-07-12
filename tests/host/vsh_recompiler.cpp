@@ -73,8 +73,10 @@ bool PositionsEqual(const ShaderOutputs& left, const ShaderOutputs& right)
 }
 
 bool ReadD3D8Source(DWORD token, const std::array<std::array<float, 4>, 12>& temporaries,
-                    const float* constants, const float* inputs, float output[4])
+                    const float* constants, const float* inputs, int addressRegister,
+                    float output[4])
 {
+    static constexpr float zero[4] = {};
     const DWORD registerType = (token >> 28) & 0x7u;
     const DWORD registerIndex = token & 0x7FFu;
     const float* source = nullptr;
@@ -86,9 +88,18 @@ bool ReadD3D8Source(DWORD token, const std::array<std::array<float, 4>, 12>& tem
     {
         source = &inputs[registerIndex * 4];
     }
-    else if(registerType == 2 && registerIndex < 96 && (token & (1u << 13)) == 0)
+    else if(registerType == 2)
     {
-        source = &constants[registerIndex * 4];
+        const int constantIndex = static_cast<int>(registerIndex) +
+                                  (((token & (1u << 13)) != 0) ? addressRegister : 0);
+        if(constantIndex >= 0 && constantIndex < 96)
+        {
+            source = &constants[static_cast<std::size_t>(constantIndex) * 4];
+        }
+        else
+        {
+            source = zero;
+        }
     }
     if(source == nullptr)
     {
@@ -140,6 +151,7 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
     }
 
     std::array<std::array<float, 4>, 12> temporaries{};
+    int addressRegister = 0;
     std::size_t tokenIndex = 1;
     while(tokenIndex < maxTokens && function[tokenIndex] != 0x0000FFFFu)
     {
@@ -159,6 +171,7 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
         for(std::size_t sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex)
         {
             if(!ReadD3D8Source(function[tokenIndex++], temporaries, constants, inputs,
+                               addressRegister,
                                sources[sourceIndex]))
             {
                 return false;
@@ -201,6 +214,12 @@ bool ExecuteD3D8Bytecode(const DWORD* function, std::size_t maxTokens, const flo
             return false;
         }
 
+        const DWORD destinationType = (destinationToken >> 28) & 0x7u;
+        if(destinationType == 3 && (destinationToken & 0x7FFu) == 0)
+        {
+            addressRegister = static_cast<int>(std::floor(result[0] + 0.5f));
+            continue;
+        }
         float* destination = ResolveD3D8Destination(destinationToken, temporaries, outputs);
         if(destination == nullptr)
         {
@@ -379,6 +398,36 @@ constexpr DWORD kPairedReadBeforeWriteProgram[] = {
     0x08000000u,
     0x0000F801u,
 };
+
+constexpr DWORD kRelativeConstantProgram[] = {
+    0x00032078u,
+    0x00000000u,
+    0x01A0001Bu,
+    0x08000000u,
+    0x00000000u,
+    0x00000000u,
+    0x002C201Bu,
+    0x0C000000u,
+    0x0000F81Au,
+    0x00000000u,
+    0x0020021Bu,
+    0x08000000u,
+    0x0000F801u,
+};
+
+constexpr DWORD kHostRelativeProgram[] = {
+    0xFFFE0101u,
+    0x00000001u,
+    0xB0010000u,
+    0x90000000u,
+    0x00000001u,
+    0xD00F0000u,
+    0xA0E42001u,
+    0x00000001u,
+    0xC00F0000u,
+    0x90E40001u,
+    0x0000FFFFu,
+};
 } // namespace
 
 int RunTests()
@@ -478,6 +527,80 @@ int RunTests()
     checkRcc(0x1p-80f, 0x1p64f, "RCC clamps tiny positive input to positive 2^64");
     checkRcc(-0x1p-80f, -0x1p64f, "RCC clamps tiny negative input to negative 2^64");
     checkRcc(0.0f, 0x1p64f, "RCC clamps zero to positive 2^64");
+
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(kRelativeConstantProgram, fallbackReason),
+          "relative constants require exact CPU fallback");
+    Check(fallbackReason == "relative_constant_dynamic_range",
+          "relative-constant CPU fallback reason is stable");
+    DWORD* relativeTranslation = XTL::EmuVshRecompileXboxFunction(kRelativeConstantProgram);
+    Check(relativeTranslation == nullptr,
+          "relative constants never emit round-to-nearest host ARL bytecode");
+    delete[] relativeTranslation;
+
+    for(std::size_t constant = 0; constant < 192; ++constant)
+    {
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            rccConstants[constant * 4 + component] =
+                static_cast<float>(constant * 10 + component);
+        }
+    }
+    const auto checkRelativeConstant = [&](float address, std::size_t expectedConstant,
+                                           const char* name)
+    {
+        rccInputs.fill(0.0f);
+        rccInputs[0] = address;
+        ShaderOutputs outputs{};
+        const bool executed = XTL::VshDiagnostics::ExecuteXboxVertexShader(
+            kRelativeConstantProgram, rccConstants.data(), rccInputs.data(),
+            outputs.position.data(), outputs.colors.data(), outputs.colors.size(),
+            outputs.texCoords.data(), outputs.texCoords.size());
+        Check(executed, name);
+        bool colorMatches = true;
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            colorMatches = colorMatches &&
+                           NearlyEqual(outputs.colors[component],
+                                       rccConstants[expectedConstant * 4 + component]);
+        }
+        Check(colorMatches, name);
+    };
+    checkRelativeConstant(-0.25f, 96, "NV2A ARL floors a negative fractional address");
+    checkRelativeConstant(1.75f, 98, "NV2A ARL floors a positive fractional address");
+    checkRelativeConstant(-100.0f, 0, "relative constant address clamps at hardware c0");
+    checkRelativeConstant(100.0f, 191, "relative constant address clamps at hardware c191");
+
+    std::array<float, 96 * 4> hostRelativeConstants{};
+    for(std::size_t component = 0; component < 4; ++component)
+    {
+        hostRelativeConstants[component] = static_cast<float>(10 + component);
+        hostRelativeConstants[4 + component] = static_cast<float>(20 + component);
+    }
+    rccInputs.fill(0.0f);
+    rccInputs[0] = -0.25f;
+    const XTL::VshDiagnostics::ValidationResult hostRelativeValidation =
+        XTL::VshDiagnostics::ValidateD3D8Function(kHostRelativeProgram,
+                                                  std::size(kHostRelativeProgram));
+    Check(hostRelativeValidation.valid, "host relative-address bytecode validates");
+    ShaderOutputs hostRoundedRelativeOutputs{};
+    Check(ExecuteD3D8Bytecode(kHostRelativeProgram, std::size(kHostRelativeProgram),
+                              hostRelativeConstants.data(), rccInputs.data(),
+                              hostRoundedRelativeOutputs),
+          "host relative-address bytecode executes independently");
+    Check(NearlyEqual(hostRoundedRelativeOutputs.colors[0], hostRelativeConstants[4]),
+          "vs.1.1 address MOV rounds -0.25 to zero");
+    rccInputs[0] = 100.0f;
+    ShaderOutputs hostOutOfRangeRelativeOutputs{};
+    Check(ExecuteD3D8Bytecode(kHostRelativeProgram, std::size(kHostRelativeProgram),
+                              hostRelativeConstants.data(), rccInputs.data(),
+                              hostOutOfRangeRelativeOutputs),
+          "host out-of-range relative bytecode executes independently");
+    Check(NearlyEqual(hostOutOfRangeRelativeOutputs.colors[0], 0.0f) &&
+              NearlyEqual(hostOutOfRangeRelativeOutputs.colors[1], 0.0f) &&
+              NearlyEqual(hostOutOfRangeRelativeOutputs.colors[2], 0.0f) &&
+              NearlyEqual(hostOutOfRangeRelativeOutputs.colors[3], 0.0f),
+          "vs.1.1 out-of-range relative constants read zero");
 
     std::array<float, 16 * 4> r11R12Inputs{};
     r11R12Inputs[0] = 1.0f;
