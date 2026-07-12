@@ -899,6 +899,69 @@ bool XTL::VshDiagnostics::ExpandQuadListIndices(const std::uint32_t* sourceIndic
     return true;
 }
 
+float XTL::VshDiagnostics::SelectRasterOutput(const float values[4], std::uint8_t writeMask,
+                                              float fallback)
+{
+    for(std::size_t component = 0; component < 4; ++component)
+    {
+        if((writeMask & (0x8u >> component)) != 0)
+        {
+            return values[component];
+        }
+    }
+    return fallback;
+}
+
+float XTL::VshDiagnostics::ClampPointSize(float pointSize, float fallback, float maximum)
+{
+    if(!(fallback > 0.0f))
+    {
+        fallback = 1.0f;
+    }
+    if(!(maximum > 0.0f))
+    {
+        maximum = fallback;
+    }
+    if(!(pointSize > 0.0f))
+    {
+        pointSize = fallback;
+    }
+    return pointSize > maximum ? maximum : pointSize;
+}
+
+std::uint32_t XTL::VshDiagnostics::PackD3DColor(const float color[4])
+{
+    std::uint32_t channels[4] = {};
+    for(std::size_t component = 0; component < 4; ++component)
+    {
+        if(!(color[component] > 0.0f))
+        {
+            channels[component] = 0;
+        }
+        else if(color[component] >= 1.0f)
+        {
+            channels[component] = 255;
+        }
+        else
+        {
+            channels[component] = static_cast<std::uint32_t>(color[component] * 255.0f);
+        }
+    }
+    return (channels[3] << 24) | (channels[0] << 16) | (channels[1] << 8) | channels[2];
+}
+
+std::uint32_t XTL::VshDiagnostics::PackD3DSpecularFog(
+    const float specular[4], const RasterOutputs& rasterOutputs)
+{
+    const float color[4] = {
+        specular[0],
+        specular[1],
+        specular[2],
+        SelectRasterOutput(rasterOutputs.fog, rasterOutputs.fogWriteMask, 1.0f),
+    };
+    return PackD3DColor(color);
+}
+
 std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xboxFunctionData)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
@@ -1709,7 +1772,8 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
                                       const float* Const, const float* Input,
                                       float* OutPos, float* OutColors,
                                       std::size_t OutColorFloatCount, float* OutTexCoords,
-                                      std::size_t OutTexCoordFloatCount)
+                                      std::size_t OutTexCoordFloatCount,
+                                      XTL::VshDiagnostics::RasterOutputs* OutRaster)
 {
     if(Program == NULL || InstrCount <= 0)
         return false;
@@ -1727,6 +1791,8 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
     float Tex[4][4] = { { 0 } };
     float Fog[4] = { 0, 0, 0, 0 };
     float Pts[4] = { 0, 0, 0, 0 };
+    std::uint8_t FogWriteMask = 0;
+    std::uint8_t PtsWriteMask = 0;
     int A0 = 0;
 
     if(Start < 0) Start = 0;
@@ -1778,7 +1844,18 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
             if(OMask != 0 && OutMux == OMUX_MAC && Orb == OUTPUT_O)
             {
                 float* d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
-                if(d) VshExecWriteMasked(d, Rm, OMask);
+                if(d != nullptr)
+                {
+                    VshExecWriteMasked(d, Rm, OMask);
+                    if(OutAddr == 5)
+                    {
+                        FogWriteMask |= static_cast<std::uint8_t>(OMask);
+                    }
+                    else if(OutAddr == 6)
+                    {
+                        PtsWriteMask |= static_cast<std::uint8_t>(OMask);
+                    }
+                }
             }
         }
 
@@ -1792,7 +1869,18 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
             if(OMask != 0 && OutMux == OMUX_ILU && Orb == OUTPUT_O)
             {
                 float* d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
-                if(d) VshExecWriteMasked(d, Ri, OMask);
+                if(d != nullptr)
+                {
+                    VshExecWriteMasked(d, Ri, OMask);
+                    if(OutAddr == 5)
+                    {
+                        FogWriteMask |= static_cast<std::uint8_t>(OMask);
+                    }
+                    else if(OutAddr == 6)
+                    {
+                        PtsWriteMask |= static_cast<std::uint8_t>(OMask);
+                    }
+                }
             }
         }
 
@@ -1815,6 +1903,13 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
         const std::size_t copyCount = std::min<std::size_t>(OutTexCoordFloatCount, 4 * 4);
         std::memcpy(OutTexCoords, Tex, copyCount * sizeof(float));
     }
+    if(OutRaster != nullptr)
+    {
+        std::memcpy(OutRaster->fog, Fog, sizeof(Fog));
+        std::memcpy(OutRaster->pointSize, Pts, sizeof(Pts));
+        OutRaster->fogWriteMask = FogWriteMask;
+        OutRaster->pointSizeWriteMask = PtsWriteMask;
+    }
     return true;
 }
 
@@ -1823,14 +1918,16 @@ extern "C" bool EmuVshExecuteProgram(const DWORD* Program, int InstrCount, int S
                                      float* OutPos, float* OutCol0, float* OutTex0)
 {
     return VshExecuteProgramInternal(Program, InstrCount, Start, Const, Input, OutPos, OutCol0,
-                                     OutCol0 == nullptr ? 0 : 4, OutTex0, OutTex0 == nullptr ? 0 : 4);
+                                     OutCol0 == nullptr ? 0 : 4, OutTex0,
+                                     OutTex0 == nullptr ? 0 : 4, nullptr);
 }
 
 bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, const float* constants,
                                                   const float* inputRegisters, float* outputPosition,
                                                   float* outputColors, std::size_t outputColorFloatCount,
                                                   float* outputTexCoords,
-                                                  std::size_t outputTexCoordFloatCount)
+                                                  std::size_t outputTexCoordFloatCount,
+                                                  RasterOutputs* outputRaster)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
     if(xboxFunction == nullptr || constants == nullptr || inputRegisters == nullptr ||
@@ -1842,5 +1939,6 @@ bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, 
     const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
     return VshExecuteProgramInternal(&xboxFunction[1], static_cast<int>(instructionCount), 0, constants,
                                      inputRegisters, outputPosition, outputColors,
-                                     outputColorFloatCount, outputTexCoords, outputTexCoordFloatCount);
+                                     outputColorFloatCount, outputTexCoords,
+                                     outputTexCoordFloatCount, outputRaster);
 }

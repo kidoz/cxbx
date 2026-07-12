@@ -43,6 +43,14 @@ struct VertexStreamView
     std::size_t stride = 0;
 };
 
+struct RasterOutputs
+{
+    float fog[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float pointSize[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    std::uint8_t fogWriteMask = 0;
+    std::uint8_t pointSizeWriteMask = 0;
+};
+
 struct TranslationCapture
 {
     const void* xboxFunction = nullptr;
@@ -57,6 +65,10 @@ ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTo
 ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);
 bool ExpandQuadListIndices(const std::uint32_t* sourceIndices, std::size_t sourceIndexCount,
                            std::vector<std::uint32_t>& expandedIndices);
+float SelectRasterOutput(const float values[4], std::uint8_t writeMask, float fallback);
+float ClampPointSize(float pointSize, float fallback, float maximum);
+std::uint32_t PackD3DColor(const float color[4]);
+std::uint32_t PackD3DSpecularFog(const float specular[4], const RasterOutputs& rasterOutputs);
 bool DecodeXboxVertex(const void* xboxDeclaration, const VertexStreamView* streams,
                       std::size_t streamCount, std::size_t vertexIndex,
                       float* inputRegisters, std::size_t inputFloatCount);
@@ -64,7 +76,8 @@ bool ExecuteXboxVertexShader(const void* xboxFunction, const float* constants,
                              const float* inputRegisters, float* outputPosition,
                              float* outputColors, std::size_t outputColorFloatCount,
                              float* outputTexCoords,
-                             std::size_t outputTexCoordFloatCount);
+                             std::size_t outputTexCoordFloatCount,
+                             RasterOutputs* outputRaster = nullptr);
 std::vector<std::string> DecodeXboxFunction(const void* xboxFunction);
 std::vector<std::string> DecodeD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 void DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture);
