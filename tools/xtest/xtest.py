@@ -38,7 +38,13 @@ TOOLS_DIR = HERE.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from tool_config import config_path_value, load_config as load_tool_config, repo_root
+from tool_config import (  # noqa: E402
+    config_path_value,
+    repo_root,
+)
+from tool_config import load_config as load_tool_config  # noqa: E402
+from traceevt import decode_event_file  # noqa: E402
+from tracegrammar import extract_prefixed_payload  # noqa: E402
 
 OUT_DIR = HERE / "out"
 Config = dict[str, Any]
@@ -57,7 +63,9 @@ def load_config() -> Config:
         sys.exit(str(e))
 
     paths = cfg.setdefault("paths", {})
-    suite_dir = config_path_value(cfg, "paths", "suite_dir", default=repo_root() / "tests" / "suite")
+    suite_dir = config_path_value(
+        cfg, "paths", "suite_dir", default=repo_root() / "tests" / "suite"
+    )
     if suite_dir is not None:
         paths["suite_dir"] = str(suite_dir)
     for key in ("nxdk_dir", "msys2_bash"):
@@ -105,6 +113,18 @@ def probe_env(suite_dir: Path, name: str) -> dict[str, str]:
         return {}
     with open(p, "rb") as f:
         return {str(k): str(v) for k, v in tomllib.load(f).get("env", {}).items()}
+
+
+def probe_golden_mode(suite_dir: Path, name: str) -> str:
+    """Return the probe's golden projection: verdicts (default) or values."""
+    path = suite_dir / "probes" / name / "probe.toml"
+    if not path.exists():
+        return "verdicts"
+    with open(path, "rb") as file:
+        mode = str(tomllib.load(file).get("golden", "verdicts"))
+    if mode not in {"verdicts", "values"}:
+        raise ValueError(f"{path}: golden must be 'verdicts' or 'values'")
+    return mode
 
 
 def target_capabilities(cfg: Config, args: argparse.Namespace) -> set[str] | None:
@@ -276,14 +296,12 @@ class ProbeResult:
         self.diff = ""
         self.trace_text = ""
         self.timed_out = False
+        self.host_trace_text = ""
+        self.host_trace_error = ""
 
 
 CHK_RE = re.compile(r"^CHK (\S+) .*?(PASS|FAIL)\s*$")
 RESULT_RE = re.compile(r"^#result (\S+) verdict=(\S+) checks=(\d+) fail=(\d+)")
-# Every trace line is also mirrored live through DbgPrint as "XT| <line>" (see
-# tests/suite/common/xtrace.c). We tolerate an emulator-supplied line prefix
-# (timestamp/thread tag) before the marker and keep everything after it.
-XT_MIRROR_RE = re.compile(r"XT\| (.*)$")
 
 
 def dbgprint_trace(log_path: Path | None) -> str:
@@ -304,7 +322,11 @@ def dbgprint_trace(log_path: Path | None) -> str:
         text = Path(log_path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    lines = [m.group(1) for line in text.splitlines() if (m := XT_MIRROR_RE.search(line))]
+    lines = [
+        payload
+        for line in text.splitlines()
+        if (payload := extract_prefixed_payload(line, "XT")) is not None
+    ]
     return "\n".join(lines)
 
 
@@ -324,7 +346,7 @@ def parse_trace(text: str, res: ProbeResult) -> None:
         res.verdict = "PARTIAL"
 
 
-def normalize_for_golden(text: str) -> list[str]:
+def normalize_for_golden(text: str, keep_values: bool = False) -> list[str]:
     """Stable, value-independent projection used for regression diffing:
     keep header, CHK verdicts (name+verdict only), and the #result line."""
     out = []
@@ -334,18 +356,44 @@ def normalize_for_golden(text: str) -> list[str]:
         elif line.startswith("CHK "):
             m = CHK_RE.match(line)
             if m:
-                out.append(f"CHK {m.group(1)} {m.group(2)}")
+                out.append(line.strip() if keep_values else f"CHK {m.group(1)} {m.group(2)}")
         elif line.startswith("#result"):
             out.append(line)
     return out
 
 
-def golden_compare(suite_dir: Path, emulator: str, res: ProbeResult, update: bool) -> None:
+def capture_host_trace(event_path: Path, probe: str) -> tuple[str, str]:
+    """Decode a requested Cxbx event stream into a stable per-probe host trace."""
+    if not event_path.exists():
+        return "", "requested event file was not created"
+    try:
+        decoded = decode_event_file(event_path)
+    except (OSError, ValueError) as error:
+        return "", str(error)
+    lines: list[str] = []
+    for record in decoded["records"]:
+        if record["kind"] == "event":
+            lines.append(str(record["text"]))
+        elif record["kind"] == "dropped":
+            lines.append(
+                f"TRACE| v=2 dropped tid_ix={record['thread_index']} count={record['count']}"
+            )
+        else:
+            return "", f"unknown event id {record['event_id']}"
+    output = OUT_DIR / f"{probe}.host.trace"
+    output.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    violations = decoded["sequence_violations"]
+    return "\n".join(lines), "; ".join(str(item) for item in violations)
+
+
+def golden_compare(
+    suite_dir: Path, emulator: str, res: ProbeResult, update: bool, keep_values: bool
+) -> None:
     # Goldens are per-emulator baselines (golden/<emulator>/<probe>.golden), so
     # each target tracks its own progress without clobbering another's.
     gdir = suite_dir / "golden" / emulator
     gpath = gdir / f"{res.name}.golden"
-    actual = normalize_for_golden(res.trace_text)
+    actual = normalize_for_golden(res.trace_text, keep_values)
     if update:
         gdir.mkdir(parents=True, exist_ok=True)
         gpath.write_text("\n".join(actual) + "\n", encoding="utf-8")
@@ -411,8 +459,10 @@ def print_report(results: Sequence[ProbeResult], emulator: str) -> bool:
             print(f"\n  [{r.name}] golden diff:")
             for line in r.diff.splitlines():
                 print("    " + line)
+        if r.host_trace_error:
+            print(f"\n  [{r.name}] host trace error: {r.host_trace_error}")
     print()
-    return n_fail == 0
+    return n_fail == 0 and not any(r.host_trace_error for r in results)
 
 
 def write_junit(results: Sequence[ProbeResult], emulator: str) -> None:
@@ -484,6 +534,9 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     names = args.probe or discover_probes(suite_dir)
     adapter = make_adapter(cfg, args)
     timeout = args.timeout or cfg["emulator"].get("cxbx", {}).get("timeout", 25)
+    if args.host_channel and args.emulator != "cxbx":
+        print("--host-channel currently requires the cxbx adapter", file=sys.stderr)
+        return 2
 
     # Capability filtering: skip probes whose required tags the target does not
     # advertise (e.g. an "nv2a" probe on an emulator with no GPU model, which
@@ -512,8 +565,22 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         # One retry for environmental no-runs (stale guest process / locked
         # %TEMP% exe left by the previous probe): a genuinely broken probe
         # fails identically twice, so the retry cannot mask a real regression.
+        event_path: Path | None = None
         for attempt in range(2):
-            rr = adapter.run(name, timeout, probe_env(suite_dir, name))
+            runtime_env = probe_env(suite_dir, name)
+            if args.host_channel:
+                OUT_DIR.mkdir(exist_ok=True)
+                event_path = OUT_DIR / f"{name}.evt"
+                event_path.unlink(missing_ok=True)
+                channels = {
+                    item.strip()
+                    for item in runtime_env.get("CXBX_TRACE", "").split(",")
+                    if item.strip()
+                }
+                channels.update(args.host_channel)
+                runtime_env["CXBX_TRACE"] = ",".join(sorted(channels))
+                runtime_env["CXBX_TRACE_EVT_FILE"] = str(event_path.resolve())
+            rr = adapter.run(name, timeout, runtime_env)
             res = ProbeResult(name)
             res.timed_out = rr.timed_out
             if rr.trace_path and Path(rr.trace_path).exists():
@@ -540,8 +607,11 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
                 break
             if attempt == 0:
                 print(f"{res.verdict}, retrying ...", end=" ", flush=True)
+        if event_path is not None:
+            res.host_trace_text, res.host_trace_error = capture_host_trace(event_path, name)
         if res.trace_text:
-            golden_compare(suite_dir, args.emulator, res, args.update_golden)
+            keep_values = args.golden_values or probe_golden_mode(suite_dir, name) == "values"
+            golden_compare(suite_dir, args.emulator, res, args.update_golden, keep_values)
         print(res.verdict + (f" ({res.golden})" if res.golden not in ("-",) else ""))
         results.append(res)
 
@@ -554,6 +624,11 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
             print(f"\n  === trace: {r.name} ===")
             for line in r.trace_text.splitlines():
                 print("    " + line)
+    if getattr(args, "show_host_trace", False):
+        for result in results:
+            print(f"\n  === host trace: {result.name} ===")
+            for line in result.host_trace_text.splitlines():
+                print("    " + line)
 
     write_junit(results, args.emulator)
     return 0 if ok else 1
@@ -563,6 +638,31 @@ def cmd_gate(cfg: Config, args: argparse.Namespace) -> int:
     """One-command CI gate: audit the kernel thunk table, (re)build the emulator,
     build every probe, run the full suite. Exit 0 only if the audit passes and
     every probe passes and matches its golden."""
+    generator = repo_root() / "tools" / "trace" / "gen_trace.py"
+    print("[gate] checking generated trace contracts ...", flush=True)
+    generated = subprocess.run(
+        [sys.executable, str(generator), "--check", "--self-test"],
+        capture_output=True,
+        text=True,
+    )
+    if generated.returncode != 0:
+        sys.stdout.write(generated.stdout)
+        sys.stderr.write(generated.stderr)
+        print("[gate] generated trace contract FAILED")
+        return 1
+
+    event_decoder = repo_root() / "tools" / "traceevt.py"
+    decoded = subprocess.run(
+        [sys.executable, str(event_decoder), "--self-test"],
+        capture_output=True,
+        text=True,
+    )
+    if decoded.returncode != 0:
+        sys.stdout.write(decoded.stdout)
+        sys.stderr.write(decoded.stderr)
+        print("[gate] binary trace decoder FAILED")
+        return 1
+
     # Fail-fast source check: the kernel thunk table must match the Xbox ABI
     # ordinals (a shift there crashes every title at startup with no obvious cause).
     audit = Path(__file__).resolve().parents[1] / "kernelaudit" / "check_kernel_thunks.py"
@@ -602,7 +702,10 @@ def cmd_gate(cfg: Config, args: argparse.Namespace) -> int:
         capability=None,
         all=True,
         update_golden=False,
+        golden_values=False,
         show_trace=False,
+        host_channel=[],
+        show_host_trace=False,
     )
     return cmd_run(cfg, run_args)
 
@@ -625,7 +728,8 @@ def main() -> int:
     r.add_argument("--timeout", type=int, help="per-probe timeout seconds")
     r.add_argument("--no-build", action="store_true", help="skip building")
     r.add_argument(
-        "--capability", action="append",
+        "--capability",
+        action="append",
         help="declare a target capability, e.g. nv2a (repeatable); overrides config",
     )
     r.add_argument("--all", action="store_true", help="run all probes, ignore capability filter")
@@ -633,13 +737,27 @@ def main() -> int:
         "--update-golden", action="store_true", help="write current normalized traces as goldens"
     )
     r.add_argument(
+        "--golden-values",
+        action="store_true",
+        help="preserve complete CHK expect/got values in golden comparisons",
+    )
+    r.add_argument(
         "--show-trace", action="store_true", help="print each probe's full trace after the report"
+    )
+    r.add_argument(
+        "--host-channel",
+        action="append",
+        default=[],
+        help="capture and decode a Cxbx host trace channel (repeatable)",
+    )
+    r.add_argument(
+        "--show-host-trace",
+        action="store_true",
+        help="print decoded host-channel captures after the report",
     )
     r.set_defaults(func=cmd_run)
 
-    g = sub.add_parser(
-        "gate", help="CI gate: build emulator + every probe, run the full suite"
-    )
+    g = sub.add_parser("gate", help="CI gate: build emulator + every probe, run the full suite")
     g.add_argument("--emulator", default="cxbx", help="cxbx | custom")
     g.add_argument("--cmd", help="custom emulator command template")
     g.add_argument("--timeout", type=int, help="per-probe timeout seconds")

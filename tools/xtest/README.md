@@ -11,17 +11,25 @@ python xtest.py list                                   # discovered probes
 python xtest.py build [probe ...]                      # build XBEs only
 python xtest.py run [--emulator cxbx] [--probe NAME]   # build (unless --no-build) + run
 python xtest.py run --update-golden                    # snapshot current results as baseline
+python xtest.py run --probe nv2a_pfifo `
+  --host-channel nv2a --host-channel mmio              # capture decoded host events
 python xtest.py run --emulator custom --cmd "emu {xbe} {rundir}"
 python xtest.py gate                                   # CI gate: emulator + probes + full suite
 ```
 
 Options: `--no-build`, `--timeout N`, `--probe NAME` (repeatable),
-`--update-golden`, `--capability NAME`, `--all`, `--show-trace`. Exit code is
-non-zero if any probe is not PASS (CI-friendly).
+`--update-golden`, `--capability NAME`, `--all`, `--show-trace`,
+`--host-channel NAME` (repeatable), and `--show-host-trace`. Exit code is
+non-zero if any probe is not PASS or a requested host capture is malformed
+(CI-friendly).
 
 Failed checks are reported with their full `expect=`/`got=` detail (not just the
 check name), so a divergence is actionable from the console. `--show-trace` prints
 each probe's complete trace after the report for deeper inspection.
+`--host-channel` is currently specific to the built-in Cxbx adapter. It enables
+the requested runtime channels, captures the binary event stream, validates
+continuation groups and per-thread sequences, and writes a decoded text artifact
+alongside the normal run outputs. `--show-host-trace` prints that decoded stream.
 
 ## Configuration — `tools/config.toml`
 
