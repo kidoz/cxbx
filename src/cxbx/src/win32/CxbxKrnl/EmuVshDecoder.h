@@ -28,6 +28,14 @@ struct ValidationResult
     std::string message;
 };
 
+struct OptimizationResult
+{
+    bool valid = false;
+    std::size_t beforeInstructionCount = 0;
+    std::size_t afterInstructionCount = 0;
+    std::size_t tokenCount = 0;
+};
+
 struct TranslationCapture
 {
     const void* xboxFunction = nullptr;
@@ -37,6 +45,7 @@ struct TranslationCapture
 };
 
 std::uint32_t HashXboxFunction(const void* xboxFunction);
+OptimizationResult OptimizeD3D8Function(void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);
 std::vector<std::string> DecodeXboxFunction(const void* xboxFunction);
