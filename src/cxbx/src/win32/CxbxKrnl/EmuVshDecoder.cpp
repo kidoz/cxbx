@@ -178,10 +178,7 @@ struct VshSrc
     DWORD Mux, R, Neg, Swz[4];
 };
 
-// NV2A temp R12 is a readable alias of the position output (oPos); vs.1.1
-// outputs are write-only and temps stop at r11. Route R12 through scratch
-// temp r11 and have the recompiler emit a final `mov oPos, r11`.
-#define VSH_POS_SCRATCH 11
+constexpr DWORD VSH_HOST_TEMP_COUNT = 12;
 
 static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
 {
@@ -209,12 +206,40 @@ static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
     }
 }
 
-static bool VshFindDphScratch(const DWORD* XboxFunction, DWORD* Scratch, bool* HasDph)
+struct VshScratchPlan
 {
-    *HasDph = false;
+    bool valid = false;
+    bool needsPosition = false;
+    bool hasDph = false;
+    DWORD position = 0;
+    DWORD dph = 0;
+    const char* failureReason = nullptr;
+};
+
+static void VshMarkTempSource(const VshSrc& Source, std::array<bool, VSH_HOST_TEMP_COUNT>& Used,
+                              bool& NeedsPosition)
+{
+    if(Source.Mux != PARAM_R)
+    {
+        return;
+    }
+    if(Source.R == 12)
+    {
+        NeedsPosition = true;
+    }
+    else if(Source.R < Used.size())
+    {
+        Used[Source.R] = true;
+    }
+}
+
+static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
+{
+    VshScratchPlan plan{};
     if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
     {
-        return false;
+        plan.failureReason = "invalid_xbox_shader";
+        return plan;
     }
 
     DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
@@ -223,32 +248,75 @@ static bool VshFindDphScratch(const DWORD* XboxFunction, DWORD* Scratch, bool* H
         instructionCount = 136;
     }
 
-    std::array<bool, VSH_POS_SCRATCH> used{};
+    std::array<bool, VSH_HOST_TEMP_COUNT> used{};
     for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
     {
         const DWORD* encoded = &XboxFunction[1 + instruction * 4];
         const DWORD mac = VshGetField(encoded, FLD_MAC);
+        const DWORD ilu = VshGetField(encoded, FLD_ILU);
         const DWORD macMask = VshGetField(encoded, FLD_OUT_MAC_MASK);
         const DWORD iluMask = VshGetField(encoded, FLD_OUT_ILU_MASK);
+        const DWORD outputMask = VshGetField(encoded, FLD_OUT_O_MASK);
         const DWORD outputR = VshGetField(encoded, FLD_OUT_R);
-        *HasDph = *HasDph || mac == MAC_DPH;
+        plan.hasDph = plan.hasDph || mac == MAC_DPH;
 
         VshSrc sources[3]{};
         for(int source = 0; source < 3; ++source)
         {
             VshDecodeSrc(encoded, source, &sources[source]);
-            if(sources[source].Mux == PARAM_R && sources[source].R < used.size())
+        }
+        if(mac == MAC_MOV || mac == MAC_ARL)
+        {
+            VshMarkTempSource(sources[0], used, plan.needsPosition);
+        }
+        else if(mac == MAC_ADD)
+        {
+            VshMarkTempSource(sources[0], used, plan.needsPosition);
+            VshMarkTempSource(sources[2], used, plan.needsPosition);
+        }
+        else if(mac == MAC_MAD)
+        {
+            VshMarkTempSource(sources[0], used, plan.needsPosition);
+            VshMarkTempSource(sources[1], used, plan.needsPosition);
+            VshMarkTempSource(sources[2], used, plan.needsPosition);
+        }
+        else if(mac != MAC_NOP)
+        {
+            VshMarkTempSource(sources[0], used, plan.needsPosition);
+            VshMarkTempSource(sources[1], used, plan.needsPosition);
+        }
+        if(ilu != ILU_NOP)
+        {
+            VshMarkTempSource(sources[2], used, plan.needsPosition);
+        }
+
+        if(macMask != 0)
+        {
+            if(outputR == 12)
             {
-                used[sources[source].R] = true;
+                plan.needsPosition = true;
+            }
+            else if(outputR < used.size())
+            {
+                used[outputR] = true;
             }
         }
-        if((macMask != 0 || (iluMask != 0 && mac == MAC_NOP)) && outputR < used.size())
+        if(iluMask != 0)
         {
-            used[outputR] = true;
+            const DWORD iluR = (mac != MAC_NOP && macMask != 0) ? 1 : outputR;
+            if(iluR == 12)
+            {
+                plan.needsPosition = true;
+            }
+            else if(iluR < used.size())
+            {
+                used[iluR] = true;
+            }
         }
-        if(iluMask != 0 && mac != MAC_NOP)
+        if(outputMask != 0 && VshGetField(encoded, FLD_OUT_ORB) == OUTPUT_O &&
+           VshGetField(encoded, FLD_OUT_ADDRESS) == 0)
         {
-            used[1] = true;
+            plan.needsPosition = true;
         }
         if(VshGetField(encoded, FLD_FINAL) != 0)
         {
@@ -256,20 +324,31 @@ static bool VshFindDphScratch(const DWORD* XboxFunction, DWORD* Scratch, bool* H
         }
     }
 
-    if(!*HasDph)
+    const auto allocateScratch = [&used](DWORD& Scratch)
     {
-        *Scratch = 0;
-        return true;
-    }
-    for(DWORD candidate = VSH_POS_SCRATCH; candidate-- > 0;)
-    {
-        if(!used[candidate])
+        for(DWORD candidate = VSH_HOST_TEMP_COUNT; candidate-- > 0;)
         {
-            *Scratch = candidate;
-            return true;
+            if(!used[candidate])
+            {
+                used[candidate] = true;
+                Scratch = candidate;
+                return true;
+            }
         }
+        return false;
+    };
+    if(plan.needsPosition && !allocateScratch(plan.position))
+    {
+        plan.failureReason = "position_alias_no_scratch";
+        return plan;
     }
-    return false;
+    if(plan.hasDph && !allocateScratch(plan.dph))
+    {
+        plan.failureReason = "dph_no_scratch";
+        return plan;
+    }
+    plan.valid = true;
+    return plan;
 }
 
 static bool VshHasIluOpcode(const DWORD* XboxFunction, DWORD Opcode)
@@ -315,19 +394,19 @@ static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD Mac
     return writesPosition && readsR12;
 }
 
-static DWORD VshMapTemp(DWORD R)
+static DWORD VshMapTemp(DWORD R, DWORD PositionScratch)
 {
-    return (R == 12) ? VSH_POS_SCRATCH : R;
+    return (R == 12) ? PositionScratch : R;
 }
 
 // Emit a PC source token for a decoded operand. Constants live at hardware
 // index (API register + 96) in the microcode, so unbias them here.
-static DWORD VshEmitSrc(const DWORD *I, const VshSrc *Src, bool Relative)
+static DWORD VshEmitSrc(const DWORD* I, const VshSrc* Src, bool Relative, DWORD PositionScratch)
 {
     switch(Src->Mux)
     {
         case PARAM_R:
-            return VshSrcToken(SPR_TEMP, VshMapTemp(Src->R), Src->Swz, Src->Neg, FALSE);
+            return VshSrcToken(SPR_TEMP, VshMapTemp(Src->R, PositionScratch), Src->Swz, Src->Neg, FALSE);
         case PARAM_V:
             return VshSrcToken(SPR_INPUT, VshGetField(I, FLD_V), Src->Swz, Src->Neg, FALSE);
         case PARAM_C:
@@ -1061,11 +1140,10 @@ bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std:
         return true;
     }
 
-    DWORD scratch = 0;
-    bool hasDph = false;
-    if(!VshFindDphScratch(xboxFunction, &scratch, &hasDph) && hasDph)
+    const VshScratchPlan scratchPlan = VshBuildScratchPlan(xboxFunction);
+    if(!scratchPlan.valid)
     {
-        reason = "dph_no_scratch";
+        reason = scratchPlan.failureReason;
         return true;
     }
     reason.clear();
@@ -1222,11 +1300,10 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     if(InstrCount == 0 || InstrCount > 136)
         InstrCount = 136;
 
-    DWORD DphScratch = 0;
-    bool HasDph = false;
-    if(!VshFindDphScratch(pXboxFunction, &DphScratch, &HasDph))
+    const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction);
+    if(!ScratchPlan.valid)
     {
-        EmuWarning("VshDecoder: exact DPH lowering requires a free temporary register");
+        EmuWarning("VshDecoder: translation scratch allocation failed (%s)", ScratchPlan.failureReason);
         return NULL;
     }
 
@@ -1241,10 +1318,11 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     // epilogue then copies the whole scratch to oPos, so unwritten components
     // must be defined -- reading an uninitialized temp makes the host reject the
     // shader (D3DERR_INVALIDCALL). A full oPos-writing shader overwrites this.
+    if(ScratchPlan.needsPosition)
     {
         static const DWORD IdSwz[4] = { 0, 1, 2, 3 };
         VshEmit(Out, &n, SIO_MOV);
-        VshEmit(Out, &n, VshDstToken(SPR_TEMP, VSH_POS_SCRATCH, 0xF));
+        VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, 0xF));
         VshEmit(Out, &n, VshSrcToken(SPR_INPUT, 0, IdSwz, FALSE, FALSE));
     }
 
@@ -1306,20 +1384,20 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     // vs.1.1 has no DPH. Compute dot(a.xyz, b.xyz) + b.w in a
                     // shader-global unused temp, then route that exact scalar
                     // through the normal NV2A temp/output masks below.
-                    DphResult = { PARAM_R, DphScratch, FALSE, { 0, 1, 2, 3 } };
+                    DphResult = { PARAM_R, ScratchPlan.dph, FALSE, { 0, 1, 2, 3 } };
                     VshSrc Bwwww = SrcB;
                     Bwwww.Swz[0] = SrcB.Swz[3];
                     Bwwww.Swz[1] = SrcB.Swz[3];
                     Bwwww.Swz[2] = SrcB.Swz[3];
                     Bwwww.Swz[3] = SrcB.Swz[3];
                     VshEmit(Out, &n, SIO_DP3);
-                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, DphScratch, 0xF));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, A0x));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcB, A0x));
+                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.dph, 0xF));
+                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, A0x, ScratchPlan.position));
+                    VshEmit(Out, &n, VshEmitSrc(I, &SrcB, A0x, ScratchPlan.position));
                     VshEmit(Out, &n, SIO_ADD);
-                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, DphScratch, 0xF));
-                    VshEmit(Out, &n, VshEmitSrc(I, &DphResult, false));
-                    VshEmit(Out, &n, VshEmitSrc(I, &Bwwww, A0x));
+                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.dph, 0xF));
+                    VshEmit(Out, &n, VshEmitSrc(I, &DphResult, false, ScratchPlan.position));
+                    VshEmit(Out, &n, VshEmitSrc(I, &Bwwww, A0x, ScratchPlan.position));
                     Opcode = SIO_MOV;
                     Srcs[0] = &DphResult;
                     SrcCount = 1;
@@ -1334,7 +1412,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     // mov a0.x, srcA
                     VshEmit(Out, &n, SIO_MOV);
                     VshEmit(Out, &n, VshDstToken(SPR_ADDR, 0, 0x1));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, false));
+                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, false, ScratchPlan.position));
                     Opcode = 0;
                     break;
                 default:
@@ -1351,9 +1429,9 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     if(OutR == 12)
                         NeedsPosEpilogue = true;
                     VshEmit(Out, &n, Opcode);
-                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, VshMapTemp(OutR), VshPcMask(MacMask)));
+                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, VshMapTemp(OutR, ScratchPlan.position), VshPcMask(MacMask)));
                     for(int s = 0; s < SrcCount; s++)
-                        VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x));
+                        VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x, ScratchPlan.position));
                 }
                 // Output-register destination
                 if(OMask != 0 && OutMux == OMUX_MAC)
@@ -1366,16 +1444,16 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         // emits the real output write.
                         NeedsPosEpilogue = true;
                         VshEmit(Out, &n, Opcode);
-                        VshEmit(Out, &n, VshDstToken(SPR_TEMP, VSH_POS_SCRATCH, VshPcMask(OMask)));
+                        VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, VshPcMask(OMask)));
                         for(int s = 0; s < SrcCount; s++)
-                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x));
+                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x, ScratchPlan.position));
                     }
                     else if(Orb == OUTPUT_O && VshMapOutput(OutAddr, &RegType, &RegNum))
                     {
                         VshEmit(Out, &n, Opcode);
                         VshEmit(Out, &n, VshDstToken(RegType, RegNum, VshPcMask(OMask)));
                         for(int s = 0; s < SrcCount; s++)
-                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x));
+                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x, ScratchPlan.position));
                     }
                     else
                         EmuWarning("VshDecoder: unsupported MAC output (orb=%lu, addr=%lu) skipped", Orb, OutAddr);
@@ -1420,8 +1498,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     if(IluR == 12)
                         NeedsPosEpilogue = true;
                     VshEmit(Out, &n, Opcode);
-                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, VshMapTemp(IluR), VshPcMask(IluMask)));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x));
+                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, VshMapTemp(IluR, ScratchPlan.position), VshPcMask(IluMask)));
+                    VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
                 }
                 // Output-register destination
                 if(OMask != 0 && OutMux == OMUX_ILU)
@@ -1431,14 +1509,14 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     {
                         NeedsPosEpilogue = true;
                         VshEmit(Out, &n, Opcode);
-                        VshEmit(Out, &n, VshDstToken(SPR_TEMP, VSH_POS_SCRATCH, VshPcMask(OMask)));
-                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x));
+                        VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, VshPcMask(OMask)));
+                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
                     }
                     else if(Orb == OUTPUT_O && VshMapOutput(OutAddr, &RegType, &RegNum))
                     {
                         VshEmit(Out, &n, Opcode);
                         VshEmit(Out, &n, VshDstToken(RegType, RegNum, VshPcMask(OMask)));
-                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x));
+                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
                     }
                     else
                         EmuWarning("VshDecoder: unsupported ILU output (orb=%lu, addr=%lu) skipped", Orb, OutAddr);
@@ -1457,7 +1535,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         static const DWORD IdSwz[4] = { 0, 1, 2, 3 };
         VshEmit(Out, &n, SIO_MOV);
         VshEmit(Out, &n, VshDstToken(SPR_RASTOUT, 0, 0xF));
-        VshEmit(Out, &n, VshSrcToken(SPR_TEMP, VSH_POS_SCRATCH, IdSwz, FALSE, FALSE));
+        VshEmit(Out, &n, VshSrcToken(SPR_TEMP, ScratchPlan.position, IdSwz, FALSE, FALSE));
     }
 
     VshEmit(Out, &n, 0x0000FFFF); // end
