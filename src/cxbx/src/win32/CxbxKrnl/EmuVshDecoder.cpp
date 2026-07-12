@@ -58,6 +58,7 @@ static void EmuWarning(const char* format, ...)
 #include <cstdio>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 namespace XTL
@@ -1281,6 +1282,189 @@ int XTL::EmuVshTranslateXboxDeclaration(const DWORD *pXboxDecl, DWORD *pPcDecl, 
     return n;
 }
 
+namespace
+{
+std::size_t VshXboxVertexTypeSize(DWORD type)
+{
+    switch(type)
+    {
+        case 0x14: return 1;
+        case 0x11:
+        case 0x15:
+        case 0x24: return 2;
+        case 0x34: return 3;
+        case 0x12:
+        case 0x16:
+        case 0x21:
+        case 0x25:
+        case 0x40:
+        case 0x44: return 4;
+        case 0x31:
+        case 0x35: return 6;
+        case 0x22:
+        case 0x41:
+        case 0x45: return 8;
+        case 0x32:
+        case 0x72: return 12;
+        case 0x42: return 16;
+        case 0x02: return 0;
+        default: return (std::numeric_limits<std::size_t>::max)();
+    }
+}
+
+float VshNormalizeShort(std::int16_t value)
+{
+    if(value == (std::numeric_limits<std::int16_t>::min)())
+    {
+        return -1.0f;
+    }
+    return static_cast<float>(value) / 32767.0f;
+}
+
+std::int32_t VshSignExtend(DWORD value, unsigned int bitCount)
+{
+    const DWORD signBit = 1u << (bitCount - 1);
+    const DWORD mask = (1u << bitCount) - 1u;
+    value &= mask;
+    return static_cast<std::int32_t>((value ^ signBit) - signBit);
+}
+
+float VshNormalizePacked(std::int32_t value, unsigned int bitCount)
+{
+    const std::int32_t minimum = -(1 << (bitCount - 1));
+    if(value == minimum)
+    {
+        return -1.0f;
+    }
+    return static_cast<float>(value) / static_cast<float>((1 << (bitCount - 1)) - 1);
+}
+
+void VshDecodeXboxVertexValue(const std::uint8_t* source, DWORD type, float output[4])
+{
+    if(type == 0x40)
+    {
+        DWORD color = 0;
+        std::memcpy(&color, source, sizeof(color));
+        output[0] = static_cast<float>((color >> 16) & 0xFFu) / 255.0f;
+        output[1] = static_cast<float>((color >> 8) & 0xFFu) / 255.0f;
+        output[2] = static_cast<float>(color & 0xFFu) / 255.0f;
+        output[3] = static_cast<float>((color >> 24) & 0xFFu) / 255.0f;
+        return;
+    }
+    if(type == 0x16)
+    {
+        DWORD packed = 0;
+        std::memcpy(&packed, source, sizeof(packed));
+        output[0] = VshNormalizePacked(VshSignExtend(packed, 11), 11);
+        output[1] = VshNormalizePacked(VshSignExtend(packed >> 11, 11), 11);
+        output[2] = VshNormalizePacked(VshSignExtend(packed >> 22, 10), 10);
+        return;
+    }
+
+    const DWORD componentCount = (type >> 4) & 7u;
+    if((type & 0xFu) == 2u)
+    {
+        const DWORD floatCount = type == 0x72 ? 3u : componentCount;
+        float values[4] = {};
+        std::memcpy(values, source, floatCount * sizeof(float));
+        output[0] = values[0];
+        output[1] = floatCount > 1 ? values[1] : 0.0f;
+        output[2] = type == 0x72 ? 0.0f : (floatCount > 2 ? values[2] : 0.0f);
+        output[3] = type == 0x72 ? values[2] : (floatCount > 3 ? values[3] : 1.0f);
+        return;
+    }
+    if((type & 0xFu) == 5u || (type & 0xFu) == 1u)
+    {
+        for(DWORD component = 0; component < componentCount && component < 4; ++component)
+        {
+            std::int16_t value = 0;
+            std::memcpy(&value, source + component * sizeof(value), sizeof(value));
+            output[component] = (type & 0xFu) == 1u ? VshNormalizeShort(value) : static_cast<float>(value);
+        }
+        return;
+    }
+    if((type & 0xFu) == 4u)
+    {
+        for(DWORD component = 0; component < componentCount && component < 4; ++component)
+        {
+            output[component] = static_cast<float>(source[component]);
+        }
+    }
+}
+} // namespace
+
+bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, const VertexStreamView* streams,
+                                           std::size_t streamCount, std::size_t vertexIndex,
+                                           float* inputRegisters, std::size_t inputFloatCount)
+{
+    if(xboxDeclarationData == nullptr || streams == nullptr || inputRegisters == nullptr ||
+       inputFloatCount < 16 * 4)
+    {
+        return false;
+    }
+
+    for(std::size_t reg = 0; reg < 16; ++reg)
+    {
+        inputRegisters[reg * 4] = 0.0f;
+        inputRegisters[reg * 4 + 1] = 0.0f;
+        inputRegisters[reg * 4 + 2] = 0.0f;
+        inputRegisters[reg * 4 + 3] = 1.0f;
+    }
+
+    const DWORD* declaration = static_cast<const DWORD*>(xboxDeclarationData);
+    std::array<std::size_t, 16> streamOffsets{};
+    DWORD currentStream = 0;
+    for(std::size_t tokenIndex = 0; tokenIndex < 128; ++tokenIndex)
+    {
+        const DWORD token = declaration[tokenIndex];
+        if(token == 0xFFFFFFFFu)
+        {
+            return true;
+        }
+        if((token >> 29) == 1u)
+        {
+            currentStream = token & 0xFu;
+            continue;
+        }
+        if((token >> 29) != 2u || (token & 0x10000000u) != 0)
+        {
+            continue;
+        }
+
+        const DWORD reg = token & 0x1Fu;
+        const DWORD type = (token >> 16) & 0xFFu;
+        const std::size_t valueSize = VshXboxVertexTypeSize(type);
+        if(reg >= 16 || currentStream >= streamCount ||
+           valueSize == (std::numeric_limits<std::size_t>::max)())
+        {
+            return false;
+        }
+        if(valueSize == 0)
+        {
+            continue;
+        }
+
+        const VertexStreamView& stream = streams[currentStream];
+        if(stream.data == nullptr || stream.stride == 0 ||
+           vertexIndex > (std::numeric_limits<std::size_t>::max)() / stream.stride)
+        {
+            return false;
+        }
+        const std::size_t vertexOffset = vertexIndex * stream.stride;
+        if(vertexOffset > stream.byteSize || streamOffsets[currentStream] > stream.byteSize - vertexOffset ||
+           valueSize > stream.byteSize - vertexOffset - streamOffsets[currentStream])
+        {
+            return false;
+        }
+
+        const std::uint8_t* source = static_cast<const std::uint8_t*>(stream.data) + vertexOffset +
+                                     streamOffsets[currentStream];
+        VshDecodeXboxVertexValue(source, type, &inputRegisters[reg * 4]);
+        streamOffsets[currentStream] += valueSize;
+    }
+    return false;
+}
+
 // ******************************************************************
 // * EmuVshExecuteProgram - CPU vertex-program interpreter (Phase 2)
 // ******************************************************************
@@ -1458,17 +1642,22 @@ static float *VshExecOutputDst(DWORD Addr, float Reg[13][4], float Col[2][4],
     {
         case 0:  return Reg[12];      // oPos (R12 alias)
         case 3:  return Col[0];       // oD0
-        case 4:  return Col[1];       // oD1
-        case 5:  return Fog;          // oFog
-        case 6:  return Pts;          // oPts
-        case 9: case 10: case 11: case 12: return Tex[Addr - 9]; // oT0..3
+        case 4: return Col[1];        // oD1
+        case 5: return Fog;           // oFog
+        case 6: return Pts;           // oPts
+        case 9:
+        case 10:
+        case 11:
+        case 12: return Tex[Addr - 9]; // oT0..3
         default: return NULL;
     }
 }
 
-extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
-                                     const float *Const, const float *Input,
-                                     float *OutPos, float *OutCol0, float *OutTex0)
+static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int Start,
+                                      const float* Const, const float* Input,
+                                      float* OutPos, float* OutColors,
+                                      std::size_t OutColorFloatCount, float* OutTexCoords,
+                                      std::size_t OutTexCoordFloatCount)
 {
     if(Program == NULL || InstrCount <= 0)
         return false;
@@ -1476,27 +1665,27 @@ extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int S
     float Reg[13][4];
     for(int r = 0; r < 13; r++)
         Reg[r][0] = Reg[r][1] = Reg[r][2] = Reg[r][3] = 0.0f;
-    float Col[2][4] = {{0,0,0,1},{0,0,0,1}};
-    float Tex[4][4] = {{0}};
-    float Fog[4] = {0,0,0,0};
-    float Pts[4] = {0,0,0,0};
+    float Col[2][4] = { { 0, 0, 0, 1 }, { 0, 0, 0, 1 } };
+    float Tex[4][4] = { { 0 } };
+    float Fog[4] = { 0, 0, 0, 0 };
+    float Pts[4] = { 0, 0, 0, 0 };
     int A0 = 0;
 
     if(Start < 0) Start = 0;
     for(int pc = Start; pc < InstrCount; pc++)
     {
-        const DWORD *I = &Program[pc * 4];
+        const DWORD* I = &Program[pc * 4];
 
-        DWORD Mac     = VshGetField(I, FLD_MAC);
-        DWORD Ilu     = VshGetField(I, FLD_ILU);
+        DWORD Mac = VshGetField(I, FLD_MAC);
+        DWORD Ilu = VshGetField(I, FLD_ILU);
         DWORD MacMask = VshGetField(I, FLD_OUT_MAC_MASK);
         DWORD IluMask = VshGetField(I, FLD_OUT_ILU_MASK);
-        DWORD OMask   = VshGetField(I, FLD_OUT_O_MASK);
-        DWORD OutR    = VshGetField(I, FLD_OUT_R);
-        DWORD Orb     = VshGetField(I, FLD_OUT_ORB);
+        DWORD OMask = VshGetField(I, FLD_OUT_O_MASK);
+        DWORD OutR = VshGetField(I, FLD_OUT_R);
+        DWORD Orb = VshGetField(I, FLD_OUT_ORB);
         DWORD OutAddr = VshGetField(I, FLD_OUT_ADDRESS);
-        DWORD OutMux  = VshGetField(I, FLD_OUT_MUX);
-        bool  Relative= VshGetField(I, FLD_A0X) != 0;
+        DWORD OutMux = VshGetField(I, FLD_OUT_MUX);
+        bool Relative = VshGetField(I, FLD_A0X) != 0;
         DWORD Vfield = VshGetField(I, FLD_V);
         bool Final = VshGetField(I, FLD_FINAL) != 0;
 
@@ -1521,7 +1710,7 @@ extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int S
                 VshExecWriteMasked(Reg[OutR > 12 ? 12 : OutR], Rm, MacMask);
             if(OMask != 0 && OutMux == OMUX_MAC && Orb == OUTPUT_O)
             {
-                float *d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
+                float* d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
                 if(d) VshExecWriteMasked(d, Rm, OMask);
             }
         }
@@ -1535,7 +1724,7 @@ extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int S
                 VshExecWriteMasked(Reg[IluR > 12 ? 12 : IluR], Ri, IluMask);
             if(OMask != 0 && OutMux == OMUX_ILU && Orb == OUTPUT_O)
             {
-                float *d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
+                float* d = VshExecOutputDst(OutAddr, Reg, Col, Tex, Fog, Pts);
                 if(d) VshExecWriteMasked(d, Ri, OMask);
             }
         }
@@ -1545,12 +1734,46 @@ extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int S
     }
 
     // oPos lives in the R12 alias; diffuse in oD0; texcoord0 in oT0.
-    OutPos[0] = Reg[12][0]; OutPos[1] = Reg[12][1]; OutPos[2] = Reg[12][2]; OutPos[3] = Reg[12][3];
-    OutCol0[0] = Col[0][0]; OutCol0[1] = Col[0][1]; OutCol0[2] = Col[0][2]; OutCol0[3] = Col[0][3];
-    if(OutTex0 != NULL)
+    OutPos[0] = Reg[12][0];
+    OutPos[1] = Reg[12][1];
+    OutPos[2] = Reg[12][2];
+    OutPos[3] = Reg[12][3];
+    if(OutColors != nullptr)
     {
-        OutTex0[0] = Tex[0][0]; OutTex0[1] = Tex[0][1];
-        OutTex0[2] = Tex[0][2]; OutTex0[3] = Tex[0][3];
+        const std::size_t copyCount = std::min<std::size_t>(OutColorFloatCount, 2 * 4);
+        std::memcpy(OutColors, Col, copyCount * sizeof(float));
+    }
+    if(OutTexCoords != nullptr)
+    {
+        const std::size_t copyCount = std::min<std::size_t>(OutTexCoordFloatCount, 4 * 4);
+        std::memcpy(OutTexCoords, Tex, copyCount * sizeof(float));
     }
     return true;
+}
+
+extern "C" bool EmuVshExecuteProgram(const DWORD* Program, int InstrCount, int Start,
+                                     const float* Const, const float* Input,
+                                     float* OutPos, float* OutCol0, float* OutTex0)
+{
+    return VshExecuteProgramInternal(Program, InstrCount, Start, Const, Input, OutPos, OutCol0,
+                                     OutCol0 == nullptr ? 0 : 4, OutTex0, OutTex0 == nullptr ? 0 : 4);
+}
+
+bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, const float* constants,
+                                                  const float* inputRegisters, float* outputPosition,
+                                                  float* outputColors, std::size_t outputColorFloatCount,
+                                                  float* outputTexCoords,
+                                                  std::size_t outputTexCoordFloatCount)
+{
+    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    if(xboxFunction == nullptr || constants == nullptr || inputRegisters == nullptr ||
+       outputPosition == nullptr || outputColors == nullptr ||
+       (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    {
+        return false;
+    }
+    const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
+    return VshExecuteProgramInternal(&xboxFunction[1], static_cast<int>(instructionCount), 0, constants,
+                                     inputRegisters, outputPosition, outputColors,
+                                     outputColorFloatCount, outputTexCoords, outputTexCoordFloatCount);
 }

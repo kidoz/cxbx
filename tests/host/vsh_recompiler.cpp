@@ -1,5 +1,6 @@
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
 
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -226,6 +227,91 @@ int RunTests()
     const XTL::VshDiagnostics::ValidationResult optimizedOversizedValidation =
         XTL::VshDiagnostics::ValidateD3D8Function(oversizedShader.data(), oversizedOptimization.tokenCount);
     Check(optimizedOversizedValidation.valid, "optimized shader meets instruction limit");
+
+    const DWORD cpuDeclaration[] = {
+        0x20000000u,
+        0x40320000u,
+        0x40400001u,
+        0x40250002u,
+        0xFFFFFFFFu,
+    };
+    std::array<std::uint8_t, 20> cpuVertex{};
+    const float cpuPosition[] = { 2.0f, 3.0f, 4.0f };
+    const DWORD cpuColor = 0x80402010u;
+    const std::int16_t cpuShorts[] = { -2, 7 };
+    std::memcpy(cpuVertex.data(), cpuPosition, sizeof(cpuPosition));
+    std::memcpy(cpuVertex.data() + sizeof(cpuPosition), &cpuColor, sizeof(cpuColor));
+    std::memcpy(cpuVertex.data() + sizeof(cpuPosition) + sizeof(cpuColor), cpuShorts, sizeof(cpuShorts));
+    const XTL::VshDiagnostics::VertexStreamView cpuStream = {
+        cpuVertex.data(),
+        cpuVertex.size(),
+        cpuVertex.size(),
+    };
+    std::array<float, 16 * 4> cpuInputs{};
+    Check(XTL::VshDiagnostics::DecodeXboxVertex(cpuDeclaration, &cpuStream, 1, 0,
+                                                cpuInputs.data(), cpuInputs.size()),
+          "CPU fallback vertex declaration decodes");
+    Check(cpuInputs[0] == 2.0f && cpuInputs[1] == 3.0f && cpuInputs[2] == 4.0f && cpuInputs[3] == 1.0f,
+          "FLOAT3 expands with W=1");
+    Check(cpuInputs[4] == 64.0f / 255.0f && cpuInputs[5] == 32.0f / 255.0f &&
+              cpuInputs[6] == 16.0f / 255.0f && cpuInputs[7] == 128.0f / 255.0f,
+          "D3DCOLOR expands to RGBA");
+    Check(cpuInputs[8] == -2.0f && cpuInputs[9] == 7.0f && cpuInputs[10] == 0.0f && cpuInputs[11] == 1.0f,
+          "SHORT2 expands with Z=0 W=1");
+
+    const DWORD packedDeclaration[] = {
+        0x20000000u,
+        0x40350000u,
+        0x40160001u,
+        0x40340002u,
+        0xFFFFFFFFu,
+    };
+    std::array<std::uint8_t, 13> packedVertex{};
+    const std::int16_t short3[] = { -3, 4, 9 };
+    const DWORD normalizedPacked = 0x1FFu | (0x600u << 11);
+    const std::uint8_t packedBytes[] = { 1, 2, 255 };
+    std::memcpy(packedVertex.data(), short3, sizeof(short3));
+    std::memcpy(packedVertex.data() + sizeof(short3), &normalizedPacked, sizeof(normalizedPacked));
+    std::memcpy(packedVertex.data() + sizeof(short3) + sizeof(normalizedPacked), packedBytes, sizeof(packedBytes));
+    const XTL::VshDiagnostics::VertexStreamView packedStream = {
+        packedVertex.data(),
+        packedVertex.size(),
+        packedVertex.size(),
+    };
+    Check(XTL::VshDiagnostics::DecodeXboxVertex(packedDeclaration, &packedStream, 1, 0,
+                                                cpuInputs.data(), cpuInputs.size()),
+          "extended Xbox declaration types decode");
+    Check(cpuInputs[0] == -3.0f && cpuInputs[1] == 4.0f && cpuInputs[2] == 9.0f && cpuInputs[3] == 1.0f,
+          "SHORT3 expands with W=1");
+    Check(cpuInputs[4] > 0.49f && cpuInputs[5] < -0.49f && cpuInputs[6] == 0.0f,
+          "NORMPACKED3 sign-extends and normalizes");
+    Check(cpuInputs[8] == 1.0f && cpuInputs[9] == 2.0f && cpuInputs[10] == 255.0f,
+          "PBYTE3 expands to scalar components");
+
+    std::array<float, 192 * 4> cpuConstants{};
+    cpuConstants[0] = 1.0f;
+    cpuConstants[5] = 1.0f;
+    cpuConstants[10] = 1.0f;
+    cpuConstants[15] = 1.0f;
+    cpuInputs.fill(0.0f);
+    cpuInputs[0] = 2.0f;
+    cpuInputs[1] = 3.0f;
+    cpuInputs[2] = 4.0f;
+    cpuInputs[3] = 1.0f;
+    std::array<float, 4> cpuOutputPosition{};
+    std::array<float, 4> cpuOutputColor{};
+    std::array<float, 4 * 4> cpuOutputTexCoord{};
+    cpuOutputTexCoord.fill(99.0f);
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(kXboxProgram, cpuConstants.data(), cpuInputs.data(),
+                                                       cpuOutputPosition.data(), cpuOutputColor.data(),
+                                                       cpuOutputColor.size(), cpuOutputTexCoord.data(),
+                                                       cpuOutputTexCoord.size()),
+          "CPU fallback executes NV2A microcode");
+    Check(cpuOutputPosition[0] == 2.0f && cpuOutputPosition[1] == 3.0f &&
+              cpuOutputPosition[2] == 4.0f && cpuOutputPosition[3] == 1.0f,
+          "CPU fallback transforms position");
+    Check(cpuOutputTexCoord.front() == 0.0f && cpuOutputTexCoord.back() == 0.0f,
+          "CPU fallback returns all four texture-coordinate outputs");
 
     DWORD translatedDeclaration[8] = {};
     const int declarationTokens =
