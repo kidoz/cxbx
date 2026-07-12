@@ -204,6 +204,22 @@ static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
     }
 }
 
+static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD MacMask,
+                                                 DWORD IluMask, DWORD OMask, DWORD OutR,
+                                                 DWORD Orb, DWORD OutAddr, const VshSrc& SrcA,
+                                                 const VshSrc& SrcB, const VshSrc& SrcC)
+{
+    const bool writesPosition = ((MacMask != 0 || IluMask != 0) && OutR == 12) ||
+                                (OMask != 0 && Orb == OUTPUT_O && OutAddr == 0);
+    const bool readsR12 =
+        (Mac != MAC_NOP &&
+         ((SrcA.Mux == PARAM_R && SrcA.R == 12) ||
+          (SrcB.Mux == PARAM_R && SrcB.R == 12) ||
+          (SrcC.Mux == PARAM_R && SrcC.R == 12))) ||
+        (Ilu != ILU_NOP && SrcC.Mux == PARAM_R && SrcC.R == 12);
+    return writesPosition && readsR12;
+}
+
 // NV2A temp R12 is a readable alias of the position output (oPos); vs.1.1
 // outputs are write-only and temps stop at r11. Route R12 through scratch
 // temp r11 and have the recompiler emit a final `mov oPos, r11`.
@@ -1030,21 +1046,15 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         // so keeping those instructions double-transforms everything off view.
         // Any instruction that both reads R12 and writes the position is part
         // of that epilogue -- drop it.
+        if(VshIsScreenSpaceTransformInstruction(Mac, Ilu, MacMask, IluMask, OMask, OutR,
+                                                Orb, OutAddr, SrcA, SrcB, SrcC))
         {
-            bool WritesPos = ((MacMask != 0 || IluMask != 0) && OutR == 12) ||
-                             (OMask != 0 && Orb == OUTPUT_O && OutAddr == 0);
-            bool ReadsR12  = (Mac != MAC_NOP &&
-                              ((SrcA.Mux == PARAM_R && SrcA.R == 12) ||
-                               (SrcB.Mux == PARAM_R && SrcB.R == 12) ||
-                               (SrcC.Mux == PARAM_R && SrcC.R == 12))) ||
-                             (Ilu != ILU_NOP && SrcC.Mux == PARAM_R && SrcC.R == 12);
-            if(WritesPos && ReadsR12)
+            NeedsPosEpilogue = true; // position already staged in the scratch temp
+            if(VshGetField(I, FLD_FINAL) != 0)
             {
-                NeedsPosEpilogue = true;   // position already staged in the scratch temp
-                if(VshGetField(I, FLD_FINAL) != 0)
-                    break;
-                continue;
+                break;
             }
+            continue;
         }
 
         if(Mac != MAC_NOP)
@@ -1664,7 +1674,13 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
 
     float Reg[13][4];
     for(int r = 0; r < 13; r++)
+    {
         Reg[r][0] = Reg[r][1] = Reg[r][2] = Reg[r][3] = 0.0f;
+    }
+    Reg[12][0] = Input[0];
+    Reg[12][1] = Input[1];
+    Reg[12][2] = Input[2];
+    Reg[12][3] = Input[3];
     float Col[2][4] = { { 0, 0, 0, 1 }, { 0, 0, 0, 1 } };
     float Tex[4][4] = { { 0 } };
     float Fog[4] = { 0, 0, 0, 0 };
@@ -1693,6 +1709,15 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
         VshDecodeSrc(I, 0, &SA);
         VshDecodeSrc(I, 1, &SB);
         VshDecodeSrc(I, 2, &SC);
+        if(VshIsScreenSpaceTransformInstruction(Mac, Ilu, MacMask, IluMask, OMask, OutR,
+                                                Orb, OutAddr, SA, SB, SC))
+        {
+            if(Final)
+            {
+                break;
+            }
+            continue;
+        }
         float A[4], B[4], C[4];
         VshExecReadSrc(I, &SA, Vfield, Relative, A0, Reg, Const, Input, A);
         VshExecReadSrc(I, &SB, Vfield, Relative, A0, Reg, Const, Input, B);
