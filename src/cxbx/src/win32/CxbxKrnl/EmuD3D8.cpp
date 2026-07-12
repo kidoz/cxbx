@@ -2235,23 +2235,51 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     const DWORD* pHostFunction = pFunction;
     bool cpuFallback = false;
     std::string cpuFallbackReason;
+    bool rejectShader = false;
+    std::string rejectionReason;
     if(pFunction != NULL && (pFunction[0] & 0xFFFF) == 0x2078)
     {
-        cpuFallback = pDeclaration != nullptr &&
-                      XTL::VshDiagnostics::RequiresCpuFallback(pFunction, cpuFallbackReason);
-        if(cpuFallback)
+        const XTL::VshDiagnostics::XboxFunctionDisposition disposition =
+            XTL::VshDiagnostics::ClassifyXboxFunction(pFunction, rejectionReason);
+        rejectShader = disposition == XTL::VshDiagnostics::XboxFunctionDisposition::Reject;
+        cpuFallback =
+            disposition == XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu;
+        if(cpuFallback && pDeclaration == nullptr)
         {
+            rejectShader = true;
+            cpuFallback = false;
+            rejectionReason = "cpu_fallback_requires_declaration";
+        }
+        else if(cpuFallback)
+        {
+            cpuFallbackReason = rejectionReason;
             pHostFunction = nullptr;
         }
-        else
+        else if(!rejectShader)
         {
             pRecompiled = EmuVshRecompileXboxFunction(pFunction);
             pHostFunction = pRecompiled;
             if(pRecompiled == NULL)
             {
-                EmuWarning("VshDecoder: recompilation failed; creating a declaration-only shader");
+                rejectShader = true;
+                rejectionReason = "recompilation_failed";
             }
         }
+    }
+
+    if(rejectShader)
+    {
+        printf("VSH| rejected hash=%08X reason=%s\n",
+               static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction)),
+               rejectionReason.c_str());
+        fflush(stdout);
+        if(pHandle != nullptr)
+        {
+            *pHandle = 0;
+        }
+        delete pD3DVertexShader;
+        EmuSwapFS(); // XBox FS
+        return D3DERR_INVALIDCALL;
     }
     const bool wasRecompiled = pRecompiled != NULL;
 
@@ -2268,6 +2296,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // ******************************************************************
     HRESULT hRet = D3D_OK;
     bool hostCallAttempted = false;
+    bool translationRejected = false;
     if(pRecompiled != NULL)
     {
         try
@@ -2286,6 +2315,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
                 else
                 {
                     hRet = D3DERR_INVALIDCALL;
+                    translationRejected = true;
+                    rejectionReason = validation.message;
                 }
             }
         }
@@ -2293,6 +2324,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
         {
             EmuWarning("VshDecoder: validation raised a host exception");
             hRet = D3DERR_INVALIDCALL;
+            translationRejected = true;
+            rejectionReason = "translation_validation_exception";
         }
     }
 
@@ -2322,6 +2355,21 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     }
 
     delete[] pRecompiled;
+
+    if(translationRejected)
+    {
+        printf("VSH| rejected hash=%08X reason=%s\n",
+               static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction)),
+               rejectionReason.c_str());
+        fflush(stdout);
+        if(pHandle != nullptr)
+        {
+            *pHandle = 0;
+        }
+        delete pD3DVertexShader;
+        EmuSwapFS(); // XBox FS
+        return D3DERR_INVALIDCALL;
+    }
 
     if(!EmuVshRegisterLive(pD3DVertexShader, cpuFallback, pFunction, pDeclaration))
     {
