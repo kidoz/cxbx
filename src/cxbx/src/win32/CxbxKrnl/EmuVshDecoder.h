@@ -74,6 +74,11 @@ struct TranslationCapture
     const void* xboxDeclaration = nullptr;
     const void* d3dDeclaration = nullptr;
     const char* rejectionReason = nullptr;
+    const float* constants = nullptr;
+    std::size_t constantFloatCount = 0;
+    const float* inputs = nullptr;
+    std::size_t inputFloatCount = 0;
+    const char* inputSource = nullptr;
 };
 
 std::uint32_t HashXboxFunction(const void* xboxFunction);
@@ -107,5 +112,6 @@ std::vector<std::string> DecodeD3D8Function(const void* d3dFunction, std::size_t
 std::vector<std::string> DecodeVertexDeclaration(const void* declaration,
                                                  std::size_t maxTokens);
 void DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture);
+void DumpReplayCapture(FILE* stream, const TranslationCapture& capture);
 } // namespace VshDiagnostics
 } // namespace XTL

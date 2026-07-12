@@ -2198,8 +2198,36 @@ static void EmuVshDumpRejectedShader(const DWORD* xboxFunction, const DWORD* d3d
             xboxDeclaration,
             d3dDeclaration,
             reason,
+            g_EmuVshCpuConstants,
+            std::size(g_EmuVshCpuConstants),
+            nullptr,
+            0,
+            "canonical",
         };
         XTL::VshDiagnostics::DumpRejectedTranslation(stdout, capture);
+        if(xboxFunction != nullptr && (xboxFunction[0] & 0xFFFFu) == 0x2078u)
+        {
+            static std::array<std::uint32_t, 256> replayedHashes{};
+            static std::size_t replayedHashCount = 0;
+            const std::uint32_t hash = XTL::VshDiagnostics::HashXboxFunction(xboxFunction);
+            bool alreadyCaptured = false;
+            for(std::size_t index = 0; index < replayedHashCount; ++index)
+            {
+                alreadyCaptured = alreadyCaptured || replayedHashes[index] == hash;
+            }
+            if(!alreadyCaptured)
+            {
+                if(replayedHashCount < replayedHashes.size())
+                {
+                    replayedHashes[replayedHashCount++] = hash;
+                }
+                else
+                {
+                    replayedHashes[hash % replayedHashes.size()] = hash;
+                }
+                XTL::VshDiagnostics::DumpReplayCapture(stdout, capture);
+            }
+        }
     }
     catch(...)
     {

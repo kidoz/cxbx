@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -31,6 +32,8 @@ struct ShaderOutputs
     std::array<float, 4> position{};
     std::array<float, 2 * 4> colors{};
     std::array<float, 4 * 4> texCoords{};
+    std::array<float, 4> fog{};
+    std::array<float, 4> pointSize{};
 };
 
 bool NearlyEqual(float left, float right)
@@ -85,6 +88,14 @@ const float* ResolveMatrixOutput(const ShaderOutputs& outputs, DWORD outputAddre
     if(outputAddress == 4)
     {
         return outputs.colors.data() + 4;
+    }
+    if(outputAddress == 5)
+    {
+        return outputs.fog.data();
+    }
+    if(outputAddress == 6)
+    {
+        return outputs.pointSize.data();
     }
     if(outputAddress >= 9 && outputAddress <= 12)
     {
@@ -188,6 +199,14 @@ float* ResolveD3D8Destination(DWORD token, std::array<std::array<float, 4>, 12>&
     if(registerType == 4 && registerIndex == 0)
     {
         return outputs.position.data();
+    }
+    if(registerType == 4 && registerIndex == 1)
+    {
+        return outputs.fog.data();
+    }
+    if(registerType == 4 && registerIndex == 2)
+    {
+        return outputs.pointSize.data();
     }
     if(registerType == 5 && registerIndex < 2)
     {
@@ -473,10 +492,11 @@ bool DifferentialTexCoordMatches(const std::vector<DWORD>& program, const float*
                                  const float* hostConstants, const float* inputs)
 {
     ShaderOutputs cpuOutputs{};
+    XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
     if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
            program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
            cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
-           cpuOutputs.texCoords.size()))
+           cpuOutputs.texCoords.size(), &rasterOutputs))
     {
         return false;
     }
@@ -594,6 +614,16 @@ void PrintShaderOutputs(const char* label, const ShaderOutputs& outputs)
     {
         std::fprintf(stderr, " %.9g", static_cast<double>(value));
     }
+    std::fprintf(stderr, " fog");
+    for(const float value : outputs.fog)
+    {
+        std::fprintf(stderr, " %.9g", static_cast<double>(value));
+    }
+    std::fprintf(stderr, " point_size");
+    for(const float value : outputs.pointSize)
+    {
+        std::fprintf(stderr, " %.9g", static_cast<double>(value));
+    }
     std::fputc('\n', stderr);
 }
 
@@ -632,10 +662,11 @@ bool RunDifferentialMatrixCase(std::size_t caseId, bool reportFailure,
                                DWORD secondaryOutputMask = 0)
 {
     ShaderOutputs cpuOutputs{};
+    XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
     if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
            program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
            cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
-           cpuOutputs.texCoords.size()))
+           cpuOutputs.texCoords.size(), &rasterOutputs))
     {
         if(reportFailure)
         {
@@ -788,10 +819,11 @@ DifferentialFailureStage EvaluateSequenceProgram(std::size_t caseId, bool report
                                                  const float* inputs)
 {
     ShaderOutputs cpuOutputs{};
+    XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
     if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
            program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
            cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
-           cpuOutputs.texCoords.size()))
+           cpuOutputs.texCoords.size(), &rasterOutputs))
     {
         if(reportFailure)
         {
@@ -800,6 +832,10 @@ DifferentialFailureStage EvaluateSequenceProgram(std::size_t caseId, bool report
         }
         return DifferentialFailureStage::CpuExecution;
     }
+    std::copy(std::begin(rasterOutputs.fog), std::end(rasterOutputs.fog),
+              cpuOutputs.fog.begin());
+    std::copy(std::begin(rasterOutputs.pointSize), std::end(rasterOutputs.pointSize),
+              cpuOutputs.pointSize.begin());
 
     std::unique_ptr<DWORD[]> translated{ XTL::EmuVshRecompileXboxFunction(program.data()) };
     const std::size_t maxD3dTokens = 16 + program.size() * 24;
@@ -877,6 +913,370 @@ std::vector<DWORD> ReduceFailingSequence(const std::vector<DWORD>& original,
         }
     }
     return reduced;
+}
+
+struct ReplayCaptureRecord
+{
+    std::uint32_t hash = 0;
+    std::string reason;
+    std::string inputSource;
+    std::vector<DWORD> function;
+    std::vector<DWORD> declaration;
+    std::array<float, 192 * 4> constants{};
+    std::array<float, 16 * 4> inputs{};
+};
+
+bool ParseUnsigned(const std::string& text, unsigned int base, std::uint64_t& value)
+{
+    if(text.empty() || (base != 10 && base != 16))
+    {
+        return false;
+    }
+    value = 0;
+    for(const unsigned char character : text)
+    {
+        unsigned int digit = 0;
+        if(character >= '0' && character <= '9')
+        {
+            digit = character - '0';
+        }
+        else if(base == 16 && character >= 'A' && character <= 'F')
+        {
+            digit = 10u + character - 'A';
+        }
+        else if(base == 16 && character >= 'a' && character <= 'f')
+        {
+            digit = 10u + character - 'a';
+        }
+        else
+        {
+            return false;
+        }
+        if(digit >= base || value > (std::numeric_limits<std::uint64_t>::max() - digit) / base)
+        {
+            return false;
+        }
+        value = value * base + digit;
+    }
+    return true;
+}
+
+bool FindReplayField(const std::string& line, const char* name, std::string& value)
+{
+    const std::string marker = std::string(" ") + name + '=';
+    const std::size_t markerPosition = line.find(marker);
+    if(markerPosition == std::string::npos)
+    {
+        return false;
+    }
+    if(line.find(marker, markerPosition + marker.size()) != std::string::npos)
+    {
+        return false;
+    }
+    const std::size_t valuePosition = markerPosition + marker.size();
+    const std::size_t valueEnd = line.find(' ', valuePosition);
+    value = line.substr(valuePosition, valueEnd - valuePosition);
+    return !value.empty();
+}
+
+bool ParseReplayWords(const std::string& text, std::vector<DWORD>& words,
+                      std::size_t maximumWordCount)
+{
+    words.clear();
+    if(text == "-")
+    {
+        return true;
+    }
+    std::size_t position = 0;
+    while(position < text.size())
+    {
+        const std::size_t end = text.find(',', position);
+        const std::string word = text.substr(position, end - position);
+        std::uint64_t value = 0;
+        if(word.size() != 8 || !ParseUnsigned(word, 16, value) || value > 0xFFFFFFFFu ||
+           words.size() >= maximumWordCount)
+        {
+            return false;
+        }
+        words.push_back(static_cast<DWORD>(value));
+        if(end == std::string::npos)
+        {
+            break;
+        }
+        if(end + 1 >= text.size())
+        {
+            return false;
+        }
+        position = end + 1;
+    }
+    return !words.empty();
+}
+
+template <std::size_t Size>
+bool ParseReplaySparseFloats(const std::string& text, std::array<float, Size>& values)
+{
+    values.fill(0.0f);
+    if(text == "-")
+    {
+        return true;
+    }
+    std::array<bool, Size> assigned{};
+    std::size_t position = 0;
+    while(position < text.size())
+    {
+        const std::size_t end = text.find(',', position);
+        const std::string entry = text.substr(position, end - position);
+        const std::size_t separator = entry.find(':');
+        std::uint64_t index = 0;
+        std::uint64_t bits = 0;
+        if(separator == std::string::npos || entry.size() - separator - 1 != 8 ||
+           !ParseUnsigned(entry.substr(0, separator), 10, index) ||
+           !ParseUnsigned(entry.substr(separator + 1), 16, bits) || index >= Size ||
+           bits > 0xFFFFFFFFu || assigned[static_cast<std::size_t>(index)])
+        {
+            return false;
+        }
+        const DWORD word = static_cast<DWORD>(bits);
+        std::memcpy(&values[static_cast<std::size_t>(index)], &word, sizeof(word));
+        assigned[static_cast<std::size_t>(index)] = true;
+        if(end == std::string::npos)
+        {
+            break;
+        }
+        if(end + 1 >= text.size())
+        {
+            return false;
+        }
+        position = end + 1;
+    }
+    return true;
+}
+
+bool ReplayDeclarationIsFramed(const std::vector<DWORD>& declaration)
+{
+    if(declaration.empty())
+    {
+        return true;
+    }
+    for(std::size_t tokenIndex = 0; tokenIndex < declaration.size();)
+    {
+        const DWORD token = declaration[tokenIndex++];
+        if(token == 0xFFFFFFFFu)
+        {
+            return tokenIndex == declaration.size();
+        }
+        const DWORD tokenType = token >> 29;
+        if(tokenType >= 6)
+        {
+            return false;
+        }
+        std::size_t payloadCount = 0;
+        if(tokenType == 4)
+        {
+            payloadCount = ((token >> 25) & 0xFu) * 4;
+        }
+        else if(tokenType == 5)
+        {
+            payloadCount = (token >> 24) & 0x1Fu;
+        }
+        if(payloadCount > declaration.size() - tokenIndex)
+        {
+            return false;
+        }
+        tokenIndex += payloadCount;
+    }
+    return false;
+}
+
+bool ParseReplayCaptureLine(const std::string& line, ReplayCaptureRecord& record,
+                            std::string& error)
+{
+    std::string replayLine = line;
+    if(!replayLine.empty() && replayLine.back() == '\r')
+    {
+        replayLine.pop_back();
+    }
+    if(replayLine.rfind("VSHREPLAY| ", 0) != 0)
+    {
+        error = "missing VSHREPLAY prefix";
+        return false;
+    }
+    std::string version;
+    std::string hash;
+    std::string function;
+    std::string declaration;
+    std::string constants;
+    std::string inputs;
+    if(!FindReplayField(replayLine, "version", version) || version != "1" ||
+       !FindReplayField(replayLine, "hash", hash) ||
+       !FindReplayField(replayLine, "reason", record.reason) ||
+       !FindReplayField(replayLine, "input_source", record.inputSource) ||
+       !FindReplayField(replayLine, "function", function) ||
+       !FindReplayField(replayLine, "declaration", declaration) ||
+       !FindReplayField(replayLine, "constants", constants) ||
+       !FindReplayField(replayLine, "inputs", inputs))
+    {
+        error = "missing or unsupported replay field";
+        return false;
+    }
+    std::uint64_t parsedHash = 0;
+    if(hash.size() != 8 || !ParseUnsigned(hash, 16, parsedHash) ||
+       !ParseReplayWords(function, record.function, 1 + 136 * 4) ||
+       !ParseReplayWords(declaration, record.declaration, 128) ||
+       !ParseReplaySparseFloats(constants, record.constants) ||
+       !ParseReplaySparseFloats(inputs, record.inputs))
+    {
+        error = "invalid replay field encoding";
+        return false;
+    }
+    record.hash = static_cast<std::uint32_t>(parsedHash);
+    if(record.function.size() < 5 || (record.function.size() - 1) % 4 != 0 ||
+       (record.function[0] & 0xFFFFu) != 0x2078u ||
+       (record.function.back() & 1u) == 0 || !ReplayDeclarationIsFramed(record.declaration) ||
+       XTL::VshDiagnostics::HashXboxFunction(record.function.data()) != record.hash)
+    {
+        error = "invalid function or hash";
+        return false;
+    }
+    for(std::size_t instruction = 0; instruction + 1 < (record.function.size() - 1) / 4;
+        ++instruction)
+    {
+        if((record.function[1 + instruction * 4 + 3] & 1u) != 0)
+        {
+            error = "function contains data after FINAL";
+            return false;
+        }
+    }
+    return true;
+}
+
+int ReplayCapture(const ReplayCaptureRecord& record)
+{
+    DWORD translatedDeclaration[128] = {};
+    XTL::VshDiagnostics::DeclarationTranslationResult declarationResult{};
+    std::array<float, 192 * 4> hardwareConstants = record.constants;
+    if(!record.declaration.empty())
+    {
+        declarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
+            record.declaration.data(), translatedDeclaration,
+            std::size(translatedDeclaration));
+        if(!XTL::VshDiagnostics::ApplyXboxDeclarationConstants(
+               record.declaration.data(), record.constants.data(), hardwareConstants.data(),
+               hardwareConstants.size()))
+        {
+            std::fprintf(stderr,
+                         "VSHREPLAY| replay hash=%08X status=fail stage=declaration_constants\n",
+                         record.hash);
+            return 1;
+        }
+    }
+
+    std::array<float, 96 * 4> hostConstants{};
+    std::copy(hardwareConstants.begin() + 96 * 4, hardwareConstants.end(),
+              hostConstants.begin());
+    std::string dispositionReason;
+    const XTL::VshDiagnostics::XboxFunctionDisposition disposition =
+        XTL::VshDiagnostics::ClassifyXboxFunction(record.function.data(), dispositionReason);
+    if(disposition != XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost)
+    {
+        ShaderOutputs cpuOutputs{};
+        const bool cpuExecuted = XTL::VshDiagnostics::ExecuteXboxVertexShader(
+            record.function.data(), hardwareConstants.data(), record.inputs.data(),
+            cpuOutputs.position.data(), cpuOutputs.colors.data(), cpuOutputs.colors.size(),
+            cpuOutputs.texCoords.data(), cpuOutputs.texCoords.size());
+        const char* dispositionName =
+            disposition == XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu
+                ? "cpu"
+                : "reject";
+        std::printf("VSHREPLAY| replay hash=%08X status=classified disposition=%s "
+                    "cpu=%s reason=%s declaration=%d\n",
+                    record.hash, dispositionName, cpuExecuted ? "pass" : "unavailable",
+                    dispositionReason.c_str(), static_cast<int>(declarationResult.disposition));
+        return disposition == XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu &&
+                       !cpuExecuted
+                   ? 1
+                   : 0;
+    }
+
+    const DifferentialFailureStage failureStage = EvaluateSequenceProgram(
+        record.hash, false, record.function, hardwareConstants.data(), hostConstants.data(),
+        record.inputs.data());
+    if(failureStage == DifferentialFailureStage::None)
+    {
+        std::printf("VSHREPLAY| replay hash=%08X status=pass disposition=host declaration=%d\n",
+                    record.hash, static_cast<int>(declarationResult.disposition));
+        return 0;
+    }
+
+    const std::vector<DWORD> reduced = ReduceFailingSequence(
+        record.function, failureStage, hardwareConstants.data(), hostConstants.data(),
+        record.inputs.data());
+    std::fprintf(stderr,
+                 "VSHREPLAY| replay hash=%08X status=fail stage=%s "
+                 "original_instructions=%zu reduced_instructions=%zu\n",
+                 record.hash, DifferentialFailureStageName(failureStage),
+                 (record.function.size() - 1) / 4, (reduced.size() - 1) / 4);
+    EvaluateSequenceProgram(record.hash, true, reduced, hardwareConstants.data(),
+                            hostConstants.data(), record.inputs.data());
+    const XTL::VshDiagnostics::TranslationCapture reducedCapture = {
+        reduced.data(),
+        nullptr,
+        record.declaration.empty() ? nullptr : record.declaration.data(),
+        nullptr,
+        DifferentialFailureStageName(failureStage),
+        hardwareConstants.data(),
+        hardwareConstants.size(),
+        record.inputs.data(),
+        record.inputs.size(),
+        record.inputSource.c_str(),
+    };
+    XTL::VshDiagnostics::DumpReplayCapture(stderr, reducedCapture);
+    return 1;
+}
+
+int ReplayCaptureFile(const char* path)
+{
+    std::ifstream input(path);
+    if(!input)
+    {
+        std::fprintf(stderr, "FAIL cannot open replay capture: %s\n", path);
+        return 1;
+    }
+    std::vector<std::uint32_t> replayedHashes;
+    std::string line;
+    std::size_t replayCount = 0;
+    int failures = 0;
+    while(std::getline(input, line))
+    {
+        if(line.rfind("VSHREPLAY| ", 0) != 0)
+        {
+            continue;
+        }
+        ReplayCaptureRecord record;
+        std::string error;
+        if(!ParseReplayCaptureLine(line, record, error))
+        {
+            std::fprintf(stderr, "FAIL replay parse line=%zu reason=%s\n", replayCount + 1,
+                         error.c_str());
+            ++failures;
+            continue;
+        }
+        if(std::find(replayedHashes.begin(), replayedHashes.end(), record.hash) !=
+           replayedHashes.end())
+        {
+            continue;
+        }
+        replayedHashes.push_back(record.hash);
+        ++replayCount;
+        failures += ReplayCapture(record);
+    }
+    if(replayCount == 0)
+    {
+        std::fputs("FAIL replay capture contains no VSHREPLAY records\n", stderr);
+        return 1;
+    }
+    std::printf("VSHREPLAY| summary records=%zu failures=%d\n", replayCount, failures);
+    return failures == 0 ? 0 : 1;
 }
 
 class DeterministicSequenceRng
@@ -2788,11 +3188,43 @@ int RunTests()
                 "unsupported_mac_opcode",
             };
             XTL::VshDiagnostics::DumpRejectedTranslation(rejectedCapture, translationCapture);
+            XTL::VshDiagnostics::DumpReplayCapture(rejectedCapture, translationCapture);
+            const GeneratedSequenceProgram replaySequence = GenerateSequenceProgram(1);
+            const XTL::VshDiagnostics::TranslationCapture validReplayCapture = {
+                replaySequence.program.data(),
+                nullptr,
+                kXboxDeclaration,
+                translatedDeclaration,
+                "round_trip",
+                opcodeHardwareConstants.data(),
+                opcodeHardwareConstants.size(),
+                opcodeInputs.data(),
+                opcodeInputs.size(),
+                "host_test",
+            };
+            XTL::VshDiagnostics::DumpReplayCapture(rejectedCapture, validReplayCapture);
+            const char* replayPath = "host_vsh_replay_smoke.tmp";
+            std::FILE* replayFile = nullptr;
+#if defined(_WIN32)
+            const errno_t replayFileError = ::fopen_s(&replayFile, replayPath, "w");
+            Check(replayFileError == 0, "replay smoke file result");
+#else
+            replayFile = std::fopen(replayPath, "w");
+#endif
+            Check(replayFile != nullptr, "replay smoke file");
+            if(replayFile != nullptr)
+            {
+                XTL::VshDiagnostics::DumpReplayCapture(replayFile, validReplayCapture);
+                Check(std::fclose(replayFile) == 0, "replay smoke file close");
+                Check(ReplayCaptureFile(replayPath) == 0,
+                      "replay file mode executes a captured shader");
+                Check(std::remove(replayPath) == 0, "replay smoke file cleanup");
+            }
             const int seekResult = std::fseek(rejectedCapture, 0, SEEK_SET);
             Check(seekResult == 0, "pre-translation diagnostic capture seek");
             if(seekResult == 0)
             {
-                std::array<char, 8192> output{};
+                std::array<char, 32768> output{};
                 const std::size_t bytesRead =
                     std::fread(output.data(), 1, output.size() - 1, rejectedCapture);
                 Check(std::ferror(rejectedCapture) == 0,
@@ -2814,6 +3246,66 @@ int RunTests()
                 Check(generatedDeclaration != nullptr &&
                           std::strstr(generatedDeclaration, "unavailable") != nullptr,
                       "pre-translation capture marks generated declaration unavailable");
+                const char* rejectedReplay = std::strstr(output.data(), "VSHREPLAY| ");
+                Check(rejectedReplay != nullptr, "pre-translation capture emits replay record");
+                if(rejectedReplay != nullptr)
+                {
+                    const char* rejectedReplayEnd = std::strchr(rejectedReplay, '\n');
+                    ReplayCaptureRecord rejectedRecord;
+                    std::string replayError;
+                    const std::string rejectedReplayLine =
+                        rejectedReplayEnd == nullptr
+                            ? std::string{}
+                            : std::string(rejectedReplay, rejectedReplayEnd);
+                    const bool rejectedParsed =
+                        rejectedReplayEnd != nullptr &&
+                        ParseReplayCaptureLine(rejectedReplayLine, rejectedRecord, replayError);
+                    Check(rejectedParsed, "rejected replay record parses");
+                    if(rejectedParsed)
+                    {
+                        Check(rejectedRecord.hash ==
+                                      XTL::VshDiagnostics::HashXboxFunction(
+                                          reservedMacProgram.data()) &&
+                                  rejectedRecord.declaration.size() ==
+                                      std::size(constantPayloadDeclaration) &&
+                                  rejectedRecord.inputSource == "canonical",
+                              "rejected replay record preserves shader, declaration, and input source");
+                        Check(ReplayCapture(rejectedRecord) == 0,
+                              "rejected replay reproduces classification");
+                        std::string corruptedReplay = rejectedReplayLine;
+                        const std::size_t hashPosition = corruptedReplay.find(" hash=");
+                        if(hashPosition != std::string::npos)
+                        {
+                            corruptedReplay[hashPosition + 6] =
+                                corruptedReplay[hashPosition + 6] == '0' ? '1' : '0';
+                        }
+                        ReplayCaptureRecord corruptedRecord;
+                        replayError.clear();
+                        Check(!ParseReplayCaptureLine(corruptedReplay, corruptedRecord,
+                                                      replayError),
+                              "replay parser rejects a corrupted stable hash");
+                    }
+
+                    const char* validReplay =
+                        rejectedReplayEnd == nullptr
+                            ? nullptr
+                            : std::strstr(rejectedReplayEnd + 1, "VSHREPLAY| ");
+                    const char* validReplayEnd =
+                        validReplay == nullptr ? nullptr : std::strchr(validReplay, '\n');
+                    ReplayCaptureRecord validRecord;
+                    replayError.clear();
+                    const bool validParsed =
+                        validReplay != nullptr && validReplayEnd != nullptr &&
+                        ParseReplayCaptureLine(std::string(validReplay, validReplayEnd),
+                                               validRecord, replayError);
+                    Check(validParsed, "translated replay record parses");
+                    if(validParsed)
+                    {
+                        Check(validRecord.inputSource == "host_test" &&
+                                  ReplayCapture(validRecord) == 0,
+                              "translated replay executes classification, validation, and semantics");
+                    }
+                }
             }
             std::fclose(rejectedCapture);
         }
@@ -2831,10 +3323,19 @@ int RunTests()
     return g_failures;
 }
 
-int main()
+int main(int argc, char** argv)
 {
     try
     {
+        if(argc == 3 && std::strcmp(argv[1], "--replay") == 0)
+        {
+            return ReplayCaptureFile(argv[2]);
+        }
+        if(argc != 1)
+        {
+            std::fputs("usage: host_vsh_recompiler_test [--replay <capture>]\n", stderr);
+            return 2;
+        }
         return RunTests();
     }
     catch(const std::exception& exception)
