@@ -7871,6 +7871,7 @@ struct EmuVshCpuVertex
     float y;
     float z;
     float rhw;
+    float pointSize;
     DWORD diffuse;
     DWORD specular;
     float texCoords[4][2];
@@ -8013,7 +8014,8 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
         if(SUCCEEDED(result))
         {
             result = g_pD3DDevice8->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE |
-                                                    D3DFVF_SPECULAR | D3DFVF_TEX4);
+                                                    D3DFVF_SPECULAR | D3DFVF_PSIZE |
+                                                    D3DFVF_TEX4);
         }
         if(SUCCEEDED(result))
         {
@@ -8036,25 +8038,20 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     return result;
 }
 
-static DWORD EmuVshPackColor(const float color[4])
+static float EmuVshGetDefaultPointSize()
 {
-    DWORD channels[4] = {};
-    for(std::size_t component = 0; component < 4; ++component)
+    DWORD encodedPointSize = 0;
+    __try
     {
-        if(!(color[component] > 0.0f))
-        {
-            channels[component] = 0;
-        }
-        else if(color[component] >= 1.0f)
-        {
-            channels[component] = 255;
-        }
-        else
-        {
-            channels[component] = static_cast<DWORD>(color[component] * 255.0f);
-        }
+        g_pD3DDevice8->GetRenderState(XTL::D3DRS_POINTSIZE, &encodedPointSize);
     }
-    return (channels[3] << 24) | (channels[0] << 16) | (channels[1] << 8) | channels[2];
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        encodedPointSize = 0;
+    }
+    float pointSize = 1.0f;
+    std::memcpy(&pointSize, &encodedPointSize, sizeof(pointSize));
+    return XTL::VshDiagnostics::ClampPointSize(pointSize, 1.0f, g_D3DCaps.MaxPointSize);
 }
 
 static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveType,
@@ -8093,6 +8090,7 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         return false;
     }
 
+    const float defaultPointSize = EmuVshGetDefaultPointSize();
     output.resize(vertexCount);
     for(UINT outputIndex = 0; outputIndex < vertexCount; ++outputIndex)
     {
@@ -8112,9 +8110,10 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         float position[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
         float colors[2 * 4] = { 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
         float texCoords[4 * 4] = {};
+        XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
         if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(g_EmuCurrentCpuVertexShader->function.data(),
                                                          g_EmuVshCpuConstants, input, position, colors,
-                                                         2 * 4, texCoords, 4 * 4))
+                                                         2 * 4, texCoords, 4 * 4, &rasterOutputs))
         {
             return false;
         }
@@ -8127,8 +8126,12 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
                                                         static_cast<float>(viewport.Height) * 0.5f;
         vertex.z = viewport.MinZ + position[2] * inverseW * (viewport.MaxZ - viewport.MinZ);
         vertex.rhw = inverseW;
-        vertex.diffuse = EmuVshPackColor(&colors[0]);
-        vertex.specular = EmuVshPackColor(&colors[4]);
+        const float pointSize = XTL::VshDiagnostics::SelectRasterOutput(
+            rasterOutputs.pointSize, rasterOutputs.pointSizeWriteMask, defaultPointSize);
+        vertex.pointSize = XTL::VshDiagnostics::ClampPointSize(
+            pointSize, defaultPointSize, g_D3DCaps.MaxPointSize);
+        vertex.diffuse = XTL::VshDiagnostics::PackD3DColor(&colors[0]);
+        vertex.specular = XTL::VshDiagnostics::PackD3DSpecularFog(&colors[4], rasterOutputs);
         for(std::size_t texCoord = 0; texCoord < 4; ++texCoord)
         {
             vertex.texCoords[texCoord][0] = texCoords[texCoord * 4];

@@ -310,6 +310,22 @@ constexpr DWORD kPartialPositionProgram[] = {
     0x08000000u,
     0x0000C801u,
 };
+
+constexpr DWORD kRasterOutputsProgram[] = {
+    0x00032078u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0000F800u,
+    0x00000000u,
+    0x0020021Bu,
+    0x08000000u,
+    0x00008828u,
+    0x00000000u,
+    0x0020041Bu,
+    0x08000000u,
+    0x00008831u,
+};
 } // namespace
 
 int RunTests()
@@ -602,6 +618,43 @@ int RunTests()
           "CPU fallback transforms position");
     Check(cpuOutputTexCoord.front() == 0.0f && cpuOutputTexCoord.back() == 0.0f,
           "CPU fallback returns all four texture-coordinate outputs");
+
+    cpuInputs[4] = 0.5f;
+    cpuInputs[8] = 7.5f;
+    XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kRasterOutputsProgram, cpuConstants.data(), cpuInputs.data(),
+              cpuOutputPosition.data(), cpuOutputColor.data(), cpuOutputColor.size(),
+              cpuOutputTexCoord.data(), cpuOutputTexCoord.size(), &rasterOutputs),
+          "CPU fallback returns raster outputs");
+    Check(rasterOutputs.fogWriteMask == 0x8u && rasterOutputs.fog[0] == 0.5f,
+          "fog value and write mask are preserved");
+    Check(rasterOutputs.pointSizeWriteMask == 0x8u && rasterOutputs.pointSize[0] == 7.5f,
+          "point-size value and write mask are preserved");
+
+    const float maskedRaster[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    Check(XTL::VshDiagnostics::SelectRasterOutput(maskedRaster, 0x2u, 9.0f) == 3.0f,
+          "raster selection honors NV2A component masks");
+    Check(XTL::VshDiagnostics::SelectRasterOutput(maskedRaster, 0, 9.0f) == 9.0f,
+          "unwritten raster output uses fallback");
+    Check(XTL::VshDiagnostics::ClampPointSize(-1.0f, 3.0f, 10.0f) == 3.0f,
+          "invalid point size uses render-state fallback");
+    Check(XTL::VshDiagnostics::ClampPointSize(20.0f, 3.0f, 10.0f) == 10.0f,
+          "point size clamps to host maximum");
+    Check(XTL::VshDiagnostics::ClampPointSize(
+              (std::numeric_limits<float>::quiet_NaN)(), 3.0f, 10.0f) == 3.0f,
+          "NaN point size uses render-state fallback");
+
+    const float packedColor[] = { -1.0f, 0.5f, 2.0f,
+                                  (std::numeric_limits<float>::quiet_NaN)() };
+    Check(XTL::VshDiagnostics::PackD3DColor(packedColor) == 0x00007FFFu,
+          "D3D color packing clamps components and NaN");
+    const float specularColor[] = { 0.25f, 0.5f, 1.0f, 0.0f };
+    Check(XTL::VshDiagnostics::PackD3DSpecularFog(specularColor, rasterOutputs) == 0x7F3F7FFFu,
+          "fog replaces specular alpha and preserves RGB");
+    XTL::VshDiagnostics::RasterOutputs unwrittenRaster{};
+    Check(XTL::VshDiagnostics::PackD3DSpecularFog(specularColor, unwrittenRaster) == 0xFF3F7FFFu,
+          "unwritten fog defaults to no fog");
 
     std::array<float, 192 * 4> differentialHardwareConstants{};
     std::array<float, 96 * 4> differentialD3D8Constants{};
