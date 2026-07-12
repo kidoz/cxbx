@@ -49,6 +49,7 @@ namespace xboxkrnl
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
+#include "core/PcmConverter.h"
 #include "core/trace.h"
 
 // ******************************************************************
@@ -99,6 +100,7 @@ struct XTL::X_DSoundStreamState
     X_CDirectSoundStream* Owner;
     IDirectSoundBuffer* HostBuffer;
     WAVEFORMATEX* Format;
+    WAVEFORMATEX HostFormat;
     X_LPFNXMEDIAOBJECTCALLBACK Callback;
     LPVOID CallbackContext;
     StreamPacket* Packets;
@@ -112,6 +114,7 @@ struct XTL::X_DSoundStreamState
     LONG Volume;
     bool Playing;
     bool Paused;
+    bool DownmixPcmToStereo;
     CRITICAL_SECTION Lock;
     X_DSoundStreamState* Next;
 };
@@ -120,6 +123,31 @@ namespace
 {
 SRWLOCK g_DSoundStreamListLock = SRWLOCK_INIT;
 XTL::X_DSoundStreamState* g_DSoundStreams = NULL;
+
+bool ConfigureHostStreamFormat(XTL::X_DSoundStreamState* state)
+{
+    state->HostFormat = *state->Format;
+    if(state->Format->wFormatTag != WAVE_FORMAT_PCM ||
+       state->Format->nChannels <= 2)
+    {
+        return true;
+    }
+
+    if(state->Format->wBitsPerSample != 16 ||
+       !cxbx::audio::CanDownmixPcm16ToStereo(state->Format->nChannels) ||
+       state->Format->nBlockAlign != state->Format->nChannels * sizeof(int16_t))
+    {
+        return false;
+    }
+
+    state->HostFormat.nChannels = 2;
+    state->HostFormat.nBlockAlign = 2 * sizeof(int16_t);
+    state->HostFormat.nAvgBytesPerSec =
+        state->HostFormat.nSamplesPerSec * state->HostFormat.nBlockAlign;
+    state->HostFormat.cbSize = 0;
+    state->DownmixPcmToStereo = true;
+    return true;
+}
 
 HRESULT EnsureDirectSoundDevice()
 {
@@ -452,9 +480,18 @@ HRESULT CreateHostStream(const XTL::X_DSSTREAMDESC* descriptor, XTL::X_CDirectSo
     state->Packets = packets;
     state->PacketCapacity = packetCapacity;
     state->Volume = DSBVOLUME_MAX;
+    if(!ConfigureHostStreamFormat(state))
+    {
+        delete stream;
+        delete state;
+        delete[] formatStorage;
+        delete[] packets;
+        return DSERR_BADFORMAT;
+    }
     InitializeCriticalSection(&state->Lock);
 
-    uint64_t desiredBytes = static_cast<uint64_t>(state->Format->nAvgBytesPerSec) * 2;
+    uint64_t desiredBytes =
+        static_cast<uint64_t>(state->HostFormat.nAvgBytesPerSec) * 2;
     if(desiredBytes < kStreamBufferMinimumBytes)
     {
         desiredBytes = kStreamBufferMinimumBytes;
@@ -464,14 +501,15 @@ HRESULT CreateHostStream(const XTL::X_DSSTREAMDESC* descriptor, XTL::X_CDirectSo
         desiredBytes = kStreamBufferMaximumBytes;
     }
 
-    const DWORD blockAlign = state->Format->nBlockAlign == 0 ? 1 : state->Format->nBlockAlign;
+    const DWORD blockAlign =
+        state->HostFormat.nBlockAlign == 0 ? 1 : state->HostFormat.nBlockAlign;
     state->BufferBytes = static_cast<DWORD>(desiredBytes) / blockAlign * blockAlign;
 
     XTL::DSBUFFERDESC hostDescriptor = {};
     hostDescriptor.dwSize = sizeof(hostDescriptor);
     hostDescriptor.dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLFREQUENCY | DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_GLOBALFOCUS;
     hostDescriptor.dwBufferBytes = state->BufferBytes;
-    hostDescriptor.lpwfxFormat = state->Format;
+    hostDescriptor.lpwfxFormat = &state->HostFormat;
 
     result = g_pDSound8->CreateSoundBuffer(&hostDescriptor, &state->HostBuffer, NULL);
     if(FAILED(result))
@@ -488,6 +526,13 @@ HRESULT CreateHostStream(const XTL::X_DSSTREAMDESC* descriptor, XTL::X_CDirectSo
     stream->EmuState = state;
     RegisterStream(state);
     *streamOut = stream;
+
+    if(state->DownmixPcmToStereo)
+    {
+        printf("EmuDSound: downmixing %u-channel PCM stream to stereo (%lu Hz)\n",
+               state->Format->nChannels,
+               state->Format->nSamplesPerSec);
+    }
 
     return DS_OK;
 }
@@ -907,11 +952,36 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
     X_DSoundStreamState* state = stream->EmuState;
     PumpStream(state);
 
+    DWORD hostPacketBytes = pInputBuffer->dwMaxSize;
+    if(state->DownmixPcmToStereo)
+    {
+        const DWORD sourceBlockAlign = state->Format->nBlockAlign;
+        if(sourceBlockAlign == 0 || pInputBuffer->dwMaxSize % sourceBlockAlign != 0)
+        {
+            ReleaseStreamReference(stream);
+            EmuSwapFS(); // Xbox FS
+            return E_INVALIDARG;
+        }
+
+        const uint64_t frameCount = pInputBuffer->dwMaxSize / sourceBlockAlign;
+        const uint64_t convertedBytes =
+            frameCount * state->HostFormat.nBlockAlign;
+        if(convertedBytes > MAXDWORD)
+        {
+            ReleaseStreamReference(stream);
+            EmuSwapFS(); // Xbox FS
+            return E_INVALIDARG;
+        }
+        hostPacketBytes = static_cast<DWORD>(convertedBytes);
+    }
+
     HRESULT hRet = DS_OK;
     EnterCriticalSection(&state->Lock);
 
     const uint64_t bufferedBytes = state->WrittenBytes - state->PlayedBytes;
-    if(state->PacketCount >= state->PacketCapacity || pInputBuffer->dwMaxSize > state->BufferBytes || bufferedBytes + pInputBuffer->dwMaxSize > state->BufferBytes)
+    if(state->PacketCount >= state->PacketCapacity ||
+       hostPacketBytes > state->BufferBytes ||
+       bufferedBytes + hostPacketBytes > state->BufferBytes)
     {
         hRet = DSERR_OUTOFMEMORY;
     }
@@ -925,7 +995,7 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
 
         hRet = state->HostBuffer->Lock(
             writeOffset,
-            pInputBuffer->dwMaxSize,
+            hostPacketBytes,
             &first,
             &firstSize,
             &second,
@@ -933,11 +1003,33 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
             0);
         if(SUCCEEDED(hRet))
         {
-            std::memcpy(first, pInputBuffer->pvBuffer, firstSize);
-            if(second != NULL && secondSize != 0)
+            const BYTE* source = static_cast<const BYTE*>(pInputBuffer->pvBuffer);
+            if(state->DownmixPcmToStereo)
             {
-                const BYTE* source = static_cast<const BYTE*>(pInputBuffer->pvBuffer);
-                std::memcpy(second, source + firstSize, secondSize);
+                const DWORD hostBlockAlign = state->HostFormat.nBlockAlign;
+                const DWORD firstFrames = firstSize / hostBlockAlign;
+                cxbx::audio::DownmixPcm16ToStereo(source,
+                                                  firstFrames,
+                                                  state->Format->nChannels,
+                                                  static_cast<BYTE*>(first));
+                if(second != NULL && secondSize != 0)
+                {
+                    const DWORD sourceOffset =
+                        firstFrames * state->Format->nBlockAlign;
+                    cxbx::audio::DownmixPcm16ToStereo(
+                        source + sourceOffset,
+                        secondSize / hostBlockAlign,
+                        state->Format->nChannels,
+                        static_cast<BYTE*>(second));
+                }
+            }
+            else
+            {
+                std::memcpy(first, source, firstSize);
+                if(second != NULL && secondSize != 0)
+                {
+                    std::memcpy(second, source + firstSize, secondSize);
+                }
             }
 
             hRet = state->HostBuffer->Unlock(first, firstSize, second, secondSize);
@@ -952,7 +1044,7 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
             packet.CompletionEvent = state->Callback == NULL ? pInputBuffer->hCompletionEvent : NULL;
             packet.Context = state->Callback != NULL ? pInputBuffer->pContext : NULL;
             packet.Size = pInputBuffer->dwMaxSize;
-            state->WrittenBytes += pInputBuffer->dwMaxSize;
+            state->WrittenBytes += hostPacketBytes;
             packet.EndPosition = state->WrittenBytes;
             state->PacketCount++;
 
@@ -984,7 +1076,7 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
             if(FAILED(hRet))
             {
                 state->PacketCount--;
-                state->WrittenBytes -= pInputBuffer->dwMaxSize;
+                state->WrittenBytes -= hostPacketBytes;
                 if(packet.Status != NULL)
                 {
                     *packet.Status = kXMediaPacketStatusFailure;
