@@ -720,6 +720,24 @@ SOOVPA<8> IDirect3DDevice8_SetTextureState_BorderColor_1_0_4627 =
     }
 };
 
+// _D3DDevice_SetTextureState_BumpEnv@12 (archived XDK 4627 d3d8.lib,
+// 112 bytes). Generated with tools/oovpa/gen_oovpa.py and verified unique in
+// Turok and the available XBE/probe corpus.
+SOOVPA<8> IDirect3DDevice8_SetTextureState_BumpEnv_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x0F, 0x87 },
+        { 0x1F, 0x03 },
+        { 0x2D, 0xE8 },
+        { 0x3F, 0x1A },
+        { 0x4F, 0x18 },
+        { 0x5F, 0x5B },
+        { 0x6F, 0x90 }
+    }
+};
+
 // _D3DDevice_BeginVisibilityTest@0 (archived XDK 4627 d3d8.lib, 48 bytes).
 // Generated with tools/oovpa/gen_oovpa.py and verified unique in Turok.
 SOOVPA<8> IDirect3DDevice8_BeginVisibilityTest_1_0_4627 =
@@ -2366,6 +2384,16 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetTextureState_BorderColor"
+        #endif
+    },
+    // IDirect3DDevice8::SetTextureState_BumpEnv
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTextureState_BumpEnv_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetTextureState_BumpEnv,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTextureState_BumpEnv"
         #endif
     },
     // IDirect3DDevice8::BeginVisibilityTest

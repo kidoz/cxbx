@@ -2579,6 +2579,35 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetTextureState_BumpEnv
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BumpEnv
+(
+    DWORD Stage,
+    D3DTEXTURESTAGESTATETYPE Type,
+    DWORD Value
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTextureState_BumpEnv");
+
+    if(Stage < 8 &&
+       ((Type >= D3DTSS_BUMPENVMAT00 && Type <= D3DTSS_BUMPENVMAT11) ||
+        Type == D3DTSS_BUMPENVLSCALE || Type == D3DTSS_BUMPENVLOFFSET))
+    {
+        g_pD3DDevice8->SetTextureStageState(Stage, Type, Value);
+    }
+    else
+    {
+        EmuWarning("SetTextureState_BumpEnv ignored invalid stage/type (%lu, 0x%.08lX)",
+                   Stage,
+                   Type);
+    }
+
+    EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_BeginVisibilityTest
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_BeginVisibilityTest()
