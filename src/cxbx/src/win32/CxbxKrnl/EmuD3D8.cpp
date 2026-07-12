@@ -2233,13 +2233,24 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 
     DWORD* pRecompiled = NULL;
     const DWORD* pHostFunction = pFunction;
+    bool cpuFallback = false;
+    std::string cpuFallbackReason;
     if(pFunction != NULL && (pFunction[0] & 0xFFFF) == 0x2078)
     {
-        pRecompiled = EmuVshRecompileXboxFunction(pFunction);
-        pHostFunction = pRecompiled;
-        if(pRecompiled == NULL)
+        cpuFallback = pDeclaration != nullptr &&
+                      XTL::VshDiagnostics::RequiresCpuFallback(pFunction, cpuFallbackReason);
+        if(cpuFallback)
         {
-            EmuWarning("VshDecoder: recompilation failed; creating a declaration-only shader");
+            pHostFunction = nullptr;
+        }
+        else
+        {
+            pRecompiled = EmuVshRecompileXboxFunction(pFunction);
+            pHostFunction = pRecompiled;
+            if(pRecompiled == NULL)
+            {
+                EmuWarning("VshDecoder: recompilation failed; creating a declaration-only shader");
+            }
         }
     }
     const bool wasRecompiled = pRecompiled != NULL;
@@ -2257,7 +2268,6 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // ******************************************************************
     HRESULT hRet = D3D_OK;
     bool hostCallAttempted = false;
-    bool cpuFallback = false;
     if(pRecompiled != NULL)
     {
         try
@@ -2271,6 +2281,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
                 if(exceedsHostLimit && pDeclaration != nullptr)
                 {
                     cpuFallback = true;
+                    cpuFallbackReason = "host_instruction_limit";
                 }
                 else
                 {
@@ -2336,8 +2347,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     }
     else if(cpuFallback)
     {
-        printf("VSH| fallback hash=%08X mode=cpu reason=host_instruction_limit\n",
-               static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction)));
+        printf("VSH| fallback hash=%08X mode=cpu reason=%s\n",
+               static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction)),
+               cpuFallbackReason.c_str());
         fflush(stdout);
     }
     else if(wasRecompiled)

@@ -178,6 +178,11 @@ struct VshSrc
     DWORD Mux, R, Neg, Swz[4];
 };
 
+// NV2A temp R12 is a readable alias of the position output (oPos); vs.1.1
+// outputs are write-only and temps stop at r11. Route R12 through scratch
+// temp r11 and have the recompiler emit a final `mov oPos, r11`.
+#define VSH_POS_SCRATCH 11
+
 static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
 {
     switch(Which)
@@ -204,6 +209,69 @@ static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
     }
 }
 
+static bool VshFindDphScratch(const DWORD* XboxFunction, DWORD* Scratch, bool* HasDph)
+{
+    *HasDph = false;
+    if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
+    {
+        return false;
+    }
+
+    DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
+    if(instructionCount == 0 || instructionCount > 136)
+    {
+        instructionCount = 136;
+    }
+
+    std::array<bool, VSH_POS_SCRATCH> used{};
+    for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
+    {
+        const DWORD* encoded = &XboxFunction[1 + instruction * 4];
+        const DWORD mac = VshGetField(encoded, FLD_MAC);
+        const DWORD macMask = VshGetField(encoded, FLD_OUT_MAC_MASK);
+        const DWORD iluMask = VshGetField(encoded, FLD_OUT_ILU_MASK);
+        const DWORD outputR = VshGetField(encoded, FLD_OUT_R);
+        *HasDph = *HasDph || mac == MAC_DPH;
+
+        VshSrc sources[3]{};
+        for(int source = 0; source < 3; ++source)
+        {
+            VshDecodeSrc(encoded, source, &sources[source]);
+            if(sources[source].Mux == PARAM_R && sources[source].R < used.size())
+            {
+                used[sources[source].R] = true;
+            }
+        }
+        if((macMask != 0 || (iluMask != 0 && mac == MAC_NOP)) && outputR < used.size())
+        {
+            used[outputR] = true;
+        }
+        if(iluMask != 0 && mac != MAC_NOP)
+        {
+            used[1] = true;
+        }
+        if(VshGetField(encoded, FLD_FINAL) != 0)
+        {
+            break;
+        }
+    }
+
+    if(!*HasDph)
+    {
+        *Scratch = 0;
+        return true;
+    }
+    for(DWORD candidate = VSH_POS_SCRATCH; candidate-- > 0;)
+    {
+        if(!used[candidate])
+        {
+            *Scratch = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD MacMask,
                                                  DWORD IluMask, DWORD OMask, DWORD OutR,
                                                  DWORD Orb, DWORD OutAddr, const VshSrc& SrcA,
@@ -219,11 +287,6 @@ static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD Mac
         (Ilu != ILU_NOP && SrcC.Mux == PARAM_R && SrcC.R == 12);
     return writesPosition && readsR12;
 }
-
-// NV2A temp R12 is a readable alias of the position output (oPos); vs.1.1
-// outputs are write-only and temps stop at r11. Route R12 through scratch
-// temp r11 and have the recompiler emit a final `mov oPos, r11`.
-#define VSH_POS_SCRATCH 11
 
 static DWORD VshMapTemp(DWORD R)
 {
@@ -853,7 +916,7 @@ XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Translati
                                                                                    const void* d3dFunction)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
-    const std::size_t maxD3dTokens = 4 + VshXboxInstructionCount(xboxFunction) * 20;
+    const std::size_t maxD3dTokens = 16 + VshXboxInstructionCount(xboxFunction) * 20;
     return ValidateD3D8Function(d3dFunction, maxD3dTokens);
 }
 
@@ -962,6 +1025,19 @@ std::uint32_t XTL::VshDiagnostics::PackD3DSpecularFog(
     return PackD3DColor(color);
 }
 
+bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std::string& reason)
+{
+    DWORD scratch = 0;
+    bool hasDph = false;
+    if(!VshFindDphScratch(static_cast<const DWORD*>(xboxFunctionData), &scratch, &hasDph) && hasDph)
+    {
+        reason = "dph_no_scratch";
+        return true;
+    }
+    reason.clear();
+    return false;
+}
+
 std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xboxFunctionData)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
@@ -1055,7 +1131,7 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
 
     const std::uint32_t hash = HashXboxFunction(xboxFunction);
     const std::size_t xboxInstructionCount = VshXboxInstructionCount(xboxFunction);
-    const std::size_t maxD3dTokens = 4 + xboxInstructionCount * 20;
+    const std::size_t maxD3dTokens = 16 + xboxInstructionCount * 20;
     const ValidationResult validation = ValidateD3D8Translation(xboxFunction, d3dFunction);
     std::fprintf(stream, "VSH| rejected hash=%08X xbox_instructions=%zu validation=%s at=%zu reason=%s\n",
                  hash, xboxInstructionCount, validation.valid ? "pass" : "fail",
@@ -1106,8 +1182,16 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     if(InstrCount == 0 || InstrCount > 136)
         InstrCount = 136;
 
+    DWORD DphScratch = 0;
+    bool HasDph = false;
+    if(!VshFindDphScratch(pXboxFunction, &DphScratch, &HasDph))
+    {
+        EmuWarning("VshDecoder: exact DPH lowering requires a free temporary register");
+        return NULL;
+    }
+
     // Worst case each Xbox instruction becomes 4 PC instructions of 5 tokens
-    DWORD *Out = new DWORD[4 + InstrCount * 20];
+    DWORD* Out = new DWORD[16 + InstrCount * 20];
     int n = 0;
     bool NeedsPosEpilogue = false;
     VshEmit(Out, &n, 0xFFFE0101);   // vs.1.1
@@ -1167,6 +1251,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
             DWORD Opcode = 0;
             const VshSrc *Srcs[3] = { NULL, NULL, NULL };
             int SrcCount = 0;
+            VshSrc DphResult{};
 
             switch(Mac)
             {
@@ -1177,11 +1262,29 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                 case MAC_DP3: Opcode = SIO_DP3; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
                 case MAC_DP4: Opcode = SIO_DP4; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
                 case MAC_DPH:
-                    // No vs.1.1 DPH (a.xyz1 dot b); approximate with DP4 -- the
-                    // A source's W contribution is a.w*b.w instead of b.w.
-                    EmuWarning("VshDecoder: DPH approximated with DP4");
-                    Opcode = SIO_DP4; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2;
+                {
+                    // vs.1.1 has no DPH. Compute dot(a.xyz, b.xyz) + b.w in a
+                    // shader-global unused temp, then route that exact scalar
+                    // through the normal NV2A temp/output masks below.
+                    DphResult = { PARAM_R, DphScratch, FALSE, { 0, 1, 2, 3 } };
+                    VshSrc Bwwww = SrcB;
+                    Bwwww.Swz[0] = SrcB.Swz[3];
+                    Bwwww.Swz[1] = SrcB.Swz[3];
+                    Bwwww.Swz[2] = SrcB.Swz[3];
+                    Bwwww.Swz[3] = SrcB.Swz[3];
+                    VshEmit(Out, &n, SIO_DP3);
+                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, DphScratch, 0xF));
+                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, A0x));
+                    VshEmit(Out, &n, VshEmitSrc(I, &SrcB, A0x));
+                    VshEmit(Out, &n, SIO_ADD);
+                    VshEmit(Out, &n, VshDstToken(SPR_TEMP, DphScratch, 0xF));
+                    VshEmit(Out, &n, VshEmitSrc(I, &DphResult, false));
+                    VshEmit(Out, &n, VshEmitSrc(I, &Bwwww, A0x));
+                    Opcode = SIO_MOV;
+                    Srcs[0] = &DphResult;
+                    SrcCount = 1;
                     break;
+                }
                 case MAC_DST: Opcode = SIO_DST; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
                 case MAC_MIN: Opcode = SIO_MIN; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
                 case MAC_MAX: Opcode = SIO_MAX; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
