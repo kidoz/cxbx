@@ -2186,6 +2186,27 @@ static HRESULT EmuVshCreateHostShader(const DWORD* declaration, const DWORD* fun
     }
 }
 
+static void EmuVshDumpRejectedShader(const DWORD* xboxFunction, const DWORD* d3dFunction,
+                                     const DWORD* xboxDeclaration,
+                                     const DWORD* d3dDeclaration, const char* reason)
+{
+    try
+    {
+        const XTL::VshDiagnostics::TranslationCapture capture = {
+            xboxFunction,
+            d3dFunction,
+            xboxDeclaration,
+            d3dDeclaration,
+            reason,
+        };
+        XTL::VshDiagnostics::DumpRejectedTranslation(stdout, capture);
+    }
+    catch(...)
+    {
+        EmuWarning("VshDecoder: rejected-shader diagnostic capture raised a host exception");
+    }
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_CreateVertexShader
 // ******************************************************************
@@ -2269,10 +2290,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 
     if(rejectShader)
     {
-        printf("VSH| rejected hash=%08X reason=%s\n",
-               static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction)),
-               rejectionReason.c_str());
-        fflush(stdout);
+        EmuVshDumpRejectedShader(pFunction, pRecompiled, pDeclaration, nullptr,
+                                 rejectionReason.c_str());
         if(pHandle != nullptr)
         {
             *pHandle = 0;
@@ -2286,6 +2305,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     const DWORD* pHostDeclaration = pDeclaration;
     std::size_t declarationTokenCount = 0;
     bool declarationCpuCompatible = true;
+    bool translatedDeclarationAvailable = false;
     std::string declarationCpuIncompatibilityReason;
     if(pDeclaration != NULL)
     {
@@ -2294,6 +2314,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
                                                           std::size(TranslatedDecl));
         declarationTokenCount = declarationResult.tokenCount;
         declarationCpuCompatible = declarationResult.cpuCompatible;
+        translatedDeclarationAvailable =
+            declarationResult.disposition !=
+                XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+            declarationResult.tokenCount != 0;
         declarationCpuIncompatibilityReason = declarationResult.cpuIncompatibilityReason;
         if(cpuFallback && !declarationResult.cpuCompatible)
         {
@@ -2331,12 +2355,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 
     if(rejectShader)
     {
-        printf("VSH| rejected hash=%08X reason=%s\n",
-               isXboxFunction
-                   ? static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction))
-                   : 0u,
-               rejectionReason.c_str());
-        fflush(stdout);
+        EmuVshDumpRejectedShader(
+            pFunction, pRecompiled, pDeclaration,
+            translatedDeclarationAvailable ? TranslatedDecl : nullptr, rejectionReason.c_str());
         if(pHandle != nullptr)
         {
             *pHandle = 0;
@@ -2404,30 +2425,18 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 
     if(FAILED(hRet) && pRecompiled != NULL)
     {
-        try
-        {
-            const XTL::VshDiagnostics::TranslationCapture capture = {
-                pFunction,
-                pRecompiled,
-                pDeclaration,
-                pHostDeclaration,
-            };
-            XTL::VshDiagnostics::DumpRejectedTranslation(stdout, capture);
-        }
-        catch(...)
-        {
-            EmuWarning("VshDecoder: rejected-shader diagnostic capture raised a host exception");
-        }
+        const char* diagnosticReason = rejectionReason.empty()
+                                           ? (hostCallAttempted ? "host_create_failed"
+                                                                : "translation_validation_failed")
+                                           : rejectionReason.c_str();
+        EmuVshDumpRejectedShader(pFunction, pRecompiled, pDeclaration, pHostDeclaration,
+                                 diagnosticReason);
     }
 
     delete[] pRecompiled;
 
     if(translationRejected)
     {
-        printf("VSH| rejected hash=%08X reason=%s\n",
-               static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction)),
-               rejectionReason.c_str());
-        fflush(stdout);
         if(pHandle != nullptr)
         {
             *pHandle = 0;

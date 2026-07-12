@@ -1470,6 +1470,124 @@ std::vector<std::string> XTL::VshDiagnostics::DecodeD3D8Function(const void* d3d
     return listing;
 }
 
+std::vector<std::string>
+XTL::VshDiagnostics::DecodeVertexDeclaration(const void* declarationData,
+                                             std::size_t maxTokens)
+{
+    const DWORD* declaration = static_cast<const DWORD*>(declarationData);
+    std::vector<std::string> listing;
+    if(declaration == nullptr || maxTokens == 0)
+    {
+        return listing;
+    }
+
+    for(std::size_t tokenIndex = 0; tokenIndex < maxTokens;)
+    {
+        const DWORD token = declaration[tokenIndex];
+        std::ostringstream line;
+        line << "token=" << std::dec << std::setw(3) << std::setfill('0') << tokenIndex
+             << " raw=" << VshHex(token);
+        if(token == 0xFFFFFFFFu)
+        {
+            line << " type=end";
+            listing.push_back(line.str());
+            return listing;
+        }
+
+        const DWORD tokenType = token >> 29;
+        std::size_t payloadCount = 0;
+        const char* payloadOwner = nullptr;
+        switch(tokenType)
+        {
+            case 0:
+                line << " type=nop";
+                break;
+            case 1:
+                if((token & 0x10000000u) != 0)
+                {
+                    line << " type=stream stream=tessellator";
+                }
+                else
+                {
+                    line << " type=stream stream=" << std::dec << (token & 0xFu);
+                }
+                break;
+            case 2:
+                if((token & 0x10000000u) != 0)
+                {
+                    line << " type=skip dwords=" << std::dec << ((token >> 16) & 0xFu);
+                }
+                else
+                {
+                    line << " type=reg reg=" << std::dec << (token & 0x1Fu)
+                         << " data_type=" << VshHex((token >> 16) & 0xFFu);
+                }
+                break;
+            case 3:
+                if((token & 0x10000000u) != 0)
+                {
+                    line << " type=tess_uv reg=" << std::dec << (token & 0x1Fu);
+                }
+                else
+                {
+                    line << " type=tess_normal in=" << std::dec << ((token >> 20) & 0xFu)
+                         << " out=" << (token & 0x1Fu);
+                }
+                break;
+            case 4:
+            {
+                const std::size_t constantCount = (token >> 25) & 0xFu;
+                line << " type=const addr=" << std::dec << (token & 0x7Fu)
+                     << " count=" << constantCount;
+                payloadCount = constantCount * 4;
+                payloadOwner = "const";
+                break;
+            }
+            case 5:
+                payloadCount = (token >> 24) & 0x1Fu;
+                payloadOwner = "extension";
+                line << " type=extension count=" << std::dec << payloadCount
+                     << " info=" << VshHex(token & 0xFFFFFFu);
+                break;
+            case 6:
+                line << " type=invalid invalid=reserved_token_type";
+                listing.push_back(line.str());
+                return listing;
+            case 7:
+                line << " type=invalid invalid=malformed_end";
+                listing.push_back(line.str());
+                return listing;
+            default:
+                break;
+        }
+        listing.push_back(line.str());
+        ++tokenIndex;
+
+        if(payloadCount > maxTokens - tokenIndex)
+        {
+            std::ostringstream truncated;
+            truncated << "token=" << std::dec << std::setw(3) << std::setfill('0')
+                      << tokenIndex << " type=invalid invalid=truncated_" << payloadOwner
+                      << "_payload expected=" << payloadCount
+                      << " available=" << (maxTokens - tokenIndex);
+            listing.push_back(truncated.str());
+            return listing;
+        }
+        for(std::size_t payloadIndex = 0; payloadIndex < payloadCount;
+            ++payloadIndex, ++tokenIndex)
+        {
+            std::ostringstream payload;
+            payload << "token=" << std::dec << std::setw(3) << std::setfill('0') << tokenIndex
+                    << " raw=" << VshHex(declaration[tokenIndex]) << " type=payload owner="
+                    << payloadOwner << " element=" << payloadIndex;
+            listing.push_back(payload.str());
+        }
+    }
+
+    listing.push_back("type=invalid invalid=declaration_missing_end");
+    return listing;
+}
+
 void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(capture.xboxFunction);
@@ -1481,13 +1599,30 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
         return;
     }
 
-    const std::uint32_t hash = HashXboxFunction(xboxFunction);
+    const bool hasXboxFunction =
+        xboxFunction != nullptr && (xboxFunction[0] & 0xFFFFu) == VSH_XBOX_VERSION;
+    const std::uint32_t hash = hasXboxFunction ? HashXboxFunction(xboxFunction) : 0;
     const std::size_t xboxInstructionCount = VshXboxInstructionCount(xboxFunction);
     const std::size_t maxD3dTokens = 16 + xboxInstructionCount * 24;
-    const ValidationResult validation = ValidateD3D8Translation(xboxFunction, d3dFunction);
-    std::fprintf(stream, "VSH| rejected hash=%08X xbox_instructions=%zu validation=%s at=%zu reason=%s\n",
-                 hash, xboxInstructionCount, validation.valid ? "pass" : "fail",
-                 validation.instructionIndex, validation.message.c_str());
+    const bool validationAvailable = hasXboxFunction && d3dFunction != nullptr;
+    ValidationResult validation;
+    if(validationAvailable)
+    {
+        validation = ValidateD3D8Translation(xboxFunction, d3dFunction);
+    }
+    const char* reason = capture.rejectionReason;
+    if(reason == nullptr || reason[0] == '\0')
+    {
+        reason = validationAvailable ? validation.message.c_str() : "unspecified";
+    }
+    const char* validationState = validationAvailable
+                                      ? (validation.valid ? "pass" : "fail")
+                                      : "unavailable";
+    std::fprintf(stream,
+                 "VSH| rejected hash=%08X xbox_instructions=%zu d3d8=%s validation=%s "
+                 "at=%zu reason=%s\n",
+                 hash, xboxInstructionCount, d3dFunction != nullptr ? "present" : "unavailable",
+                 validationState, validation.instructionIndex, reason);
 
     for(const std::string& line : DecodeXboxFunction(xboxFunction))
     {
@@ -1498,21 +1633,26 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
         std::fprintf(stream, "VSH| d3d8 hash=%08X %s\n", hash, line.c_str());
     }
 
-    if(xboxDeclaration == nullptr || d3dDeclaration == nullptr)
+    if(xboxDeclaration == nullptr)
     {
-        std::fprintf(stream, "VSH| declaration hash=%08X unavailable\n", hash);
-        std::fflush(stream);
-        return;
+        std::fprintf(stream, "VSH| declaration_xbox hash=%08X unavailable\n", hash);
     }
-
-    for(std::size_t index = 0; index < 128; ++index)
+    else
     {
-        std::fprintf(stream, "VSH| declaration hash=%08X token=%zu xbox=%08X d3d8=%08X\n",
-                     hash, index, static_cast<unsigned int>(xboxDeclaration[index]),
-                     static_cast<unsigned int>(d3dDeclaration[index]));
-        if(xboxDeclaration[index] == 0xFFFFFFFFu || d3dDeclaration[index] == 0xFFFFFFFFu)
+        for(const std::string& line : DecodeVertexDeclaration(xboxDeclaration, 128))
         {
-            break;
+            std::fprintf(stream, "VSH| declaration_xbox hash=%08X %s\n", hash, line.c_str());
+        }
+    }
+    if(d3dDeclaration == nullptr)
+    {
+        std::fprintf(stream, "VSH| declaration_d3d8 hash=%08X unavailable\n", hash);
+    }
+    else
+    {
+        for(const std::string& line : DecodeVertexDeclaration(d3dDeclaration, 128))
+        {
+            std::fprintf(stream, "VSH| declaration_d3d8 hash=%08X %s\n", hash, line.c_str());
         }
     }
     std::fflush(stream);
