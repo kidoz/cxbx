@@ -413,6 +413,33 @@ static bool VshHasIluOpcode(const DWORD* XboxFunction, DWORD Opcode)
     return false;
 }
 
+static bool VshUsesRelativeConstants(const DWORD* XboxFunction)
+{
+    if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
+    {
+        return false;
+    }
+
+    DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
+    if(instructionCount == 0 || instructionCount > 136)
+    {
+        instructionCount = 136;
+    }
+    for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
+    {
+        const DWORD* encoded = &XboxFunction[1 + instruction * 4];
+        if(VshGetField(encoded, FLD_A0X) != 0)
+        {
+            return true;
+        }
+        if(VshGetField(encoded, FLD_FINAL) != 0)
+        {
+            break;
+        }
+    }
+    return false;
+}
+
 static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD MacMask,
                                                  DWORD IluMask, DWORD OMask, DWORD OutR,
                                                  DWORD Orb, DWORD OutAddr, const VshSrc& SrcA,
@@ -1174,6 +1201,11 @@ bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std:
         reason = "rcc_requires_clamp";
         return true;
     }
+    if(VshUsesRelativeConstants(xboxFunction))
+    {
+        reason = "relative_constant_dynamic_range";
+        return true;
+    }
 
     const VshScratchPlan scratchPlan = VshBuildScratchPlan(xboxFunction);
     if(!scratchPlan.valid)
@@ -1328,6 +1360,11 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     if(VshHasIluOpcode(pXboxFunction, ILU_RCC))
     {
         EmuWarning("VshDecoder: RCC requires clamping unavailable in vs.1.1; using CPU fallback");
+        return NULL;
+    }
+    if(VshUsesRelativeConstants(pXboxFunction))
+    {
+        EmuWarning("VshDecoder: relative constants require NV2A ARL and range semantics; using CPU fallback");
         return NULL;
     }
 
