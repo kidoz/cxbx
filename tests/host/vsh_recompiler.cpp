@@ -335,6 +335,38 @@ constexpr DWORD kScreenSpaceEpilogueProgram[] = {
     0x0000F801u,
 };
 
+constexpr DWORD kMidProgramPositionFeedbackProgram[] = {
+    0x00042078u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0000F800u,
+    0x00000000u,
+    0x0040021Bu,
+    0xC4361000u,
+    0x0000F800u,
+    0x00000000u,
+    0x0020001Bu,
+    0xC4000000u,
+    0x0000F818u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0000F801u,
+};
+
+constexpr DWORD kAmbiguousScreenSpaceSuffixProgram[] = {
+    0x00022078u,
+    0x00000000u,
+    0x0020001Bu,
+    0x08000000u,
+    0x0000F800u,
+    0x00000000u,
+    0x004C001Bu,
+    0xC4361800u,
+    0x0000F801u,
+};
+
 constexpr DWORD kPartialPositionProgram[] = {
     0x00012078u,
     0x00000000u,
@@ -1090,6 +1122,51 @@ int RunTests()
               "screen-space removal preserves clip-space position");
         delete[] epilogueD3D8;
     }
+
+    ShaderOutputs cpuFeedbackOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              kMidProgramPositionFeedbackProgram, differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuFeedbackOutputs.position.data(),
+              cpuFeedbackOutputs.colors.data(), cpuFeedbackOutputs.colors.size(),
+              cpuFeedbackOutputs.texCoords.data(), cpuFeedbackOutputs.texCoords.size()),
+          "CPU mid-program R12 feedback shader executes");
+    DWORD* feedbackD3D8 =
+        XTL::EmuVshRecompileXboxFunction(kMidProgramPositionFeedbackProgram);
+    Check(feedbackD3D8 != nullptr, "mid-program R12 feedback shader translates");
+    if(feedbackD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8FeedbackOutputs{};
+        Check(ExecuteD3D8Bytecode(feedbackD3D8, 4 + 4 * 20,
+                                  differentialD3D8Constants.data(), differentialInputs.data(),
+                                  d3d8FeedbackOutputs),
+              "translated mid-program R12 feedback bytecode executes independently");
+        bool feedbackMatches = PositionsEqual(cpuFeedbackOutputs, d3d8FeedbackOutputs);
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            feedbackMatches = feedbackMatches &&
+                              NearlyEqual(cpuFeedbackOutputs.colors[component],
+                                          d3d8FeedbackOutputs.colors[component]);
+        }
+        Check(feedbackMatches, "CPU and translator preserve mid-program R12 feedback");
+        Check(NearlyEqual(cpuFeedbackOutputs.colors[0], differentialInputs[0] * 8.0f) &&
+                  NearlyEqual(cpuFeedbackOutputs.colors[1], differentialInputs[1] * 8.0f) &&
+                  NearlyEqual(cpuFeedbackOutputs.colors[2], differentialInputs[2] * 8.0f) &&
+                  NearlyEqual(cpuFeedbackOutputs.colors[3], differentialInputs[3] * 8.0f),
+              "mid-program position feedback remains observable");
+        delete[] feedbackD3D8;
+    }
+
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(kAmbiguousScreenSpaceSuffixProgram,
+                                                   fallbackReason),
+          "ambiguous terminal R12 position feedback requires CPU fallback");
+    Check(fallbackReason == "ambiguous_screen_space_suffix",
+          "ambiguous screen-space suffix fallback reason is stable");
+    DWORD* ambiguousSuffixD3D8 =
+        XTL::EmuVshRecompileXboxFunction(kAmbiguousScreenSpaceSuffixProgram);
+    Check(ambiguousSuffixD3D8 == nullptr,
+          "ambiguous screen-space suffix never emits host bytecode");
+    delete[] ambiguousSuffixD3D8;
 
     differentialInputs[0] = 0.25f;
     differentialInputs[1] = -0.5f;

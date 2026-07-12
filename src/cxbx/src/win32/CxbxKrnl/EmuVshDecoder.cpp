@@ -440,20 +440,90 @@ static bool VshUsesRelativeConstants(const DWORD* XboxFunction)
     return false;
 }
 
-static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD MacMask,
-                                                 DWORD IluMask, DWORD OMask, DWORD OutR,
-                                                 DWORD Orb, DWORD OutAddr, const VshSrc& SrcA,
-                                                 const VshSrc& SrcB, const VshSrc& SrcC)
+static bool VshInstructionWritesPosition(const DWORD* Instruction)
 {
-    const bool writesPosition = ((MacMask != 0 || IluMask != 0) && OutR == 12) ||
-                                (OMask != 0 && Orb == OUTPUT_O && OutAddr == 0);
-    const bool readsR12 =
-        (Mac != MAC_NOP &&
-         ((SrcA.Mux == PARAM_R && SrcA.R == 12) ||
-          (SrcB.Mux == PARAM_R && SrcB.R == 12) ||
-          (SrcC.Mux == PARAM_R && SrcC.R == 12))) ||
-        (Ilu != ILU_NOP && SrcC.Mux == PARAM_R && SrcC.R == 12);
-    return writesPosition && readsR12;
+    const DWORD macMask = VshGetField(Instruction, FLD_OUT_MAC_MASK);
+    const DWORD iluMask = VshGetField(Instruction, FLD_OUT_ILU_MASK);
+    const DWORD outputMask = VshGetField(Instruction, FLD_OUT_O_MASK);
+    return ((macMask != 0 || iluMask != 0) && VshGetField(Instruction, FLD_OUT_R) == 12) ||
+           (outputMask != 0 && VshGetField(Instruction, FLD_OUT_ORB) == OUTPUT_O &&
+            VshGetField(Instruction, FLD_OUT_ADDRESS) == 0);
+}
+
+static bool VshInstructionReadsR12(const DWORD* Instruction)
+{
+    VshSrc srcA{}, srcB{}, srcC{};
+    VshDecodeSrc(Instruction, 0, &srcA);
+    VshDecodeSrc(Instruction, 1, &srcB);
+    VshDecodeSrc(Instruction, 2, &srcC);
+    const DWORD mac = VshGetField(Instruction, FLD_MAC);
+    const DWORD ilu = VshGetField(Instruction, FLD_ILU);
+    return (mac != MAC_NOP &&
+            ((srcA.Mux == PARAM_R && srcA.R == 12) ||
+             (srcB.Mux == PARAM_R && srcB.R == 12) ||
+             (srcC.Mux == PARAM_R && srcC.R == 12))) ||
+           (ilu != ILU_NOP && srcC.Mux == PARAM_R && srcC.R == 12);
+}
+
+static bool VshIsIdentitySource(const VshSrc& Source)
+{
+    return !Source.Neg && Source.Swz[0] == 0 && Source.Swz[1] == 1 &&
+           Source.Swz[2] == 2 && Source.Swz[3] == 3;
+}
+
+struct VshScreenSpaceSuffix
+{
+    std::size_t start = 0;
+    bool ambiguous = false;
+};
+
+static VshScreenSpaceSuffix VshClassifyScreenSpaceSuffix(const DWORD* Instructions,
+                                                         std::size_t InstructionCount)
+{
+    VshScreenSpaceSuffix suffix{ InstructionCount, false };
+    if(Instructions == nullptr || InstructionCount < 2)
+    {
+        return suffix;
+    }
+
+    const DWORD* finalInstruction = &Instructions[(InstructionCount - 1) * 4];
+    if(VshGetField(finalInstruction, FLD_FINAL) == 0 ||
+       !VshInstructionWritesPosition(finalInstruction) ||
+       !VshInstructionReadsR12(finalInstruction))
+    {
+        return suffix;
+    }
+
+    VshSrc srcA{}, srcB{};
+    VshDecodeSrc(finalInstruction, 0, &srcA);
+    VshDecodeSrc(finalInstruction, 1, &srcB);
+    const DWORD* previousInstruction = finalInstruction - 4;
+    // Recognize only the verified XDK-style terminal multiply. R12 feedback in
+    // the shader body is guest computation and must remain intact; a terminal
+    // lookalike that differs from this shape is safer on the CPU interpreter.
+    const bool exactFinalMultiply =
+        VshGetField(finalInstruction, FLD_MAC) == MAC_MUL &&
+        VshGetField(finalInstruction, FLD_ILU) == ILU_NOP &&
+        VshGetField(finalInstruction, FLD_V) == 1 &&
+        VshGetField(finalInstruction, FLD_A0X) == 0 &&
+        VshGetField(finalInstruction, FLD_OUT_MAC_MASK) == 0 &&
+        VshGetField(finalInstruction, FLD_OUT_ILU_MASK) == 0 &&
+        VshGetField(finalInstruction, FLD_OUT_O_MASK) == 0xF &&
+        VshGetField(finalInstruction, FLD_OUT_MUX) == OMUX_MAC &&
+        VshGetField(finalInstruction, FLD_OUT_ORB) == OUTPUT_O &&
+        VshGetField(finalInstruction, FLD_OUT_ADDRESS) == 0 && srcA.Mux == PARAM_R &&
+        srcA.R == 12 && VshIsIdentitySource(srcA) && srcB.Mux == PARAM_V &&
+        VshIsIdentitySource(srcB) && VshInstructionWritesPosition(previousInstruction) &&
+        !VshInstructionReadsR12(previousInstruction);
+    if(exactFinalMultiply)
+    {
+        suffix.start = InstructionCount - 1;
+    }
+    else
+    {
+        suffix.ambiguous = true;
+    }
+    return suffix;
 }
 
 static DWORD VshMapTemp(DWORD R, DWORD PositionScratch)
@@ -1207,6 +1277,16 @@ bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std:
         return true;
     }
 
+    const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
+    const VshScreenSpaceSuffix screenSpaceSuffix =
+        VshClassifyScreenSpaceSuffix(xboxFunction == nullptr ? nullptr : &xboxFunction[1],
+                                     instructionCount);
+    if(screenSpaceSuffix.ambiguous)
+    {
+        reason = "ambiguous_screen_space_suffix";
+        return true;
+    }
+
     const VshScratchPlan scratchPlan = VshBuildScratchPlan(xboxFunction);
     if(!scratchPlan.valid)
     {
@@ -1368,9 +1448,15 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         return NULL;
     }
 
-    DWORD InstrCount = (pXboxFunction[0] >> 16) & 0xFFFF;
-    if(InstrCount == 0 || InstrCount > 136)
-        InstrCount = 136;
+    const DWORD InstrCount = static_cast<DWORD>(VshXboxInstructionCount(pXboxFunction));
+
+    const VshScreenSpaceSuffix ScreenSpaceSuffix =
+        VshClassifyScreenSpaceSuffix(&pXboxFunction[1], InstrCount);
+    if(ScreenSpaceSuffix.ambiguous)
+    {
+        EmuWarning("VshDecoder: ambiguous screen-space suffix; using CPU fallback");
+        return NULL;
+    }
 
     const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction);
     if(!ScratchPlan.valid)
@@ -1400,6 +1486,12 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
 
     for(DWORD i = 0; i < InstrCount; i++)
     {
+        if(i >= ScreenSpaceSuffix.start)
+        {
+            NeedsPosEpilogue = true;
+            break;
+        }
+
         const DWORD *I = &pXboxFunction[1 + i * 4];
 
         DWORD Mac = VshGetField(I, FLD_MAC);
@@ -1418,24 +1510,6 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         VshDecodeSrc(I, 1, &SrcB);
         VshDecodeSrc(I, 2, &SrcC);
         VshSrc StagedIluSource{ PARAM_R, ScratchPlan.pairedIlu, FALSE, { 0, 1, 2, 3 } };
-
-        // Screen-space transform removal: the Xbox library appends a position
-        // epilogue that reads oPos back (the R12 alias) and rescales it by 1/w
-        // and the viewport, because the NV2A wants screen coordinates. The PC
-        // pipeline expects CLIP-space positions and performs the divide itself,
-        // so keeping those instructions double-transforms everything off view.
-        // Any instruction that both reads R12 and writes the position is part
-        // of that epilogue -- drop it.
-        if(VshIsScreenSpaceTransformInstruction(Mac, Ilu, MacMask, IluMask, OMask, OutR,
-                                                Orb, OutAddr, SrcA, SrcB, SrcC))
-        {
-            NeedsPosEpilogue = true; // position already staged in the scratch temp
-            if(VshGetField(I, FLD_FINAL) != 0)
-            {
-                break;
-            }
-            continue;
-        }
 
         const bool StageIluSource =
             VshNeedsPairedIluScratch(I, Mac, Ilu, MacMask, OutR, OMask, SrcC);
@@ -2108,9 +2182,17 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
     std::uint8_t PtsWriteMask = 0;
     int A0 = 0;
 
+    const VshScreenSpaceSuffix screenSpaceSuffix =
+        VshClassifyScreenSpaceSuffix(Program, static_cast<std::size_t>(InstrCount));
+
     if(Start < 0) Start = 0;
     for(int pc = Start; pc < InstrCount; pc++)
     {
+        if(static_cast<std::size_t>(pc) >= screenSpaceSuffix.start)
+        {
+            break;
+        }
+
         const DWORD* I = &Program[pc * 4];
 
         DWORD Mac = VshGetField(I, FLD_MAC);
@@ -2130,15 +2212,6 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
         VshDecodeSrc(I, 0, &SA);
         VshDecodeSrc(I, 1, &SB);
         VshDecodeSrc(I, 2, &SC);
-        if(VshIsScreenSpaceTransformInstruction(Mac, Ilu, MacMask, IluMask, OMask, OutR,
-                                                Orb, OutAddr, SA, SB, SC))
-        {
-            if(Final)
-            {
-                break;
-            }
-            continue;
-        }
         float A[4], B[4], C[4];
         VshExecReadSrc(I, &SA, Vfield, Relative, A0, Reg, Const, Input, A);
         VshExecReadSrc(I, &SB, Vfield, Relative, A0, Reg, Const, Input, B);
