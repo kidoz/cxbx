@@ -8,6 +8,18 @@ cxbx_common_src = files(
   'src/win32/XBVideo.cpp',
 )
 
+cxbx_trace = static_library(
+  'cxbx_trace',
+  'src/core/trace/trace.cpp',
+  'src/platform/win32/trace_os.cpp',
+  include_directories : cxbx_inc,
+)
+
+cxbx_trace_dep = declare_dependency(
+  link_with : cxbx_trace,
+  include_directories : cxbx_inc,
+)
+
 cxbx_launcher_src = files(
   'src/win32/Cxbx/DlgControllerConfig.cpp',
   'src/win32/Cxbx/DlgVideoConfig.cpp',
@@ -117,6 +129,7 @@ cxbx_runtime = shared_library(
   cxbx_runtime_src,
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
+  dependencies : cxbx_trace_dep,
   link_with : cxbx_link_libs,
   link_args : cxbx_link_args + [
     '-Wl,/BASE:0x10000000',
