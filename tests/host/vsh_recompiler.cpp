@@ -339,6 +339,14 @@ constexpr DWORD kRasterOutputsProgram[] = {
     0x08000000u,
     0x00008831u,
 };
+
+constexpr DWORD kRccProgram[] = {
+    0x00012078u,
+    0x00000000u,
+    0x06000000u,
+    0x00000000u,
+    0x2000F805u,
+};
 } // namespace
 
 int RunTests()
@@ -373,6 +381,37 @@ int RunTests()
     Check(XTL::VshDiagnostics::RequiresCpuFallback(noScratchDph.data(), fallbackReason),
           "DPH without a free temporary requires CPU fallback");
     Check(fallbackReason == "dph_no_scratch", "DPH CPU fallback reason is stable");
+
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(kRccProgram, fallbackReason),
+          "RCC requires exact CPU fallback");
+    Check(fallbackReason == "rcc_requires_clamp", "RCC CPU fallback reason is stable");
+    DWORD* rccTranslation = XTL::EmuVshRecompileXboxFunction(kRccProgram);
+    Check(rccTranslation == nullptr, "RCC never emits an approximate RCP translation");
+    delete[] rccTranslation;
+
+    std::array<float, 192 * 4> rccConstants{};
+    std::array<float, 16 * 4> rccInputs{};
+    const auto checkRcc = [&](float input, float expected, const char* name)
+    {
+        rccInputs[0] = input;
+        ShaderOutputs outputs{};
+        const bool executed = XTL::VshDiagnostics::ExecuteXboxVertexShader(
+            kRccProgram, rccConstants.data(), rccInputs.data(), outputs.position.data(),
+            outputs.colors.data(), outputs.colors.size(), outputs.texCoords.data(),
+            outputs.texCoords.size());
+        Check(executed, name);
+        Check(NearlyEqual(outputs.position[0], expected) &&
+                  NearlyEqual(outputs.position[1], expected) &&
+                  NearlyEqual(outputs.position[2], expected) &&
+                  NearlyEqual(outputs.position[3], expected),
+              name);
+    };
+    checkRcc(2.0f, 0.5f, "RCC preserves ordinary positive reciprocal");
+    checkRcc(-4.0f, -0.25f, "RCC preserves ordinary negative reciprocal");
+    checkRcc(0x1p-80f, 0x1p64f, "RCC clamps tiny positive input to positive 2^64");
+    checkRcc(-0x1p-80f, -0x1p64f, "RCC clamps tiny negative input to negative 2^64");
+    checkRcc(0.0f, 0x1p64f, "RCC clamps zero to positive 2^64");
 
     const std::vector<std::string> xboxListing = XTL::VshDiagnostics::DecodeXboxFunction(kXboxProgram);
     const std::vector<std::string> d3dListing =
