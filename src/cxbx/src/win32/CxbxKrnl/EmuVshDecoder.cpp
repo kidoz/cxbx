@@ -471,6 +471,80 @@ static bool VshIsIdentitySource(const VshSrc& Source)
            Source.Swz[2] == 2 && Source.Swz[3] == 3;
 }
 
+static bool VshIsSupportedOutputAddress(DWORD Address)
+{
+    switch(Address)
+    {
+        case 0:
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        case 9:
+        case 10:
+        case 11:
+        case 12: return true;
+        default: return false;
+    }
+}
+
+static bool VshIsValidSource(const VshSrc& Source)
+{
+    return Source.Mux == PARAM_R || Source.Mux == PARAM_V || Source.Mux == PARAM_C;
+}
+
+static const char* VshTranslationFallbackReason(const DWORD* Instructions,
+                                                std::size_t InstructionCount)
+{
+    for(std::size_t index = 0; index < InstructionCount; ++index)
+    {
+        const DWORD* instruction = &Instructions[index * 4];
+        const DWORD mac = VshGetField(instruction, FLD_MAC);
+        const DWORD ilu = VshGetField(instruction, FLD_ILU);
+        const DWORD macMask = VshGetField(instruction, FLD_OUT_MAC_MASK);
+        const DWORD iluMask = VshGetField(instruction, FLD_OUT_ILU_MASK);
+        const DWORD outputMask = VshGetField(instruction, FLD_OUT_O_MASK);
+        if(mac > MAC_ARL)
+        {
+            return "unsupported_mac_opcode";
+        }
+
+        VshSrc sourceA{}, sourceB{}, sourceC{};
+        VshDecodeSrc(instruction, 0, &sourceA);
+        VshDecodeSrc(instruction, 1, &sourceB);
+        VshDecodeSrc(instruction, 2, &sourceC);
+        const bool usesA = mac != MAC_NOP;
+        const bool usesB = mac == MAC_MUL || mac == MAC_MAD || mac == MAC_DP3 ||
+                           mac == MAC_DPH || mac == MAC_DP4 || mac == MAC_DST ||
+                           mac == MAC_MIN || mac == MAC_MAX || mac == MAC_SLT ||
+                           mac == MAC_SGE;
+        const bool usesC = mac == MAC_ADD || mac == MAC_MAD || ilu != ILU_NOP;
+        if((usesA && !VshIsValidSource(sourceA)) ||
+           (usesB && !VshIsValidSource(sourceB)) ||
+           (usesC && !VshIsValidSource(sourceC)))
+        {
+            return "unsupported_source_mux";
+        }
+
+        if((macMask != 0 || iluMask != 0) && VshGetField(instruction, FLD_OUT_R) > 12)
+        {
+            return "unsupported_temp_register";
+        }
+        if(outputMask != 0)
+        {
+            const DWORD outputMux = VshGetField(instruction, FLD_OUT_MUX);
+            const bool selectedPipelineActive =
+                outputMux == OMUX_MAC ? mac != MAC_NOP && mac != MAC_ARL : ilu != ILU_NOP;
+            if(!selectedPipelineActive || VshGetField(instruction, FLD_OUT_ORB) != OUTPUT_O ||
+               !VshIsSupportedOutputAddress(VshGetField(instruction, FLD_OUT_ADDRESS)))
+            {
+                return "unsupported_output_route";
+            }
+        }
+    }
+    return nullptr;
+}
+
 struct VshScreenSpaceSuffix
 {
     std::size_t start = 0;
@@ -1278,6 +1352,13 @@ bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std:
     }
 
     const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
+    const char* translationFallbackReason = VshTranslationFallbackReason(
+        xboxFunction == nullptr ? nullptr : &xboxFunction[1], instructionCount);
+    if(translationFallbackReason != nullptr)
+    {
+        reason = translationFallbackReason;
+        return true;
+    }
     const VshScreenSpaceSuffix screenSpaceSuffix =
         VshClassifyScreenSpaceSuffix(xboxFunction == nullptr ? nullptr : &xboxFunction[1],
                                      instructionCount);
@@ -1449,6 +1530,15 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     }
 
     const DWORD InstrCount = static_cast<DWORD>(VshXboxInstructionCount(pXboxFunction));
+
+    const char* TranslationFallbackReason =
+        VshTranslationFallbackReason(&pXboxFunction[1], InstrCount);
+    if(TranslationFallbackReason != nullptr)
+    {
+        EmuWarning("VshDecoder: unsupported instruction form (%s); using CPU fallback",
+                   TranslationFallbackReason);
+        return NULL;
+    }
 
     const VshScreenSpaceSuffix ScreenSpaceSuffix =
         VshClassifyScreenSpaceSuffix(&pXboxFunction[1], InstrCount);
@@ -2066,27 +2156,55 @@ static float VshInvSqrt(float x)
 
 static float VshLog2(float x)
 {
-    if(x <= 0.0f) return 0.0f;
+    if(x <= 0.0f)
+    {
+        return 0.0f;
+    }
     std::uint32_t bits;
     memcpy(&bits, &x, 4);
-    int e = static_cast<int>((bits >> 23) & 0xFFu) - 127;
+    const int exponent = static_cast<int>((bits >> 23) & 0xFFu) - 127;
     bits = (bits & 0x807FFFFFu) | 0x3F800000u; // mantissa m in [1,2)
     float m;
     memcpy(&m, &bits, 4);
-    float p = -1.7417939f + (2.8212026f + (-1.4699568f + (0.4471900f - 0.0568825f * m) * m) * m) * m;
-    return p + (float)e;
+    const float y = (m - 1.0f) / (m + 1.0f);
+    const float y2 = y * y;
+    const float series =
+        y * (1.0f + y2 * (1.0f / 3.0f +
+                          y2 * (1.0f / 5.0f +
+                                y2 * (1.0f / 7.0f +
+                                      y2 * (1.0f / 9.0f + y2 * (1.0f / 11.0f))))));
+    return static_cast<float>(exponent) + 2.8853900818f * series;
 }
 
 static float VshExp2(float x)
 {
-    if(x < -126.0f) return 0.0f;
-    if(x >  126.0f) return 3.4e38f;
-    int xi = VshFloorI(x);
-    float f = x - (float)xi;
-    float p = 1.0f + f * (0.6931472f + f * (0.2402265f + f * (0.0555041f + f * 0.0096181f)));
-    int bits = (xi + 127) << 23;
-    float scale; memcpy(&scale, &bits, 4);
-    return p * scale;
+    if(x < -126.0f)
+    {
+        return 0.0f;
+    }
+    if(x > 126.0f)
+    {
+        return 3.4e38f;
+    }
+    const int integer = VshFloorI(x);
+    const float fraction = x - static_cast<float>(integer);
+    const float polynomial =
+        1.0f +
+        fraction *
+            (0.6931471806f +
+             fraction *
+                 (0.2402265070f +
+                  fraction *
+                      (0.0555041087f +
+                       fraction *
+                           (0.0096181291f +
+                            fraction *
+                                (0.0013333558f +
+                                 fraction * (0.0001540353f + fraction * 0.0000152527f))))));
+    const int bits = (integer + 127) << 23;
+    float scale;
+    memcpy(&scale, &bits, 4);
+    return polynomial * scale;
 }
 
 // ILU scalar op on the C source (already swizzled). LIT writes a full vec4.
