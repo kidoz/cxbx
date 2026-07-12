@@ -819,6 +819,13 @@ HRESULT WINAPI EmuIDirect3DDevice8_SetTextureState_BorderColor
     DWORD           Value
 );
 
+VOID WINAPI EmuIDirect3DDevice8_SetTextureState_BumpEnv
+(
+    DWORD           Stage,
+    D3DTEXTURESTAGESTATETYPE Type,
+    DWORD           Value
+);
+
 VOID WINAPI EmuIDirect3DDevice8_BeginVisibilityTest();
 HRESULT WINAPI EmuIDirect3DDevice8_EndVisibilityTest(DWORD Index);
 HRESULT WINAPI EmuIDirect3DDevice8_GetVisibilityTestResult
