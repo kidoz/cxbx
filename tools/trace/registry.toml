@@ -1,0 +1,333 @@
+[grammar]
+version = 2
+
+[[channels]]
+id = 0
+enum = "Kernel"
+key = "ktrace"
+prefix = "KTRACE"
+default_tier = "text"
+
+[[channels]]
+id = 1
+enum = "Nv2a"
+key = "nv2a"
+prefix = "NV2A"
+default_tier = "bin"
+availability = "CXBX_TRACE_HAVE_NV2A"
+
+[[channels]]
+id = 2
+enum = "SingleStep"
+key = "ss"
+prefix = "SS"
+default_tier = "bin"
+environment_alias = "CXBX_SS_TRACE"
+
+[[channels]]
+id = 3
+enum = "Exception"
+key = "exc"
+prefix = "EXC"
+default_tier = "text"
+environment_alias = "CXBX_EXC_TRACE"
+
+[[channels]]
+id = 4
+enum = "D3dStat"
+key = "d3dstat"
+prefix = "D3DSTAT"
+default_tier = "text"
+environment_alias = "CXBX_D3D_CALL_STATS"
+
+[[channels]]
+id = 5
+enum = "D3d"
+key = "d3d"
+prefix = "D3D"
+default_tier = "text"
+
+[[channels]]
+id = 6
+enum = "Hle"
+key = "hle"
+prefix = "HLE"
+default_tier = "text"
+environment_alias = "CXBX_HLE_TRACE"
+
+[[channels]]
+id = 7
+enum = "FileIo"
+key = "fileio"
+prefix = "FILEIO"
+default_tier = "text"
+environment_alias = "CXBX_FILEIO_TRACE"
+
+[[channels]]
+id = 8
+enum = "UsbPhysical"
+key = "usb"
+prefix = "USBPHYS"
+default_tier = "text"
+environment_alias = "CXBX_USB_PHYS_TRACE"
+
+[[channels]]
+id = 9
+enum = "Reboot"
+key = "reboot"
+prefix = "REBOOT"
+default_tier = "text"
+environment_alias = "CXBX_REBOOT_TRACE"
+
+[[channels]]
+id = 10
+enum = "Crc"
+key = "crc"
+prefix = "CRC"
+default_tier = "text"
+environment_alias = "CXBX_CRC_TRACE"
+
+[[channels]]
+id = 11
+enum = "Mmio"
+key = "mmio"
+prefix = "MMIO"
+default_tier = "bin"
+environment_alias = "CXBX_MMIO_TRACE"
+
+[[channels]]
+id = 12
+enum = "Nv2aMethodStats"
+key = "nv2a_method_stats"
+prefix = "NV2ASTAT"
+default_tier = "text"
+environment_alias = "CXBX_NV2A_METHOD_STATS"
+
+[[value_sets]]
+key = "d3d_api"
+enum = "D3dApi"
+
+[[value_sets.values]]
+id = 1
+enum = "Clear"
+key = "Clear"
+
+[[value_sets.values]]
+id = 2
+enum = "IsFencePending"
+key = "IsFencePending"
+
+[[value_sets.values]]
+id = 3
+enum = "BlockOnFence"
+key = "BlockOnFence"
+
+[[value_sets.values]]
+id = 4
+enum = "BlockUntilIdle"
+key = "BlockUntilIdle"
+
+[[value_sets]]
+key = "d3d_wait_reason"
+enum = "D3dWaitReason"
+
+[[value_sets.values]]
+id = 1
+enum = "SingleStep"
+key = "single_step"
+
+[[value_sets.values]]
+id = 2
+enum = "Fence"
+key = "fence"
+
+[[value_sets.values]]
+id = 3
+enum = "Idle"
+key = "idle"
+
+[[events]]
+id = 1
+enum = "KernelBoundary"
+key = "kernel_boundary"
+channel = "ktrace"
+argument = "ordinal"
+argument_type = "u32"
+
+[[events]]
+id = 2
+enum = "D3dBoundary"
+key = "d3d_boundary"
+channel = "d3d"
+argument = "api_id"
+argument_type = "u32"
+
+[[events]]
+id = 3
+enum = "FileSystemBoundary"
+key = "filesystem_boundary"
+channel = "fileio"
+argument = "transition"
+argument_type = "u32"
+
+[[events]]
+id = 4
+enum = "MmioAccess"
+key = "mmio_access"
+channel = "mmio"
+argument = "address"
+argument_type = "u32"
+
+[[events]]
+id = 5
+enum = "Exception"
+key = "exception"
+channel = "exc"
+argument = "code"
+argument_type = "u32"
+
+[[events]]
+id = 6
+enum = "BinaryDropped"
+key = "binary_dropped"
+channel = "ktrace"
+argument = "count"
+argument_type = "u32"
+
+[[events]]
+id = 7
+enum = "ThreadAttach"
+key = "thread_attach"
+channel = "ktrace"
+argument = "thread_id"
+argument_type = "u32"
+
+[[events]]
+id = 8
+enum = "Continuation0"
+key = "continuation_0"
+channel = "ktrace"
+argument = "word"
+argument_type = "u32"
+
+[[events]]
+id = 9
+enum = "Continuation1"
+key = "continuation_1"
+channel = "ktrace"
+argument = "word"
+argument_type = "u32"
+
+[[events]]
+id = 10
+enum = "Continuation2"
+key = "continuation_2"
+channel = "ktrace"
+argument = "word"
+argument_type = "u32"
+
+[[events]]
+id = 11
+enum = "D3dCall"
+key = "d3d_call"
+channel = "d3d"
+argument = "api"
+argument_type = "u32"
+verb = "call"
+continuations = ["Continuation0", "Continuation1", "Continuation2"]
+continuation_arguments = ["seq", "flags", "marker"]
+formats = ["d3d_api", "dec", "hex", "hex"]
+
+[[events]]
+id = 12
+enum = "D3dReturn"
+key = "d3d_return"
+channel = "d3d"
+argument = "api"
+argument_type = "u32"
+verb = "ret"
+continuations = ["Continuation0", "Continuation1"]
+continuation_arguments = ["seq", "hr"]
+formats = ["d3d_api", "dec", "hex"]
+
+[[events]]
+id = 13
+enum = "D3dWait"
+key = "d3d_wait"
+channel = "d3d"
+argument = "reason"
+argument_type = "u32"
+verb = "wait"
+continuations = ["Continuation0", "Continuation1", "Continuation2"]
+continuation_arguments = ["seq", "handle", "pending"]
+formats = ["d3d_wait_reason", "dec", "hex", "bool"]
+
+[[events]]
+id = 14
+enum = "Nv2aRead"
+key = "nv2a_read"
+channel = "nv2a"
+argument = "offset"
+argument_type = "u32"
+verb = "rd"
+continuations = ["Continuation0"]
+continuation_arguments = ["value"]
+formats = ["hex", "hex"]
+
+[[events]]
+id = 15
+enum = "Nv2aWrite"
+key = "nv2a_write"
+channel = "nv2a"
+argument = "offset"
+argument_type = "u32"
+verb = "wr"
+continuations = ["Continuation0"]
+continuation_arguments = ["value"]
+formats = ["hex", "hex"]
+
+[[events]]
+id = 16
+enum = "Nv2aPush"
+key = "nv2a_push"
+channel = "nv2a"
+argument = "word"
+argument_type = "u32"
+verb = "pb"
+formats = ["hex"]
+
+[[events]]
+id = 17
+enum = "Nv2aMethod"
+key = "nv2a_method"
+channel = "nv2a"
+argument = "class"
+argument_type = "u32"
+verb = "mthd"
+continuations = ["Continuation0", "Continuation1"]
+continuation_arguments = ["method", "data"]
+formats = ["hex", "hex", "hex"]
+
+[[events]]
+id = 18
+enum = "Nv2aRamht"
+key = "nv2a_ramht"
+channel = "nv2a"
+argument = "handle"
+argument_type = "u32"
+verb = "ramht"
+continuations = ["Continuation0", "Continuation1"]
+continuation_arguments = ["instance", "class"]
+formats = ["hex", "hex", "hex"]
+
+[[events]]
+id = 19
+enum = "SingleStepInstruction"
+key = "single_step_instruction"
+channel = "ss"
+argument = "eip"
+argument_type = "u32"
+verb = "step"
+continuations = ["Continuation0"]
+continuation_arguments = ["esp"]
+formats = ["hex", "hex"]
