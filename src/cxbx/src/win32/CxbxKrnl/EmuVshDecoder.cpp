@@ -272,6 +272,33 @@ static bool VshFindDphScratch(const DWORD* XboxFunction, DWORD* Scratch, bool* H
     return false;
 }
 
+static bool VshHasIluOpcode(const DWORD* XboxFunction, DWORD Opcode)
+{
+    if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
+    {
+        return false;
+    }
+
+    DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
+    if(instructionCount == 0 || instructionCount > 136)
+    {
+        instructionCount = 136;
+    }
+    for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
+    {
+        const DWORD* encoded = &XboxFunction[1 + instruction * 4];
+        if(VshGetField(encoded, FLD_ILU) == Opcode)
+        {
+            return true;
+        }
+        if(VshGetField(encoded, FLD_FINAL) != 0)
+        {
+            break;
+        }
+    }
+    return false;
+}
+
 static bool VshIsScreenSpaceTransformInstruction(DWORD Mac, DWORD Ilu, DWORD MacMask,
                                                  DWORD IluMask, DWORD OMask, DWORD OutR,
                                                  DWORD Orb, DWORD OutAddr, const VshSrc& SrcA,
@@ -1027,9 +1054,16 @@ std::uint32_t XTL::VshDiagnostics::PackD3DSpecularFog(
 
 bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std::string& reason)
 {
+    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    if(VshHasIluOpcode(xboxFunction, ILU_RCC))
+    {
+        reason = "rcc_requires_clamp";
+        return true;
+    }
+
     DWORD scratch = 0;
     bool hasDph = false;
-    if(!VshFindDphScratch(static_cast<const DWORD*>(xboxFunctionData), &scratch, &hasDph) && hasDph)
+    if(!VshFindDphScratch(xboxFunction, &scratch, &hasDph) && hasDph)
     {
         reason = "dph_no_scratch";
         return true;
@@ -1177,6 +1211,12 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
 {
     if(pXboxFunction == NULL || (pXboxFunction[0] & 0xFFFF) != 0x2078)
         return NULL;
+
+    if(VshHasIluOpcode(pXboxFunction, ILU_RCC))
+    {
+        EmuWarning("VshDecoder: RCC requires clamping unavailable in vs.1.1; using CPU fallback");
+        return NULL;
+    }
 
     DWORD InstrCount = (pXboxFunction[0] >> 16) & 0xFFFF;
     if(InstrCount == 0 || InstrCount > 136)
@@ -1350,10 +1390,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
             {
                 case ILU_MOV: Opcode = SIO_MOV; break;
                 case ILU_RCP: Opcode = SIO_RCP; break;
-                case ILU_RCC:
-                    EmuWarning("VshDecoder: RCC approximated with RCP");
-                    Opcode = SIO_RCP;
-                    break;
+                case ILU_RCC: break; // rejected before emission; CPU fallback preserves the clamp
                 case ILU_RSQ: Opcode = SIO_RSQ; break;
                 case ILU_EXP: Opcode = SIO_EXP; break;
                 case ILU_LOG: Opcode = SIO_LOG; break;
@@ -1818,6 +1855,7 @@ static float VshExp2(float x)
 // ILU scalar op on the C source (already swizzled). LIT writes a full vec4.
 static void VshExecIlu(DWORD Op, const float C[4], float R[4])
 {
+    static constexpr float RccMinimumMagnitude = 0x1p-64f;
     float s = C[0];
     float r = 0.0f;
     switch(Op)
@@ -1827,8 +1865,17 @@ static void VshExecIlu(DWORD Op, const float C[4], float R[4])
         case ILU_RCC:
         {
             float a = s;
-            if(a >= 0.0f) { if(a < 5.42101e-20f) a = 5.42101e-20f; }
-            else          { if(a > -5.42101e-20f) a = -5.42101e-20f; }
+            if(a >= 0.0f)
+            {
+                if(a < RccMinimumMagnitude)
+                {
+                    a = RccMinimumMagnitude;
+                }
+            }
+            else if(a > -RccMinimumMagnitude)
+            {
+                a = -RccMinimumMagnitude;
+            }
             r = 1.0f / a;
             break;
         }
