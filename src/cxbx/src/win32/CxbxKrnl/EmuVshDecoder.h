@@ -36,6 +36,13 @@ struct OptimizationResult
     std::size_t tokenCount = 0;
 };
 
+struct VertexStreamView
+{
+    const void* data = nullptr;
+    std::size_t byteSize = 0;
+    std::size_t stride = 0;
+};
+
 struct TranslationCapture
 {
     const void* xboxFunction = nullptr;
@@ -48,6 +55,14 @@ std::uint32_t HashXboxFunction(const void* xboxFunction);
 OptimizationResult OptimizeD3D8Function(void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);
+bool DecodeXboxVertex(const void* xboxDeclaration, const VertexStreamView* streams,
+                      std::size_t streamCount, std::size_t vertexIndex,
+                      float* inputRegisters, std::size_t inputFloatCount);
+bool ExecuteXboxVertexShader(const void* xboxFunction, const float* constants,
+                             const float* inputRegisters, float* outputPosition,
+                             float* outputColors, std::size_t outputColorFloatCount,
+                             float* outputTexCoords,
+                             std::size_t outputTexCoordFloatCount);
 std::vector<std::string> DecodeXboxFunction(const void* xboxFunction);
 std::vector<std::string> DecodeD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 void DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture);
