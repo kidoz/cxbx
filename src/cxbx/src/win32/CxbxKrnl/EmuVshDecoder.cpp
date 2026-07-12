@@ -1806,56 +1806,185 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
 // * D3DVSDT equivalents, in place into pPcDecl. The token framing (STREAM/
 // * REG/CONST/END) is shared between the two APIs. Returns the token count.
 // ******************************************************************
-int XTL::EmuVshTranslateXboxDeclaration(const DWORD *pXboxDecl, DWORD *pPcDecl, int MaxTokens)
+namespace
 {
-    int n = 0;
+constexpr std::size_t VSH_MAX_DECLARATION_TOKENS = 128;
 
-    while(n < MaxTokens - 1)
+bool VshMapHostVertexType(DWORD xboxType, DWORD& hostType)
+{
+    switch(xboxType)
     {
-        DWORD Token = pXboxDecl[n];
-
-        if(Token == 0xFFFFFFFF)
-        {
-            pPcDecl[n++] = Token;   // D3DVSD_END
-            return n;
-        }
-
-        if((Token >> 29) == 2 && (Token & 0x10000000) == 0)   // D3DVSD_REG
-        {
-            DWORD XboxType = (Token >> 16) & 0xFF;
-            DWORD PcType;
-            switch(XboxType)
+        case 0x12: hostType = 0; return true;
+        case 0x22: hostType = 1; return true;
+        case 0x32: hostType = 2; return true;
+        case 0x42: hostType = 3; return true;
+        case 0x40: hostType = 4; return true;
+        case 0x25: hostType = 6; return true;
+        case 0x45: hostType = 7; return true;
+        default:
+            if(xboxType <= 0x07)
             {
-                case 0x12: PcType = 0; break;   // FLOAT1
-                case 0x22: PcType = 1; break;   // FLOAT2
-                case 0x32: PcType = 2; break;   // FLOAT3
-                case 0x42: PcType = 3; break;   // FLOAT4
-                case 0x40: PcType = 4; break;   // D3DCOLOR
-                case 0x25: PcType = 6; break;   // SHORT2
-                case 0x45: PcType = 7; break;   // SHORT4
-                default:
-                    if(XboxType <= 0x07)
-                        PcType = XboxType;      // already a PC type code
-                    else
-                    {
-                        EmuWarning("VshDecoder: unsupported Xbox vertex type 0x%02lX -> FLOAT4", XboxType);
-                        PcType = 3;
-                    }
-                    break;
+                hostType = xboxType;
+                return true;
             }
-            pPcDecl[n] = (Token & 0xE000FFFF) | (PcType << 16);
-            n++;
-            continue;
-        }
+            return false;
+    }
+}
 
-        // STREAM / CONST / NOP / tessellator tokens pass through unchanged
-        pPcDecl[n] = Token;
-        n++;
+bool VshIsCpuVertexType(DWORD type)
+{
+    switch(type)
+    {
+        case 0x00:
+        case 0x01:
+        case 0x02:
+        case 0x03:
+        case 0x04:
+        case 0x05:
+        case 0x06:
+        case 0x07:
+        case 0x11:
+        case 0x12:
+        case 0x14:
+        case 0x15:
+        case 0x16:
+        case 0x21:
+        case 0x22:
+        case 0x24:
+        case 0x25:
+        case 0x31:
+        case 0x32:
+        case 0x34:
+        case 0x35:
+        case 0x40:
+        case 0x41:
+        case 0x42:
+        case 0x44:
+        case 0x45:
+        case 0x72: return true;
+        default: return false;
+    }
+}
+} // namespace
+
+XTL::VshDiagnostics::DeclarationTranslationResult
+XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
+                                              void* d3dDeclarationData,
+                                              std::size_t maxTokens)
+{
+    DeclarationTranslationResult result;
+    const DWORD* xboxDeclaration = static_cast<const DWORD*>(xboxDeclarationData);
+    DWORD* d3dDeclaration = static_cast<DWORD*>(d3dDeclarationData);
+    if(xboxDeclaration == nullptr || d3dDeclaration == nullptr || maxTokens == 0)
+    {
+        result.reason = "invalid_declaration_arguments";
+        return result;
     }
 
-    pPcDecl[n++] = 0xFFFFFFFF;
-    EmuWarning("VshDecoder: declaration exceeded %d tokens; truncated", MaxTokens);
-    return n;
+    result.disposition = XboxFunctionDisposition::TranslateToHost;
+    for(std::size_t inputIndex = 0; inputIndex < VSH_MAX_DECLARATION_TOKENS;)
+    {
+        if(result.tokenCount >= maxTokens)
+        {
+            result.disposition = XboxFunctionDisposition::Reject;
+            result.tokenCount = 0;
+            result.reason = "declaration_capacity";
+            return result;
+        }
+
+        const DWORD token = xboxDeclaration[inputIndex++];
+        if(token == 0xFFFFFFFFu)
+        {
+            d3dDeclaration[result.tokenCount++] = token;
+            if(result.disposition == XboxFunctionDisposition::ExecuteOnCpu)
+            {
+                result.reason = "declaration_cpu_vertex_type";
+            }
+            return result;
+        }
+
+        const DWORD tokenType = token >> 29;
+        if(tokenType == 7 || tokenType == 6)
+        {
+            result.disposition = XboxFunctionDisposition::Reject;
+            result.tokenCount = 0;
+            result.reason = "malformed_declaration_token";
+            return result;
+        }
+
+        DWORD translatedToken = token;
+        if(tokenType == 2 && (token & 0x10000000u) == 0)
+        {
+            const DWORD reg = token & 0x1Fu;
+            const DWORD xboxType = (token >> 16) & 0xFFu;
+            DWORD hostType = 0;
+            if(reg >= 16)
+            {
+                result.disposition = XboxFunctionDisposition::Reject;
+                result.tokenCount = 0;
+                result.reason = "declaration_register_range";
+                return result;
+            }
+            if(VshMapHostVertexType(xboxType, hostType))
+            {
+                translatedToken = (token & 0xE000FFFFu) | (hostType << 16);
+            }
+            else if(VshIsCpuVertexType(xboxType))
+            {
+                result.disposition = XboxFunctionDisposition::ExecuteOnCpu;
+            }
+            else
+            {
+                result.disposition = XboxFunctionDisposition::Reject;
+                result.tokenCount = 0;
+                result.reason = "unsupported_vertex_type";
+                return result;
+            }
+        }
+
+        d3dDeclaration[result.tokenCount++] = translatedToken;
+
+        std::size_t payloadCount = 0;
+        if(tokenType == 4)
+        {
+            payloadCount = static_cast<std::size_t>((token >> 25) & 0xFu) * 4;
+        }
+        else if(tokenType == 5)
+        {
+            payloadCount = (token >> 24) & 0x1Fu;
+        }
+        if(payloadCount > VSH_MAX_DECLARATION_TOKENS - inputIndex ||
+           payloadCount > maxTokens - result.tokenCount)
+        {
+            result.disposition = XboxFunctionDisposition::Reject;
+            result.tokenCount = 0;
+            result.reason = "declaration_capacity";
+            return result;
+        }
+        for(std::size_t payloadIndex = 0; payloadIndex < payloadCount; ++payloadIndex)
+        {
+            d3dDeclaration[result.tokenCount++] = xboxDeclaration[inputIndex++];
+        }
+    }
+
+    result.disposition = XboxFunctionDisposition::Reject;
+    result.tokenCount = 0;
+    result.reason = "declaration_missing_end";
+    return result;
+}
+
+int XTL::EmuVshTranslateXboxDeclaration(const DWORD* pXboxDecl, DWORD* pPcDecl, int MaxTokens)
+{
+    if(MaxTokens <= 0)
+    {
+        return 0;
+    }
+    const VshDiagnostics::DeclarationTranslationResult result =
+        VshDiagnostics::TranslateXboxDeclaration(pXboxDecl, pPcDecl,
+                                                 static_cast<std::size_t>(MaxTokens));
+    return result.disposition == VshDiagnostics::XboxFunctionDisposition::Reject
+               ? 0
+               : static_cast<int>(result.tokenCount);
 }
 
 namespace
@@ -1864,6 +1993,14 @@ std::size_t VshXboxVertexTypeSize(DWORD type)
 {
     switch(type)
     {
+        case 0x00:
+        case 0x04:
+        case 0x05:
+        case 0x06: return 4;
+        case 0x01:
+        case 0x07: return 8;
+        case 0x02: return 12;
+        case 0x03: return 16;
         case 0x14: return 1;
         case 0x11:
         case 0x15:
@@ -1883,7 +2020,6 @@ std::size_t VshXboxVertexTypeSize(DWORD type)
         case 0x32:
         case 0x72: return 12;
         case 0x42: return 16;
-        case 0x02: return 0;
         default: return (std::numeric_limits<std::size_t>::max)();
     }
 }
@@ -1917,7 +2053,7 @@ float VshNormalizePacked(std::int32_t value, unsigned int bitCount)
 
 void VshDecodeXboxVertexValue(const std::uint8_t* source, DWORD type, float output[4])
 {
-    if(type == 0x40)
+    if(type == 0x40 || type == 0x04)
     {
         DWORD color = 0;
         std::memcpy(&color, source, sizeof(color));
@@ -1925,6 +2061,36 @@ void VshDecodeXboxVertexValue(const std::uint8_t* source, DWORD type, float outp
         output[1] = static_cast<float>((color >> 8) & 0xFFu) / 255.0f;
         output[2] = static_cast<float>(color & 0xFFu) / 255.0f;
         output[3] = static_cast<float>((color >> 24) & 0xFFu) / 255.0f;
+        return;
+    }
+    if(type <= 0x03)
+    {
+        const DWORD floatCount = type + 1;
+        float values[4] = {};
+        std::memcpy(values, source, floatCount * sizeof(float));
+        for(DWORD component = 0; component < floatCount; ++component)
+        {
+            output[component] = values[component];
+        }
+        return;
+    }
+    if(type == 0x05)
+    {
+        for(DWORD component = 0; component < 4; ++component)
+        {
+            output[component] = static_cast<float>(source[component]);
+        }
+        return;
+    }
+    if(type == 0x06 || type == 0x07)
+    {
+        const DWORD componentCount = type == 0x06 ? 2 : 4;
+        for(DWORD component = 0; component < componentCount; ++component)
+        {
+            std::int16_t value = 0;
+            std::memcpy(&value, source + component * sizeof(value), sizeof(value));
+            output[component] = static_cast<float>(value);
+        }
         return;
     }
     if(type == 0x16)
