@@ -21,6 +21,13 @@ int EmuVshTranslateXboxDeclaration(const DWORD* xboxDeclaration, DWORD* pcDeclar
 
 namespace VshDiagnostics
 {
+enum class XboxFunctionDisposition
+{
+    TranslateToHost,
+    ExecuteOnCpu,
+    Reject,
+};
+
 struct ValidationResult
 {
     bool valid = false;
@@ -63,6 +70,7 @@ std::uint32_t HashXboxFunction(const void* xboxFunction);
 OptimizationResult OptimizeD3D8Function(void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);
+XboxFunctionDisposition ClassifyXboxFunction(const void* xboxFunction, std::string& reason);
 bool RequiresCpuFallback(const void* xboxFunction, std::string& reason);
 bool ExpandQuadListIndices(const std::uint32_t* sourceIndices, std::size_t sourceIndexCount,
                            std::vector<std::uint32_t>& expandedIndices);

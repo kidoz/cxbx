@@ -1337,45 +1337,57 @@ std::uint32_t XTL::VshDiagnostics::PackD3DSpecularFog(
     return PackD3DColor(color);
 }
 
-bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std::string& reason)
+XTL::VshDiagnostics::XboxFunctionDisposition
+XTL::VshDiagnostics::ClassifyXboxFunction(const void* xboxFunctionData, std::string& reason)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    if(xboxFunction == nullptr || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    {
+        reason = "invalid_xbox_function";
+        return XboxFunctionDisposition::Reject;
+    }
+
+    const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
+    const char* rejectionReason =
+        VshTranslationFallbackReason(&xboxFunction[1], instructionCount);
+    if(rejectionReason != nullptr)
+    {
+        reason = rejectionReason;
+        return XboxFunctionDisposition::Reject;
+    }
     if(VshHasIluOpcode(xboxFunction, ILU_RCC))
     {
         reason = "rcc_requires_clamp";
-        return true;
+        return XboxFunctionDisposition::ExecuteOnCpu;
     }
     if(VshUsesRelativeConstants(xboxFunction))
     {
         reason = "relative_constant_dynamic_range";
-        return true;
+        return XboxFunctionDisposition::ExecuteOnCpu;
     }
 
-    const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
-    const char* translationFallbackReason = VshTranslationFallbackReason(
-        xboxFunction == nullptr ? nullptr : &xboxFunction[1], instructionCount);
-    if(translationFallbackReason != nullptr)
-    {
-        reason = translationFallbackReason;
-        return true;
-    }
     const VshScreenSpaceSuffix screenSpaceSuffix =
-        VshClassifyScreenSpaceSuffix(xboxFunction == nullptr ? nullptr : &xboxFunction[1],
-                                     instructionCount);
+        VshClassifyScreenSpaceSuffix(&xboxFunction[1], instructionCount);
     if(screenSpaceSuffix.ambiguous)
     {
         reason = "ambiguous_screen_space_suffix";
-        return true;
+        return XboxFunctionDisposition::ExecuteOnCpu;
     }
 
     const VshScratchPlan scratchPlan = VshBuildScratchPlan(xboxFunction);
     if(!scratchPlan.valid)
     {
         reason = scratchPlan.failureReason;
-        return true;
+        return XboxFunctionDisposition::ExecuteOnCpu;
     }
     reason.clear();
-    return false;
+    return XboxFunctionDisposition::TranslateToHost;
+}
+
+bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std::string& reason)
+{
+    return ClassifyXboxFunction(xboxFunctionData, reason) ==
+           XboxFunctionDisposition::ExecuteOnCpu;
 }
 
 std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xboxFunctionData)
@@ -1518,42 +1530,24 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
     if(pXboxFunction == NULL || (pXboxFunction[0] & 0xFFFF) != 0x2078)
         return NULL;
 
-    if(VshHasIluOpcode(pXboxFunction, ILU_RCC))
+    std::string dispositionReason;
+    const VshDiagnostics::XboxFunctionDisposition disposition =
+        VshDiagnostics::ClassifyXboxFunction(pXboxFunction, dispositionReason);
+    if(disposition != VshDiagnostics::XboxFunctionDisposition::TranslateToHost)
     {
-        EmuWarning("VshDecoder: RCC requires clamping unavailable in vs.1.1; using CPU fallback");
-        return NULL;
-    }
-    if(VshUsesRelativeConstants(pXboxFunction))
-    {
-        EmuWarning("VshDecoder: relative constants require NV2A ARL and range semantics; using CPU fallback");
+        const char* mode =
+            disposition == VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu ? "CPU fallback"
+                                                                                 : "rejection";
+        EmuWarning("VshDecoder: function requires %s (%s)", mode, dispositionReason.c_str());
         return NULL;
     }
 
     const DWORD InstrCount = static_cast<DWORD>(VshXboxInstructionCount(pXboxFunction));
 
-    const char* TranslationFallbackReason =
-        VshTranslationFallbackReason(&pXboxFunction[1], InstrCount);
-    if(TranslationFallbackReason != nullptr)
-    {
-        EmuWarning("VshDecoder: unsupported instruction form (%s); using CPU fallback",
-                   TranslationFallbackReason);
-        return NULL;
-    }
-
     const VshScreenSpaceSuffix ScreenSpaceSuffix =
         VshClassifyScreenSpaceSuffix(&pXboxFunction[1], InstrCount);
-    if(ScreenSpaceSuffix.ambiguous)
-    {
-        EmuWarning("VshDecoder: ambiguous screen-space suffix; using CPU fallback");
-        return NULL;
-    }
 
     const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction);
-    if(!ScratchPlan.valid)
-    {
-        EmuWarning("VshDecoder: translation scratch allocation failed (%s)", ScratchPlan.failureReason);
-        return NULL;
-    }
 
     // Paired DPH+ILU can require a staged source plus six result instructions.
     DWORD* Out = new DWORD[16 + InstrCount * 24];
@@ -2437,6 +2431,11 @@ bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, 
     if(xboxFunction == nullptr || constants == nullptr || inputRegisters == nullptr ||
        outputPosition == nullptr || outputColors == nullptr ||
        (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    {
+        return false;
+    }
+    std::string dispositionReason;
+    if(ClassifyXboxFunction(xboxFunction, dispositionReason) == XboxFunctionDisposition::Reject)
     {
         return false;
     }
