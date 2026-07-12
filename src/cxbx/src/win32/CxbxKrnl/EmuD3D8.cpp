@@ -910,28 +910,12 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
             // ******************************************************************
             g_pD3DDevice8 = *g_EmuD3D8CreateDeviceProxyData.ppReturnedDeviceInterface;
 
-            // ******************************************************************
-            // * check for YUY2 overlay support
-            // ******************************************************************
-            {
-                XTL::D3DDISPLAYMODE DisplayMode;
-
-                if(g_pD3DDevice8->GetDisplayMode(&DisplayMode) != D3D_OK)
-                    g_bSupportsYUY2 = FALSE;
-                else
-                {
-                    ::HRESULT hRet = g_pD3D8->CheckDeviceFormat
-                    (
-                        g_EmuD3D8CreateDeviceProxyData.Adapter, g_EmuD3D8CreateDeviceProxyData.DeviceType,
-                        (XTL::D3DFORMAT)DisplayMode.Format, 0, XTL::D3DRTYPE_TEXTURE, XTL::D3DFMT_YUY2
-                    );
-
-                    g_bSupportsYUY2 = SUCCEEDED(hRet);
-
-                    if(!g_bSupportsYUY2)
-                        EmuWarning("YUY2 overlays are not supported in hardware, could be slow!");
-                }
-            }
+            // D3D8 YUY2 texture sampling support does not imply that the
+            // separate DirectDraw hardware-overlay path is available or can
+            // target this window. Modern drivers can report the texture format
+            // while presenting the DirectDraw overlay as a black surface. Keep
+            // XMV presentation on the deterministic software conversion path.
+            g_bSupportsYUY2 = FALSE;
 
             // ******************************************************************
             // * Update Caches
