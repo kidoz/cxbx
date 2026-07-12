@@ -100,6 +100,9 @@ static DWORD                        g_dwOverlayH    = 480;  // Cached Overlay He
 // conversion cache, do not Release); composited over the backbuffer at Swap
 // while the title keeps the overlay enabled.
 static XTL::IDirect3DTexture8      *g_pOverlayFrameTexture = NULL;
+static std::atomic<std::uint32_t> g_OverlayFrameGeneration{ 0 };
+static LARGE_INTEGER              g_NextOverlayUpdate = {};
+static LARGE_INTEGER              g_NextOverlayPresent = {};
 static Xbe::Header                 *g_XbeHeader     = NULL; // XbeHeader
 static uint32                       g_XbeHeaderSize = 0;    // XbeHeaderSize
 static XTL::D3DCAPS8                g_D3DCaps;              // Direct3D8 Caps
@@ -3612,6 +3615,61 @@ static void EmuComposeOverlay()
         pOldTexture->Release();
 }
 
+static void EmuPaceSoftwareOverlay(
+    LARGE_INTEGER& NextDeadline,
+    LONGLONG PeriodNumerator,
+    LONGLONG PeriodDenominator)
+{
+    static LARGE_INTEGER Frequency = {};
+
+    if(Frequency.QuadPart == 0 && !QueryPerformanceFrequency(&Frequency))
+    {
+        return;
+    }
+
+    LARGE_INTEGER Now = {};
+    QueryPerformanceCounter(&Now);
+    const LONGLONG Interval =
+        Frequency.QuadPart * PeriodNumerator / PeriodDenominator;
+    if(Interval <= 0)
+    {
+        return;
+    }
+
+    if(NextDeadline.QuadPart == 0)
+    {
+        NextDeadline = Now;
+    }
+
+    if(Now.QuadPart >= NextDeadline.QuadPart)
+    {
+        // Skip periods that elapsed while the guest was decoding or blocked.
+        // Never issue a burst of catch-up updates or presents.
+        const LONGLONG Missed =
+            (Now.QuadPart - NextDeadline.QuadPart) / Interval + 1;
+        NextDeadline.QuadPart += Missed * Interval;
+        return;
+    }
+
+    const LONGLONG Target = NextDeadline.QuadPart;
+    do
+    {
+        const LONGLONG RemainingMilliseconds =
+            (Target - Now.QuadPart) * 1000 / Frequency.QuadPart;
+        if(RemainingMilliseconds > 1)
+        {
+            Sleep(static_cast<DWORD>(RemainingMilliseconds - 1));
+        }
+        else
+        {
+            SwitchToThread();
+        }
+        QueryPerformanceCounter(&Now);
+    } while(Now.QuadPart < Target);
+
+    NextDeadline.QuadPart = Target + Interval;
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_Swap
 // ******************************************************************
@@ -3647,32 +3705,22 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     EmuComposeOverlay();
     EmuMirrorPresentToWindow();
 
-    HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
-
-    // Pace software-overlay frames so XMV video doesn't race ahead of the
-    // audio clock. Without this the guest's frame loop spins at full CPU
-    // speed (because KeWaitForSingleObject timing is approximate), producing
-    // video stutter and audio desync.
+    // Windowed host Present does not reliably block for the Xbox's 60 Hz
+    // display cadence. The latest overlay frame continues to scan out while
+    // XMV waits for its next audio-synchronised video frame.
     if(g_pOverlayFrameTexture != NULL)
     {
-        static LARGE_INTEGER s_Freq = {};
-        static LARGE_INTEGER s_Next = {};
-        if(s_Freq.QuadPart == 0)
-        {
-            QueryPerformanceFrequency(&s_Freq);
-            timeBeginPeriod(1);
-        }
-        LARGE_INTEGER now;
-        QueryPerformanceCounter(&now);
-        if(s_Next.QuadPart == 0)
-            s_Next = now;
-        if(now.QuadPart < s_Next.QuadPart)
-        {
-            DWORD dwMs = (DWORD)((s_Next.QuadPart - now.QuadPart) * 1000 / s_Freq.QuadPart);
-            if(dwMs > 0 && dwMs < 100)
-                Sleep(dwMs);
-        }
-        s_Next.QuadPart = now.QuadPart + s_Freq.QuadPart / 60;
+        EmuPaceSoftwareOverlay(g_NextOverlayPresent, 1, 60);
+    }
+
+    HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
+
+    if(g_pOverlayFrameTexture != NULL &&
+       cxbx::trace::IsEnabled(cxbx::trace::Channel::Media))
+    {
+        cxbx::trace::RecordBinary(
+            cxbx::trace::Event::MediaPresent,
+            g_OverlayFrameGeneration.load(std::memory_order_relaxed));
     }
 
     // The debug runtime scopes markers to one presented frame.
@@ -5156,6 +5204,9 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay
     if(!Enable)
     {
         g_pOverlayFrameTexture = NULL;
+        g_OverlayFrameGeneration.store(0, std::memory_order_relaxed);
+        g_NextOverlayUpdate.QuadPart = 0;
+        g_NextOverlayPresent.QuadPart = 0;
     }
 
     if(g_bSupportsYUY2)
@@ -5328,7 +5379,20 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay
         // every frame, wiping the overlay before its Swap presented it.
         EmuYuy2TextureInfo *pInfo = EmuFindYuy2Texture((X_D3DResource*)pSurface);
 
+        // XMV decodes 29.97/30 fps video ahead of its DirectSound master clock.
+        // The Xbox overlay consumes those frames at video cadence; accepting
+        // them at the 60 Hz display cadence makes the decoder run ahead and
+        // then pause at each audio packet boundary. Rate-match software-overlay
+        // updates while the latest frame continues to scan out at 60 Hz.
+        EmuPaceSoftwareOverlay(g_NextOverlayUpdate, 1001, 30000);
         g_pOverlayFrameTexture = EmuConvertYuy2Texture(pInfo);
+        if(g_pOverlayFrameTexture != NULL &&
+           cxbx::trace::IsEnabled(cxbx::trace::Channel::Media))
+        {
+            const std::uint32_t frame =
+                g_OverlayFrameGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+            cxbx::trace::RecordBinary(cxbx::trace::Event::MediaOverlayUpdate, frame);
+        }
     }
 
     EmuSwapFS();   // XBox FS
@@ -5707,7 +5771,18 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple
     }
 
     if(State == -1)
-        printf("*Warning* RenderState_Simple(0x%.08X, 0x%.08X) is unsupported\n", Method, Value);
+    {
+        static volatile LONG WarningCount = 0;
+        const LONG Count = InterlockedIncrement(&WarningCount);
+        if(Count <= 16)
+        {
+            printf("*Warning* RenderState_Simple(0x%.08X, 0x%.08X) is unsupported\n", Method, Value);
+        }
+        else if(Count == 17)
+        {
+            printf("*Warning* further unsupported RenderState_Simple calls are suppressed\n");
+        }
+    }
     else
     {
         switch(State)
