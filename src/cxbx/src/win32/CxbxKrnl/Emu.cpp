@@ -45,6 +45,7 @@ namespace xboxkrnl
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuNV2ALogging.h"
+#include "core/trace.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -113,15 +114,19 @@ static bool EmuGetLogFile(char *szLogFile, DWORD dwLogFileSize)
     return dwLogFile != 0 && dwLogFile < dwLogFileSize;
 }
 
-static void EmuRedirectStdStream(DWORD StdHandle, int FileDescriptor, FILE *Stream, const char *Path, DWORD CreationDisposition)
+static void EmuRedirectStdStream(DWORD StdHandle, int FileDescriptor, FILE* Stream, const char* Path, DWORD CreationDisposition)
 {
     HANDLE hFile = CreateFile(Path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CreationDisposition, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if(hFile == INVALID_HANDLE_VALUE)
+    {
         return;
+    }
 
     if(CreationDisposition == OPEN_ALWAYS)
+    {
         SetFilePointer(hFile, 0, NULL, FILE_END);
+    }
 
     int NewDescriptor = _open_osfhandle((intptr_t)hFile, _O_TEXT);
 
@@ -134,11 +139,13 @@ static void EmuRedirectStdStream(DWORD StdHandle, int FileDescriptor, FILE *Stre
     if(_dup2(NewDescriptor, FileDescriptor) == 0)
     {
         SetStdHandle(StdHandle, (HANDLE)_get_osfhandle(FileDescriptor));
-        setvbuf(Stream, NULL, _IONBF, 0);
+        setvbuf(Stream, NULL, _IOFBF, 64 * 1024);
     }
 
     if(NewDescriptor != FileDescriptor)
+    {
         _close(NewDescriptor);
+    }
 }
 
 static void EmuConfigureLogFile()
@@ -1252,6 +1259,9 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
             *Class = ObjectClass;
 
         NV2A_TRACE_RAMHT(Handle, ObjectInstance, ObjectClass);
+        cxbx::trace::RecordNv2aRamht(static_cast<std::uint32_t>(Handle),
+                                     static_cast<std::uint32_t>(ObjectInstance),
+                                     static_cast<std::uint32_t>(ObjectClass));
         return true;
     }
 
@@ -1561,6 +1571,9 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
 
         EmuNv2aRecordMethodStat(Class, Method, Data);
         NV2A_TRACE_METHOD(Class, Method, Data);
+        cxbx::trace::RecordNv2aMethod(static_cast<std::uint32_t>(Class),
+                                      static_cast<std::uint32_t>(Method),
+                                      static_cast<std::uint32_t>(Data));
         return;
     }
 
@@ -1723,6 +1736,9 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
     }
 
     NV2A_TRACE_METHOD(Class, Method, Data);
+    cxbx::trace::RecordNv2aMethod(static_cast<std::uint32_t>(Class),
+                                  static_cast<std::uint32_t>(Method),
+                                  static_cast<std::uint32_t>(Data));
 }
 
 static void EmuNv2aRunPusher();
@@ -1749,6 +1765,7 @@ extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
             DWORD Word = Buffer[Offset / sizeof(DWORD)];
             Offset += sizeof(DWORD);
             NV2A_TRACE_PB(Word);
+            cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
 
             if((Word & 0xE0000003) == 0x20000000 || (Word & 3) == 1)
             {
@@ -1831,6 +1848,8 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
     {
         Value = EmuNv2aReadRamin32(Offset);
         NV2A_TRACE_REG("rd", Offset, Value);
+        cxbx::trace::RecordNv2aRegister(false, static_cast<std::uint32_t>(Offset),
+                                        static_cast<std::uint32_t>(Value));
         return Value;
     }
 
@@ -1926,6 +1945,8 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
     }
 
     NV2A_TRACE_REG("rd", Offset, Value);
+    cxbx::trace::RecordNv2aRegister(false, static_cast<std::uint32_t>(Offset),
+                                    static_cast<std::uint32_t>(Value));
     return Value;
 }
 
@@ -1972,6 +1993,8 @@ static void EmuStubMmioWrite(ULONG Address, ULONG Value)
 
 static ULONG EmuReadMmio(ULONG Address, ULONG Size)
 {
+    cxbx::trace::RecordBinary(cxbx::trace::Event::MmioAccess,
+                              static_cast<std::uint32_t>(Address));
     ULONG AlignedAddress = Address & ~3;
 
     ULONG Value;
@@ -2008,6 +2031,8 @@ static ULONG EmuReadMmio(ULONG Address, ULONG Size)
 
 static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
 {
+    cxbx::trace::RecordBinary(cxbx::trace::Event::MmioAccess,
+                              static_cast<std::uint32_t>(Address));
     ULONG AlignedAddress = Address & ~3;
     ULONG Offset = EmuNv2aOffset(AlignedAddress);
 
@@ -2048,6 +2073,8 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
     {
         EmuNv2aWriteRamin32(Offset, Value);
         NV2A_TRACE_REG("wr", Offset, Value);
+        cxbx::trace::RecordNv2aRegister(true, static_cast<std::uint32_t>(Offset),
+                                        static_cast<std::uint32_t>(Value));
         return;
     }
 
@@ -2058,11 +2085,15 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
     else if(Offset == EmuNv2aPfbWbc)
     {
         NV2A_TRACE_REG("wr", Offset, Value);
+        cxbx::trace::RecordNv2aRegister(true, static_cast<std::uint32_t>(Offset),
+                                        static_cast<std::uint32_t>(Value));
         return;
     }
 
     EmuNv2aStoreRegister(Offset, Value);
     NV2A_TRACE_REG("wr", Offset, Value);
+    cxbx::trace::RecordNv2aRegister(true, static_cast<std::uint32_t>(Offset),
+                                    static_cast<std::uint32_t>(Value));
 
     // A write to the CRTC scanout base flips the display to that surface; capture
     // what the guest just put on screen (path 2). The programmed value is a
@@ -4059,6 +4090,7 @@ static void EmuNv2aRunPusher()
 
         Get += 4;
         NV2A_TRACE_PB(Word);
+        cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
 
         ULONG Count = (State & EmuNv2aPfifoDmaStateMethodCount) >> 18;
         if(Count != 0)
@@ -6051,6 +6083,9 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
             InterlockedDecrement(&g_SsTraceBudget);
             printf("SS| eip=0x%08lX esp=0x%08lX\n",
                    e->ContextRecord->Eip, e->ContextRecord->Esp);
+            cxbx::trace::RecordSingleStep(
+                static_cast<std::uint32_t>(e->ContextRecord->Eip),
+                static_cast<std::uint32_t>(e->ContextRecord->Esp));
             if((g_SsTraceBudget & 0x3F) == 0)
                 fflush(stdout);
             e->ContextRecord->EFlags |= 0x100; // keep stepping
@@ -6187,8 +6222,11 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
            GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
     printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
            GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+    cxbx::trace::RecordFlight(cxbx::trace::Event::Exception,
+                              static_cast<std::uint32_t>(e->ExceptionRecord->ExceptionCode));
+    cxbx::trace::DumpFlightEmergency();
     {
-        const char *last = EmuGetLastD3DCall();
+        const char* last = EmuGetLastD3DCall();
         if(last != NULL)
             printf("Emu (0x%lX): Vectored last D3D call: %s\n",
                    GetCurrentThreadId(), last);
@@ -6575,6 +6613,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
     EmuConfigureLogFile();
     printf("--- cxbx runtime start ---\n");
+    cxbx::trace::Initialize(stdout);
 
     if(g_hEmuVectoredExceptionHandler == NULL)
         g_hEmuVectoredExceptionHandler = AddVectoredExceptionHandler(1, EmuVectoredExceptionHandler);
@@ -7020,70 +7059,75 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 // * func: EmuWarning
 // ******************************************************************
 #ifdef _DEBUG_WARNINGS
-extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char *szWarningMessage, ...)
+extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char* szWarningMessage, ...)
 {
     if(szWarningMessage == NULL)
+    {
         return;
+    }
 
-    char szBuffer1[255];
-    char szBuffer2[255];
+    char szBuffer[512];
+    const int prefixLength = snprintf(szBuffer, sizeof(szBuffer),
+                                      "Emu (0x%lX): *WARNING* -> ", GetCurrentThreadId());
+    if(prefixLength < 0)
+    {
+        return;
+    }
 
     va_list argp;
-
-    sprintf(szBuffer1, "Emu (0x%X): *WARNING* -> ", GetCurrentThreadId());
-
     va_start(argp, szWarningMessage);
-
-    vsprintf(szBuffer2, szWarningMessage, argp);
-
+    const size_t messageOffset = static_cast<size_t>(prefixLength) < sizeof(szBuffer)
+                                     ? static_cast<size_t>(prefixLength)
+                                     : sizeof(szBuffer) - 1;
+    vsnprintf(szBuffer + messageOffset, sizeof(szBuffer) - messageOffset,
+              szWarningMessage, argp);
     va_end(argp);
 
-    strcat(szBuffer1, szBuffer2);
-
-    printf("%s\n", szBuffer1);
-
+    printf("%s\n", szBuffer);
     fflush(stdout);
-
-    return;
 }
 #endif
 
 // ******************************************************************
 // * func: EmuCleanup
 // ******************************************************************
-extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char *szErrorMessage, ...)
+extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char* szErrorMessage, ...)
 {
     // ******************************************************************
     // * Print out ErrorMessage (if exists)
     // ******************************************************************
     if(szErrorMessage != NULL)
     {
-        char szBuffer1[255];
-        char szBuffer2[255];
+        char szBuffer[512];
+        const int prefixLength = snprintf(szBuffer, sizeof(szBuffer),
+                                          "Emu (0x%lX): Recieved Fatal Message -> \n\n",
+                                          GetCurrentThreadId());
 
-        va_list argp;
+        if(prefixLength >= 0)
+        {
+            va_list argp;
+            va_start(argp, szErrorMessage);
+            const size_t messageOffset = static_cast<size_t>(prefixLength) < sizeof(szBuffer)
+                                             ? static_cast<size_t>(prefixLength)
+                                             : sizeof(szBuffer) - 1;
+            vsnprintf(szBuffer + messageOffset, sizeof(szBuffer) - messageOffset,
+                      szErrorMessage, argp);
+            va_end(argp);
 
-        sprintf(szBuffer1, "Emu (0x%X): Recieved Fatal Message -> \n\n", GetCurrentThreadId());
+            printf("%s\n", szBuffer);
 
-        va_start(argp, szErrorMessage);
-
-        vsprintf(szBuffer2, szErrorMessage, argp);
-
-        va_end(argp);
-
-        strcat(szBuffer1, szBuffer2);
-
-        printf("%s\n", szBuffer1);
-
-        char szLogFile[260];
-
-        if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
-            MessageBox(NULL, szBuffer1, "cxbxkrnl", MB_OK | MB_ICONEXCLAMATION);
+            char szLogFile[260];
+            if(!EmuGetLogFile(szLogFile, sizeof(szLogFile)))
+            {
+                MessageBox(NULL, szBuffer, "cxbxkrnl", MB_OK | MB_ICONEXCLAMATION);
+            }
+        }
     }
 
     EmuNv2aDumpMethodStats("cleanup");
 
     printf("cxbxkrnl: Terminating Process\n");
+    cxbx::trace::Shutdown();
     fflush(stdout);
 
     // ******************************************************************
@@ -8089,9 +8133,12 @@ int EmuException(LPEXCEPTION_POINTERS e)
     }
 
     // ******************************************************************
-	// * Debugging Information
-	// ******************************************************************
-	{
+    // * Debugging Information
+    // ******************************************************************
+    {
+        cxbx::trace::RecordFlight(cxbx::trace::Event::Exception,
+                                  static_cast<std::uint32_t>(e->ExceptionRecord->ExceptionCode));
+        cxbx::trace::DumpFlightEmergency();
 		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
 		printf("Emu (0x%X): Recieved Exception [0x%.08X]@0x%.08X\n", GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
         printf("Emu (0x%X): ESP=0x%.08X EBP=0x%.08X\n", GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
@@ -8107,7 +8154,7 @@ int EmuException(LPEXCEPTION_POINTERS e)
             printf("Emu (0x%X): Stack unavailable.\n", GetCurrentThreadId());
         }
 		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
-	}
+    }
 
     fflush(stdout);
 

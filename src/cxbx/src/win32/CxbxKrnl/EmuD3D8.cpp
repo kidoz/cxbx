@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "EmuFS.h"
 #include "EmuShared.h"
 #include "core/Yuy2Converter.h"
+#include "core/trace.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -164,7 +165,24 @@ static void EmuD3DDumpCallStats(void)
     }
 }
 
-#define D3D_TRACE(name) EmuD3DTraceEntry(name)
+template <size_t Size>
+constexpr uint32 EmuD3DTraceId(const char (&Name)[Size])
+{
+    uint32 hash = 2166136261u;
+    for(size_t i = 0; i + 1 < Size; ++i)
+    {
+        hash ^= static_cast<std::uint8_t>(Name[i]);
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+#define D3D_TRACE(name)                                                                  \
+    do                                                                                   \
+    {                                                                                    \
+        cxbx::trace::RecordFlight(cxbx::trace::Event::D3dBoundary, EmuD3DTraceId(name)); \
+        EmuD3DTraceEntry(name);                                                          \
+    } while(0)
 extern "C" const char *EmuGetLastD3DCall(void) { return (const char *)g_LastD3DCall; }
 
 // XDK 5849 D3DPERF_APICounters values used by the HLE debug bridge.
@@ -3242,6 +3260,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 {
     D3D_TRACE("Clear");
     EmuSwapFS();   // Win2k/XP FS
+    const std::uint32_t traceSequence = cxbx::trace::RecordD3dCall(
+        cxbx::trace::D3dApi::Clear, static_cast<std::uint32_t>(Flags),
+        static_cast<std::uint32_t>(g_D3DDebugMarker));
 
     EmuLocateD3DDebugGlobals();
     DWORD *pApiCounters = EmuD3DPerfApiCounters();
@@ -3349,8 +3370,13 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 
         if(pApiCounters != NULL)
             pApiCounters[EMU_API_D3DDEVICE_BLOCKUNTILIDLE]++;
+
+        cxbx::trace::RecordD3dWait(cxbx::trace::D3dWaitReason::SingleStep,
+                                   traceSequence, 0, false);
     }
 
+    cxbx::trace::RecordD3dReturn(cxbx::trace::D3dApi::Clear, traceSequence,
+                                 static_cast<std::uint32_t>(ret));
     EmuSwapFS();   // XBox FS
 
     return ret;
@@ -7332,6 +7358,8 @@ BOOL WINAPI XTL::EmuIDirect3DDevice8_IsFencePending(DWORD Fence)
     // so by the time a title checks IsFencePending the prior work is already
     // complete. Report FALSE (not pending) for all fences.
     BOOL pending = FALSE;
+    cxbx::trace::RecordD3dWait(cxbx::trace::D3dWaitReason::Fence, 0,
+                               static_cast<std::uint32_t>(Fence), pending != FALSE);
 
     EmuSwapFS();   // XBox FS
 
@@ -7347,6 +7375,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BlockOnFence(DWORD Fence)
     D3D_TRACE("BlockOnFence");
 
     // The host GPU processes synchronously, so there is nothing to block on.
+    cxbx::trace::RecordD3dWait(cxbx::trace::D3dWaitReason::Fence, 0,
+                               static_cast<std::uint32_t>(Fence), false);
 
     EmuSwapFS();   // XBox FS
 
@@ -7392,6 +7422,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BlockUntilIdle(VOID)
             pRT->Release();
         }
     }
+
+    cxbx::trace::RecordD3dWait(cxbx::trace::D3dWaitReason::Idle, 0, 0, false);
 
     EmuSwapFS();   // XBox FS
 

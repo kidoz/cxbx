@@ -43,6 +43,7 @@ namespace xboxkrnl
 };
 
 #include "Cxbx.h"
+#include "core/trace.h"
 #include "Emu.h"
 
 #include <cstdarg>
@@ -432,6 +433,7 @@ extern "C" void EmuUnimplementedKernelLog(int Ordinal, void *Caller)
 template <int Ordinal>
 static uint32 __stdcall CxbxUnimplementedStub(void)
 {
+    cxbx::trace::RecordFlight(cxbx::trace::Event::KernelBoundary, Ordinal);
     EmuUnimplementedKernelLog(Ordinal, CXBX_RETADDR());
     return 0;
 }
