@@ -857,6 +857,48 @@ XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Translati
     return ValidateD3D8Function(d3dFunction, maxD3dTokens);
 }
 
+bool XTL::VshDiagnostics::ExpandQuadListIndices(const std::uint32_t* sourceIndices,
+                                                std::size_t sourceIndexCount,
+                                                std::vector<std::uint32_t>& expandedIndices)
+{
+    expandedIndices.clear();
+    if(sourceIndexCount % 4 != 0 ||
+       (sourceIndices == nullptr &&
+        sourceIndexCount > (std::numeric_limits<std::uint32_t>::max)()))
+    {
+        return false;
+    }
+    const std::size_t quadCount = sourceIndexCount / 4;
+    if(quadCount > (std::numeric_limits<std::size_t>::max)() / 6)
+    {
+        return false;
+    }
+    expandedIndices.reserve(quadCount * 6);
+    for(std::size_t quad = 0; quad < quadCount; ++quad)
+    {
+        const std::size_t base = quad * 4;
+        const std::uint32_t index0 = sourceIndices == nullptr
+                                         ? static_cast<std::uint32_t>(base)
+                                         : sourceIndices[base];
+        const std::uint32_t index1 = sourceIndices == nullptr
+                                         ? static_cast<std::uint32_t>(base + 1)
+                                         : sourceIndices[base + 1];
+        const std::uint32_t index2 = sourceIndices == nullptr
+                                         ? static_cast<std::uint32_t>(base + 2)
+                                         : sourceIndices[base + 2];
+        const std::uint32_t index3 = sourceIndices == nullptr
+                                         ? static_cast<std::uint32_t>(base + 3)
+                                         : sourceIndices[base + 3];
+        expandedIndices.push_back(index0);
+        expandedIndices.push_back(index1);
+        expandedIndices.push_back(index2);
+        expandedIndices.push_back(index0);
+        expandedIndices.push_back(index2);
+        expandedIndices.push_back(index3);
+    }
+    return true;
+}
+
 std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xboxFunctionData)
 {
     const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);

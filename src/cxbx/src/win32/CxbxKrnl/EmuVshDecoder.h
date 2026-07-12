@@ -55,6 +55,8 @@ std::uint32_t HashXboxFunction(const void* xboxFunction);
 OptimizationResult OptimizeD3D8Function(void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);
+bool ExpandQuadListIndices(const std::uint32_t* sourceIndices, std::size_t sourceIndexCount,
+                           std::vector<std::uint32_t>& expandedIndices);
 bool DecodeXboxVertex(const void* xboxDeclaration, const VertexStreamView* streams,
                       std::size_t streamCount, std::size_t vertexIndex,
                       float* inputRegisters, std::size_t inputFloatCount);
