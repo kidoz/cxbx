@@ -8,7 +8,9 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -69,6 +71,60 @@ bool PositionsEqual(const ShaderOutputs& left, const ShaderOutputs& right)
         if(!NearlyEqual(left.position[component], right.position[component]))
         {
             return false;
+        }
+    }
+    return true;
+}
+
+const float* ResolveMatrixOutput(const ShaderOutputs& outputs, DWORD outputAddress)
+{
+    if(outputAddress == 3)
+    {
+        return outputs.colors.data();
+    }
+    if(outputAddress == 4)
+    {
+        return outputs.colors.data() + 4;
+    }
+    if(outputAddress >= 9 && outputAddress <= 12)
+    {
+        return outputs.texCoords.data() + (outputAddress - 9) * 4;
+    }
+    return nullptr;
+}
+
+bool MatrixOutputsEqual(const ShaderOutputs& left, const ShaderOutputs& right,
+                        DWORD primaryOutputAddress, DWORD primaryOutputMask,
+                        DWORD secondaryOutputAddress, DWORD secondaryOutputMask)
+{
+    if(!PositionsEqual(left, right))
+    {
+        return false;
+    }
+    const std::array<std::pair<DWORD, DWORD>, 2> outputs{ {
+        { primaryOutputAddress, primaryOutputMask },
+        { secondaryOutputAddress, secondaryOutputMask },
+    } };
+    for(const auto& output : outputs)
+    {
+        if(output.second == 0)
+        {
+            continue;
+        }
+        const float* leftValues = ResolveMatrixOutput(left, output.first);
+        const float* rightValues = ResolveMatrixOutput(right, output.first);
+        if(leftValues == nullptr || rightValues == nullptr)
+        {
+            return false;
+        }
+        for(std::size_t component = 0; component < 4; ++component)
+        {
+            const DWORD nv2aMaskBit = 1u << (3u - static_cast<DWORD>(component));
+            if((output.second & nv2aMaskBit) != 0 &&
+               !NearlyEqual(leftValues[component], rightValues[component]))
+            {
+                return false;
+            }
         }
     }
     return true;
@@ -345,10 +401,11 @@ std::array<DWORD, 4> EncodeNvTestInstruction(DWORD mac, DWORD ilu, DWORD vertex,
                                              const NvTestSource& sourceB,
                                              const NvTestSource& sourceC, DWORD macMask,
                                              DWORD outputR, DWORD iluMask, DWORD outputMask,
-                                             DWORD outputAddress, DWORD outputMux, bool final)
+                                             DWORD outputAddress, DWORD outputMux, bool final,
+                                             DWORD constant = 0)
 {
     std::array<DWORD, 4> instruction{};
-    instruction[1] = (ilu << 25) | (mac << 21) | (vertex << 9) |
+    instruction[1] = (ilu << 25) | (mac << 21) | (constant << 13) | (vertex << 9) |
                      (static_cast<DWORD>(sourceA.negate) << 8) |
                      (sourceA.swizzle[0] << 6) | (sourceA.swizzle[1] << 4) |
                      (sourceA.swizzle[2] << 2) | sourceA.swizzle[3];
@@ -445,6 +502,193 @@ bool DifferentialTexCoordMatches(const std::vector<DWORD>& program, const float*
         {
             return false;
         }
+    }
+    return true;
+}
+
+struct DifferentialSourcePattern
+{
+    NvTestSource sourceA;
+    NvTestSource sourceB;
+    NvTestSource sourceC;
+};
+
+std::vector<DWORD> BuildPipelineMatrixProgram(DWORD mac, DWORD ilu,
+                                              const DifferentialSourcePattern& sources,
+                                              DWORD outputMask, DWORD outputAddress,
+                                              DWORD outputMux, bool targetIsFinal)
+{
+    const NvTestSource unused{};
+    const NvTestSource vertex1{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource vertex2{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource vertex3{ 2, 0, false, { 0, 1, 2, 3 } };
+    std::vector<DWORD> program{ 0x00042078u };
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 1, vertex1, unused, unused, 0xFu, 1, 0, 0,
+                                         9, 0, false));
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 2, vertex2, unused, unused, 0xFu, 2, 0, 0,
+                                         9, 0, false));
+    const std::array<DWORD, 4> target = EncodeNvTestInstruction(
+        mac, ilu, 0, sources.sourceA, sources.sourceB, sources.sourceC, 0, 0, 0,
+        outputMask, outputAddress, outputMux, targetIsFinal, 96);
+    const std::array<DWORD, 4> position = EncodeNvTestInstruction(
+        1, 0, 3, vertex3, unused, unused, 0, 0, 0, 0xFu, 0, 0, !targetIsFinal);
+    AppendNvTestInstruction(program, targetIsFinal ? position : target);
+    AppendNvTestInstruction(program, targetIsFinal ? target : position);
+    return program;
+}
+
+std::vector<DWORD> BuildPairedHazardMatrixProgram(bool iluReadsMacDestination,
+                                                  DWORD destinationRegister,
+                                                  const NvTestSource& reader,
+                                                  DWORD temporaryMask, DWORD outputMask)
+{
+    const NvTestSource unused{};
+    const NvTestSource vertex0{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource vertex1{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource vertex2{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource destinationSource{ 1, destinationRegister, reader.negate,
+                                          reader.swizzle };
+    std::vector<DWORD> program{ 0x00042078u };
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 1, vertex1, unused, unused, 0xFu,
+                                         destinationRegister, 0, 0, 9, 0, false));
+    if(iluReadsMacDestination)
+    {
+        AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                             1, 1, 0, vertex0, unused, destinationSource,
+                                             temporaryMask, destinationRegister, 0, outputMask,
+                                             9, 1, false));
+    }
+    else
+    {
+        AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                             1, 1, 0, destinationSource, unused, vertex0, 0,
+                                             destinationRegister, temporaryMask, outputMask, 9,
+                                             0, false));
+    }
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 0, destinationSource, unused, unused, 0, 0, 0,
+                                         0xFu, 10, 0, false));
+    AppendNvTestInstruction(program, EncodeNvTestInstruction(
+                                         1, 0, 2, vertex2, unused, unused, 0, 0, 0, 0xFu,
+                                         0, 0, true));
+    return program;
+}
+
+void PrintShaderOutputs(const char* label, const ShaderOutputs& outputs)
+{
+    std::fprintf(stderr, "VSHMATRIX| %s position", label);
+    for(const float value : outputs.position)
+    {
+        std::fprintf(stderr, " %.9g", static_cast<double>(value));
+    }
+    std::fprintf(stderr, " colors");
+    for(const float value : outputs.colors)
+    {
+        std::fprintf(stderr, " %.9g", static_cast<double>(value));
+    }
+    std::fprintf(stderr, " texcoords");
+    for(const float value : outputs.texCoords)
+    {
+        std::fprintf(stderr, " %.9g", static_cast<double>(value));
+    }
+    std::fputc('\n', stderr);
+}
+
+void ReportDifferentialMatrixFailure(std::size_t caseId, const char* stage,
+                                     const std::vector<DWORD>& program,
+                                     const DWORD* translated, std::size_t maxD3dTokens,
+                                     const ShaderOutputs& cpuOutputs,
+                                     const ShaderOutputs& hostOutputs)
+{
+    const std::uint32_t hash = XTL::VshDiagnostics::HashXboxFunction(program.data());
+    std::fprintf(stderr, "VSHMATRIX| mismatch case=%zu hash=%08X stage=%s words=%zu\n",
+                 caseId, hash, stage, program.size());
+    for(std::size_t word = 0; word < program.size(); ++word)
+    {
+        std::fprintf(stderr, "VSHMATRIX| raw case=%zu word=%zu value=%08X\n", caseId,
+                     word, static_cast<unsigned int>(program[word]));
+    }
+    for(const std::string& line : XTL::VshDiagnostics::DecodeXboxFunction(program.data()))
+    {
+        std::fprintf(stderr, "VSHMATRIX| nv2a case=%zu %s\n", caseId, line.c_str());
+    }
+    for(const std::string& line :
+        XTL::VshDiagnostics::DecodeD3D8Function(translated, maxD3dTokens))
+    {
+        std::fprintf(stderr, "VSHMATRIX| d3d8 case=%zu %s\n", caseId, line.c_str());
+    }
+    PrintShaderOutputs("cpu", cpuOutputs);
+    PrintShaderOutputs("d3d8", hostOutputs);
+}
+
+bool RunDifferentialMatrixCase(std::size_t caseId, bool reportFailure,
+                               const std::vector<DWORD>& program,
+                               const float* hardwareConstants, const float* hostConstants,
+                               const float* inputs, DWORD primaryOutputAddress,
+                               DWORD primaryOutputMask, DWORD secondaryOutputAddress = 0,
+                               DWORD secondaryOutputMask = 0)
+{
+    ShaderOutputs cpuOutputs{};
+    if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
+           program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
+           cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
+           cpuOutputs.texCoords.size()))
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "cpu_execution", program, nullptr, 0,
+                                            cpuOutputs, {});
+        }
+        return false;
+    }
+
+    std::unique_ptr<DWORD[]> translated{ XTL::EmuVshRecompileXboxFunction(program.data()) };
+    const std::size_t maxD3dTokens = 16 + program.size() * 24;
+    if(translated == nullptr)
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "translation", program, nullptr, 0,
+                                            cpuOutputs, {});
+        }
+        return false;
+    }
+    const XTL::VshDiagnostics::ValidationResult validation =
+        XTL::VshDiagnostics::ValidateD3D8Translation(program.data(), translated.get());
+    if(!validation.valid)
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, validation.message.c_str(), program,
+                                            translated.get(), maxD3dTokens, cpuOutputs, {});
+        }
+        return false;
+    }
+
+    ShaderOutputs hostOutputs{};
+    if(!ExecuteD3D8Bytecode(translated.get(), maxD3dTokens, hostConstants, inputs,
+                            hostOutputs))
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "d3d8_execution", program,
+                                            translated.get(), maxD3dTokens, cpuOutputs,
+                                            hostOutputs);
+        }
+        return false;
+    }
+    if(!MatrixOutputsEqual(cpuOutputs, hostOutputs, primaryOutputAddress, primaryOutputMask,
+                           secondaryOutputAddress, secondaryOutputMask))
+    {
+        if(reportFailure)
+        {
+            ReportDifferentialMatrixFailure(caseId, "output", program, translated.get(),
+                                            maxD3dTokens, cpuOutputs, hostOutputs);
+        }
+        return false;
     }
     return true;
 }
@@ -762,6 +1006,112 @@ int RunTests()
                                           opcodeHostConstants.data(), opcodeInputs.data()),
               name.c_str());
     }
+
+    const NvTestSource temporary1{ 1, 1, false, { 0, 1, 2, 3 } };
+    const NvTestSource temporary1ReverseNegated{ 1, 1, true, { 3, 2, 1, 0 } };
+    const NvTestSource temporary2Swizzled{ 1, 2, false, { 1, 0, 3, 2 } };
+    const NvTestSource constant96{ 3, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource constant96Swizzled{ 3, 0, false, { 2, 3, 0, 1 } };
+    const NvTestSource vertex0Negated{ 2, 0, true, { 0, 1, 2, 3 } };
+    const NvTestSource vertex0ReverseNegated{ 2, 0, true, { 3, 2, 1, 0 } };
+    const std::array<DifferentialSourcePattern, 3> matrixSourcePatterns{ {
+        { vertex0, temporary1, temporary2Swizzled },
+        { temporary1ReverseNegated, constant96, vertex0ReverseNegated },
+        { constant96Swizzled, vertex0Negated, temporary1 },
+    } };
+    const std::array<DWORD, 4> matrixMasks{ 0x1u, 0x5u, 0xAu, 0xFu };
+    const std::array<DWORD, 6> matrixOutputs{ 3u, 4u, 9u, 10u, 11u, 12u };
+    const std::array<DWORD, 3> hazardDestinations{ 1u, 2u, 11u };
+    const std::array<NvTestSource, 2> hazardReaders{ {
+        { 1, 0, false, { 0, 1, 2, 3 } },
+        { 1, 0, true, { 3, 2, 1, 0 } },
+    } };
+    const std::array<float, 4> matrixConstant{ 1.25f, 0.75f, 3.0f, 0.5f };
+    std::copy(matrixConstant.begin(), matrixConstant.end(),
+              opcodeHardwareConstants.begin() + 96 * 4);
+    std::copy(matrixConstant.begin(), matrixConstant.end(), opcodeHostConstants.begin());
+
+    std::size_t matrixCaseId = 0;
+    std::size_t matrixFailures = 0;
+    for(const OpcodeCase& opcodeCase : macCases)
+    {
+        for(const DifferentialSourcePattern& sources : matrixSourcePatterns)
+        {
+            for(const DWORD mask : matrixMasks)
+            {
+                for(const DWORD output : matrixOutputs)
+                {
+                    const bool targetIsFinal = (matrixCaseId & 1u) != 0;
+                    const std::vector<DWORD> program = BuildPipelineMatrixProgram(
+                        opcodeCase.opcode, 0, sources, mask, output, 0, targetIsFinal);
+                    if(!RunDifferentialMatrixCase(
+                           matrixCaseId, matrixFailures == 0, program,
+                           opcodeHardwareConstants.data(),
+                           opcodeHostConstants.data(), opcodeInputs.data(), output, mask))
+                    {
+                        ++matrixFailures;
+                    }
+                    ++matrixCaseId;
+                }
+            }
+        }
+    }
+    for(const OpcodeCase& opcodeCase : iluCases)
+    {
+        for(const DifferentialSourcePattern& sources : matrixSourcePatterns)
+        {
+            for(const DWORD mask : matrixMasks)
+            {
+                for(const DWORD output : matrixOutputs)
+                {
+                    const bool targetIsFinal = (matrixCaseId & 1u) != 0;
+                    const std::vector<DWORD> program = BuildPipelineMatrixProgram(
+                        0, opcodeCase.opcode, sources, mask, output, 1, targetIsFinal);
+                    if(!RunDifferentialMatrixCase(
+                           matrixCaseId, matrixFailures == 0, program,
+                           opcodeHardwareConstants.data(),
+                           opcodeHostConstants.data(), opcodeInputs.data(), output, mask))
+                    {
+                        ++matrixFailures;
+                    }
+                    ++matrixCaseId;
+                }
+            }
+        }
+    }
+    for(const bool iluReadsMacDestination : { false, true })
+    {
+        for(const DWORD destination : hazardDestinations)
+        {
+            for(const NvTestSource& reader : hazardReaders)
+            {
+                for(const DWORD temporaryMask : matrixMasks)
+                {
+                    const DWORD outputMask =
+                        matrixMasks[(matrixCaseId + 1) % matrixMasks.size()];
+                    const std::vector<DWORD> program = BuildPairedHazardMatrixProgram(
+                        iluReadsMacDestination, destination, reader, temporaryMask,
+                        outputMask);
+                    if(!RunDifferentialMatrixCase(
+                           matrixCaseId, matrixFailures == 0, program,
+                           opcodeHardwareConstants.data(),
+                           opcodeHostConstants.data(), opcodeInputs.data(), 9, outputMask, 10,
+                           0xFu))
+                    {
+                        ++matrixFailures;
+                    }
+                    ++matrixCaseId;
+                }
+            }
+        }
+    }
+    Check(matrixCaseId == 1344, "deterministic shader matrix case count is stable");
+    if(matrixFailures != 0)
+    {
+        std::fprintf(stderr, "VSHMATRIX| summary cases=%zu failures=%zu\n", matrixCaseId,
+                     matrixFailures);
+    }
+    Check(matrixFailures == 0, "deterministic shader matrix preserves CPU semantics");
 
     const auto checkUnsupportedProgram = [&](const std::vector<DWORD>& program,
                                              const char* expectedReason, const char* name)
