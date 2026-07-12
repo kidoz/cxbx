@@ -8078,7 +8078,7 @@ static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveT
 }
 
 static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamView* streams,
-                                       std::size_t streamCount, const UINT* indices,
+                                       std::size_t streamCount, const std::uint32_t* indices,
                                        UINT firstVertex, UINT vertexCount,
                                        std::vector<EmuVshCpuVertex>& output)
 {
@@ -8138,9 +8138,37 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
     return true;
 }
 
-static bool EmuVshDrawCpuBound(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
-                               UINT firstVertex, UINT vertexCount, const UINT* indices)
+static bool EmuVshExpandCpuQuadTopology(bool quadList, XTL::D3DPRIMITIVETYPE& primitiveType,
+                                        UINT& primitiveCount, UINT& vertexCount,
+                                        const std::uint32_t*& indices,
+                                        std::vector<std::uint32_t>& expandedIndices)
 {
+    if(!quadList)
+    {
+        return true;
+    }
+    if(!XTL::VshDiagnostics::ExpandQuadListIndices(indices, vertexCount, expandedIndices) ||
+       expandedIndices.size() > 65536)
+    {
+        return false;
+    }
+    indices = expandedIndices.data();
+    vertexCount = static_cast<UINT>(expandedIndices.size());
+    primitiveType = XTL::D3DPT_TRIANGLELIST;
+    primitiveCount = vertexCount / 3;
+    return true;
+}
+
+static bool EmuVshDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
+                               UINT primitiveCount, UINT firstVertex, UINT vertexCount,
+                               const std::uint32_t* indices)
+{
+    std::vector<std::uint32_t> expandedIndices;
+    if(!EmuVshExpandCpuQuadTopology(quadList, primitiveType, primitiveCount, vertexCount,
+                                    indices, expandedIndices))
+    {
+        return false;
+    }
     std::array<EmuVshLockedStream, 16> locked{};
     EmuVshLockedStreamsGuard lockedStreamsGuard(locked);
     std::array<XTL::VshDiagnostics::VertexStreamView, 16> streams{};
@@ -8177,27 +8205,37 @@ static bool EmuVshDrawCpuBound(XTL::D3DPRIMITIVETYPE primitiveType, UINT primiti
     return transformed && SUCCEEDED(EmuVshDrawPrimitiveUp(primitiveType, primitiveCount, vertices.data()));
 }
 
-static bool EmuVshDrawCpuUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
-                            UINT vertexCount, const void* data, UINT stride)
+static bool EmuVshDrawCpuUp(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
+                            UINT primitiveCount, UINT vertexCount, const void* data, UINT stride)
 {
+    const UINT sourceVertexCount = vertexCount;
     if(data == nullptr || stride == 0 ||
-       vertexCount > (std::numeric_limits<std::size_t>::max)() / stride)
+       sourceVertexCount > (std::numeric_limits<std::size_t>::max)() / stride)
+    {
+        return false;
+    }
+    const std::uint32_t* indices = nullptr;
+    std::vector<std::uint32_t> expandedIndices;
+    if(!EmuVshExpandCpuQuadTopology(quadList, primitiveType, primitiveCount, vertexCount,
+                                    indices, expandedIndices))
     {
         return false;
     }
     std::array<XTL::VshDiagnostics::VertexStreamView, 16> streams{};
-    streams[0] = { data, static_cast<std::size_t>(vertexCount) * stride, stride };
+    streams[0] = { data, static_cast<std::size_t>(sourceVertexCount) * stride, stride };
     std::vector<EmuVshCpuVertex> vertices;
-    return EmuVshTransformCpuVertices(streams.data(), streams.size(), nullptr, 0, vertexCount, vertices) &&
+    return EmuVshTransformCpuVertices(streams.data(), streams.size(), indices, 0, vertexCount, vertices) &&
            SUCCEEDED(EmuVshDrawPrimitiveUp(primitiveType, primitiveCount, vertices.data()));
 }
 
-static bool EmuVshTryDrawCpuBound(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
-                                  UINT firstVertex, UINT vertexCount, const UINT* indices)
+static bool EmuVshTryDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
+                                  UINT primitiveCount, UINT firstVertex, UINT vertexCount,
+                                  const std::uint32_t* indices)
 {
     try
     {
-        return EmuVshDrawCpuBound(primitiveType, primitiveCount, firstVertex, vertexCount, indices);
+        return EmuVshDrawCpuBound(quadList, primitiveType, primitiveCount,
+                                  firstVertex, vertexCount, indices);
     }
     catch(...)
     {
@@ -8205,12 +8243,12 @@ static bool EmuVshTryDrawCpuBound(XTL::D3DPRIMITIVETYPE primitiveType, UINT prim
     }
 }
 
-static bool EmuVshTryDrawCpuUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
-                               UINT vertexCount, const void* data, UINT stride)
+static bool EmuVshTryDrawCpuUp(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
+                               UINT primitiveCount, UINT vertexCount, const void* data, UINT stride)
 {
     try
     {
-        return EmuVshDrawCpuUp(primitiveType, primitiveCount, vertexCount, data, stride);
+        return EmuVshDrawCpuUp(quadList, primitiveType, primitiveCount, vertexCount, data, stride);
     }
     catch(...)
     {
@@ -8218,8 +8256,8 @@ static bool EmuVshTryDrawCpuUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT primiti
     }
 }
 
-static bool EmuVshTryDrawCpuIndexed(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
-                                    UINT vertexCount, const WORD* indexData)
+static bool EmuVshTryDrawCpuIndexed(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
+                                    UINT primitiveCount, UINT vertexCount, const WORD* indexData)
 {
     XTL::IDirect3DIndexBuffer8* hostIndexBuffer = nullptr;
     BYTE* indexBytes = nullptr;
@@ -8233,7 +8271,7 @@ static bool EmuVshTryDrawCpuIndexed(XTL::D3DPRIMITIVETYPE primitiveType, UINT pr
            SUCCEEDED(EmuVshLockIndexBuffer(g_EmuVshCpuIndexBuffer, &indexBytes, &indexByteSize)) &&
            byteOffset <= indexByteSize && vertexCount <= (indexByteSize - byteOffset) / sizeof(WORD))
         {
-            std::vector<UINT> indices(vertexCount);
+            std::vector<std::uint32_t> indices(vertexCount);
             for(UINT index = 0; index < vertexCount; ++index)
             {
                 WORD value = 0;
@@ -8242,8 +8280,8 @@ static bool EmuVshTryDrawCpuIndexed(XTL::D3DPRIMITIVETYPE primitiveType, UINT pr
             }
             EmuVshUnlockIndexBuffer(hostIndexBuffer);
             indexBytes = nullptr;
-            rendered = EmuVshDrawCpuBound(primitiveType, primitiveCount, g_EmuVshCpuBaseVertexIndex,
-                                          vertexCount, indices.data());
+            rendered = EmuVshDrawCpuBound(quadList, primitiveType, primitiveCount,
+                                          g_EmuVshCpuBaseVertexIndex, vertexCount, indices.data());
         }
         if(indexBytes != nullptr)
         {
@@ -8310,13 +8348,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
-        const bool rendered = !quadList &&
-                              EmuVshTryDrawCpuBound(PCPrimitiveType, PrimitiveCount, StartVertex,
-                                                    VertexCount, nullptr);
+        const bool rendered = EmuVshTryDrawCpuBound(quadList, PCPrimitiveType, PrimitiveCount,
+                                                    StartVertex, VertexCount, nullptr);
         if(!rendered)
         {
             EmuVshLogCpuDraw("DrawVertices", PrimitiveType, VertexCount, false,
-                             quadList ? "quad_list_unsupported" : "execution_failed");
+                             quadList && VertexCount % 4 != 0
+                                 ? "incomplete_quad_list"
+                                 : "execution_failed");
             static LONG warningCount = 0;
             if(InterlockedIncrement(&warningCount) <= 5)
             {
@@ -8419,13 +8458,15 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
-        const bool rendered = !quadList &&
-                              EmuVshTryDrawCpuUp(PCPrimitiveType, PrimitiveCount, VertexCount,
-                                                 pVertexStreamZeroData, VertexStreamZeroStride);
+        const bool rendered = EmuVshTryDrawCpuUp(quadList, PCPrimitiveType, PrimitiveCount,
+                                                 VertexCount, pVertexStreamZeroData,
+                                                 VertexStreamZeroStride);
         if(!rendered)
         {
             EmuVshLogCpuDraw("DrawVerticesUP", PrimitiveType, VertexCount, false,
-                             quadList ? "quad_list_unsupported" : "execution_failed");
+                             quadList && VertexCount % 4 != 0
+                                 ? "incomplete_quad_list"
+                                 : "execution_failed");
             static LONG warningCount = 0;
             if(InterlockedIncrement(&warningCount) <= 5)
             {
@@ -8536,12 +8577,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
-        const bool rendered = !quadList &&
-                              EmuVshTryDrawCpuIndexed(PCPrimitiveType, PrimitiveCount, VertexCount, pIndexData);
+        const bool rendered = EmuVshTryDrawCpuIndexed(quadList, PCPrimitiveType, PrimitiveCount,
+                                                      VertexCount, pIndexData);
         if(!rendered)
         {
             EmuVshLogCpuDraw("DrawIndexedVertices", PrimitiveType, VertexCount, false,
-                             quadList ? "quad_list_unsupported" : "execution_failed");
+                             quadList && VertexCount % 4 != 0
+                                 ? "incomplete_quad_list"
+                                 : "execution_failed");
             static LONG warningCount = 0;
             if(InterlockedIncrement(&warningCount) <= 5)
             {

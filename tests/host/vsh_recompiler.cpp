@@ -6,6 +6,7 @@
 #include <cstring>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <string>
 
 namespace
@@ -487,6 +488,35 @@ int RunTests()
     const XTL::VshDiagnostics::ValidationResult optimizedOversizedValidation =
         XTL::VshDiagnostics::ValidateD3D8Function(oversizedShader.data(), oversizedOptimization.tokenCount);
     Check(optimizedOversizedValidation.valid, "optimized shader meets instruction limit");
+
+    std::vector<std::uint32_t> quadIndices;
+    Check(XTL::VshDiagnostics::ExpandQuadListIndices(nullptr, 4, quadIndices),
+          "single sequential quad expands");
+    Check(quadIndices == std::vector<std::uint32_t>({ 0, 1, 2, 0, 2, 3 }),
+          "single quad becomes two triangles");
+    Check(XTL::VshDiagnostics::ExpandQuadListIndices(nullptr, 8, quadIndices),
+          "multiple sequential quads expand");
+    Check(quadIndices == std::vector<std::uint32_t>({ 0, 1, 2, 0, 2, 3,
+                                                      4, 5, 6, 4, 6, 7 }),
+          "multiple quads preserve independent topology");
+    const std::uint32_t indexedQuad[] = { 9, 2, 7, 4 };
+    Check(XTL::VshDiagnostics::ExpandQuadListIndices(indexedQuad, std::size(indexedQuad), quadIndices),
+          "indexed quad expands");
+    Check(quadIndices == std::vector<std::uint32_t>({ 9, 2, 7, 9, 7, 4 }),
+          "indexed quad preserves source indices");
+    quadIndices.assign({ 99, 100 });
+    Check(!XTL::VshDiagnostics::ExpandQuadListIndices(nullptr, 5, quadIndices),
+          "incomplete quad is rejected");
+    Check(quadIndices.empty(), "failed quad expansion clears output");
+    if constexpr((std::numeric_limits<std::size_t>::max)() >
+                 (std::numeric_limits<std::uint32_t>::max)())
+    {
+        const std::size_t oversizedSequentialCount =
+            static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
+        Check(!XTL::VshDiagnostics::ExpandQuadListIndices(nullptr, oversizedSequentialCount,
+                                                          quadIndices),
+              "sequential quad index overflow is rejected");
+    }
 
     const DWORD cpuDeclaration[] = {
         0x20000000u,
