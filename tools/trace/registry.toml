@@ -103,6 +103,30 @@ prefix = "NV2ASTAT"
 default_tier = "text"
 environment_alias = "CXBX_NV2A_METHOD_STATS"
 
+[[channels]]
+id = 13
+enum = "Media"
+key = "media"
+prefix = "MEDIA"
+default_tier = "bin"
+environment_alias = "CXBX_MEDIA_TRACE"
+
+[[channels]]
+id = 14
+enum = "Audio"
+key = "audio"
+prefix = "AUDIO"
+default_tier = "bin"
+environment_alias = "CXBX_AUDIO_TRACE"
+
+[[channels]]
+id = 15
+enum = "Sync"
+key = "sync"
+prefix = "SYNC"
+default_tier = "bin"
+environment_alias = "CXBX_SYNC_TRACE"
+
 [[value_sets]]
 key = "d3d_api"
 enum = "D3dApi"
@@ -331,3 +355,73 @@ verb = "step"
 continuations = ["Continuation0"]
 continuation_arguments = ["esp"]
 formats = ["hex", "hex"]
+
+[[events]]
+id = 20
+enum = "MediaOverlayUpdate"
+key = "media_overlay_update"
+channel = "media"
+argument = "frame"
+argument_type = "u32"
+verb = "overlay_update"
+formats = ["dec"]
+
+[[events]]
+id = 21
+enum = "MediaPresent"
+key = "media_present"
+channel = "media"
+argument = "frame"
+argument_type = "u32"
+verb = "present"
+formats = ["dec"]
+
+[[events]]
+id = 22
+enum = "AudioPacketQueued"
+key = "audio_packet_queued"
+channel = "audio"
+argument = "bytes"
+argument_type = "u32"
+verb = "packet_queued"
+formats = ["dec"]
+
+[[events]]
+id = 23
+enum = "AudioPacketCompleted"
+key = "audio_packet_completed"
+channel = "audio"
+argument = "bytes"
+argument_type = "u32"
+verb = "packet_completed"
+formats = ["dec"]
+
+[[events]]
+id = 24
+enum = "AudioStarved"
+key = "audio_starved"
+channel = "audio"
+argument = "played_bytes"
+argument_type = "u32"
+verb = "starved"
+formats = ["dec"]
+
+[[events]]
+id = 25
+enum = "SyncWaitSatisfied"
+key = "sync_wait_satisfied"
+channel = "sync"
+argument = "elapsed_ms"
+argument_type = "u32"
+verb = "wait_satisfied"
+formats = ["dec"]
+
+[[events]]
+id = 26
+enum = "SyncWaitTimeout"
+key = "sync_wait_timeout"
+channel = "sync"
+argument = "elapsed_ms"
+argument_type = "u32"
+verb = "wait_timeout"
+formats = ["dec"]
