@@ -25,6 +25,16 @@ host_pcm_test = executable(
 
 test('host-pcm-conversion', host_pcm_test)
 
+host_vsh_recompiler_test = executable(
+  'host_vsh_recompiler_test',
+  'vsh_recompiler.cpp',
+  '../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+  include_directories : cxbx_inc,
+  cpp_args : '-DCXBX_VSH_HOST_TEST',
+)
+
+test('host-vsh-recompiler', host_vsh_recompiler_test)
+
 host_trace_core_test = executable(
   'host_trace_core_test',
   'trace_core.cpp',

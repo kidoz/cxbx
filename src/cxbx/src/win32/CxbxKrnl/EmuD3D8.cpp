@@ -43,6 +43,7 @@ namespace xboxkrnl
 };
 
 #include "Emu.h"
+#include "EmuVshDecoder.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
 #include "core/Yuy2Converter.h"
@@ -2055,9 +2056,9 @@ static void EmuVshRegisterLive(XTL::X_D3DVertexShader *pShader)
     }
 }
 
-static bool EmuVshUnregisterLive(XTL::X_D3DVertexShader *pShader)
+static bool EmuVshUnregisterLive(XTL::X_D3DVertexShader* pShader)
 {
-    for(int i=0;i<256;i++)
+    for(int i = 0; i < 256; i++)
     {
         if(g_EmuLiveVertexShaders[i] == pShader)
         {
@@ -2067,6 +2068,19 @@ static bool EmuVshUnregisterLive(XTL::X_D3DVertexShader *pShader)
     }
 
     return false;
+}
+
+static HRESULT EmuVshCreateHostShader(const DWORD* declaration, const DWORD* function,
+                                      DWORD* handle, DWORD usage)
+{
+    __try
+    {
+        return g_pD3DDevice8->CreateVertexShader(declaration, function, handle, usage);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return D3DERR_INVALIDCALL;
+    }
 }
 
 // ******************************************************************
@@ -2111,21 +2125,24 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // vertex-program microcode, and the Xbox declaration carries extended
     // data-type codes -- neither is host-consumable. Recompile the microcode
     // into vs.1.1 bytecode and rewrite the declaration types (EmuVshDecoder).
-    extern DWORD *EmuVshRecompileXboxFunction(const CONST DWORD *pXboxFunction);
-    extern int    EmuVshTranslateXboxDeclaration(const CONST DWORD *pXboxDecl, DWORD *pPcDecl, int MaxTokens);
+    extern DWORD* EmuVshRecompileXboxFunction(CONST DWORD * pXboxFunction);
+    extern int EmuVshTranslateXboxDeclaration(CONST DWORD * pXboxDecl, DWORD * pPcDecl, int MaxTokens);
 
-    DWORD *pRecompiled = NULL;
-    const DWORD *pHostFunction = pFunction;
+    DWORD* pRecompiled = NULL;
+    const DWORD* pHostFunction = pFunction;
     if(pFunction != NULL && (pFunction[0] & 0xFFFF) == 0x2078)
     {
         pRecompiled = EmuVshRecompileXboxFunction(pFunction);
         pHostFunction = pRecompiled;
         if(pRecompiled == NULL)
+        {
             EmuWarning("VshDecoder: recompilation failed; creating a declaration-only shader");
+        }
     }
+    const bool wasRecompiled = pRecompiled != NULL;
 
-    DWORD  TranslatedDecl[128];
-    const DWORD *pHostDeclaration = pDeclaration;
+    DWORD TranslatedDecl[128];
+    const DWORD* pHostDeclaration = pDeclaration;
     if(pDeclaration != NULL)
     {
         EmuVshTranslateXboxDeclaration(pDeclaration, TranslatedDecl, 128);
@@ -2136,19 +2153,48 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // * redirect to windows d3d
     // ******************************************************************
     HRESULT hRet = D3D_OK;
-    __try
+    bool hostCallAttempted = false;
+    if(pRecompiled != NULL)
     {
-        hRet = g_pD3DDevice8->CreateVertexShader
-        (
-            pHostDeclaration,
-            pHostFunction,
-            &pD3DVertexShader->Handle,
-            g_dwVertexShaderUsage
-        );
+        try
+        {
+            const XTL::VshDiagnostics::ValidationResult validation =
+                XTL::VshDiagnostics::ValidateD3D8Translation(pFunction, pRecompiled);
+            if(!validation.valid)
+            {
+                hRet = D3DERR_INVALIDCALL;
+            }
+        }
+        catch(...)
+        {
+            EmuWarning("VshDecoder: validation raised a host exception");
+            hRet = D3DERR_INVALIDCALL;
+        }
     }
-    __except(EXCEPTION_EXECUTE_HANDLER)
+
+    if(SUCCEEDED(hRet))
     {
-        hRet = D3DERR_INVALIDCALL;
+        hostCallAttempted = true;
+        hRet = EmuVshCreateHostShader(pHostDeclaration, pHostFunction,
+                                      &pD3DVertexShader->Handle, g_dwVertexShaderUsage);
+    }
+
+    if(FAILED(hRet) && pRecompiled != NULL)
+    {
+        try
+        {
+            const XTL::VshDiagnostics::TranslationCapture capture = {
+                pFunction,
+                pRecompiled,
+                pDeclaration,
+                pHostDeclaration,
+            };
+            XTL::VshDiagnostics::DumpRejectedTranslation(stdout, capture);
+        }
+        catch(...)
+        {
+            EmuWarning("VshDecoder: rejected-shader diagnostic capture raised a host exception");
+        }
     }
 
     delete[] pRecompiled;
@@ -2159,21 +2205,21 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
 
     if(FAILED(hRet))
     {
-        printf("EmuD3D8 (0x%X): CreateVertexShader FAILED on the host (hr=0x%.08X)%s.\n",
-               GetCurrentThreadId(), hRet,
-               pRecompiled != NULL ? " for a recompiled Xbox shader" : "");
+        printf("EmuD3D8 (0x%X): CreateVertexShader FAILED %s (hr=0x%.08X)%s.\n",
+               GetCurrentThreadId(), hostCallAttempted ? "on the host" : "during translation validation", hRet,
+               wasRecompiled ? " for a recompiled Xbox shader" : "");
         fflush(stdout);
 
         hRet = D3D_OK;
     }
-    else if(pRecompiled != NULL)
+    else if(wasRecompiled)
     {
         printf("EmuD3D8 (0x%X): CreateVertexShader OK, host handle 0x%.08X (recompiled Xbox shader).\n",
                GetCurrentThreadId(), pD3DVertexShader->Handle);
         fflush(stdout);
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return hRet;
 }
