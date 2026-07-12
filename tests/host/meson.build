@@ -16,6 +16,15 @@ host_yuy2_test = executable(
 
 test('host-yuy2-conversion', host_yuy2_test)
 
+host_pcm_test = executable(
+  'host_pcm_test',
+  'pcm_conversion.cpp',
+  '../../src/cxbx/src/core/PcmConverter.cpp',
+  include_directories : cxbx_inc,
+)
+
+test('host-pcm-conversion', host_pcm_test)
+
 host_trace_core_test = executable(
   'host_trace_core_test',
   'trace_core.cpp',
