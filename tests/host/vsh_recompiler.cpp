@@ -1251,6 +1251,28 @@ int RunTests()
     Check(cpuInputs[8] == -2.0f && cpuInputs[9] == 7.0f && cpuInputs[10] == 0.0f && cpuInputs[11] == 1.0f,
           "SHORT2 expands with Z=0 W=1");
 
+    const DWORD pcTypeDeclaration[] = {
+        0x20000000u,
+        0x40000000u,
+        0x40010001u,
+        0x40020002u,
+        0x40030003u,
+        0x40040004u,
+        0x40050005u,
+        0x40060006u,
+        0x40070007u,
+        0xFFFFFFFFu,
+    };
+    std::array<std::uint8_t, 60> pcTypeVertex{};
+    const XTL::VshDiagnostics::VertexStreamView pcTypeStream = {
+        pcTypeVertex.data(),
+        pcTypeVertex.size(),
+        pcTypeVertex.size(),
+    };
+    Check(XTL::VshDiagnostics::DecodeXboxVertex(pcTypeDeclaration, &pcTypeStream, 1, 0,
+                                                cpuInputs.data(), cpuInputs.size()),
+          "CPU fallback decodes every accepted PC declaration type");
+
     const DWORD packedDeclaration[] = {
         0x20000000u,
         0x40350000u,
@@ -1532,10 +1554,156 @@ int RunTests()
     }
 
     DWORD translatedDeclaration[8] = {};
-    const int declarationTokens =
-        XTL::EmuVshTranslateXboxDeclaration(kXboxDeclaration, translatedDeclaration, 8);
+    const XTL::VshDiagnostics::DeclarationTranslationResult declarationResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(kXboxDeclaration, translatedDeclaration,
+                                                      std::size(translatedDeclaration));
+    Check(declarationResult.disposition ==
+              XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
+          "host-compatible declaration is classified for translation");
+    Check(declarationResult.reason.empty(), "translated declaration has no fallback reason");
+    const int declarationTokens = XTL::EmuVshTranslateXboxDeclaration(
+        kXboxDeclaration, translatedDeclaration, static_cast<int>(std::size(translatedDeclaration)));
     Check(declarationTokens == 3, "declaration token count");
     Check(translatedDeclaration[1] == 0x40020000u, "PC declaration token remains stable");
+
+    const std::array<DWORD, 15> hostVertexTypes = {
+        0x00,
+        0x01,
+        0x02,
+        0x03,
+        0x04,
+        0x05,
+        0x06,
+        0x07,
+        0x12,
+        0x22,
+        0x32,
+        0x42,
+        0x40,
+        0x25,
+        0x45,
+    };
+    for(const DWORD type : hostVertexTypes)
+    {
+        const DWORD declaration[] = {
+            0x20000000u,
+            0x40000000u | (type << 16),
+            0xFFFFFFFFu,
+        };
+        DWORD output[3] = {};
+        const XTL::VshDiagnostics::DeclarationTranslationResult typeResult =
+            XTL::VshDiagnostics::TranslateXboxDeclaration(declaration, output, std::size(output));
+        Check(typeResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
+              "host vertex declaration type translates");
+        Check(typeResult.tokenCount == 3, "host vertex declaration retains token count");
+    }
+
+    const std::array<DWORD, 12> cpuOnlyVertexTypes = {
+        0x11,
+        0x14,
+        0x15,
+        0x16,
+        0x21,
+        0x24,
+        0x31,
+        0x34,
+        0x35,
+        0x41,
+        0x44,
+        0x72,
+    };
+    for(const DWORD type : cpuOnlyVertexTypes)
+    {
+        const DWORD declaration[] = {
+            0x20000000u,
+            0x40000000u | (type << 16),
+            0xFFFFFFFFu,
+        };
+        DWORD output[3] = {};
+        const XTL::VshDiagnostics::DeclarationTranslationResult typeResult =
+            XTL::VshDiagnostics::TranslateXboxDeclaration(declaration, output, std::size(output));
+        Check(typeResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu,
+              "Xbox-only vertex declaration type selects CPU execution");
+        Check(typeResult.reason == "declaration_cpu_vertex_type",
+              "CPU-only declaration reason is stable");
+    }
+
+    const DWORD constantPayloadDeclaration[] = {
+        0x82000000u,
+        0xFFFFFFFFu,
+        0x3F800000u,
+        0x40000000u,
+        0x40400000u,
+        0xFFFFFFFFu,
+    };
+    DWORD translatedConstantPayload[6] = {};
+    const XTL::VshDiagnostics::DeclarationTranslationResult constantPayloadResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(
+            constantPayloadDeclaration, translatedConstantPayload,
+            std::size(translatedConstantPayload));
+    Check(constantPayloadResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
+              constantPayloadResult.tokenCount == std::size(constantPayloadDeclaration),
+          "constant payload data cannot terminate declaration parsing");
+
+    const DWORD unsupportedTypeDeclaration[] = {
+        0x20000000u,
+        0x40550000u,
+        0xFFFFFFFFu,
+    };
+    DWORD rejectedDeclaration[8] = {};
+    XTL::VshDiagnostics::DeclarationTranslationResult rejectedDeclarationResult =
+        XTL::VshDiagnostics::TranslateXboxDeclaration(
+            unsupportedTypeDeclaration, rejectedDeclaration, std::size(rejectedDeclaration));
+    Check(rejectedDeclarationResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              rejectedDeclarationResult.reason == "unsupported_vertex_type",
+          "unknown vertex declaration type is rejected");
+
+    const DWORD invalidRegisterDeclaration[] = {
+        0x20000000u,
+        0x40000010u,
+        0xFFFFFFFFu,
+    };
+    rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
+        invalidRegisterDeclaration, rejectedDeclaration, std::size(rejectedDeclaration));
+    Check(rejectedDeclarationResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              rejectedDeclarationResult.reason == "declaration_register_range",
+          "out-of-range declaration register is rejected");
+
+    const DWORD malformedDeclaration[] = { 0xC0000000u, 0xFFFFFFFFu };
+    rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
+        malformedDeclaration, rejectedDeclaration, std::size(rejectedDeclaration));
+    Check(rejectedDeclarationResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              rejectedDeclarationResult.reason == "malformed_declaration_token",
+          "reserved declaration token is rejected");
+
+    std::array<DWORD, 128> unterminatedDeclaration{};
+    rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
+        unterminatedDeclaration.data(), rejectedDeclaration, std::size(rejectedDeclaration));
+    Check(rejectedDeclarationResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              rejectedDeclarationResult.reason == "declaration_capacity",
+          "declaration exceeding output capacity is rejected");
+    std::array<DWORD, 128> unterminatedOutput{};
+    rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
+        unterminatedDeclaration.data(), unterminatedOutput.data(), unterminatedOutput.size());
+    Check(rejectedDeclarationResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              rejectedDeclarationResult.reason == "declaration_missing_end",
+          "unterminated declaration is rejected");
+
+    rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
+        kXboxDeclaration, rejectedDeclaration, 2);
+    Check(rejectedDeclarationResult.disposition ==
+                  XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
+              rejectedDeclarationResult.reason == "declaration_capacity" &&
+              XTL::EmuVshTranslateXboxDeclaration(kXboxDeclaration, rejectedDeclaration, 2) == 0,
+          "declaration capacity failure is not truncated into success");
 
     std::FILE* capture = nullptr;
 #if defined(_WIN32)

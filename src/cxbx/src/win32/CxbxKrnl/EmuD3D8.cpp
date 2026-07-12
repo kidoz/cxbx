@@ -2229,7 +2229,6 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // data-type codes -- neither is host-consumable. Recompile the microcode
     // into vs.1.1 bytecode and rewrite the declaration types (EmuVshDecoder).
     extern DWORD* EmuVshRecompileXboxFunction(CONST DWORD * pXboxFunction);
-    extern int EmuVshTranslateXboxDeclaration(CONST DWORD * pXboxDecl, DWORD * pPcDecl, int MaxTokens);
 
     DWORD* pRecompiled = NULL;
     const DWORD* pHostFunction = pFunction;
@@ -2237,7 +2236,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     std::string cpuFallbackReason;
     bool rejectShader = false;
     std::string rejectionReason;
-    if(pFunction != NULL && (pFunction[0] & 0xFFFF) == 0x2078)
+    const bool isXboxFunction = pFunction != NULL && (pFunction[0] & 0xFFFF) == 0x2078;
+    if(isXboxFunction)
     {
         const XTL::VshDiagnostics::XboxFunctionDisposition disposition =
             XTL::VshDiagnostics::ClassifyXboxFunction(pFunction, rejectionReason);
@@ -2281,15 +2281,61 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
         EmuSwapFS(); // XBox FS
         return D3DERR_INVALIDCALL;
     }
-    const bool wasRecompiled = pRecompiled != NULL;
 
     DWORD TranslatedDecl[128];
     const DWORD* pHostDeclaration = pDeclaration;
     if(pDeclaration != NULL)
     {
-        EmuVshTranslateXboxDeclaration(pDeclaration, TranslatedDecl, 128);
-        pHostDeclaration = TranslatedDecl;
+        const XTL::VshDiagnostics::DeclarationTranslationResult declarationResult =
+            XTL::VshDiagnostics::TranslateXboxDeclaration(pDeclaration, TranslatedDecl,
+                                                          std::size(TranslatedDecl));
+        if(declarationResult.disposition ==
+           XTL::VshDiagnostics::XboxFunctionDisposition::Reject)
+        {
+            rejectShader = true;
+            rejectionReason = declarationResult.reason;
+        }
+        else if(declarationResult.disposition ==
+                XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu)
+        {
+            if(!isXboxFunction)
+            {
+                rejectShader = true;
+                rejectionReason = "cpu_declaration_requires_xbox_function";
+            }
+            else
+            {
+                cpuFallback = true;
+                cpuFallbackReason = declarationResult.reason;
+                delete[] pRecompiled;
+                pRecompiled = NULL;
+                pHostFunction = nullptr;
+            }
+        }
+        else
+        {
+            pHostDeclaration = TranslatedDecl;
+        }
     }
+
+    if(rejectShader)
+    {
+        printf("VSH| rejected hash=%08X reason=%s\n",
+               isXboxFunction
+                   ? static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(pFunction))
+                   : 0u,
+               rejectionReason.c_str());
+        fflush(stdout);
+        if(pHandle != nullptr)
+        {
+            *pHandle = 0;
+        }
+        delete[] pRecompiled;
+        delete pD3DVertexShader;
+        EmuSwapFS(); // XBox FS
+        return D3DERR_INVALIDCALL;
+    }
+    const bool wasRecompiled = pRecompiled != NULL;
 
     // ******************************************************************
     // * redirect to windows d3d
