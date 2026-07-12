@@ -1723,6 +1723,152 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
     std::fflush(stream);
 }
 
+static std::size_t VshReplayDeclarationTokenCount(const DWORD* declaration,
+                                                  std::size_t maxTokens)
+{
+    if(declaration == nullptr)
+    {
+        return 0;
+    }
+    for(std::size_t tokenIndex = 0; tokenIndex < maxTokens;)
+    {
+        const DWORD token = declaration[tokenIndex++];
+        if(token == 0xFFFFFFFFu)
+        {
+            return tokenIndex;
+        }
+        const DWORD tokenType = token >> 29;
+        if(tokenType >= 6)
+        {
+            return tokenIndex;
+        }
+        std::size_t payloadCount = 0;
+        if(tokenType == 4)
+        {
+            payloadCount = ((token >> 25) & 0xFu) * 4;
+        }
+        else if(tokenType == 5)
+        {
+            payloadCount = (token >> 24) & 0x1Fu;
+        }
+        if(payloadCount > maxTokens - tokenIndex)
+        {
+            return maxTokens;
+        }
+        tokenIndex += payloadCount;
+    }
+    return maxTokens;
+}
+
+static void VshReplayPrintReason(FILE* stream, const char* reason)
+{
+    if(reason == nullptr || reason[0] == '\0')
+    {
+        std::fputs("unspecified", stream);
+        return;
+    }
+    for(const unsigned char character : std::string(reason))
+    {
+        const bool safe = (character >= 'a' && character <= 'z') ||
+                          (character >= 'A' && character <= 'Z') ||
+                          (character >= '0' && character <= '9') || character == '_' ||
+                          character == '-';
+        std::fputc(safe ? character : '_', stream);
+    }
+}
+
+static void VshReplayPrintWords(FILE* stream, const DWORD* words, std::size_t wordCount)
+{
+    if(words == nullptr || wordCount == 0)
+    {
+        std::fputc('-', stream);
+        return;
+    }
+    for(std::size_t index = 0; index < wordCount; ++index)
+    {
+        std::fprintf(stream, "%s%08X", index == 0 ? "" : ",",
+                     static_cast<unsigned int>(words[index]));
+    }
+}
+
+static void VshReplayPrintSparseFloats(FILE* stream, const float* values,
+                                       std::size_t valueCount)
+{
+    bool wroteValue = false;
+    for(std::size_t index = 0; index < valueCount; ++index)
+    {
+        DWORD bits = 0;
+        std::memcpy(&bits, &values[index], sizeof(bits));
+        if(bits == 0)
+        {
+            continue;
+        }
+        std::fprintf(stream, "%s%zu:%08X", wroteValue ? "," : "", index,
+                     static_cast<unsigned int>(bits));
+        wroteValue = true;
+    }
+    if(!wroteValue)
+    {
+        std::fputc('-', stream);
+    }
+}
+
+void XTL::VshDiagnostics::DumpReplayCapture(FILE* stream,
+                                            const TranslationCapture& capture)
+{
+    const DWORD* xboxFunction = static_cast<const DWORD*>(capture.xboxFunction);
+    if(stream == nullptr || xboxFunction == nullptr ||
+       (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    {
+        return;
+    }
+
+    std::array<float, 16 * 4> canonicalInputs{};
+    const float* inputs = capture.inputs;
+    std::size_t inputFloatCount = std::min<std::size_t>(capture.inputFloatCount, 16 * 4);
+    const char* inputSource = capture.inputSource;
+    if(inputs == nullptr || inputFloatCount == 0)
+    {
+        for(std::size_t index = 0; index < canonicalInputs.size(); ++index)
+        {
+            const std::size_t registerIndex = index / 4;
+            canonicalInputs[index] = static_cast<float>(registerIndex + 1) * 0.0625f +
+                                     static_cast<float>((index % 4) + 1) * 0.25f;
+        }
+        inputs = canonicalInputs.data();
+        inputFloatCount = canonicalInputs.size();
+        inputSource = "canonical";
+    }
+    else if(inputSource == nullptr || inputSource[0] == '\0')
+    {
+        inputSource = "runtime";
+    }
+
+    const std::size_t functionWordCount = 1 + VshXboxInstructionCount(xboxFunction) * 4;
+    const DWORD* declaration = static_cast<const DWORD*>(capture.xboxDeclaration);
+    const std::size_t declarationTokenCount =
+        VshReplayDeclarationTokenCount(declaration, 128);
+    const std::size_t constantFloatCount =
+        capture.constants == nullptr
+            ? 0
+            : std::min<std::size_t>(capture.constantFloatCount, 192 * 4);
+    std::fprintf(stream, "VSHREPLAY| version=1 hash=%08X reason=",
+                 static_cast<unsigned int>(HashXboxFunction(xboxFunction)));
+    VshReplayPrintReason(stream, capture.rejectionReason);
+    std::fputs(" input_source=", stream);
+    VshReplayPrintReason(stream, inputSource);
+    std::fputs(" function=", stream);
+    VshReplayPrintWords(stream, xboxFunction, functionWordCount);
+    std::fputs(" declaration=", stream);
+    VshReplayPrintWords(stream, declaration, declarationTokenCount);
+    std::fputs(" constants=", stream);
+    VshReplayPrintSparseFloats(stream, capture.constants, constantFloatCount);
+    std::fputs(" inputs=", stream);
+    VshReplayPrintSparseFloats(stream, inputs, inputFloatCount);
+    std::fputc('\n', stream);
+    std::fflush(stream);
+}
+
 // ******************************************************************
 // * EmuVshRecompileXboxFunction
 // ******************************************************************
