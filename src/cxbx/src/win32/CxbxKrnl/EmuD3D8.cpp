@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "EmuVshDecoder.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
+#include "core/d3d_pixel_shader.h"
 #include "core/d3d_present.h"
 #include "core/trace.h"
 #include "core/Yuy2Converter.h"
@@ -61,6 +62,7 @@ namespace XTL
 #include "ResCxbxDll.h"
 
 #include <process.h>
+#include <algorithm>
 #include <array>
 #include <clocale>
 #include <cstring>
@@ -2970,42 +2972,108 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetVertexShaderConstant4
 #define X_PIXELSHADER_FALLBACK_MASK     0xFF000000u
 
 static bool g_bUsePixelShaderFallback = false;
+static DWORD g_EmuCurrentPixelShaderHandle = 0;
 
-static void EmuApplyPixelShaderFallback()
+struct EmuPixelShaderFallbackDefinition
+{
+    DWORD handle = 0;
+    cxbx::d3d::XboxPixelShaderDefinition definition{};
+};
+
+static std::vector<EmuPixelShaderFallbackDefinition> g_EmuPixelShaderFallbacks;
+
+static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindPixelShaderFallback(
+    DWORD handle)
+{
+    for(const auto& fallback : g_EmuPixelShaderFallbacks)
+    {
+        if(fallback.handle == handle)
+        {
+            return &fallback.definition;
+        }
+    }
+    return nullptr;
+}
+
+static cxbx::d3d::PixelShaderFallback EmuCurrentPixelShaderFallback()
+{
+    const auto* definition = EmuFindPixelShaderFallback(g_EmuCurrentPixelShaderHandle);
+    return definition != nullptr
+               ? cxbx::d3d::ClassifyPixelShaderFallback(*definition)
+               : cxbx::d3d::PixelShaderFallback::TextureModulate;
+}
+
+static void EmuApplyPixelShaderFallback(cxbx::d3d::PixelShaderFallback fallback,
+                                        bool allowStage3Remap)
 {
     using namespace XTL;
 
     if(g_pD3DDevice8 == 0)
+    {
         return;
+    }
 
     g_pD3DDevice8->SetPixelShader(0);   // fixed-function
 
-    // Stage 0: texture * diffuse (colour and alpha).
-    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLOROP,   D3DTOP_MODULATE);
+    DWORD stage0ColorOperation = D3DTOP_MODULATE;
+    if(fallback == cxbx::d3d::PixelShaderFallback::Texture)
+    {
+        stage0ColorOperation = D3DTOP_SELECTARG1;
+    }
+    else if(fallback == cxbx::d3d::PixelShaderFallback::TextureModulate2X ||
+            fallback == cxbx::d3d::PixelShaderFallback::TextureModulate2XStage3)
+    {
+        stage0ColorOperation = D3DTOP_MODULATE2X;
+    }
+
+    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLOROP, stage0ColorOperation);
     g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
     g_pD3DDevice8->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-    g_pD3DDevice8->SetTextureStageState(0, D3DTSS_ALPHAOP,   D3DTOP_MODULATE);
+    g_pD3DDevice8->SetTextureStageState(
+        0, D3DTSS_ALPHAOP,
+        fallback == cxbx::d3d::PixelShaderFallback::Texture ? D3DTOP_SELECTARG1
+                                                             : D3DTOP_MODULATE);
     g_pD3DDevice8->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
     g_pD3DDevice8->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
 
-    // Stage 1: modulate in a second texture if one is bound (caustics / detail);
-    // fall back to the running colour when absent.
-    IDirect3DBaseTexture8 *pStage1 = 0;
-    g_pD3DDevice8->GetTexture(1, &pStage1);
-    if(pStage1 != 0)
+    if(fallback == cxbx::d3d::PixelShaderFallback::DualTextureModulate2X)
     {
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLOROP,   D3DTOP_MODULATE2X);
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE);
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CURRENT);
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAOP,   D3DTOP_SELECTARG2);
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAARG2, D3DTA_CURRENT);
-        pStage1->Release();
+        g_pD3DDevice8->SetTextureStageState(1, D3DTSS_TEXCOORDINDEX, 1);
+    }
+    else if(fallback == cxbx::d3d::PixelShaderFallback::TextureModulate2XStage3 &&
+            allowStage3Remap)
+    {
+        IDirect3DBaseTexture8* stage3Texture = nullptr;
+        if(SUCCEEDED(g_pD3DDevice8->GetTexture(3, &stage3Texture)) &&
+           stage3Texture != nullptr)
+        {
+            g_pD3DDevice8->SetTexture(1, stage3Texture);
+            stage3Texture->Release();
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_MODULATE);
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CURRENT);
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAARG2, D3DTA_CURRENT);
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_TEXCOORDINDEX, 3);
+        }
+        else
+        {
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+            g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        }
     }
     else
     {
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
         g_pD3DDevice8->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
     }
+    g_pD3DDevice8->SetTextureStageState(2, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    g_pD3DDevice8->SetTextureStageState(2, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 }
 
 // ******************************************************************
@@ -3063,6 +3131,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
     if(FAILED(hRet))
     {
         *pHandle = X_PIXELSHADER_FALLBACK_MARKER | (++s_PixelShaderFallbackCounter & 0x00FFFFFF);
+        cxbx::d3d::XboxPixelShaderDefinition definition{};
+        SIZE_T bytesRead = 0;
+        if(ReadProcessMemory(GetCurrentProcess(), pFunction, definition.data(),
+                             sizeof(definition), &bytesRead) &&
+           bytesRead == sizeof(definition))
+        {
+            g_EmuPixelShaderFallbacks.push_back({*pHandle, definition});
+        }
         hRet = D3D_OK;
     }
 
@@ -3102,6 +3178,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
     // Xbox register-combiner shader: drive the fixed-function pipeline instead so
     // the bound textures are sampled and lit. Record it so the draw path keeps the
     // modulate stages asserted even if the title later touches texture state.
+    g_EmuCurrentPixelShaderHandle = Handle;
     if(Handle == 0)
     {
         g_bUsePixelShaderFallback = false;
@@ -3111,7 +3188,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
             FAILED(g_pD3DDevice8->SetPixelShader(Handle)))
     {
         g_bUsePixelShaderFallback = true;
-        EmuApplyPixelShaderFallback();
+        EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), false);
     }
     else
     {
@@ -3259,7 +3336,19 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
     {
         HRESULT hRet = g_pD3DDevice8->DeletePixelShader(Handle);
         if(FAILED(hRet))
+        {
             EmuWarning("DeletePixelShader failed for handle 0x%.08X", Handle);
+        }
+    }
+    else if((Handle & X_PIXELSHADER_FALLBACK_MASK) == X_PIXELSHADER_FALLBACK_MARKER)
+    {
+        g_EmuPixelShaderFallbacks.erase(
+            std::remove_if(g_EmuPixelShaderFallbacks.begin(),
+                           g_EmuPixelShaderFallbacks.end(),
+                           [Handle](const EmuPixelShaderFallbackDefinition& fallback) {
+                               return fallback.handle == Handle;
+                           }),
+            g_EmuPixelShaderFallbacks.end());
     }
 
     EmuSwapFS();   // XBox FS
@@ -7651,7 +7740,9 @@ static void EmuUpdateDeferredStates()
     // every draw: the bound textures (which it modulates) change per draw, and
     // the title may touch texture-stage state between draws.
     if(g_bUsePixelShaderFallback)
-        EmuApplyPixelShaderFallback();
+    {
+        EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), false);
+    }
 
     // Certain D3DRS values need to be checked on each Draw[Indexed]Vertices
     if(EmuD3DDeferredRenderState != 0)
