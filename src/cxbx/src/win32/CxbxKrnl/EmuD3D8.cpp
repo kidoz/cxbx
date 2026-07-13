@@ -67,6 +67,7 @@ namespace XTL
 #include <algorithm>
 #include <array>
 #include <clocale>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -2587,6 +2588,9 @@ struct EmuVshCpuFallback
     bool bindLogged = false;
     bool unbindLogged = false;
     bool drawLogged = false;
+    bool geometryLogged = false;
+    bool materialLogged = false;
+    bool collapseCaptureLogged = false;
     bool rejectionLogged = false;
     std::uint32_t hash = 0;
     std::size_t instructionCount = 0;
@@ -9286,10 +9290,192 @@ static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport)
 static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
                                      const EmuVshCpuVertex* vertices)
 {
+    if(g_EmuCurrentCpuVertexShader != nullptr &&
+       !g_EmuCurrentCpuVertexShader->geometryLogged && vertices != nullptr)
+    {
+        const UINT vertexCount = EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
+        if(vertexCount != 0)
+        {
+            float minX = vertices[0].x;
+            float maxX = vertices[0].x;
+            float minY = vertices[0].y;
+            float maxY = vertices[0].y;
+            UINT visibleColors = 0;
+            UINT visibleAlpha = 0;
+            float minZ = vertices[0].z;
+            float maxZ = vertices[0].z;
+            float minU = vertices[0].texCoords[0][0];
+            float maxU = vertices[0].texCoords[0][0];
+            float minV = vertices[0].texCoords[0][1];
+            float maxV = vertices[0].texCoords[0][1];
+            for(UINT index = 0; index < vertexCount; ++index)
+            {
+                minX = (std::min)(minX, vertices[index].x);
+                maxX = (std::max)(maxX, vertices[index].x);
+                minY = (std::min)(minY, vertices[index].y);
+                maxY = (std::max)(maxY, vertices[index].y);
+                minZ = (std::min)(minZ, vertices[index].z);
+                maxZ = (std::max)(maxZ, vertices[index].z);
+                minU = (std::min)(minU, vertices[index].texCoords[0][0]);
+                maxU = (std::max)(maxU, vertices[index].texCoords[0][0]);
+                minV = (std::min)(minV, vertices[index].texCoords[0][1]);
+                maxV = (std::max)(maxV, vertices[index].texCoords[0][1]);
+                if((vertices[index].diffuse & 0x00FFFFFF) != 0)
+                {
+                    ++visibleColors;
+                }
+                if((vertices[index].diffuse & 0xFF000000) != 0)
+                {
+                    ++visibleAlpha;
+                }
+            }
+            printf("VSH| cpu_geometry hash=%08X vertices=%u bounds=%.3f,%.3f,%.3f,%.3f "
+                   "depth=%.6f,%.6f tex0=%.6f,%.6f,%.6f,%.6f "
+                   "visible_colors=%u visible_alpha=%u diffuse=%08X\n",
+                   static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), vertexCount,
+                   minX, minY, maxX, maxY, minZ, maxZ, minU, minV, maxU, maxV,
+                   visibleColors, visibleAlpha,
+                   static_cast<unsigned int>(vertices[0].diffuse));
+            DWORD zEnable = 0;
+            DWORD zFunction = 0;
+            DWORD cullMode = 0;
+            DWORD alphaBlend = 0;
+            DWORD alphaTest = 0;
+            DWORD colorWrite = 0;
+            UINT renderTargetWidth = 0;
+            UINT renderTargetHeight = 0;
+            bool drawsToBackBuffer = false;
+            __try
+            {
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZENABLE, &zEnable);
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZFUNC, &zFunction);
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_CULLMODE, &cullMode);
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ALPHABLENDENABLE, &alphaBlend);
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ALPHATESTENABLE, &alphaTest);
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_COLORWRITEENABLE, &colorWrite);
+                XTL::IDirect3DSurface8* renderTarget = nullptr;
+                XTL::IDirect3DSurface8* backBuffer = nullptr;
+                if(SUCCEEDED(g_pD3DDevice8->GetRenderTarget(&renderTarget)) &&
+                   renderTarget != nullptr)
+                {
+                    XTL::D3DSURFACE_DESC description = {
+                        XTL::D3DFMT_UNKNOWN, XTL::D3DRTYPE_SURFACE, 0,
+                        XTL::D3DPOOL_DEFAULT, 0, XTL::D3DMULTISAMPLE_NONE, 0, 0
+                    };
+                    if(SUCCEEDED(renderTarget->GetDesc(&description)))
+                    {
+                        renderTargetWidth = description.Width;
+                        renderTargetHeight = description.Height;
+                    }
+                    if(SUCCEEDED(g_pD3DDevice8->GetBackBuffer(
+                           0, XTL::D3DBACKBUFFER_TYPE_MONO, &backBuffer)))
+                    {
+                        drawsToBackBuffer = renderTarget == backBuffer;
+                    }
+                }
+                if(backBuffer != nullptr)
+                {
+                    backBuffer->Release();
+                }
+                if(renderTarget != nullptr)
+                {
+                    renderTarget->Release();
+                }
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            printf("VSH| cpu_raster_state hash=%08X z=%lu zfunc=%lu cull=%lu blend=%lu "
+                   "alpha_test=%lu color_write=%08lX pixel_fallback=%u rt=%ux%u backbuffer=%u\n",
+                   static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), zEnable,
+                   zFunction, cullMode, alphaBlend, alphaTest, colorWrite,
+                   g_bUsePixelShaderFallback ? 1u : 0u, renderTargetWidth,
+                   renderTargetHeight, drawsToBackBuffer ? 1u : 0u);
+            fflush(stdout);
+            g_EmuCurrentCpuVertexShader->geometryLogged = true;
+        }
+    }
+
+    const DWORD savedState = EmuCaptureD3DStateBlock();
     DWORD previousShader = 0;
     HRESULT result = D3DERR_INVALIDCALL;
     __try
     {
+        XTL::IDirect3DBaseTexture8* stage0Texture = nullptr;
+        const bool stage0TextureBound =
+            SUCCEEDED(g_pD3DDevice8->GetTexture(0, &stage0Texture)) &&
+            stage0Texture != nullptr;
+        const bool stage0TextureHasData = EmuHostTextureHasData(stage0Texture);
+        if(stage0Texture != nullptr)
+        {
+            stage0Texture->Release();
+        }
+        DWORD texCoordIndexState = 0;
+        const HRESULT texCoordIndexResult = g_pD3DDevice8->GetTextureStageState(
+            0, XTL::D3DTSS_TEXCOORDINDEX, &texCoordIndexState);
+        const DWORD texCoordIndex = texCoordIndexState & 0xFFFFu;
+        bool texCoordsFinite = SUCCEEDED(texCoordIndexResult) && texCoordIndex < 4;
+        bool texCoordsVary = false;
+        const UINT vertexCount = EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
+        if(texCoordsFinite && vertices != nullptr && vertexCount != 0)
+        {
+            const float firstU = vertices[0].texCoords[texCoordIndex][0];
+            const float firstV = vertices[0].texCoords[texCoordIndex][1];
+            texCoordsFinite = std::isfinite(firstU) && std::isfinite(firstV);
+            for(UINT index = 1; index < vertexCount && texCoordsFinite; ++index)
+            {
+                const float u = vertices[index].texCoords[texCoordIndex][0];
+                const float v = vertices[index].texCoords[texCoordIndex][1];
+                texCoordsFinite = std::isfinite(u) && std::isfinite(v);
+                texCoordsVary = texCoordsVary || u != firstU || v != firstV;
+            }
+        }
+        const bool stage0TextureUsable = cxbx::d3d::CpuFallbackTextureUsable(
+            stage0TextureBound, static_cast<unsigned int>(texCoordIndex),
+            texCoordsFinite, texCoordsVary, stage0TextureHasData);
+        const cxbx::d3d::CpuFallbackMaterial material =
+            cxbx::d3d::SelectCpuFallbackMaterial(stage0TextureUsable);
+        if(g_EmuCurrentCpuVertexShader != nullptr &&
+           !g_EmuCurrentCpuVertexShader->materialLogged)
+        {
+            printf("VSH| cpu_material hash=%08X pixel=%08lX stage0_texture=%u texcoord=%lu "
+                   "finite=%u varies=%u texture_data=%u mode=%s "
+                   "combiner=%s\n",
+                   static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash),
+                   g_EmuCurrentPixelShaderHandle, stage0TextureBound ? 1u : 0u, texCoordIndex,
+                   texCoordsFinite ? 1u : 0u, texCoordsVary ? 1u : 0u,
+                   stage0TextureHasData ? 1u : 0u,
+                   material == cxbx::d3d::CpuFallbackMaterial::TextureModulate
+                       ? "texture_modulate"
+                       : "diffuse",
+                   cxbx::d3d::PixelShaderFallbackName(EmuCurrentPixelShaderFallback()));
+            fflush(stdout);
+            g_EmuCurrentCpuVertexShader->materialLogged = true;
+        }
+
+        if(material == cxbx::d3d::CpuFallbackMaterial::TextureModulate)
+        {
+            // Preserve the common NV2A combiner shapes which the D3D8 fixed-function
+            // stages can express: texture-only, doubled vertex lighting, a second
+            // detail texture, and the stage-3 lookup used by several lit materials.
+            EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), true);
+        }
+        else
+        {
+            g_pD3DDevice8->SetPixelShader(0);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLOROP,
+                                                XTL::D3DTOP_SELECTARG1);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG1,
+                                                D3DTA_DIFFUSE);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAOP,
+                                                XTL::D3DTOP_SELECTARG1);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG1,
+                                                D3DTA_DIFFUSE);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLOROP,
+                                                XTL::D3DTOP_DISABLE);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAOP,
+                                                XTL::D3DTOP_DISABLE);
+        }
         result = g_pD3DDevice8->GetVertexShader(&previousShader);
         if(SUCCEEDED(result))
         {
@@ -9319,7 +9505,15 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
 
     __try
     {
-        g_pD3DDevice8->SetVertexShader(previousShader);
+        if(savedState != 0)
+        {
+            g_pD3DDevice8->ApplyStateBlock(savedState);
+            EmuDeleteD3DStateBlock(savedState);
+        }
+        else
+        {
+            g_pD3DDevice8->SetVertexShader(previousShader);
+        }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -9388,6 +9582,8 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         return false;
     }
     output.resize(vertexCount);
+    std::array<float, 16 * 4> firstInputs{};
+    bool capturedFirstInputs = false;
     for(UINT outputIndex = 0; outputIndex < vertexCount; ++outputIndex)
     {
         const UINT relativeIndex = indices == nullptr ? outputIndex : indices[outputIndex];
@@ -9401,6 +9597,11 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
                                                   streamCount, vertexIndex, input, 16 * 4))
         {
             return false;
+        }
+        if(!capturedFirstInputs)
+        {
+            std::copy(std::begin(input), std::end(input), firstInputs.begin());
+            capturedFirstInputs = true;
         }
 
         float position[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -9432,6 +9633,46 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         {
             vertex.texCoords[texCoord][0] = texCoords[texCoord * 4];
             vertex.texCoords[texCoord][1] = texCoords[texCoord * 4 + 1];
+        }
+    }
+
+    if(vertexCount >= 3 && capturedFirstInputs &&
+       !g_EmuCurrentCpuVertexShader->collapseCaptureLogged)
+    {
+        float minX = output[0].x;
+        float maxX = output[0].x;
+        float minY = output[0].y;
+        float maxY = output[0].y;
+        for(UINT index = 1; index < vertexCount; ++index)
+        {
+            minX = (std::min)(minX, output[index].x);
+            maxX = (std::max)(maxX, output[index].x);
+            minY = (std::min)(minY, output[index].y);
+            maxY = (std::max)(maxY, output[index].y);
+        }
+        if(maxX - minX <= 1.0e-4f && maxY - minY <= 1.0e-4f)
+        {
+            try
+            {
+                const XTL::VshDiagnostics::TranslationCapture capture = {
+                    g_EmuCurrentCpuVertexShader->function.data(),
+                    nullptr,
+                    g_EmuCurrentCpuVertexShader->declaration.data(),
+                    nullptr,
+                    "collapsed_geometry",
+                    shaderConstants.data(),
+                    shaderConstants.size(),
+                    firstInputs.data(),
+                    firstInputs.size(),
+                    "decoded_vertex_0",
+                };
+                XTL::VshDiagnostics::DumpReplayCapture(stdout, capture);
+            }
+            catch(...)
+            {
+                EmuWarning("VshDecoder: collapsed-geometry capture raised a host exception");
+            }
+            g_EmuCurrentCpuVertexShader->collapseCaptureLogged = true;
         }
     }
     return true;
