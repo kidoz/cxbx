@@ -46,8 +46,9 @@ namespace xboxkrnl
 #include "EmuVshDecoder.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
-#include "core/Yuy2Converter.h"
+#include "core/d3d_present.h"
 #include "core/trace.h"
+#include "core/Yuy2Converter.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -107,7 +108,7 @@ static DWORD                        g_dwOverlayH    = 480;  // Cached Overlay He
 static XTL::IDirect3DTexture8      *g_pOverlayFrameTexture = NULL;
 static std::atomic<std::uint32_t> g_OverlayFrameGeneration{ 0 };
 static LARGE_INTEGER              g_NextOverlayUpdate = {};
-static LARGE_INTEGER              g_NextOverlayPresent = {};
+static LARGE_INTEGER              g_NextSwapPresent = {};
 static Xbe::Header                 *g_XbeHeader     = NULL; // XbeHeader
 static uint32                       g_XbeHeaderSize = 0;    // XbeHeaderSize
 static XTL::D3DCAPS8                g_D3DCaps;              // Direct3D8 Caps
@@ -192,6 +193,257 @@ constexpr uint32 EmuD3DTraceId(const char (&Name)[Size])
         EmuD3DTraceEntry(name);                                                          \
     } while(0)
 extern "C" const char *EmuGetLastD3DCall(void) { return (const char *)g_LastD3DCall; }
+
+static HRESULT EmuHostEndScene()
+{
+    __try
+    {
+        return g_pD3DDevice8->EndScene();
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return D3DERR_INVALIDCALL;
+    }
+}
+
+static HRESULT EmuHostPresent(const RECT* sourceRect, const RECT* destinationRect,
+                              HWND destinationWindow, const RGNDATA* dirtyRegion)
+{
+    __try
+    {
+        return g_pD3DDevice8->Present(sourceRect, destinationRect, destinationWindow,
+                                      dirtyRegion);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return D3DERR_INVALIDCALL;
+    }
+}
+
+static HRESULT EmuHostBeginScene()
+{
+    __try
+    {
+        return g_pD3DDevice8->BeginScene();
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return D3DERR_INVALIDCALL;
+    }
+}
+
+static bool EmuReadHostBackbufferPixel(UINT x, UINT y, DWORD& pixel)
+{
+    XTL::IDirect3DSurface8* backBuffer = nullptr;
+    bool read = false;
+    __try
+    {
+        if(SUCCEEDED(g_pD3DDevice8->GetBackBuffer(
+               0, XTL::D3DBACKBUFFER_TYPE_MONO, &backBuffer)) &&
+           backBuffer != nullptr)
+        {
+            XTL::D3DSURFACE_DESC description = {
+                XTL::D3DFMT_UNKNOWN, XTL::D3DRTYPE_SURFACE, 0, XTL::D3DPOOL_DEFAULT,
+                0, XTL::D3DMULTISAMPLE_NONE, 0, 0
+            };
+            XTL::D3DLOCKED_RECT locked{};
+            if(SUCCEEDED(backBuffer->GetDesc(&description)) && x < description.Width &&
+               y < description.Height &&
+               SUCCEEDED(backBuffer->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            {
+                const BYTE* row = static_cast<const BYTE*>(locked.pBits) +
+                                  static_cast<std::size_t>(y) * locked.Pitch;
+                std::memcpy(&pixel, row + static_cast<std::size_t>(x) * sizeof(pixel),
+                            sizeof(pixel));
+                backBuffer->UnlockRect();
+                read = true;
+            }
+            backBuffer->Release();
+            backBuffer = nullptr;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        if(backBuffer != nullptr)
+        {
+            backBuffer->Release();
+        }
+        read = false;
+    }
+    return read;
+}
+
+static void EmuDrawHostControlTriangles(HRESULT& simpleResult, HRESULT& complexResult)
+{
+    struct ControlVertex
+    {
+        float x;
+        float y;
+        float z;
+        float rhw;
+        DWORD diffuse;
+    };
+    struct ComplexControlVertex
+    {
+        float x;
+        float y;
+        float z;
+        float rhw;
+        float pointSize;
+        DWORD diffuse;
+        DWORD specular;
+        float texCoords[4][2];
+    };
+    const ControlVertex vertices[3] = {
+        { 16.0f, 16.0f, 0.0f, 1.0f, 0xFFFF00FFu },
+        { 96.0f, 16.0f, 0.0f, 1.0f, 0xFFFF00FFu },
+        { 16.0f, 96.0f, 0.0f, 1.0f, 0xFFFF00FFu },
+    };
+    const ComplexControlVertex complexVertices[3] = {
+        { 128.0f, 16.0f, 0.0f, 1.0f, 1.0f, 0xFF00FFFFu, 0, {} },
+        { 208.0f, 16.0f, 0.0f, 1.0f, 1.0f, 0xFF00FFFFu, 0, {} },
+        { 128.0f, 96.0f, 0.0f, 1.0f, 1.0f, 0xFF00FFFFu, 0, {} },
+    };
+    DWORD savedState = 0;
+    simpleResult = D3DERR_INVALIDCALL;
+    complexResult = D3DERR_INVALIDCALL;
+    __try
+    {
+        const HRESULT stateResult =
+            g_pD3DDevice8->CreateStateBlock(XTL::D3DSBT_ALL, &savedState);
+        if(SUCCEEDED(stateResult))
+        {
+            g_pD3DDevice8->SetPixelShader(0);
+            g_pD3DDevice8->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
+            g_pD3DDevice8->SetRenderState(XTL::D3DRS_ZENABLE, FALSE);
+            g_pD3DDevice8->SetRenderState(XTL::D3DRS_CULLMODE, XTL::D3DCULL_NONE);
+            g_pD3DDevice8->SetRenderState(XTL::D3DRS_ALPHABLENDENABLE, FALSE);
+            g_pD3DDevice8->SetRenderState(XTL::D3DRS_ALPHATESTENABLE, FALSE);
+            g_pD3DDevice8->SetRenderState(XTL::D3DRS_COLORWRITEENABLE, 0xFu);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLOROP,
+                                                XTL::D3DTOP_SELECTARG1);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG1,
+                                                D3DTA_DIFFUSE);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLOROP,
+                                                XTL::D3DTOP_DISABLE);
+            simpleResult = g_pD3DDevice8->DrawPrimitiveUP(
+                XTL::D3DPT_TRIANGLELIST, 1, vertices, sizeof(ControlVertex));
+            g_pD3DDevice8->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE |
+                                           D3DFVF_SPECULAR | D3DFVF_PSIZE |
+                                           D3DFVF_TEX4);
+            complexResult = g_pD3DDevice8->DrawPrimitiveUP(
+                XTL::D3DPT_TRIANGLELIST, 1, complexVertices,
+                sizeof(ComplexControlVertex));
+            g_pD3DDevice8->ApplyStateBlock(savedState);
+            g_pD3DDevice8->DeleteStateBlock(savedState);
+            savedState = 0;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        simpleResult = D3DERR_INVALIDCALL;
+        complexResult = D3DERR_INVALIDCALL;
+    }
+}
+
+static void EmuRunHostControlProbe()
+{
+    static bool attempted = false;
+    if(attempted ||
+       !cxbx::d3d::ControlProbeEnabled(getenv("CXBX_D3D_CONTROL_PROBE")))
+    {
+        return;
+    }
+    attempted = true;
+
+    DWORD beforePixel = 0;
+    DWORD afterPixel = 0;
+    DWORD beforeComplexPixel = 0;
+    DWORD afterComplexPixel = 0;
+    const bool beforeRead = EmuReadHostBackbufferPixel(32, 32, beforePixel);
+    const bool beforeComplexRead =
+        EmuReadHostBackbufferPixel(144, 32, beforeComplexPixel);
+    const HRESULT beginResult = EmuHostBeginScene();
+    HRESULT simpleDrawResult = D3DERR_INVALIDCALL;
+    HRESULT complexDrawResult = D3DERR_INVALIDCALL;
+    HRESULT endResult = D3DERR_INVALIDCALL;
+    if(SUCCEEDED(beginResult))
+    {
+        EmuDrawHostControlTriangles(simpleDrawResult, complexDrawResult);
+        endResult = EmuHostEndScene();
+    }
+    const bool afterRead = EmuReadHostBackbufferPixel(32, 32, afterPixel);
+    const bool afterComplexRead =
+        EmuReadHostBackbufferPixel(144, 32, afterComplexPixel);
+    printf("D3DPROBE| control_triangle begin=%08lX simple_draw=%08lX "
+           "complex_draw=%08lX end=%08lX simple_before=%08lX simple_after=%08lX "
+           "simple_changed=%u complex_before=%08lX complex_after=%08lX complex_changed=%u\n",
+           beginResult, simpleDrawResult, complexDrawResult, endResult,
+           beforeRead ? beforePixel : 0u, afterRead ? afterPixel : 0u,
+           beforeRead && afterRead && beforePixel != afterPixel ? 1u : 0u,
+           beforeComplexRead ? beforeComplexPixel : 0u,
+           afterComplexRead ? afterComplexPixel : 0u,
+           beforeComplexRead && afterComplexRead && beforeComplexPixel != afterComplexPixel
+               ? 1u
+               : 0u);
+    fflush(stdout);
+}
+
+static void EmuCapturePresentMirror();
+static void EmuBlitPresentMirror();
+
+static HRESULT EmuPresentHostDevice(const RECT* sourceRect, const RECT* destinationRect,
+                                    HWND destinationWindow, const RGNDATA* dirtyRegion,
+                                    bool runControlProbe)
+{
+    HRESULT endSceneResult = D3D_OK;
+    HRESULT presentResult = D3D_OK;
+    HRESULT beginSceneResult = D3D_OK;
+    for(const cxbx::d3d::PresentSceneStep step : cxbx::d3d::PresentSceneSteps())
+    {
+        switch(step)
+        {
+            case cxbx::d3d::PresentSceneStep::EndScene:
+                endSceneResult = EmuHostEndScene();
+                if(SUCCEEDED(endSceneResult) && runControlProbe)
+                {
+                    EmuRunHostControlProbe();
+                }
+                break;
+            case cxbx::d3d::PresentSceneStep::CaptureMirror:
+                if(SUCCEEDED(endSceneResult))
+                {
+                    EmuCapturePresentMirror();
+                }
+                break;
+            case cxbx::d3d::PresentSceneStep::Present:
+                presentResult = EmuHostPresent(sourceRect, destinationRect, destinationWindow,
+                                               dirtyRegion);
+                break;
+            case cxbx::d3d::PresentSceneStep::BlitMirror:
+                EmuBlitPresentMirror();
+                break;
+            case cxbx::d3d::PresentSceneStep::BeginScene:
+                beginSceneResult = EmuHostBeginScene();
+                break;
+        }
+    }
+
+    if(FAILED(endSceneResult))
+    {
+        static LONG warningCount = 0;
+        if(InterlockedIncrement(&warningCount) <= 4)
+        {
+            EmuWarning("D3D8 host EndScene failed before Present (hr=0x%.08lX)",
+                       endSceneResult);
+        }
+    }
+    if(FAILED(presentResult))
+    {
+        return presentResult;
+    }
+    return beginSceneResult;
+}
 
 // XDK 5849 D3DPERF_APICounters values used by the HLE debug bridge.
 enum EmuD3DPerfApiCounter
@@ -942,7 +1194,7 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
             // * Initially, show a black screen
             // ******************************************************************
             g_pD3DDevice8->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
-            g_pD3DDevice8->Present(0, 0, 0, 0);
+            EmuPresentHostDevice(nullptr, nullptr, nullptr, nullptr, false);
 
             // signal completion
             g_EmuD3D8CreateDeviceProxyData.bReady = false;
@@ -3661,8 +3913,6 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_Clear
 // ******************************************************************
-static void EmuMirrorPresentToWindow();   // defined below; mirrors host back buffer to GDI window
-
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
 (
     DWORD           Count,
@@ -3685,12 +3935,6 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
         pApiCounters[EMU_API_D3DDEVICE_CLEAR]++;
 
     EmuFlushTiledSurfaceLocks();
-
-    // Mirror the previously-presented frame (opt-in via CXBX_D3D_WINDOW). Clear
-    // runs at the top of each frame, before the new frame overwrites the back
-    // buffer, so this shows the last completed frame in the GDI live window --
-    // used when the host's D3D8 windowed Present will not composite to a window.
-    EmuMirrorPresentToWindow();
 
     // ******************************************************************
     // * debug trace
@@ -3832,22 +4076,60 @@ VOID WINAPI XTL::EmuD3DPERF_Reset()
         memset(g_pD3DPerfStatistics + EMU_D3DPERF_TEXTURE_COUNTER_OFFSET, 0,
                EMU_D3DPERF_TEXTURE_COUNTER_DWORDS * sizeof(DWORD));
     }
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 }
 
-// Mirror the presented frame to the emulator's GDI live window (Emu.cpp).
-extern "C" void EmuHostBlitToWindow(const void *Pixels, unsigned Width, unsigned Height);
+// Mirror the presented frame to the emulator's GDI window (Emu.cpp).
+extern "C" void EmuHostBlitToWindow(const void* Pixels, unsigned Width, unsigned Height);
 
-// Copy the host back buffer to the GDI live window (opt-in via CXBX_D3D_WINDOW),
-// called from both Swap and Present. Some hosts' D3D8 *windowed* Present does not
-// composite to the visible window, so the emulator window stays black even when
-// rendering is correct; a GDI StretchDIBits of the presented pixels always shows.
-// Must run with the host (Win2k/XP) FS active.
-static void EmuMirrorBlitHostBackbuffer()
+struct EmuPresentMirrorFrame
 {
-    XTL::IDirect3DSurface8 *pHostBack = NULL;
-    if(FAILED(g_pD3DDevice8->GetBackBuffer(0, XTL::D3DBACKBUFFER_TYPE_MONO, &pHostBack)) || pHostBack == NULL)
+    DWORD* pixels = nullptr;
+    std::size_t capacity = 0;
+    unsigned width = 0;
+    unsigned height = 0;
+    bool valid = false;
+};
+
+static EmuPresentMirrorFrame g_EmuPresentMirrorFrame;
+
+static bool EmuPresentMirrorEnabled()
+{
+    static int mirrorWindow = -1;
+    if(mirrorWindow < 0)
+    {
+        char mirrorEnvironment[8] = {};
+        const DWORD mirrorEnvironmentLength = GetEnvironmentVariableA(
+            "CXBX_D3D_WINDOW", mirrorEnvironment, sizeof(mirrorEnvironment));
+        const char* mirrorEnvironmentValue =
+            mirrorEnvironmentLength == 0 ? nullptr : mirrorEnvironment;
+        mirrorWindow = cxbx::d3d::MirrorWindowEnabled(mirrorEnvironmentValue) ? 1 : 0;
+    }
+    return mirrorWindow != 0;
+}
+
+// Capture before Present while the completed backbuffer is still lockable.
+// The pixels are blitted afterward so an unreliable windowed D3D8 Present
+// cannot overwrite the GDI fallback with a stale or partially composed frame.
+// Must run with the host (Win2k/XP) FS active.
+static void EmuCaptureHostBackbuffer()
+{
+    g_EmuPresentMirrorFrame.valid = false;
+
+    XTL::IDirect3DSurface8* pHostBack = NULL;
+    const HRESULT getBackBufferResult =
+        g_pD3DDevice8->GetBackBuffer(0, XTL::D3DBACKBUFFER_TYPE_MONO, &pHostBack);
+    if(FAILED(getBackBufferResult) || pHostBack == NULL)
+    {
+        static bool loggedGetBackBufferFailure = false;
+        if(!loggedGetBackBufferFailure)
+        {
+            printf("EmuD3D8: visible-frame mirror could not get the host back buffer (0x%.08lX).\n",
+                   getBackBufferResult);
+            loggedGetBackBufferFailure = true;
+        }
         return;
+    }
 
     XTL::D3DSURFACE_DESC sd;
     XTL::D3DLOCKED_RECT lr;
@@ -3855,52 +4137,96 @@ static void EmuMirrorBlitHostBackbuffer()
     // locked by the emulated LockRect the guest used to write the frame. Clear
     // that stale lock before reading it, or our LockRect returns INVALIDCALL.
     pHostBack->UnlockRect();
-    if(SUCCEEDED(pHostBack->GetDesc(&sd)) &&
-       SUCCEEDED(pHostBack->LockRect(&lr, NULL, D3DLOCK_READONLY)))
+    const HRESULT getDescResult = pHostBack->GetDesc(&sd);
+    const HRESULT lockResult = SUCCEEDED(getDescResult)
+                                   ? pHostBack->LockRect(&lr, NULL, D3DLOCK_READONLY)
+                                   : getDescResult;
+    if(SUCCEEDED(getDescResult) && SUCCEEDED(lockResult))
     {
-        static DWORD *s_pMirror = NULL;
-        static DWORD  s_MirrorPixels = 0;
-        DWORD need = sd.Width * sd.Height;
-
-        if(need > s_MirrorPixels)
+        const std::size_t width = sd.Width;
+        const std::size_t height = sd.Height;
+        const bool validSize = width != 0 && height != 0 &&
+                               width <= (std::numeric_limits<std::size_t>::max)() / height;
+        const std::size_t requiredPixels = validSize ? width * height : 0;
+        if(requiredPixels > g_EmuPresentMirrorFrame.capacity &&
+           requiredPixels <= (std::numeric_limits<std::size_t>::max)() / sizeof(DWORD))
         {
-            free(s_pMirror);
-            s_pMirror = (DWORD*)malloc(need * sizeof(DWORD));
-            s_MirrorPixels = s_pMirror ? need : 0;
+            DWORD* replacement = static_cast<DWORD*>(
+                malloc(requiredPixels * sizeof(DWORD)));
+            if(replacement != nullptr)
+            {
+                free(g_EmuPresentMirrorFrame.pixels);
+                g_EmuPresentMirrorFrame.pixels = replacement;
+                g_EmuPresentMirrorFrame.capacity = requiredPixels;
+            }
         }
 
-        if(s_pMirror != NULL)
+        if(requiredPixels != 0 &&
+           requiredPixels <= g_EmuPresentMirrorFrame.capacity)
         {
             for(DWORD y = 0; y < sd.Height; y++)
-                memcpy(s_pMirror + y * sd.Width,
+            {
+                memcpy(g_EmuPresentMirrorFrame.pixels + y * sd.Width,
                        (BYTE*)lr.pBits + y * lr.Pitch, sd.Width * sizeof(DWORD));
-            EmuHostBlitToWindow(s_pMirror, sd.Width, sd.Height);
+            }
+            g_EmuPresentMirrorFrame.width = sd.Width;
+            g_EmuPresentMirrorFrame.height = sd.Height;
+            g_EmuPresentMirrorFrame.valid = true;
         }
 
         pHostBack->UnlockRect();
     }
+    else
+    {
+        static bool loggedLockFailure = false;
+        if(!loggedLockFailure)
+        {
+            printf("EmuD3D8: visible-frame mirror could not read the host back buffer "
+                   "(desc=0x%.08lX lock=0x%.08lX).\n",
+                   getDescResult, lockResult);
+            loggedLockFailure = true;
+        }
+    }
     pHostBack->Release();
 }
 
-static void EmuMirrorPresentToWindow()
+static void EmuCapturePresentMirror()
 {
-    static int s_MirrorWindow = -1;
-    if(s_MirrorWindow < 0)
-        s_MirrorWindow = GetEnvironmentVariableA("CXBX_D3D_WINDOW", NULL, 0) != 0 ? 1 : 0;
-
-    if(!s_MirrorWindow || g_pD3DDevice8 == NULL)
+    if(!EmuPresentMirrorEnabled() || g_pD3DDevice8 == NULL)
+    {
         return;
+    }
 
     // Titles that hand the emulator an incomplete/scratch device (e.g. the CDX
     // D3D__pDevice hack) can fault inside GetBackBuffer/LockRect; the mirror is a
     // display convenience and must never take the title down, so swallow it.
     __try
     {
-        EmuMirrorBlitHostBackbuffer();
+        EmuCaptureHostBackbuffer();
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        g_EmuPresentMirrorFrame.valid = false;
+    }
+}
+
+static void EmuBlitPresentMirror()
+{
+    if(!g_EmuPresentMirrorFrame.valid)
+    {
+        return;
+    }
+
+    __try
+    {
+        EmuHostBlitToWindow(g_EmuPresentMirrorFrame.pixels,
+                            g_EmuPresentMirrorFrame.width,
+                            g_EmuPresentMirrorFrame.height);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
     }
+    g_EmuPresentMirrorFrame.valid = false;
 }
 
 // ******************************************************************
@@ -3934,17 +4260,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Present
     #endif
 
     EmuFlushTiledSurfaceLocks();
-    EmuMirrorPresentToWindow();
 
-    HRESULT hRet = D3D_OK;
-    __try
-    {
-        hRet = g_pD3DDevice8->Present(pSourceRect, pDestRect, (HWND)pDummy1, (CONST RGNDATA*)pDummy2);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-        hRet = D3DERR_INVALIDCALL;
-    }
+    const HRESULT hRet = EmuPresentHostDevice(
+        pSourceRect, pDestRect, static_cast<HWND>(pDummy1),
+        static_cast<const RGNDATA*>(pDummy2), true);
 
     g_D3DDebugMarker = 0;
 
@@ -4027,7 +4346,7 @@ static void EmuComposeOverlay()
         pOldTexture->Release();
 }
 
-static void EmuPaceSoftwareOverlay(
+static void EmuPacePresent(
     LARGE_INTEGER& NextDeadline,
     LONGLONG PeriodNumerator,
     LONGLONG PeriodDenominator)
@@ -4048,18 +4367,12 @@ static void EmuPaceSoftwareOverlay(
         return;
     }
 
-    if(NextDeadline.QuadPart == 0)
-    {
-        NextDeadline = Now;
-    }
-
-    if(Now.QuadPart >= NextDeadline.QuadPart)
+    if(NextDeadline.QuadPart == 0 || Now.QuadPart >= NextDeadline.QuadPart)
     {
         // Skip periods that elapsed while the guest was decoding or blocked.
         // Never issue a burst of catch-up updates or presents.
-        const LONGLONG Missed =
-            (Now.QuadPart - NextDeadline.QuadPart) / Interval + 1;
-        NextDeadline.QuadPart += Missed * Interval;
+        NextDeadline.QuadPart = cxbx::d3d::NextPresentDeadline(
+            Now.QuadPart, NextDeadline.QuadPart, Interval);
         return;
     }
 
@@ -4115,17 +4428,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
 
     EmuFlushTiledSurfaceLocks();
     EmuComposeOverlay();
-    EmuMirrorPresentToWindow();
 
     // Windowed host Present does not reliably block for the Xbox's 60 Hz
-    // display cadence. The latest overlay frame continues to scan out while
-    // XMV waits for its next audio-synchronised video frame.
-    if(g_pOverlayFrameTexture != NULL)
-    {
-        EmuPaceSoftwareOverlay(g_NextOverlayPresent, 1, 60);
-    }
+    // display cadence. Pace every Swap so frame-counted title animations and
+    // attract-mode timeouts do not run at unrestricted host speed. If Present
+    // already blocked, EmuPacePresent advances over that elapsed period without
+    // adding another wait.
+    EmuPacePresent(g_NextSwapPresent, 1, 60);
 
-    HRESULT hRet = g_pD3DDevice8->Present(0, 0, 0, 0);
+    const HRESULT hRet = EmuPresentHostDevice(nullptr, nullptr, nullptr, nullptr, true);
 
     if(g_pOverlayFrameTexture != NULL &&
        cxbx::trace::IsEnabled(cxbx::trace::Channel::Media))
@@ -5651,7 +5962,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay
         g_pOverlayFrameTexture = NULL;
         g_OverlayFrameGeneration.store(0, std::memory_order_relaxed);
         g_NextOverlayUpdate.QuadPart = 0;
-        g_NextOverlayPresent.QuadPart = 0;
+        g_NextSwapPresent.QuadPart = 0;
     }
 
     if(g_bSupportsYUY2)
@@ -5829,7 +6140,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay
         // them at the 60 Hz display cadence makes the decoder run ahead and
         // then pause at each audio packet boundary. Rate-match software-overlay
         // updates while the latest frame continues to scan out at 60 Hz.
-        EmuPaceSoftwareOverlay(g_NextOverlayUpdate, 1001, 30000);
+        EmuPacePresent(g_NextOverlayUpdate, 1001, 30000);
         g_pOverlayFrameTexture = EmuConvertYuy2Texture(pInfo);
         if(g_pOverlayFrameTexture != NULL &&
            cxbx::trace::IsEnabled(cxbx::trace::Channel::Media))

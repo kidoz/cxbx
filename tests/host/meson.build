@@ -16,6 +16,15 @@ host_yuy2_test = executable(
 
 test('host-yuy2-conversion', host_yuy2_test)
 
+host_d3d_present_test = executable(
+  'host_d3d_present_test',
+  'd3d_present.cpp',
+  include_directories : cxbx_inc,
+  install : false,
+)
+
+test('host-d3d-present', host_d3d_present_test)
+
 host_pcm_test = executable(
   'host_pcm_test',
   'pcm_conversion.cpp',

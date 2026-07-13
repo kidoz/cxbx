@@ -3178,49 +3178,71 @@ static DWORD WINAPI EmuNv2aWindowThread(LPVOID Param)
     return 0;
 }
 
-// Blit a top-down BGRA framebuffer to the live window, creating it (on its own
-// message-pump thread) on first use.
-static void EmuNv2aBlitToWindow(const ULONG *Pixels, ULONG Width, ULONG Height)
+static void EmuBlitPixelsToWindow(HWND Window, const ULONG* Pixels,
+                                  ULONG Width, ULONG Height)
 {
-    if(g_hEmuNv2aWindow == NULL)
+    if(Window == NULL || Pixels == NULL || Width == 0 || Height == 0)
     {
-        ULONG WinH = Height > 480 ? 480 : Height;   // pbkit hands over-tall buffers
-        ULONG Packed = (Width << 16) | (WinH & 0xFFFF);
-        CreateThread(NULL, 0, EmuNv2aWindowThread, (LPVOID)(uintptr_t)Packed, 0, NULL);
-        for(int i = 0; i < 200 && g_hEmuNv2aWindow == NULL; i++)
-            Sleep(2);
+        return;
     }
-    if(g_hEmuNv2aWindow == NULL)
-        return;
 
-    HDC Hdc = GetDC(g_hEmuNv2aWindow);
+    HDC Hdc = GetDC(Window);
     if(Hdc == NULL)
+    {
         return;
+    }
 
     BITMAPINFO Bmi = {};
     Bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     Bmi.bmiHeader.biWidth = (LONG)Width;
-    Bmi.bmiHeader.biHeight = -(LONG)Height;   // top-down
+    Bmi.bmiHeader.biHeight = -(LONG)Height; // top-down
     Bmi.bmiHeader.biPlanes = 1;
     Bmi.bmiHeader.biBitCount = 32;
     Bmi.bmiHeader.biCompression = BI_RGB;
 
     RECT Rc;
-    GetClientRect(g_hEmuNv2aWindow, &Rc);
+    GetClientRect(Window, &Rc);
     if(Rc.right > 0 && Rc.bottom > 0)
+    {
         StretchDIBits(Hdc, 0, 0, Rc.right, Rc.bottom, 0, 0, (int)Width, (int)Height,
                       Pixels, &Bmi, DIB_RGB_COLORS, SRCCOPY);
-    ReleaseDC(g_hEmuNv2aWindow, Hdc);
+    }
+    ReleaseDC(Window, Hdc);
 }
 
-// Exposed for the D3D8-HLE present path (EmuD3D8.cpp): mirror the host back
-// buffer to the same GDI live window the software rasterizer uses. Some hosts'
-// D3D8 *windowed* Present does not composite to the visible window (it blits
-// below the desktop compositor), leaving a black window even though rendering
-// succeeded; a GDI StretchDIBits of the presented pixels always shows.
-extern "C" void EmuHostBlitToWindow(const void *Pixels, unsigned Width, unsigned Height)
+// Blit a top-down BGRA framebuffer to the live window, creating it (on its own
+// message-pump thread) on first use.
+static void EmuNv2aBlitToWindow(const ULONG* Pixels, ULONG Width, ULONG Height)
 {
-    EmuNv2aBlitToWindow((const ULONG *)Pixels, (ULONG)Width, (ULONG)Height);
+    if(g_hEmuNv2aWindow == NULL)
+    {
+        ULONG WinH = Height > 480 ? 480 : Height; // pbkit hands over-tall buffers
+        ULONG Packed = (Width << 16) | (WinH & 0xFFFF);
+        CreateThread(NULL, 0, EmuNv2aWindowThread, (LPVOID)(uintptr_t)Packed, 0, NULL);
+        for(int i = 0; i < 200 && g_hEmuNv2aWindow == NULL; i++)
+        {
+            Sleep(2);
+        }
+    }
+    EmuBlitPixelsToWindow(g_hEmuNv2aWindow, Pixels, Width, Height);
+}
+
+// Exposed for the D3D8-HLE present path (EmuD3D8.cpp). Draw the captured host
+// backbuffer over the actual HLE render window after Direct3D Present returns.
+// The separate NV2A window remains only as a fallback for raw-GPU paths that do
+// not create an HLE window.
+extern "C" void EmuHostBlitToWindow(const void* Pixels, unsigned Width, unsigned Height)
+{
+    if(XTL::g_hEmuWindow != NULL)
+    {
+        EmuBlitPixelsToWindow(XTL::g_hEmuWindow, static_cast<const ULONG*>(Pixels),
+                              static_cast<ULONG>(Width), static_cast<ULONG>(Height));
+    }
+    else
+    {
+        EmuNv2aBlitToWindow(static_cast<const ULONG*>(Pixels),
+                            static_cast<ULONG>(Width), static_cast<ULONG>(Height));
+    }
 }
 
 // Capture the displayed framebuffer ("path 2"). The CRTC scanout base register
