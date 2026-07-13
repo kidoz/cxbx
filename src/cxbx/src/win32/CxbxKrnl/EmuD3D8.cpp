@@ -48,6 +48,7 @@ namespace xboxkrnl
 #include "EmuShared.h"
 #include "core/d3d_pixel_shader.h"
 #include "core/d3d_present.h"
+#include "core/d3d_texture.h"
 #include "core/trace.h"
 #include "core/Yuy2Converter.h"
 
@@ -1260,6 +1261,52 @@ static bool EmuD3DIsReadableRange(const void* base, DWORD bytes)
         current = regionEnd;
     }
 
+    return true;
+}
+
+extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
+
+static bool EmuD3DCopyReadableRange(const void* source, DWORD bytes,
+                                    std::vector<BYTE>& copy)
+{
+    if(source == nullptr || bytes == 0)
+    {
+        return false;
+    }
+
+    try
+    {
+        copy.resize(bytes);
+    }
+    catch(...)
+    {
+        return false;
+    }
+
+    SIZE_T bytesRead = 0;
+    if(ReadProcessMemory(GetCurrentProcess(), source, copy.data(), bytes, &bytesRead) &&
+       bytesRead == bytes)
+    {
+        return true;
+    }
+
+    // Xbox resources may carry an identity-map alias or another pointer-shaped
+    // value whose low 26 bits are the physical RAM address.  Reverse-map that
+    // address through the contiguous-allocation tracker before treating a texture
+    // as missing.  The tracker returns zero unless the complete address belongs
+    // to a live guest allocation, so arbitrary unreadable host pointers fail closed.
+    const ULONG physicalAddress = cxbx::d3d::XboxPhysicalAddress(
+        reinterpret_cast<std::uintptr_t>(source));
+    const ULONG hostAddress = EmuContiguousHostFromPhysical(physicalAddress);
+    bytesRead = 0;
+    if(hostAddress == 0 ||
+       !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(hostAddress),
+                          copy.data(), bytes, &bytesRead) ||
+       bytesRead != bytes)
+    {
+        copy.clear();
+        return false;
+    }
     return true;
 }
 
@@ -3797,6 +3844,124 @@ static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const EmuYuy2TextureInfo *p
     return converted ? g_pYuvConvertTexture : NULL;
 }
 
+static void EmuFlushHostTextureLocks(XTL::IDirect3DBaseTexture8* baseTexture)
+{
+    if(baseTexture == nullptr)
+    {
+        return;
+    }
+
+    constexpr DWORD maximumMipLevels = 32;
+    __try
+    {
+        switch(baseTexture->GetType())
+        {
+            case XTL::D3DRTYPE_TEXTURE:
+            {
+                auto* texture = static_cast<XTL::IDirect3DTexture8*>(baseTexture);
+                const DWORD levelCount = (std::min)(texture->GetLevelCount(), maximumMipLevels);
+                for(DWORD level = 0; level < levelCount; ++level)
+                {
+                    texture->UnlockRect(level);
+                }
+                break;
+            }
+            case XTL::D3DRTYPE_CUBETEXTURE:
+            {
+                auto* texture = static_cast<XTL::IDirect3DCubeTexture8*>(baseTexture);
+                const DWORD levelCount = (std::min)(texture->GetLevelCount(), maximumMipLevels);
+                for(DWORD face = 0; face < 6; ++face)
+                {
+                    for(DWORD level = 0; level < levelCount; ++level)
+                    {
+                        texture->UnlockRect(static_cast<XTL::D3DCUBEMAP_FACES>(face), level);
+                    }
+                }
+                break;
+            }
+            case XTL::D3DRTYPE_VOLUMETEXTURE:
+            {
+                auto* texture = static_cast<XTL::IDirect3DVolumeTexture8*>(baseTexture);
+                const DWORD levelCount = (std::min)(texture->GetLevelCount(), maximumMipLevels);
+                for(DWORD level = 0; level < levelCount; ++level)
+                {
+                    texture->UnlockBox(level);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static bool EmuHostTextureHasData(XTL::IDirect3DBaseTexture8* baseTexture)
+{
+    if(baseTexture == nullptr || baseTexture->GetType() != XTL::D3DRTYPE_TEXTURE)
+    {
+        return false;
+    }
+
+    auto* texture = static_cast<XTL::IDirect3DTexture8*>(baseTexture);
+    XTL::D3DSURFACE_DESC description = {
+        XTL::D3DFMT_UNKNOWN, XTL::D3DRTYPE_TEXTURE, 0,
+        XTL::D3DPOOL_DEFAULT, 0, XTL::D3DMULTISAMPLE_NONE, 0, 0
+    };
+    XTL::D3DLOCKED_RECT locked = {};
+    bool lockedTexture = false;
+    bool hasData = false;
+    __try
+    {
+        if(SUCCEEDED(texture->GetLevelDesc(0, &description)) && description.Height != 0 &&
+           SUCCEEDED(texture->LockRect(0, &locked, nullptr, D3DLOCK_READONLY)) &&
+           locked.pBits != nullptr && locked.Pitch != 0)
+        {
+            lockedTexture = true;
+            const std::size_t pitch = static_cast<std::size_t>(
+                locked.Pitch < 0 ? -static_cast<std::int64_t>(locked.Pitch) : locked.Pitch);
+            const bool compressed = description.Format == XTL::D3DFMT_DXT1 ||
+                                    description.Format == XTL::D3DFMT_DXT2 ||
+                                    description.Format == XTL::D3DFMT_DXT3 ||
+                                    description.Format == XTL::D3DFMT_DXT4 ||
+                                    description.Format == XTL::D3DFMT_DXT5;
+            const std::size_t rowCount = compressed ? (description.Height + 3u) / 4u
+                                                    : description.Height;
+            const std::size_t sampleCount = (std::min<std::size_t>)(rowCount, 32);
+            const std::size_t bytesPerSample = (std::min<std::size_t>)(pitch, 256);
+            const auto* bytes = static_cast<const BYTE*>(locked.pBits);
+            for(std::size_t sample = 0; sample < sampleCount && !hasData; ++sample)
+            {
+                const std::size_t row = sampleCount <= 1 ? 0 : sample * (rowCount - 1) / (sampleCount - 1);
+                const BYTE* rowBytes = bytes + row * pitch;
+                for(std::size_t byte = 0; byte < bytesPerSample; ++byte)
+                {
+                    if(rowBytes[byte] != 0)
+                    {
+                        hasData = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if(lockedTexture)
+        {
+            texture->UnlockRect(0);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        if(lockedTexture)
+        {
+            texture->UnlockRect(0);
+        }
+        hasData = false;
+    }
+    return hasData;
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetTexture
 // ******************************************************************
@@ -3850,6 +4015,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
 
     if(Stage == 0)
         g_bStage0ConvertedYuv = bConvertedYuv;
+
+    // Xbox texture locks expose unified-memory mappings and have no matching
+    // guest Unlock call. End any host lock before sampling the resource.
+    EmuFlushHostTextureLocks(pBaseTexture8);
 
     HRESULT hRet = D3D_OK;
     __try
@@ -4813,6 +4982,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
     DWORD dwCommonType = pResource->Common & X_D3DCOMMON_TYPE_MASK;
 
+    const DWORD dwRegisterBase = reinterpret_cast<DWORD>(pBase);
+    const DWORD dwDataOffset = pThis->Data;
+
 	// Add the offset of the current texture to the base
 	pBase = (PVOID)((DWORD)pBase+pThis->Data);
 
@@ -4982,7 +5154,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             }
 
             DWORD dwWidth, dwHeight, dwBPP, dwDepth = 1, dwPitch = 0, dwMipMapLevels = 1;
-            BOOL  bSwizzled = FALSE, bCompressed = FALSE, dwCompressedSize = 0;
+            DWORD dwCompressedSize = 0;
+            DWORD dwCompressedBytesPerBlock = 0;
+            BOOL  bSwizzled = FALSE, bCompressed = FALSE;
             BOOL  bCubemap = pPixelContainer->Format & X_D3DFORMAT_CUBEMAP;
 
             if(bCubemap)
@@ -5039,11 +5213,14 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 dwHeight = 1 << ((pPixelContainer->Format & X_D3DFORMAT_VSIZE_MASK) >> X_D3DFORMAT_VSIZE_SHIFT);
                 dwDepth  = 1 << ((pPixelContainer->Format & X_D3DFORMAT_PSIZE_MASK) >> X_D3DFORMAT_PSIZE_SHIFT);
 
-                // D3DFMT_DXT2->D3DFMT_DXT5 : 128bits per block/per 16 texels
-                dwCompressedSize = dwWidth*dwHeight;
-
-                if(X_Format == 0x0C)    // D3DFMT_DXT1 : 64bits per block/per 16 texels
-                    dwCompressedSize /= 2;
+                // DXT textures always occupy complete 4x4 blocks. This matters
+                // for Xbox UI textures smaller than one block: a 1x2 or 2x2
+                // DXT1 level still contains one full eight-byte block.
+                const std::size_t bytesPerBlock = X_Format == 0x0C ? 8u : 16u;
+                dwCompressedBytesPerBlock = static_cast<DWORD>(bytesPerBlock);
+                dwCompressedSize = static_cast<DWORD>(
+                    cxbx::d3d::CompressedTextureLevelSize(
+                        dwWidth, dwHeight, bytesPerBlock));
 
                 dwMipMapLevels = (pPixelContainer->Format & X_D3DFORMAT_MIPMAP_MASK) >> X_D3DFORMAT_MIPMAP_SHIFT;
             }
@@ -5063,6 +5240,16 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 dwBPP = 4;
                 pBase = NULL;   // the source-validation guard below skips the copy
             }
+
+            const DWORD dwSourceWidth = dwWidth;
+            const DWORD dwSourceHeight = dwHeight;
+            const DWORD dwSourceMipMapLevels =
+                bCompressed && dwMipMapLevels != 0 ? dwMipMapLevels : 1;
+            const DWORD dwCompressedMipChainSize = bCompressed
+                ? static_cast<DWORD>(cxbx::d3d::CompressedTextureMipChainSize(
+                      dwSourceWidth, dwSourceHeight, dwCompressedBytesPerBlock,
+                      dwSourceMipMapLevels))
+                : 0;
 
             // ******************************************************************
             // * Create the happy little texture
@@ -5148,6 +5335,13 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             else
                 hRet = pResource->EmuTexture8->LockRect(0, &LockedRect, NULL, 0);
 
+            if(FAILED(hRet))
+            {
+                EmuWarning("Resource_Register: texture level 0 lock failed (0x%.08lX)",
+                           hRet);
+                break;
+            }
+
             RECT  iRect  = {0,0,0,0};
             POINT iPoint = {0,0};
 
@@ -5157,30 +5351,45 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             // lands in unmapped memory). A skipped copy leaves one texture
             // blank; an unguarded copy killed the process through the title's
             // last-resort exception handler.
-            DWORD dwSourceSize = bCompressed ? (DWORD)dwCompressedSize
+            DWORD dwSourceSize = bCompressed ? dwCompressedMipChainSize
                                              : (dwPitch != 0 ? dwPitch : dwWidth*dwBPP) * dwHeight;
 
-            if(!EmuD3DIsReadableRange(pBase, dwSourceSize))
+            std::vector<BYTE> sourceCopy;
+            if(!EmuD3DCopyReadableRange(pBase, dwSourceSize, sourceCopy))
             {
-                printf("*Warning* Register skipped copying a texture with an unreadable source (base=0x%.08X size=0x%X)\n",
-                       (DWORD)pBase, dwSourceSize);
+                printf("*Warning* Register skipped copying a texture with an unreadable source "
+                       "(resource=0x%.08lX common=0x%.08lX base_arg=0x%.08lX data=0x%.08lX "
+                       "resolved=0x%.08lX format=0x%.08lX size=0x%.08lX copy=0x%lX)\n",
+                       reinterpret_cast<DWORD>(pThis), pResource->Common,
+                       dwRegisterBase, dwDataOffset, reinterpret_cast<DWORD>(pBase),
+                       pPixelContainer->Format, pPixelContainer->Size, dwSourceSize);
             }
             else if(bSwizzled)
             {
                 XTL::EmuXGUnswizzleRect
                 (
-                    pBase, dwWidth, dwHeight, dwDepth, LockedRect.pBits,
+                    sourceCopy.data(), dwWidth, dwHeight, dwDepth, LockedRect.pBits,
                     LockedRect.Pitch, iRect, iPoint, dwBPP
                 );
             }
             else if(bCompressed)
             {
-                memcpy(LockedRect.pBits, pBase, dwCompressedSize);
+                const DWORD rowBytes =
+                    ((dwSourceWidth + 3) / 4) * dwCompressedBytesPerBlock;
+                const DWORD blockRows = (dwSourceHeight + 3) / 4;
+                BYTE* destination = static_cast<BYTE*>(LockedRect.pBits);
+                const BYTE* source = sourceCopy.data();
+                for(DWORD row = 0; row < blockRows; ++row)
+                {
+                    memcpy(destination, source, rowBytes);
+                    destination += LockedRect.Pitch;
+                    source += rowBytes;
+                }
             }
             else
             {
                 BYTE *pDest = (BYTE*)LockedRect.pBits;
-                BYTE *pSrc  = (BYTE*)pBase;
+                const BYTE *pSrc = sourceCopy.data();
 
                 if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwWidth*dwBPP)
                     memcpy(pDest, pSrc, dwWidth*dwHeight*dwBPP);
@@ -5201,6 +5410,48 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 pResource->EmuSurface8->UnlockRect();
             else
                 pResource->EmuTexture8->UnlockRect(0);
+
+            if(bCompressed && dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
+               !sourceCopy.empty())
+            {
+                const DWORD hostLevelCount = pResource->EmuTexture8->GetLevelCount();
+                const DWORD copyLevelCount =
+                    (std::min)(dwSourceMipMapLevels, hostLevelCount);
+                DWORD sourceOffset = dwCompressedSize;
+                DWORD levelWidth = dwSourceWidth > 1 ? dwSourceWidth / 2 : 1;
+                DWORD levelHeight = dwSourceHeight > 1 ? dwSourceHeight / 2 : 1;
+                for(DWORD level = 1; level < copyLevelCount; ++level)
+                {
+                    D3DLOCKED_RECT levelLock{};
+                    const HRESULT levelResult =
+                        pResource->EmuTexture8->LockRect(level, &levelLock, NULL, 0);
+                    if(FAILED(levelResult))
+                    {
+                        EmuWarning("Resource_Register: compressed texture level %lu lock "
+                                   "failed (0x%.08lX)", level, levelResult);
+                        break;
+                    }
+
+                    const DWORD rowBytes =
+                        ((levelWidth + 3) / 4) * dwCompressedBytesPerBlock;
+                    const DWORD blockRows = (levelHeight + 3) / 4;
+                    BYTE* destination = static_cast<BYTE*>(levelLock.pBits);
+                    const BYTE* source = sourceCopy.data() + sourceOffset;
+                    for(DWORD row = 0; row < blockRows; ++row)
+                    {
+                        memcpy(destination, source, rowBytes);
+                        destination += levelLock.Pitch;
+                        source += rowBytes;
+                    }
+                    pResource->EmuTexture8->UnlockRect(level);
+
+                    sourceOffset += static_cast<DWORD>(
+                        cxbx::d3d::CompressedTextureLevelSize(
+                            levelWidth, levelHeight, dwCompressedBytesPerBlock));
+                    levelWidth = levelWidth > 1 ? levelWidth / 2 : 1;
+                    levelHeight = levelHeight > 1 ? levelHeight / 2 : 1;
+                }
+            }
 
             // Debug Texture Dumping
             /*
