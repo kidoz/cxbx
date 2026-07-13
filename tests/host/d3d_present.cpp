@@ -76,6 +76,20 @@ int main()
         return 1;
     }
 
+    if(cxbx::d3d::XboxResourceDataAddress(0x528B0000u, 0x00006EB2u, false) !=
+           0x028B6EB2u ||
+       cxbx::d3d::XboxResourceDataAddress(0x0B210000u, 0x0000D578u, false) !=
+           0x0B21D578u ||
+       cxbx::d3d::XboxResourceDataAddress(0x528B0000u, 0x00006EB2u, true) !=
+           0x528B6EB2u ||
+       cxbx::d3d::XboxResourceDataAddress(0xFFFFFFF0u, 0x00000030u, false) !=
+           0x00000020u)
+    {
+        std::fputs("Xbox registered resource addresses must match D3D's UMA mask\n",
+                   stderr);
+        return 1;
+    }
+
     if(cxbx::d3d::CpuFallbackTextureUsable(false, 0, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 4, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 0, false, true, true) ||
