@@ -45,6 +45,7 @@ namespace xboxkrnl
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuNV2ALogging.h"
+#include "core/d3d_push_buffer.h"
 #include "core/trace.h"
 
 // ******************************************************************
@@ -1363,6 +1364,8 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_TRANSFORM_CONSTANT_LOAD   0x1EA4u
 #define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
 #define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
+#define NV097_ARRAY_ELEMENT16                0x1800u
+#define NV097_ARRAY_ELEMENT32                0x1808u
 #define NV097_DRAW_ARRAYS                   0x1810u
 #define NV097_SET_CONTEXT_DMA_SEMAPHORE     0x01A4u
 #define NV097_SET_SEMAPHORE_OFFSET          0x1D6Cu
@@ -1397,8 +1400,11 @@ static ULONG g_EmuNv2aSurfacePitchColor = 0;
 static ULONG g_EmuNv2aSurfaceClipW = 0;
 static ULONG g_EmuNv2aSurfaceClipH = 0;
 static ULONG g_EmuNv2aBeginOp = 0;
+static ULONG g_EmuNv2aElementIndices[4096] = {};
+static ULONG g_EmuNv2aElementIndexCount = 0;
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
+static bool  g_bEmuNv2aHleRaster = false;
 // Viewport transform (clip/NDC -> screen). Defaults are identity so the Phase 0
 // pre-transformed case (w==1, no viewport programmed) maps position straight to
 // screen coordinates; a title that programs a real viewport gets it applied.
@@ -1451,7 +1457,8 @@ static ULONG g_EmuNv2aStencilOpZPass = 0x1E00;
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
-static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count);
+static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
+                                       const ULONG* Indices = nullptr);
 static void EmuNv2aWriteBackendSemaphore(ULONG Data);
 
 // Opt-in PGRAPH method histogram (CXBX_NV2A_METHOD_STATS=1): count every
@@ -1673,9 +1680,44 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_STENCIL_OP_FAIL:      g_EmuNv2aStencilOpFail = Data; break;
             case NV097_SET_STENCIL_OP_ZFAIL:     g_EmuNv2aStencilOpZFail = Data; break;
             case NV097_SET_STENCIL_OP_ZPASS:     g_EmuNv2aStencilOpZPass = Data; break;
-            case NV097_SET_BEGIN_END:            g_EmuNv2aBeginOp = Data; break;
+            case NV097_SET_BEGIN_END:
+                if(Data == 0)
+                {
+                    if(g_EmuNv2aElementIndexCount >= 3)
+                    {
+                        EmuNv2aRasterizeDrawArrays(
+                            0, g_EmuNv2aElementIndexCount,
+                            g_EmuNv2aElementIndices);
+                    }
+                    g_EmuNv2aElementIndexCount = 0;
+                }
+                else
+                {
+                    g_EmuNv2aElementIndexCount = 0;
+                }
+                g_EmuNv2aBeginOp = Data;
+                break;
+            case NV097_ARRAY_ELEMENT16:
+            {
+                const auto indices = cxbx::d3d::DecodeArrayElement16(Data);
+                for(const std::uint32_t index : indices)
+                {
+                    if(g_EmuNv2aElementIndexCount < std::size(g_EmuNv2aElementIndices))
+                    {
+                        g_EmuNv2aElementIndices[g_EmuNv2aElementIndexCount++] = index;
+                    }
+                }
+                break;
+            }
+            case NV097_ARRAY_ELEMENT32:
+                if(g_EmuNv2aElementIndexCount < std::size(g_EmuNv2aElementIndices))
+                {
+                    g_EmuNv2aElementIndices[g_EmuNv2aElementIndexCount++] = Data;
+                }
+                break;
             case NV097_DRAW_ARRAYS:
-                EmuNv2aRasterizeDrawArrays(Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
+                EmuNv2aRasterizeDrawArrays(
+                    Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
                 break;
             case NV097_SET_TRANSFORM_EXECUTION_MODE: g_EmuNv2aVpExecMode = Data & 0x3; break;
             case NV097_SET_TRANSFORM_PROGRAM_LOAD:   g_EmuNv2aVpWriteDword = Data * 4; break;
@@ -1744,99 +1786,45 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
 static void EmuNv2aRunPusher();
 
 // Replay an XDK CPU-copy push buffer through the same method decoder used by
-// the register-level NV2A pusher. In-place GPU buffers use physical addresses
-// and are intentionally left to the MMIO path.
-extern "C" bool EmuNv2aExecutePushBuffer(const DWORD *Buffer, DWORD Size)
+// the register-level NV2A pusher. The guest-address adapter is defined below
+// the physical-memory helpers and feeds this same packet walker.
+extern "C" bool EmuNv2aExecutePushBuffer(const DWORD* Buffer, DWORD Size)
 {
-    if(Buffer == NULL || Size < sizeof(DWORD) || Size > 16 * 1024 * 1024)
+    if(Buffer == NULL || Size < sizeof(DWORD) || Size > cxbx::d3d::PushBufferMaxBytes)
     {
         return false;
     }
 
-    DWORD Offset = 0;
-    DWORD Guard = 0;
-    DWORD ReturnOffset = 0;
-    bool InSubroutine = false;
-
     __try
     {
-        while(Offset + sizeof(DWORD) <= Size && Guard++ < Size / sizeof(DWORD) * 2)
+        const auto ReadWord = [Buffer](std::uint32_t Offset, std::uint32_t& Word)
         {
-            DWORD Word = Buffer[Offset / sizeof(DWORD)];
-            Offset += sizeof(DWORD);
-            NV2A_TRACE_PB(Word);
-            cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
-
-            if((Word & 0xE0000003) == 0x20000000 || (Word & 3) == 1)
-            {
-                DWORD Target = Word & ((Word & 0xE0000003) == 0x20000000 ? 0x1FFFFFFC : 0xFFFFFFFC);
-                if(Target >= Size)
-                {
-                    return false;
-                }
-                Offset = Target;
-                continue;
-            }
-
-            if((Word & 3) == 2)
-            {
-                DWORD Target = Word & 0xFFFFFFFC;
-                if(InSubroutine || Target >= Size)
-                {
-                    return false;
-                }
-
-                ReturnOffset = Offset;
-                InSubroutine = true;
-                Offset = Target;
-                continue;
-            }
-
-            if(Word == 0x00020000)
-            {
-                if(!InSubroutine)
-                {
-                    return false;
-                }
-
-                Offset = ReturnOffset;
-                InSubroutine = false;
-                continue;
-            }
-
-            if((Word & 0xE0030003) != 0 && (Word & 0xE0030003) != 0x40000000)
-            {
-                return false;
-            }
-
-            bool Incrementing = (Word & 0xE0030003) == 0;
-            DWORD Method = Word & 0x1FFC;
-            DWORD Subchannel = (Word >> 13) & 0x07;
-            DWORD Count = (Word >> 18) & 0x07FF;
-
-            if(Count > (Size - Offset) / sizeof(DWORD))
-            {
-                return false;
-            }
-
-            for(DWORD i = 0; i < Count; i++)
-            {
-                DWORD Data = Buffer[Offset / sizeof(DWORD)];
-                Offset += sizeof(DWORD);
-                EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
-                if(Incrementing)
-                {
-                    Method += sizeof(DWORD);
-                }
-            }
+            memcpy(&Word, reinterpret_cast<const BYTE*>(Buffer) + Offset, sizeof(Word));
+            return true;
+        };
+        if(!cxbx::d3d::ValidatePushBuffer(Size, ReadWord))
+        {
+            return false;
         }
+        return cxbx::d3d::WalkPushBuffer(
+            Size,
+            [Buffer](std::uint32_t Offset, std::uint32_t& Word)
+            {
+                memcpy(&Word, reinterpret_cast<const BYTE*>(Buffer) + Offset, sizeof(Word));
+                NV2A_TRACE_PB(Word);
+                cxbx::trace::RecordNv2aPush(Word);
+                return true;
+            },
+            [](std::uint32_t Subchannel, std::uint32_t Method, std::uint32_t Data)
+            {
+                EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
+                return true;
+            });
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
         return false;
     }
-
-    return Offset == Size;
 }
 
 static ULONG EmuReadMmioRegister32(ULONG Address)
@@ -2273,7 +2261,7 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
         return false;
     }
 
-    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    BYTE* Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
     {
         for(ULONG i = 0; i < Size; i++)
@@ -2283,7 +2271,7 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
 
     for(ULONG i = 0; i < Size; i++)
     {
-        BYTE *Page = EmuGetPhysicalPage(Address + i, true);
+        BYTE* Page = EmuGetPhysicalPage(Address + i, true);
         if(Page == NULL)
             return false;
 
@@ -2291,6 +2279,139 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
     }
 
     return true;
+}
+
+static bool EmuNv2aPhysicalPushSpanMapped(ULONG Address, ULONG Size)
+{
+    if(Size == 0 || Address + Size - 1 < Address ||
+       !EmuIsPhysicalMapAddress(Address) ||
+       !EmuIsPhysicalMapAddress(Address + Size - 1))
+    {
+        return false;
+    }
+    if(EmuPhysicalHostSpan(Address, Size) != NULL)
+    {
+        return true;
+    }
+
+    const ULONG FirstPage = EmuPhysicalMapPageAddress(Address) & ~(EmuPhysicalPageSize - 1);
+    const ULONG LastPage =
+        EmuPhysicalMapPageAddress(Address + Size - 1) & ~(EmuPhysicalPageSize - 1);
+    for(ULONG Page = FirstPage;; Page += EmuPhysicalPageSize)
+    {
+        if(EmuGetPhysicalPage(Page, false) == NULL)
+        {
+            return false;
+        }
+        if(Page == LastPage)
+        {
+            return true;
+        }
+        if(Page > LastPage - EmuPhysicalPageSize)
+        {
+            return false;
+        }
+    }
+}
+
+static ULONG EmuNv2aPushHostSpan(ULONG GuestAddress, ULONG Size)
+{
+    ULONG BlockSize = 0;
+    ULONG BlockBase = EmuContiguousBlockBase(GuestAddress, &BlockSize);
+    if(BlockBase != 0 && GuestAddress - BlockBase <= BlockSize &&
+       Size <= BlockSize - (GuestAddress - BlockBase))
+    {
+        return GuestAddress;
+    }
+
+    const ULONG HostAddress = EmuContiguousHostFromPhysical(GuestAddress);
+    BlockBase = EmuContiguousBlockBase(HostAddress, &BlockSize);
+    if(HostAddress != 0 && BlockBase != 0 && HostAddress - BlockBase <= BlockSize &&
+       Size <= BlockSize - (HostAddress - BlockBase))
+    {
+        return HostAddress;
+    }
+    return 0;
+}
+
+extern "C" bool EmuNv2aExecuteGuestPushBuffer(DWORD GuestAddress, DWORD Size)
+{
+    if(GuestAddress == 0 || Size < sizeof(DWORD) ||
+       Size > cxbx::d3d::PushBufferMaxBytes ||
+       (Size % sizeof(DWORD)) != 0 || GuestAddress + Size - 1 < GuestAddress)
+    {
+        return false;
+    }
+
+    const ULONG HostAddress = EmuNv2aPushHostSpan(GuestAddress, Size);
+    if(HostAddress != 0)
+    {
+        return EmuNv2aExecutePushBuffer(reinterpret_cast<const DWORD*>(HostAddress), Size);
+    }
+    if(EmuIsReadableRange(GuestAddress, Size))
+    {
+        return EmuNv2aExecutePushBuffer(reinterpret_cast<const DWORD*>(GuestAddress), Size);
+    }
+
+    ULONG PhysicalAddress = 0;
+    if(EmuIsPhysicalMapAddress(GuestAddress))
+    {
+        PhysicalAddress = GuestAddress;
+    }
+    else if(GuestAddress <= 0x0FFFFFFF)
+    {
+        PhysicalAddress = EmuPhysicalMapBase + (GuestAddress & EmuPhysicalRamMirrorMask);
+    }
+    else
+    {
+        return false;
+    }
+
+    if(!EmuNv2aPhysicalPushSpanMapped(PhysicalAddress, Size))
+    {
+        return false;
+    }
+
+    __try
+    {
+        const auto ReadWord = [PhysicalAddress](std::uint32_t Offset, std::uint32_t& Word)
+        {
+            ULONG RawWord = 0;
+            if(!EmuReadPhysicalMap(PhysicalAddress + Offset, sizeof(RawWord), &RawWord))
+            {
+                return false;
+            }
+            Word = static_cast<std::uint32_t>(RawWord);
+            return true;
+        };
+        if(!cxbx::d3d::ValidatePushBuffer(Size, ReadWord))
+        {
+            return false;
+        }
+        return cxbx::d3d::WalkPushBuffer(
+            Size,
+            [PhysicalAddress](std::uint32_t Offset, std::uint32_t& Word)
+            {
+                ULONG RawWord = 0;
+                if(!EmuReadPhysicalMap(PhysicalAddress + Offset, sizeof(RawWord), &RawWord))
+                {
+                    return false;
+                }
+                Word = static_cast<std::uint32_t>(RawWord);
+                NV2A_TRACE_PB(RawWord);
+                cxbx::trace::RecordNv2aPush(Word);
+                return true;
+            },
+            [](std::uint32_t Subchannel, std::uint32_t Method, std::uint32_t Data)
+            {
+                EmuNv2aHandlePgraphMethod(Subchannel, Method, Data);
+                return true;
+            });
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 // ******************************************************************
@@ -3372,6 +3493,10 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 // off by default so the HLE-D3D8 titles and the conformance suite are untouched.
 static bool EmuNv2aRasterEnabled()
 {
+    if(g_bEmuNv2aHleRaster)
+    {
+        return true;
+    }
     if(!g_bEmuNv2aRasterChecked)
     {
         char Buffer[8] = {0};
@@ -3380,6 +3505,11 @@ static bool EmuNv2aRasterEnabled()
         g_bEmuNv2aRasterChecked = true;
     }
     return g_bEmuNv2aRaster;
+}
+
+extern "C" void EmuNv2aEnableHleRaster()
+{
+    g_bEmuNv2aHleRaster = true;
 }
 
 static float EmuNv2aReadHostFloat(ULONG HostAddress)
@@ -3663,7 +3793,8 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
 // z-buffer, or texturing.
 static ULONG g_EmuNv2aRasterLogCount = 0;
 
-static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
+static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
+                                       const ULONG* Indices)
 {
     if(!EmuNv2aRasterEnabled() || g_EmuNv2aBeginOp == 0 || Count < 3)
         return;
@@ -3787,7 +3918,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count)
 
     for(ULONG i = 0; i < Count; i++)
     {
-        ULONG Index = Start + i;
+        ULONG Index = Indices == nullptr ? Start + i : Indices[i];
         float Xc, Yc, Zc = 0.0f, W;
         float U = 0.0f, V = 0.0f;
         ULONG Color = 0xFFFFFFFF;

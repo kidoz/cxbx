@@ -25,6 +25,15 @@ host_d3d_present_test = executable(
 
 test('host-d3d-present', host_d3d_present_test)
 
+host_d3d_push_buffer_test = executable(
+  'host_d3d_push_buffer_test',
+  'd3d_push_buffer.cpp',
+  include_directories : cxbx_inc,
+  install : false,
+)
+
+test('host-d3d-push-buffer', host_d3d_push_buffer_test)
+
 host_pcm_test = executable(
   'host_pcm_test',
   'pcm_conversion.cpp',

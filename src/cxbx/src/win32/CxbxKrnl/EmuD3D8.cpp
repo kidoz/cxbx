@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "EmuVshDecoder.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
+#include "core/d3d_push_buffer.h"
 #include "core/d3d_pixel_shader.h"
 #include "core/d3d_present.h"
 #include "core/d3d_texture.h"
@@ -68,9 +69,13 @@ namespace XTL
 #include <clocale>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <utility>
 #include <vector>
 
 extern "C" bool EmuNv2aExecutePushBuffer(const DWORD* Buffer, DWORD Size);
+extern "C" bool EmuNv2aExecuteGuestPushBuffer(DWORD GuestAddress, DWORD Size);
+extern "C" void EmuNv2aEnableHleRaster();
 
 // ******************************************************************
 // * Global(s)
@@ -649,6 +654,231 @@ static XTL::X_D3DSurface      *g_pCachedRenderTarget = NULL;
 static XTL::X_D3DSurface      *g_pCachedZStencilSurface = NULL;
 static XTL::X_D3DPushBuffer   *g_pRecordingPushBuffer = NULL;
 static DWORD                   g_dwVertexShaderUsage = 0;
+
+struct EmuRecordedPushBufferDraw
+{
+    XTL::D3DPRIMITIVETYPE primitiveType = XTL::D3DPT_POINTLIST;
+    UINT primitiveCount = 0;
+    UINT stride = 0;
+    DWORD stateBlock = 0;
+    std::vector<BYTE> vertices;
+};
+
+struct EmuRecordedPushBuffer
+{
+    XTL::X_D3DPushBuffer* pushBuffer = NULL;
+    const DWORD* registeredData = nullptr;
+    DWORD registeredBytes = 0;
+    std::vector<EmuRecordedPushBufferDraw> draws;
+    std::size_t byteCount = 0;
+};
+
+static std::vector<EmuRecordedPushBuffer> g_EmuRecordedPushBuffers;
+constexpr std::size_t EMU_RECORDED_DRAW_LIMIT = 256;
+constexpr std::size_t EMU_RECORDED_BYTE_LIMIT = 16 * 1024 * 1024;
+
+static DWORD EmuCaptureD3DStateBlock()
+{
+    DWORD stateBlock = 0;
+    __try
+    {
+        g_pD3DDevice8->CreateStateBlock(XTL::D3DSBT_ALL, &stateBlock);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        stateBlock = 0;
+    }
+    return stateBlock;
+}
+
+static void EmuDeleteD3DStateBlock(DWORD stateBlock)
+{
+    if(stateBlock == 0 || g_pD3DDevice8 == NULL)
+    {
+        return;
+    }
+    __try
+    {
+        g_pD3DDevice8->DeleteStateBlock(stateBlock);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static EmuRecordedPushBuffer* EmuFindRecordedPushBuffer(XTL::X_D3DPushBuffer* pushBuffer)
+{
+    for(EmuRecordedPushBuffer& recording : g_EmuRecordedPushBuffers)
+    {
+        if(recording.pushBuffer == pushBuffer)
+        {
+            return &recording;
+        }
+    }
+    return NULL;
+}
+
+static void EmuReleaseRecordedPushBufferState(EmuRecordedPushBuffer& recording)
+{
+    if(g_pD3DDevice8 != NULL)
+    {
+        for(EmuRecordedPushBufferDraw& draw : recording.draws)
+        {
+            if(draw.stateBlock != 0)
+            {
+                EmuDeleteD3DStateBlock(draw.stateBlock);
+                draw.stateBlock = 0;
+            }
+        }
+    }
+}
+
+static void EmuDiscardRecordedPushBuffer(XTL::X_D3DPushBuffer* pushBuffer)
+{
+    for(std::vector<EmuRecordedPushBuffer>::iterator recording = g_EmuRecordedPushBuffers.begin();
+        recording != g_EmuRecordedPushBuffers.end(); ++recording)
+    {
+        if(recording->pushBuffer == pushBuffer)
+        {
+            EmuReleaseRecordedPushBufferState(*recording);
+            g_EmuRecordedPushBuffers.erase(recording);
+            return;
+        }
+    }
+}
+
+static EmuRecordedPushBuffer* EmuResetRecordedPushBuffer(XTL::X_D3DPushBuffer* pushBuffer)
+{
+    EmuRecordedPushBuffer* recording = EmuFindRecordedPushBuffer(pushBuffer);
+    if(recording != NULL)
+    {
+        EmuReleaseRecordedPushBufferState(*recording);
+        recording->draws.clear();
+        recording->byteCount = 0;
+        return recording;
+    }
+
+    try
+    {
+        g_EmuRecordedPushBuffers.push_back({ pushBuffer });
+        return &g_EmuRecordedPushBuffers.back();
+    }
+    catch(...)
+    {
+        return NULL;
+    }
+}
+
+static UINT EmuRecordedDrawVertexCount(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount)
+{
+    switch(primitiveType)
+    {
+        case XTL::D3DPT_POINTLIST: return primitiveCount;
+        case XTL::D3DPT_LINELIST: return primitiveCount * 2;
+        case XTL::D3DPT_LINESTRIP: return primitiveCount + 1;
+        case XTL::D3DPT_TRIANGLELIST: return primitiveCount * 3;
+        case XTL::D3DPT_TRIANGLESTRIP:
+        case XTL::D3DPT_TRIANGLEFAN: return primitiveCount + 2;
+        default: return 0;
+    }
+}
+
+static void EmuAppendRecordedDraw(EmuRecordedPushBuffer& recording,
+                                  XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
+                                  const void* vertices, UINT stride)
+{
+    if(vertices == NULL || stride == 0 || recording.draws.size() >= EMU_RECORDED_DRAW_LIMIT)
+    {
+        return;
+    }
+
+    const UINT vertexCount = EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
+    if(vertexCount == 0 ||
+       vertexCount > (std::numeric_limits<std::size_t>::max)() / stride)
+    {
+        return;
+    }
+    const std::size_t byteCount = static_cast<std::size_t>(vertexCount) * stride;
+    if(byteCount > EMU_RECORDED_BYTE_LIMIT - recording.byteCount)
+    {
+        return;
+    }
+
+    EmuRecordedPushBufferDraw draw;
+    draw.primitiveType = primitiveType;
+    draw.primitiveCount = primitiveCount;
+    draw.stride = stride;
+    draw.stateBlock = EmuCaptureD3DStateBlock();
+
+    try
+    {
+        const BYTE* vertexBytes = static_cast<const BYTE*>(vertices);
+        draw.vertices.assign(vertexBytes, vertexBytes + byteCount);
+        recording.draws.push_back(std::move(draw));
+        recording.byteCount += byteCount;
+    }
+    catch(...)
+    {
+        if(draw.stateBlock != 0)
+        {
+            EmuDeleteD3DStateBlock(draw.stateBlock);
+        }
+    }
+}
+
+static void EmuRecordPushBufferDraw(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
+                                    const void* vertices, UINT stride)
+{
+    if(g_pRecordingPushBuffer == NULL)
+    {
+        return;
+    }
+    EmuRecordedPushBuffer* recording = EmuFindRecordedPushBuffer(g_pRecordingPushBuffer);
+    if(recording != NULL)
+    {
+        EmuAppendRecordedDraw(*recording, primitiveType, primitiveCount, vertices, stride);
+    }
+}
+
+static bool EmuReplayRecordedDraws(const EmuRecordedPushBuffer& recording)
+{
+    if(recording.draws.empty())
+    {
+        return true;
+    }
+
+    HRESULT result = D3D_OK;
+    __try
+    {
+        for(const EmuRecordedPushBufferDraw& draw : recording.draws)
+        {
+            if(FAILED(result))
+            {
+                break;
+            }
+            if(draw.stateBlock != 0)
+            {
+                result = g_pD3DDevice8->ApplyStateBlock(draw.stateBlock);
+            }
+            if(SUCCEEDED(result))
+            {
+                result = g_pD3DDevice8->DrawPrimitiveUP(
+                    draw.primitiveType, draw.primitiveCount, draw.vertices.data(), draw.stride);
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        result = D3DERR_INVALIDCALL;
+    }
+    return SUCCEEDED(result);
+}
+
+static bool EmuReplayRecordedPushBuffer(XTL::X_D3DPushBuffer* pushBuffer)
+{
+    EmuRecordedPushBuffer* recording = EmuFindRecordedPushBuffer(pushBuffer);
+    return recording == NULL || EmuReplayRecordedDraws(*recording);
+}
 
 // ******************************************************************
 // * EmuD3DTiles (8 Tiles Max)
@@ -5117,17 +5347,18 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
         case X_D3DCOMMON_TYPE_PUSHBUFFER:
         {
-            // Pushbuffers are command-stream buffers, not GPU textures or vertex
-            // buffers. The game's Data field already points to the guest command
-            // stream; RunPushBuffer reads it via EmuNv2aExecutePushBuffer. No
-            // host D3D resource is needed. Set the Lock sentinel so
-            // EmuVerifyResourceIsRegistered does not re-enter this path.
-            // NOTE: setting Lock=1 changes the game's resource-lifetime
-            // expectations; if this causes early exit, remove the assignment
-            // and let the warning-only path stand (the prior session's working
-            // configuration for Turok's frontend render).
+            // Static XDK pushbuffers store Data as an offset from the base passed
+            // to Register. Preserve the resolved host span out-of-line: mutating
+            // Data would change the guest resource ABI and make repeat Register
+            // calls add the base twice.
             X_D3DPushBuffer *pPushBuffer = (X_D3DPushBuffer*)pResource;
-            // pPushBuffer->Lock = 1;  // see note above
+            EmuRecordedPushBuffer* recording = EmuResetRecordedPushBuffer(pPushBuffer);
+            if(recording != nullptr && pPushBuffer->AllocationSize != 0 &&
+               EmuD3DIsReadableRange(pBase, pPushBuffer->AllocationSize))
+            {
+                recording->registeredData = static_cast<const DWORD*>(pBase);
+                recording->registeredBytes = pPushBuffer->AllocationSize;
+            }
         }
         break;
 
@@ -5528,6 +5759,20 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_AddRef
         return uRet;
     }
 
+    if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_PUSHBUFFER &&
+       (pThis->Common & X_D3DCOMMON_D3DCREATED) != 0)
+    {
+        const ULONG referenceCount = pThis->Common & X_D3DCOMMON_REFCOUNT_MASK;
+        if(referenceCount < X_D3DCOMMON_REFCOUNT_MASK)
+        {
+            uRet = referenceCount + 1;
+            pThis->Common = (pThis->Common & ~X_D3DCOMMON_REFCOUNT_MASK) | uRet;
+        }
+
+        EmuSwapFS(); // XBox FS
+        return uRet;
+    }
+
     IDirect3DResource8 *pResource8 = pThis->EmuResource8;
 
     if(pThis->Lock == 0x8000BEEF)
@@ -5593,6 +5838,27 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
         }
 
         EmuSwapFS();   // XBox FS
+        return uRet;
+    }
+
+    if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_PUSHBUFFER &&
+       (pThis->Common & X_D3DCOMMON_D3DCREATED) != 0)
+    {
+        X_D3DPushBuffer* pushBuffer = static_cast<X_D3DPushBuffer*>(pThis);
+        const ULONG referenceCount = pThis->Common & X_D3DCOMMON_REFCOUNT_MASK;
+        if(referenceCount > 1)
+        {
+            uRet = referenceCount - 1;
+            pThis->Common = (pThis->Common & ~X_D3DCOMMON_REFCOUNT_MASK) | uRet;
+        }
+        else
+        {
+            EmuDiscardRecordedPushBuffer(pushBuffer);
+            delete[] reinterpret_cast<BYTE*>(pushBuffer->Data);
+            delete pushBuffer;
+        }
+
+        EmuSwapFS(); // XBox FS
         return uRet;
     }
 
@@ -8431,12 +8697,29 @@ XTL::X_D3DPushBuffer* WINAPI XTL::EmuIDirect3DDevice8_CreatePushBuffer2
     }
     #endif
 
-    X_D3DPushBuffer *pPushBuffer = new X_D3DPushBuffer();
+    X_D3DPushBuffer* pPushBuffer = new(std::nothrow) X_D3DPushBuffer();
+    if(pPushBuffer == NULL)
+    {
+        EmuSwapFS(); // XBox FS
+        return NULL;
+    }
 
-    pPushBuffer->Common = 1;    // refcount 1
-    pPushBuffer->Data = 0;
+    BYTE* data = Size == 0 ? NULL : new(std::nothrow) BYTE[Size]();
+    if(Size != 0 && data == NULL)
+    {
+        delete pPushBuffer;
+        EmuSwapFS(); // XBox FS
+        return NULL;
+    }
+
+    pPushBuffer->Common = X_D3DCOMMON_TYPE_PUSHBUFFER | X_D3DCOMMON_D3DCREATED | 1;
+    if(RunUsingCpuCopy != FALSE)
+    {
+        pPushBuffer->Common |= cxbx::d3d::PushBufferCpuCopy;
+    }
+    pPushBuffer->Data = reinterpret_cast<ULONG>(data);
     pPushBuffer->Lock = 0;
-    pPushBuffer->Size = 0;      // stays 0: see the execute-at-record note
+    pPushBuffer->Size = 0;
     pPushBuffer->AllocationSize = Size;
 
     EmuSwapFS();   // XBox FS
@@ -8476,7 +8759,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BeginPushBuffer
     g_pRecordingPushBuffer = pPushBuffer;
 
     if(pPushBuffer != NULL)
+    {
         pPushBuffer->Size = 0;
+        EmuResetRecordedPushBuffer(pPushBuffer);
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -8496,7 +8782,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndPushBuffer(VOID)
     #endif
 
     if(g_pRecordingPushBuffer != NULL)
+    {
         g_pRecordingPushBuffer->Size += 4;
+    }
 
     g_pRecordingPushBuffer = NULL;
 
@@ -8635,14 +8923,141 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BlockUntilIdle(VOID)
 
     return D3D_OK;
 }
-// ******************************************************************
-HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer
-(
-    X_D3DPushBuffer *pPushBuffer,
-    PVOID            pFixup
-)
+
+static bool EmuVshTryDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
+                                  UINT primitiveCount, UINT firstVertex, UINT vertexCount,
+                                  const std::uint32_t* indices);
+static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveType,
+                             UINT vertexCount, bool rendered, const char* reason);
+
+static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    if(commandData == nullptr || size == 0)
+    {
+        return size == 0;
+    }
+
+    std::vector<std::uint32_t> indices;
+    try
+    {
+        indices.reserve(4096);
+    }
+    catch(...)
+    {
+        return false;
+    }
+
+    std::uint32_t beginEndOperation = 0;
+    try
+    {
+        const bool walked = cxbx::d3d::WalkPushBuffer(
+            size,
+            [commandData](std::uint32_t offset, std::uint32_t& word)
+            {
+                std::memcpy(&word, reinterpret_cast<const BYTE*>(commandData) + offset,
+                            sizeof(word));
+                return true;
+            },
+            [&indices, &beginEndOperation](std::uint32_t, std::uint32_t method,
+                                           std::uint32_t data)
+            {
+                constexpr std::uint32_t setBeginEnd = 0x17FCu;
+                constexpr std::uint32_t arrayElement16 = 0x1800u;
+                constexpr std::uint32_t arrayElement32 = 0x1808u;
+                constexpr std::size_t maximumIndices = 65536;
+
+                if(method == setBeginEnd)
+                {
+                    if(data != 0)
+                    {
+                        beginEndOperation = data;
+                        indices.clear();
+                        return true;
+                    }
+
+                    const cxbx::d3d::IndexedBatch batch = cxbx::d3d::ClassifyIndexedBatch(
+                        beginEndOperation, static_cast<std::uint32_t>(indices.size()));
+                    XTL::D3DPRIMITIVETYPE primitiveType = XTL::D3DPT_FORCE_DWORD;
+                    bool quadList = false;
+                    switch(batch.topology)
+                    {
+                        case cxbx::d3d::IndexedBatchTopology::PointList:
+                            primitiveType = XTL::D3DPT_POINTLIST;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::LineList:
+                            primitiveType = XTL::D3DPT_LINELIST;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::LineStrip:
+                            primitiveType = XTL::D3DPT_LINESTRIP;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::TriangleList:
+                            primitiveType = XTL::D3DPT_TRIANGLELIST;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::TriangleStrip:
+                            primitiveType = XTL::D3DPT_TRIANGLESTRIP;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::TriangleFan:
+                            primitiveType = XTL::D3DPT_TRIANGLEFAN;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::QuadList:
+                            primitiveType = XTL::D3DPT_TRIANGLELIST;
+                            quadList = true;
+                            break;
+                        case cxbx::d3d::IndexedBatchTopology::Invalid:
+                            break;
+                    }
+
+                    bool rendered = false;
+                    const bool supported = primitiveType != XTL::D3DPT_FORCE_DWORD;
+                    if(supported && g_EmuCurrentCpuVertexShader != nullptr)
+                    {
+                        rendered = EmuVshTryDrawCpuBound(
+                            quadList, primitiveType, batch.primitiveCount,
+                            g_EmuVshCpuBaseVertexIndex,
+                            static_cast<UINT>(indices.size()), indices.data());
+                        EmuVshLogCpuDraw("RunPushBuffer", beginEndOperation,
+                                         static_cast<UINT>(indices.size()), rendered,
+                                         rendered ? "none" : "cpu_push_draw_failed");
+                    }
+
+                    beginEndOperation = 0;
+                    indices.clear();
+                    return true;
+                }
+
+                if(beginEndOperation != 0 && method == arrayElement16)
+                {
+                    const auto packedIndices = cxbx::d3d::DecodeArrayElement16(data);
+                    if(indices.size() > maximumIndices - packedIndices.size())
+                    {
+                        return false;
+                    }
+                    indices.insert(indices.end(), packedIndices.begin(), packedIndices.end());
+                }
+                else if(beginEndOperation != 0 && method == arrayElement32)
+                {
+                    if(indices.size() >= maximumIndices)
+                    {
+                        return false;
+                    }
+                    indices.push_back(data);
+                }
+                return true;
+            });
+        return walked && beginEndOperation == 0;
+    }
+    catch(...)
+    {
+        return false;
+    }
+}
+
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer(
+    X_D3DPushBuffer* pPushBuffer,
+    PVOID pFixup)
+{
+    EmuSwapFS(); // Win2k/XP FS
     D3D_TRACE("RunPushBuffer");
 
     HRESULT Result = D3D_OK;
@@ -8657,16 +9072,64 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer
         {
             printf("*Warning* RunPushBuffer fixups are not yet implemented\n");
         }
-        else if((pPushBuffer->Common & 0x80000000) != 0 &&
-                pPushBuffer->Size != 0 &&
-                pPushBuffer->Size <= pPushBuffer->AllocationSize)
+        else
         {
-            if(!EmuNv2aExecutePushBuffer((const DWORD*)pPushBuffer->Data, pPushBuffer->Size))
-                printf("*Warning* RunPushBuffer rejected an invalid CPU-copy command stream\n");
-        }
-        else if(pPushBuffer->Size > pPushBuffer->AllocationSize)
-        {
-            Result = D3DERR_INVALIDCALL;
+            EmuRecordedPushBuffer* recording = EmuFindRecordedPushBuffer(pPushBuffer);
+            const bool hasRegisteredData =
+                recording != nullptr && recording->registeredData != nullptr &&
+                pPushBuffer->Size <= recording->registeredBytes;
+            const cxbx::d3d::PushBufferReplay replay =
+                hasRegisteredData
+                    ? cxbx::d3d::PushBufferReplay::Decode
+                    : cxbx::d3d::ClassifyPushBuffer(
+                          pPushBuffer->Common, pPushBuffer->Data, pPushBuffer->Size,
+                          pPushBuffer->AllocationSize);
+            if(replay == cxbx::d3d::PushBufferReplay::Invalid)
+            {
+                Result = D3DERR_INVALIDCALL;
+            }
+            else if(replay == cxbx::d3d::PushBufferReplay::Decode)
+            {
+                const DWORD* commandData = hasRegisteredData
+                                               ? recording->registeredData
+                                               : reinterpret_cast<const DWORD*>(
+                                                     pPushBuffer->Data);
+                if(hasRegisteredData && g_EmuCurrentCpuVertexShader != nullptr)
+                {
+                    if(!EmuReplayHlePushBuffer(commandData, pPushBuffer->Size))
+                    {
+                        printf("*Warning* RunPushBuffer rejected an invalid HLE command stream\n");
+                        Result = D3DERR_INVALIDCALL;
+                    }
+                }
+                else
+                {
+                    if(hasRegisteredData)
+                    {
+                        EmuNv2aEnableHleRaster();
+                    }
+                    if(!EmuNv2aExecutePushBuffer(commandData, pPushBuffer->Size))
+                    {
+                        printf("*Warning* RunPushBuffer rejected an invalid command stream\n");
+                        Result = D3DERR_INVALIDCALL;
+                    }
+                }
+            }
+            else if(replay == cxbx::d3d::PushBufferReplay::GuestDecode &&
+                    !EmuNv2aExecuteGuestPushBuffer(pPushBuffer->Data, pPushBuffer->Size))
+            {
+                static LONG warningCount = 0;
+                if(InterlockedIncrement(&warningCount) <= 4)
+                {
+                    printf("*Warning* RunPushBuffer could not map an in-place GPU command stream\n");
+                }
+            }
+
+            if(SUCCEEDED(Result) && !EmuReplayRecordedPushBuffer(pPushBuffer))
+            {
+                printf("*Warning* RunPushBuffer failed to replay recorded host draws\n");
+                Result = D3DERR_INVALIDCALL;
+            }
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
@@ -8838,6 +9301,15 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
         {
             result = g_pD3DDevice8->DrawPrimitiveUP(primitiveType, primitiveCount, vertices,
                                                     sizeof(EmuVshCpuVertex));
+            if(SUCCEEDED(result))
+            {
+                // This draw is submitted to the current backbuffer immediately. Static
+                // push-buffer recording keeps its own copy for future RunPushBuffer calls;
+                // replaying every CPU fallback draw again at Present would move it after
+                // later UI draws and cover title logos or text.
+                EmuRecordPushBufferDraw(primitiveType, primitiveCount, vertices,
+                                        sizeof(EmuVshCpuVertex));
+            }
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
@@ -9339,8 +9811,18 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
     {
         static LONG WarnCount = 0;
         if(InterlockedIncrement(&WarnCount) <= 5)
+        {
+            printf("EmuD3D8: DrawVerticesUP failed (0x%.08lX) prim=%lu primCount=%u stride=%u.\n",
+                   hRet, static_cast<unsigned long>(PCPrimitiveType), PrimitiveCount,
+                   VertexStreamZeroStride);
             EmuWarning("DrawVerticesUP failed (0x%.08X) prim=%d primCount=%d stride=%d",
                        hRet, PCPrimitiveType, PrimitiveCount, VertexStreamZeroStride);
+        }
+    }
+    else
+    {
+        EmuRecordPushBufferDraw(PCPrimitiveType, PrimitiveCount, pNewVertexStreamZeroData,
+                                VertexStreamZeroStride);
     }
 
     if(PrimitiveType == 8) // Quad List
