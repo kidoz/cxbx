@@ -5218,9 +5218,16 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
     const DWORD dwRegisterBase = reinterpret_cast<DWORD>(pBase);
     const DWORD dwDataOffset = pThis->Data;
+    const bool isPushBuffer = dwCommonType == X_D3DCOMMON_TYPE_PUSHBUFFER;
 
-	// Add the offset of the current texture to the base
-	pBase = (PVOID)((DWORD)pBase+pThis->Data);
+    // Xbox D3DResource::Register adds the resource's Data offset to pBase and
+    // masks non-push-buffer resources into the NV2A's 28-bit UMA address
+    // window. Guest code can therefore pass a pointer-shaped alias which is
+    // unreadable on the host even though its masked address names live title
+    // memory. Match the XDK routine before inspecting or copying the resource.
+    const DWORD dwResolvedDataAddress = cxbx::d3d::XboxResourceDataAddress(
+        reinterpret_cast<std::uintptr_t>(pBase), pThis->Data, isPushBuffer);
+    pBase = reinterpret_cast<PVOID>(dwResolvedDataAddress);
 
     // ******************************************************************
     // * Determine the resource type, and initialize

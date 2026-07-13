@@ -39,4 +39,14 @@ inline constexpr std::uint32_t XboxPhysicalAddress(std::uintptr_t address) noexc
     return static_cast<std::uint32_t>(address) & XboxRamMask;
 }
 
+inline constexpr std::uint32_t XboxResourceDataAddress(
+    std::uintptr_t baseAddress, std::uint32_t dataOffset,
+    bool isPushBuffer) noexcept
+{
+    const std::uint32_t resolvedAddress =
+        static_cast<std::uint32_t>(baseAddress) + dataOffset;
+    constexpr std::uint32_t ResourceAddressMask = 0x0FFFFFFFu;
+    return isPushBuffer ? resolvedAddress : resolvedAddress & ResourceAddressMask;
+}
+
 } // namespace cxbx::d3d
