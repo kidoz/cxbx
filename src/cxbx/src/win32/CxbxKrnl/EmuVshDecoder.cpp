@@ -206,6 +206,29 @@ static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
     }
 }
 
+static std::string VshFormatSource(const DWORD* instruction, const VshSrc& source)
+{
+    std::ostringstream text;
+    if(source.Neg != 0)
+    {
+        text << '-';
+    }
+    switch(source.Mux)
+    {
+        case PARAM_R: text << 'r' << source.R; break;
+        case PARAM_V: text << 'v' << VshGetField(instruction, FLD_V); break;
+        case PARAM_C: text << 'c' << VshGetField(instruction, FLD_CONST); break;
+        default: text << "invalid" << source.Mux; break;
+    }
+    static constexpr char Components[] = "xyzw";
+    text << '.';
+    for(DWORD component : source.Swz)
+    {
+        text << Components[component & 3u];
+    }
+    return text.str();
+}
+
 struct VshScratchPlan
 {
     bool valid = false;
@@ -447,7 +470,9 @@ static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
     return plan;
 }
 
-static bool VshHasIluOpcode(const DWORD* XboxFunction, DWORD Opcode)
+static bool VshHasIluOpcodeOutsidePair(const DWORD* XboxFunction, DWORD Opcode,
+                                       std::size_t IgnoredScale,
+                                       std::size_t IgnoredOffset)
 {
     if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
     {
@@ -461,6 +486,10 @@ static bool VshHasIluOpcode(const DWORD* XboxFunction, DWORD Opcode)
     }
     for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
     {
+        if(instruction == IgnoredScale || instruction == IgnoredOffset)
+        {
+            continue;
+        }
         const DWORD* encoded = &XboxFunction[1 + instruction * 4];
         if(VshGetField(encoded, FLD_ILU) == Opcode)
         {
@@ -659,6 +688,107 @@ static VshScreenSpaceSuffix VshClassifyScreenSpaceSuffix(const DWORD* Instructio
         suffix.ambiguous = true;
     }
     return suffix;
+}
+
+struct VshViewportPair
+{
+    std::size_t scale;
+    std::size_t offset;
+    bool discardScale;
+};
+
+static VshViewportPair VshFindViewportScaleAddPair(const DWORD* instructions,
+                                                   std::size_t instructionCount)
+{
+    const VshViewportPair notFound{ instructionCount, instructionCount, false };
+    if(instructions == nullptr || instructionCount < 3)
+    {
+        return notFound;
+    }
+
+    for(std::size_t scaleIndex = 0; scaleIndex + 1 < instructionCount; ++scaleIndex)
+    {
+        const DWORD* scale = &instructions[scaleIndex * 4];
+        VshSrc scaleA{}, scaleB{}, scaleC{};
+        VshDecodeSrc(scale, 0, &scaleA);
+        VshDecodeSrc(scale, 1, &scaleB);
+        VshDecodeSrc(scale, 2, &scaleC);
+        const bool noScaleIlu = VshGetField(scale, FLD_ILU) == ILU_NOP &&
+                                VshGetField(scale, FLD_OUT_ILU_MASK) == 0;
+        const bool scaleShape =
+            VshGetField(scale, FLD_MAC) == MAC_MUL &&
+            VshGetField(scale, FLD_CONST) == 58 &&
+            VshGetField(scale, FLD_OUT_MAC_MASK) == 0 &&
+            VshGetField(scale, FLD_OUT_O_MASK) == 0xE &&
+            VshGetField(scale, FLD_OUT_ORB) == OUTPUT_O &&
+            VshGetField(scale, FLD_OUT_ADDRESS) == 0 &&
+            VshGetField(scale, FLD_OUT_MUX) == OMUX_MAC && scaleA.Mux == PARAM_R &&
+            scaleA.R == 12 && VshIsIdentitySource(scaleA) && scaleB.Mux == PARAM_C &&
+            VshIsIdentitySource(scaleB);
+        if(!scaleShape)
+        {
+            continue;
+        }
+
+        const std::size_t lastOffset = (std::min)(scaleIndex + 2, instructionCount - 1);
+        for(std::size_t offsetIndex = scaleIndex + 1; offsetIndex <= lastOffset;
+            ++offsetIndex)
+        {
+            const DWORD* offset = &instructions[offsetIndex * 4];
+            VshSrc offsetA{}, offsetB{}, offsetC{};
+            VshDecodeSrc(offset, 0, &offsetA);
+            VshDecodeSrc(offset, 1, &offsetB);
+            VshDecodeSrc(offset, 2, &offsetC);
+            const bool fusedReciprocal =
+                VshGetField(scale, FLD_ILU) == ILU_RCC &&
+                VshGetField(scale, FLD_OUT_ILU_MASK) == 0x8 &&
+                offsetB.Mux == PARAM_R && offsetB.R == 1 &&
+                scaleC.Mux == PARAM_R && scaleC.R == 12 &&
+                scaleC.Swz[0] == 3 && scaleC.Swz[1] == 3 &&
+                scaleC.Swz[2] == 3 && scaleC.Swz[3] == 3;
+            const bool exactPair =
+                VshGetField(offset, FLD_MAC) == MAC_MAD &&
+                VshGetField(offset, FLD_ILU) == ILU_NOP &&
+                VshGetField(offset, FLD_CONST) == 59 &&
+                VshGetField(offset, FLD_OUT_MAC_MASK) == 0 &&
+                VshGetField(offset, FLD_OUT_ILU_MASK) == 0 &&
+                VshGetField(offset, FLD_OUT_O_MASK) == 0xE &&
+                VshGetField(offset, FLD_OUT_ORB) == OUTPUT_O &&
+                VshGetField(offset, FLD_OUT_ADDRESS) == 0 &&
+                VshGetField(offset, FLD_OUT_MUX) == OMUX_MAC &&
+                offsetA.Mux == PARAM_R && offsetA.R == 12 &&
+                VshIsIdentitySource(offsetA) && offsetB.Mux == PARAM_R &&
+                offsetB.R == 1 && offsetB.Swz[0] == 0 && offsetB.Swz[1] == 0 &&
+                offsetB.Swz[2] == 0 && offsetB.Swz[3] == 0 &&
+                offsetC.Mux == PARAM_C && VshIsIdentitySource(offsetC);
+            if(!exactPair)
+            {
+                continue;
+            }
+
+            bool positionUsedBetweenOrAfter = false;
+            for(std::size_t trailing = scaleIndex + 1; trailing < instructionCount;
+                ++trailing)
+            {
+                if(trailing == offsetIndex)
+                {
+                    continue;
+                }
+                const DWORD* instruction = &instructions[trailing * 4];
+                positionUsedBetweenOrAfter =
+                    positionUsedBetweenOrAfter || VshInstructionReadsR12(instruction) ||
+                    VshInstructionWritesPosition(instruction);
+            }
+            if(!positionUsedBetweenOrAfter)
+            {
+                // A fused RCC computes only the reciprocal consumed by the
+                // removed offset instruction. Other paired ILU work is an
+                // independently scheduled side effect and must still run.
+                return { scaleIndex, offsetIndex, noScaleIlu || fusedReciprocal };
+            }
+        }
+    }
+    return notFound;
 }
 
 static DWORD VshMapTemp(DWORD R, DWORD PositionScratch)
@@ -1419,7 +1549,21 @@ XTL::VshDiagnostics::ClassifyXboxFunction(const void* xboxFunctionData, std::str
         reason = rejectionReason;
         return XboxFunctionDisposition::Reject;
     }
-    if(VshHasIluOpcode(xboxFunction, ILU_RCC))
+    const VshScreenSpaceSuffix screenSpaceSuffix =
+        VshClassifyScreenSpaceSuffix(&xboxFunction[1], instructionCount);
+    const VshViewportPair viewportPair =
+        VshFindViewportScaleAddPair(&xboxFunction[1], instructionCount);
+    const bool viewportPairCoversFinalInstruction =
+        viewportPair.scale < instructionCount && viewportPair.offset == instructionCount - 1;
+    if(screenSpaceSuffix.ambiguous && !viewportPairCoversFinalInstruction)
+    {
+        reason = "ambiguous_screen_space_suffix";
+        return XboxFunctionDisposition::ExecuteOnCpu;
+    }
+    const std::size_t ignoredViewportScale =
+        viewportPair.discardScale ? viewportPair.scale : instructionCount;
+    if(VshHasIluOpcodeOutsidePair(xboxFunction, ILU_RCC, ignoredViewportScale,
+                                 viewportPair.offset))
     {
         reason = "rcc_requires_clamp";
         return XboxFunctionDisposition::ExecuteOnCpu;
@@ -1427,14 +1571,6 @@ XTL::VshDiagnostics::ClassifyXboxFunction(const void* xboxFunctionData, std::str
     if(VshUsesRelativeConstants(xboxFunction))
     {
         reason = "relative_constant_dynamic_range";
-        return XboxFunctionDisposition::ExecuteOnCpu;
-    }
-
-    const VshScreenSpaceSuffix screenSpaceSuffix =
-        VshClassifyScreenSpaceSuffix(&xboxFunction[1], instructionCount);
-    if(screenSpaceSuffix.ambiguous)
-    {
-        reason = "ambiguous_screen_space_suffix";
         return XboxFunctionDisposition::ExecuteOnCpu;
     }
 
@@ -1463,6 +1599,10 @@ std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xbo
     for(std::size_t index = 0; index < instructionCount; ++index)
     {
         const DWORD* instruction = &xboxFunction[1 + index * 4];
+        VshSrc sourceA{}, sourceB{}, sourceC{};
+        VshDecodeSrc(instruction, 0, &sourceA);
+        VshDecodeSrc(instruction, 1, &sourceB);
+        VshDecodeSrc(instruction, 2, &sourceC);
         std::ostringstream line;
         line << "pc=" << std::dec << std::setw(3) << std::setfill('0') << index
              << " raw=" << VshHex(instruction[0]) << ',' << VshHex(instruction[1]) << ','
@@ -1471,6 +1611,9 @@ std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xbo
              << " ilu=" << VshIluName(VshGetField(instruction, FLD_ILU))
              << " c=" << VshGetField(instruction, FLD_CONST)
              << " v=" << VshGetField(instruction, FLD_V)
+             << " a=" << VshFormatSource(instruction, sourceA)
+             << " b=" << VshFormatSource(instruction, sourceB)
+             << " csrc=" << VshFormatSource(instruction, sourceC)
              << " out_r=" << VshGetField(instruction, FLD_OUT_R)
              << " mac_mask=0x" << std::hex << VshGetField(instruction, FLD_OUT_MAC_MASK)
              << " ilu_mask=0x" << VshGetField(instruction, FLD_OUT_ILU_MASK)
@@ -1897,6 +2040,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
 
     const VshScreenSpaceSuffix ScreenSpaceSuffix =
         VshClassifyScreenSpaceSuffix(&pXboxFunction[1], InstrCount);
+    const VshViewportPair ViewportPair =
+        VshFindViewportScaleAddPair(&pXboxFunction[1], InstrCount);
 
     const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction);
 
@@ -1922,6 +2067,12 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
 
     for(DWORD i = 0; i < InstrCount; i++)
     {
+        if(i == ViewportPair.offset ||
+           (i == ViewportPair.scale && ViewportPair.discardScale))
+        {
+            NeedsPosEpilogue = true;
+            continue;
+        }
         if(i >= ScreenSpaceSuffix.start)
         {
             NeedsPosEpilogue = true;
@@ -1940,6 +2091,11 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         DWORD OutAddr = VshGetField(I, FLD_OUT_ADDRESS);
         DWORD OutMux  = VshGetField(I, FLD_OUT_MUX);
         bool  A0x     = VshGetField(I, FLD_A0X) != 0;
+        if(i == ViewportPair.scale)
+        {
+            OMask = 0;
+            NeedsPosEpilogue = true;
+        }
 
         VshSrc SrcA{}, SrcB{}, SrcC{};
         VshDecodeSrc(I, 0, &SrcA);
@@ -2668,7 +2824,7 @@ void VshDecodeXboxVertexValue(const std::uint8_t* source, DWORD type, float outp
     {
         for(DWORD component = 0; component < componentCount && component < 4; ++component)
         {
-            output[component] = static_cast<float>(source[component]);
+            output[component] = static_cast<float>(source[component]) / 255.0f;
         }
     }
 }
@@ -3045,10 +3201,18 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
 
     const VshScreenSpaceSuffix screenSpaceSuffix =
         VshClassifyScreenSpaceSuffix(Program, static_cast<std::size_t>(InstrCount));
+    const VshViewportPair viewportPair =
+        VshFindViewportScaleAddPair(Program, static_cast<std::size_t>(InstrCount));
 
     if(Start < 0) Start = 0;
     for(int pc = Start; pc < InstrCount; pc++)
     {
+        if(static_cast<std::size_t>(pc) == viewportPair.offset ||
+           (static_cast<std::size_t>(pc) == viewportPair.scale &&
+            viewportPair.discardScale))
+        {
+            continue;
+        }
         if(static_cast<std::size_t>(pc) >= screenSpaceSuffix.start)
         {
             break;
@@ -3068,6 +3232,10 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
         bool Relative = VshGetField(I, FLD_A0X) != 0;
         DWORD Vfield = VshGetField(I, FLD_V);
         bool Final = VshGetField(I, FLD_FINAL) != 0;
+        if(static_cast<std::size_t>(pc) == viewportPair.scale)
+        {
+            OMask = 0;
+        }
 
         VshSrc SA{}, SB{}, SC{};
         VshDecodeSrc(I, 0, &SA);

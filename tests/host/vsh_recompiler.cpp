@@ -1152,6 +1152,16 @@ bool ParseReplayCaptureLine(const std::string& line, ReplayCaptureRecord& record
 
 int ReplayCapture(const ReplayCaptureRecord& record)
 {
+    if(record.reason == "collapsed_geometry")
+    {
+        const std::vector<std::string> listing =
+            XTL::VshDiagnostics::DecodeXboxFunction(record.function.data());
+        for(const std::string& instruction : listing)
+        {
+            std::printf("VSHREPLAY| decoded hash=%08X %s\n", record.hash,
+                        instruction.c_str());
+        }
+    }
     DWORD translatedDeclaration[128] = {};
     XTL::VshDiagnostics::DeclarationTranslationResult declarationResult{};
     std::array<float, 192 * 4> hardwareConstants = record.constants;
@@ -1189,9 +1199,11 @@ int ReplayCapture(const ReplayCaptureRecord& record)
                 ? "cpu"
                 : "reject";
         std::printf("VSHREPLAY| replay hash=%08X status=classified disposition=%s "
-                    "cpu=%s reason=%s declaration=%d\n",
+                    "cpu=%s reason=%s declaration=%d position=%.9g,%.9g,%.9g,%.9g\n",
                     record.hash, dispositionName, cpuExecuted ? "pass" : "unavailable",
-                    dispositionReason.c_str(), static_cast<int>(declarationResult.disposition));
+                    dispositionReason.c_str(), static_cast<int>(declarationResult.disposition),
+                    cpuOutputs.position[0], cpuOutputs.position[1], cpuOutputs.position[2],
+                    cpuOutputs.position[3]);
         return disposition == XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu &&
                        !cpuExecuted
                    ? 1
@@ -2632,8 +2644,9 @@ int RunTests()
           "SHORT3 expands with W=1");
     Check(cpuInputs[4] > 0.49f && cpuInputs[5] < -0.49f && cpuInputs[6] == 0.0f,
           "NORMPACKED3 sign-extends and normalizes");
-    Check(cpuInputs[8] == 1.0f && cpuInputs[9] == 2.0f && cpuInputs[10] == 255.0f,
-          "PBYTE3 expands to scalar components");
+    Check(NearlyEqual(cpuInputs[8], 1.0f / 255.0f) &&
+              NearlyEqual(cpuInputs[9], 2.0f / 255.0f) && cpuInputs[10] == 1.0f,
+          "PBYTE3 expands to normalized scalar components");
 
     std::array<float, 192 * 4> cpuConstants{};
     cpuConstants[0] = 1.0f;
@@ -2807,6 +2820,206 @@ int RunTests()
                   NearlyEqual(cpuEpilogueOutputs.position[3], differentialInputs[3]),
               "screen-space removal preserves clip-space position");
         delete[] epilogueD3D8;
+    }
+
+    const NvTestSource viewportUnusedSource{};
+    const NvTestSource viewportPositionSource{ 1, 12, false, { 0, 1, 2, 3 } };
+    const NvTestSource reciprocalWSource{ 1, 1, false, { 0, 0, 0, 0 } };
+    const NvTestSource constantSource{ 3, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource vertexPositionSource{ 2, 0, false, { 0, 1, 2, 3 } };
+    const NvTestSource vertexColorSource{ 2, 0, false, { 0, 1, 2, 3 } };
+    std::vector<DWORD> viewportPairProgram{ 0x00042078u };
+    AppendNvTestInstruction(
+        viewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 0, vertexPositionSource, viewportUnusedSource,
+                                viewportUnusedSource,
+                                0, 0, 0, 0xF, 0, 0, false));
+    AppendNvTestInstruction(
+        viewportPairProgram,
+        EncodeNvTestInstruction(2, 0, 0, viewportPositionSource, constantSource,
+                                viewportUnusedSource,
+                                0, 0, 0, 0xE, 0, 0, false, 58));
+    AppendNvTestInstruction(
+        viewportPairProgram,
+        EncodeNvTestInstruction(4, 0, 0, viewportPositionSource, reciprocalWSource,
+                                constantSource, 0, 0, 0, 0xE, 0, 0, false, 59));
+    AppendNvTestInstruction(
+        viewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 2, vertexColorSource, viewportUnusedSource,
+                                viewportUnusedSource,
+                                0, 0, 0, 0xF, 3, 0, true));
+    ShaderOutputs cpuViewportPairOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              viewportPairProgram.data(), differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuViewportPairOutputs.position.data(),
+              cpuViewportPairOutputs.colors.data(), cpuViewportPairOutputs.colors.size(),
+              cpuViewportPairOutputs.texCoords.data(), cpuViewportPairOutputs.texCoords.size()),
+          "CPU embedded viewport pair shader executes");
+    Check(PositionsEqual(cpuViewportPairOutputs, cpuEpilogueOutputs),
+          "CPU removes embedded c58/c59 viewport pair");
+    DWORD* viewportPairD3D8 =
+        XTL::EmuVshRecompileXboxFunction(viewportPairProgram.data());
+    Check(viewportPairD3D8 != nullptr, "embedded viewport pair shader translates");
+    if(viewportPairD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8ViewportPairOutputs{};
+        Check(ExecuteD3D8Bytecode(viewportPairD3D8, 4 + 4 * 20,
+                                  differentialD3D8Constants.data(), differentialInputs.data(),
+                                  d3d8ViewportPairOutputs),
+              "translated embedded viewport pair bytecode executes independently");
+        Check(PositionsEqual(cpuViewportPairOutputs, d3d8ViewportPairOutputs),
+              "CPU and translator remove embedded c58/c59 viewport pair");
+        delete[] viewportPairD3D8;
+    }
+
+    const NvTestSource vertexSecondaryColorSource{ 2, 1, false, { 0, 1, 2, 3 } };
+    std::vector<DWORD> interleavedViewportPairProgram{ 0x00052078u };
+    AppendNvTestInstruction(
+        interleavedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 0, vertexPositionSource, viewportUnusedSource,
+                                viewportUnusedSource, 0, 0, 0, 0xF, 0, 0, false));
+    AppendNvTestInstruction(
+        interleavedViewportPairProgram,
+        EncodeNvTestInstruction(2, 0, 0, viewportPositionSource, constantSource,
+                                viewportUnusedSource, 0, 0, 0, 0xE, 0, 0, false, 58));
+    AppendNvTestInstruction(
+        interleavedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 1, vertexSecondaryColorSource,
+                                viewportUnusedSource, viewportUnusedSource, 0, 0, 0, 0xF,
+                                4, 0, false));
+    AppendNvTestInstruction(
+        interleavedViewportPairProgram,
+        EncodeNvTestInstruction(4, 0, 0, viewportPositionSource, reciprocalWSource,
+                                constantSource, 0, 0, 0, 0xE, 0, 0, false, 59));
+    AppendNvTestInstruction(
+        interleavedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 2, vertexColorSource, viewportUnusedSource,
+                                viewportUnusedSource, 0, 0, 0, 0xF, 3, 0, true));
+    ShaderOutputs cpuInterleavedViewportPairOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              interleavedViewportPairProgram.data(), differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuInterleavedViewportPairOutputs.position.data(),
+              cpuInterleavedViewportPairOutputs.colors.data(),
+              cpuInterleavedViewportPairOutputs.colors.size(),
+              cpuInterleavedViewportPairOutputs.texCoords.data(),
+              cpuInterleavedViewportPairOutputs.texCoords.size()),
+          "CPU interleaved viewport pair shader executes");
+    Check(PositionsEqual(cpuInterleavedViewportPairOutputs, cpuEpilogueOutputs),
+          "CPU removes interleaved c58/c59 viewport pair");
+    Check(NearlyEqual(cpuInterleavedViewportPairOutputs.colors[4],
+                      differentialInputs[4]),
+          "CPU preserves instruction scheduled inside viewport pair");
+    DWORD* interleavedViewportPairD3D8 =
+        XTL::EmuVshRecompileXboxFunction(interleavedViewportPairProgram.data());
+    Check(interleavedViewportPairD3D8 != nullptr,
+          "interleaved viewport pair shader translates");
+    if(interleavedViewportPairD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8InterleavedViewportPairOutputs{};
+        Check(ExecuteD3D8Bytecode(interleavedViewportPairD3D8, 4 + 5 * 20,
+                                  differentialD3D8Constants.data(),
+                                  differentialInputs.data(),
+                                  d3d8InterleavedViewportPairOutputs),
+              "translated interleaved viewport pair bytecode executes independently");
+        Check(OutputsEqual(cpuInterleavedViewportPairOutputs,
+                           d3d8InterleavedViewportPairOutputs),
+              "CPU and translator preserve interleaved viewport pair semantics");
+        delete[] interleavedViewportPairD3D8;
+    }
+
+    std::vector<DWORD> fusedViewportPairProgram = viewportPairProgram;
+    const NvTestSource positionWSource{ 1, 12, false, { 3, 3, 3, 3 } };
+    const std::array<DWORD, 4> fusedViewportScale = EncodeNvTestInstruction(
+        2, 3, 0, viewportPositionSource, constantSource, positionWSource, 0, 7, 0x8,
+        0xE, 0, 0, false, 58);
+    std::copy(fusedViewportScale.begin(), fusedViewportScale.end(),
+              fusedViewportPairProgram.begin() + 5);
+    ShaderOutputs cpuFusedViewportPairOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              fusedViewportPairProgram.data(), differentialHardwareConstants.data(),
+              differentialInputs.data(), cpuFusedViewportPairOutputs.position.data(),
+              cpuFusedViewportPairOutputs.colors.data(),
+              cpuFusedViewportPairOutputs.colors.size(),
+              cpuFusedViewportPairOutputs.texCoords.data(),
+              cpuFusedViewportPairOutputs.texCoords.size()),
+          "CPU fused viewport pair shader executes");
+    Check(PositionsEqual(cpuFusedViewportPairOutputs, cpuEpilogueOutputs),
+          "CPU removes fused RCC c58/c59 viewport pair");
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(fusedViewportPairProgram.data(),
+                                                    fallbackReason) ==
+              XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
+          "dead RCC in fused viewport pair permits host translation");
+    Check(fallbackReason.empty(), "removed fused RCC has no fallback reason");
+    DWORD* fusedViewportPairD3D8 =
+        XTL::EmuVshRecompileXboxFunction(fusedViewportPairProgram.data());
+    Check(fusedViewportPairD3D8 != nullptr, "fused RCC viewport pair shader translates");
+    if(fusedViewportPairD3D8 != nullptr)
+    {
+        const XTL::VshDiagnostics::ValidationResult fusedValidation =
+            XTL::VshDiagnostics::ValidateD3D8Translation(fusedViewportPairProgram.data(),
+                                                         fusedViewportPairD3D8);
+        Check(fusedValidation.valid, "fused RCC viewport pair bytecode validates");
+        ShaderOutputs d3d8FusedViewportPairOutputs{};
+        Check(ExecuteD3D8Bytecode(fusedViewportPairD3D8, 4 + 4 * 20,
+                                  differentialD3D8Constants.data(),
+                                  differentialInputs.data(),
+                                  d3d8FusedViewportPairOutputs),
+              "translated fused viewport pair bytecode executes independently");
+        Check(PositionsEqual(cpuFusedViewportPairOutputs, d3d8FusedViewportPairOutputs),
+              "CPU and translator remove fused RCC c58/c59 viewport pair");
+        delete[] fusedViewportPairD3D8;
+    }
+
+    std::vector<DWORD> terminalFusedViewportPairProgram{ 0x00032078u };
+    AppendNvTestInstruction(
+        terminalFusedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 0, vertexPositionSource, viewportUnusedSource,
+                                viewportUnusedSource, 0, 0, 0, 0xF, 0, 0, false));
+    AppendNvTestInstruction(terminalFusedViewportPairProgram, fusedViewportScale);
+    AppendNvTestInstruction(
+        terminalFusedViewportPairProgram,
+        EncodeNvTestInstruction(4, 0, 0, viewportPositionSource, reciprocalWSource,
+                                constantSource, 0, 0, 0, 0xE, 0, 0, true, 59));
+    ShaderOutputs cpuTerminalFusedViewportPairOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              terminalFusedViewportPairProgram.data(),
+              differentialHardwareConstants.data(), differentialInputs.data(),
+              cpuTerminalFusedViewportPairOutputs.position.data(),
+              cpuTerminalFusedViewportPairOutputs.colors.data(),
+              cpuTerminalFusedViewportPairOutputs.colors.size(),
+              cpuTerminalFusedViewportPairOutputs.texCoords.data(),
+              cpuTerminalFusedViewportPairOutputs.texCoords.size()),
+          "CPU terminal fused viewport pair shader executes");
+    Check(PositionsEqual(cpuTerminalFusedViewportPairOutputs, cpuEpilogueOutputs),
+          "CPU removes terminal fused RCC c58/c59 viewport pair");
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(
+              terminalFusedViewportPairProgram.data(), fallbackReason) ==
+              XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
+          "verified terminal viewport pair overrides ambiguous suffix classification");
+    Check(fallbackReason.empty(), "terminal fused viewport pair has no fallback reason");
+    DWORD* terminalFusedViewportPairD3D8 =
+        XTL::EmuVshRecompileXboxFunction(terminalFusedViewportPairProgram.data());
+    Check(terminalFusedViewportPairD3D8 != nullptr,
+          "terminal fused RCC viewport pair shader translates");
+    if(terminalFusedViewportPairD3D8 != nullptr)
+    {
+        const XTL::VshDiagnostics::ValidationResult terminalFusedValidation =
+            XTL::VshDiagnostics::ValidateD3D8Translation(
+                terminalFusedViewportPairProgram.data(), terminalFusedViewportPairD3D8);
+        Check(terminalFusedValidation.valid,
+              "terminal fused RCC viewport pair bytecode validates");
+        ShaderOutputs d3d8TerminalFusedViewportPairOutputs{};
+        Check(ExecuteD3D8Bytecode(terminalFusedViewportPairD3D8, 4 + 4 * 20,
+                                  differentialD3D8Constants.data(),
+                                  differentialInputs.data(),
+                                  d3d8TerminalFusedViewportPairOutputs),
+              "translated terminal fused viewport pair bytecode executes independently");
+        Check(PositionsEqual(cpuTerminalFusedViewportPairOutputs,
+                             d3d8TerminalFusedViewportPairOutputs),
+              "CPU and translator remove terminal fused RCC c58/c59 viewport pair");
+        delete[] terminalFusedViewportPairD3D8;
     }
 
     ShaderOutputs cpuFeedbackOutputs{};
