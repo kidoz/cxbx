@@ -94,10 +94,14 @@ int main()
            0x11D254F8u ||
        cxbx::d3d::XboxResourceHostDataAddress(0x11D00000u, 0x000254F8u, false) !=
            0x01D254F8u ||
+       cxbx::d3d::XboxResourceHostDataAddress(0x11EDF850u, 0, true) !=
+           0x11EDF850u ||
+       cxbx::d3d::XboxResourceHostDataAddress(0x11EDF850u, 0, false) !=
+           0x01EDF850u ||
        cxbx::d3d::XboxResourceHostDataAddress(0xFFFFFFF0u, 0x00000030u, true) !=
            0x00000020u)
     {
-        std::fputs("registered resources must retain tracked host backing aliases\n",
+        std::fputs("registered textures and buffers must retain tracked host backing aliases\n",
                    stderr);
         return 1;
     }

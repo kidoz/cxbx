@@ -5278,6 +5278,11 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
     const DWORD dwUnmaskedDataAddress = dwRegisterBase + dwDataOffset;
     const bool isPushBuffer = dwCommonType == X_D3DCOMMON_TYPE_PUSHBUFFER;
 
+    ULONG contiguousBlockSize = 0;
+    const ULONG contiguousBlockBase =
+        EmuContiguousBlockBase(dwUnmaskedDataAddress, &contiguousBlockSize);
+    const bool hasTrackedBacking = contiguousBlockBase != 0;
+
     // Xbox D3DResource::Register adds the resource's Data offset to pBase and
     // masks non-push-buffer resources into the NV2A's 28-bit UMA address
     // window. Guest code can therefore pass a pointer-shaped alias which is
@@ -5285,7 +5290,19 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
     // memory. Match the XDK routine before inspecting or copying the resource.
     const DWORD dwResolvedDataAddress = cxbx::d3d::XboxResourceDataAddress(
         reinterpret_cast<std::uintptr_t>(pBase), pThis->Data, isPushBuffer);
-    pBase = reinterpret_cast<PVOID>(dwResolvedDataAddress);
+    const DWORD dwHostDataAddress = isPushBuffer
+                                        ? dwResolvedDataAddress
+                                        : cxbx::d3d::XboxResourceHostDataAddress(
+                                              dwRegisterBase, dwDataOffset,
+                                              hasTrackedBacking);
+
+    // Preserve the XDK's masked guest/NV2A address semantics, but upload from
+    // the live host alias when the contiguous-allocation tracker proves that
+    // the unmasked pointer belongs to title-owned memory.  Heap-backed Xbox
+    // allocations commonly live above the 256 MiB D3D resource window (for
+    // example Turok's level textures at 0x11xxxxxx); masking those host
+    // pointers before the copy turns valid pixels into an unreadable address.
+    pBase = reinterpret_cast<PVOID>(dwHostDataAddress);
 
     // ******************************************************************
     // * Determine the resource type, and initialize
@@ -5304,13 +5321,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             // * Create the vertex buffer
             // ******************************************************************
             {
-                ULONG contiguousBlockSize = 0;
-                const ULONG contiguousBlockBase =
-                    EmuContiguousBlockBase(dwUnmaskedDataAddress, &contiguousBlockSize);
-                const bool hasTrackedBacking = contiguousBlockBase != 0;
-                const DWORD vertexDataAddress = cxbx::d3d::XboxResourceHostDataAddress(
-                    dwRegisterBase, dwDataOffset, hasTrackedBacking);
-                PVOID vertexData = reinterpret_cast<PVOID>(vertexDataAddress);
+                PVOID vertexData = reinterpret_cast<PVOID>(dwHostDataAddress);
                 const DWORD dwSize = hasTrackedBacking
                                          ? contiguousBlockSize -
                                                (dwUnmaskedDataAddress - contiguousBlockBase)
@@ -5671,7 +5682,8 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             // blank; an unguarded copy killed the process through the title's
             // last-resort exception handler.
             DWORD dwSourceSize = bCompressed ? dwCompressedMipChainSize
-                                             : (dwPitch != 0 ? dwPitch : dwWidth*dwBPP) * dwHeight;
+                                             : (dwPitch != 0 ? dwPitch : dwSourceWidth * dwBPP) *
+                                                   dwSourceHeight;
 
             std::vector<BYTE> sourceCopy;
             if(!EmuD3DCopyReadableRange(pBase, dwSourceSize, sourceCopy))
@@ -5685,11 +5697,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             }
             else if(bSwizzled)
             {
-                XTL::EmuXGUnswizzleRect
-                (
-                    sourceCopy.data(), dwWidth, dwHeight, dwDepth, LockedRect.pBits,
-                    LockedRect.Pitch, iRect, iPoint, dwBPP
-                );
+                XTL::EmuXGUnswizzleRect(
+                    sourceCopy.data(), dwSourceWidth, dwSourceHeight, dwDepth, LockedRect.pBits,
+                    LockedRect.Pitch, iRect, iPoint, dwBPP);
             }
             else if(bCompressed)
             {
@@ -5710,14 +5720,14 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 BYTE *pDest = (BYTE*)LockedRect.pBits;
                 const BYTE *pSrc = sourceCopy.data();
 
-                if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwWidth*dwBPP)
-                    memcpy(pDest, pSrc, dwWidth*dwHeight*dwBPP);
+                if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwSourceWidth * dwBPP)
+                    memcpy(pDest, pSrc, dwSourceWidth * dwSourceHeight * dwBPP);
                 else
                 {
                     // TODO: Faster copy (maybe unnecessary)
-                    for(DWORD v=0;v<dwHeight;v++)
+                    for(DWORD v = 0; v < dwSourceHeight; v++)
                     {
-                        memcpy(pDest, pSrc, dwWidth*dwBPP);
+                        memcpy(pDest, pSrc, dwSourceWidth * dwBPP);
 
                         pDest += LockedRect.Pitch;
                         pSrc  += dwPitch;
