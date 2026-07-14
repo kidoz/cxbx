@@ -9999,12 +9999,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer(
             const bool hasRegisteredData =
                 recording != nullptr && recording->registeredData != nullptr &&
                 pPushBuffer->Size <= recording->registeredBytes;
-            const cxbx::d3d::PushBufferReplay replay =
-                hasRegisteredData
-                    ? cxbx::d3d::PushBufferReplay::Decode
-                    : cxbx::d3d::ClassifyPushBuffer(
-                          pPushBuffer->Common, pPushBuffer->Data, pPushBuffer->Size,
-                          pPushBuffer->AllocationSize);
+            const bool hasRecordedDraws = recording != nullptr && !recording->draws.empty();
+            const cxbx::d3d::PushBufferReplay replay = cxbx::d3d::SelectPushBufferReplay(
+                hasRegisteredData, hasRecordedDraws, pPushBuffer->Common,
+                pPushBuffer->Data, pPushBuffer->Size, pPushBuffer->AllocationSize);
             if(replay == cxbx::d3d::PushBufferReplay::Invalid)
             {
                 Result = D3DERR_INVALIDCALL;
