@@ -3426,6 +3426,7 @@ static void EmuApplyPixelShaderFallback(cxbx::d3d::PixelShaderFallback fallback,
 // CXBX_D3D_SKIP_DRAWS=i[:j]  skip guest draws with per-frame index in [i,j)
 // CXBX_D3D_DUMP_DRAWS=i[:j]  after each guest draw with per-frame index in
 //                            [i,j), dump the backbuffer to %TEMP%\cxbx_draw\
+// CXBX_D3D_DUMP_FRAMES=i[:j] limit draw dumps to frames in [i,j)
 // CXBX_D3D_TEXTURE_DUMP=1    dump the converted level 0 of every registered
 //                            texture/surface to %TEMP%\cxbx_tex\
 // CXBX_TEX_TRACE=1           one TEX| line per registered texture/surface
@@ -3847,6 +3848,9 @@ static void EmuD3DDrawPost(void)
 {
     static int s_DumpEnabled = -1;
     static DWORD s_DumpBegin = 0, s_DumpEnd = 0;
+    static bool s_FrameRangeParsed = false;
+    static bool s_FrameRangeEnabled = false;
+    static DWORD s_FrameBegin = 0, s_FrameEnd = 0;
     static LONG s_DumpsRemaining = 64;
 
     if(s_DumpEnabled < 0)
@@ -3855,6 +3859,16 @@ static void EmuD3DDrawPost(void)
                             ? 1
                             : 0;
     if(s_DumpEnabled != 1)
+        return;
+
+    if(!s_FrameRangeParsed)
+    {
+        s_FrameRangeEnabled = EmuD3DParseDrawRange(
+            getenv("CXBX_D3D_DUMP_FRAMES"), s_FrameBegin, s_FrameEnd);
+        s_FrameRangeParsed = true;
+    }
+    if(s_FrameRangeEnabled &&
+       (g_D3DDebugFrame < s_FrameBegin || g_D3DDebugFrame >= s_FrameEnd))
         return;
 
     const DWORD index = g_D3DDebugDrawIndex != 0 ? g_D3DDebugDrawIndex - 1 : 0;
