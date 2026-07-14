@@ -69,6 +69,27 @@ int main()
     Check("connections multi-port changed", connection.changedMask,
           static_cast<std::uint32_t>(0x0B));
 
+    connections.Reset();
+    connections.Observe(1u);
+    connections.Consume();
+    connections.Observe(0u);
+    connection = connections.Consume();
+    Check("fallback removal current", connection.currentMask,
+          static_cast<std::uint32_t>(0));
+    Check("fallback removal changed", connection.changedMask,
+          static_cast<std::uint32_t>(1));
+    Check("fallback removal generation", connection.generations[0],
+          static_cast<std::uint32_t>(2));
+
+    connections.Observe(1u);
+    connection = connections.Consume();
+    Check("fallback reinsertion current", connection.currentMask,
+          static_cast<std::uint32_t>(1));
+    Check("fallback reinsertion changed", connection.changedMask,
+          static_cast<std::uint32_t>(1));
+    Check("fallback reinsertion generation", connection.generations[0],
+          static_cast<std::uint32_t>(3));
+
     HostInput::XInputGamepad host{};
     host.buttons = Button(HostInput::XInputButton::DPadUp) |
                    Button(HostInput::XInputButton::Start) |

@@ -137,7 +137,7 @@ class XBController : public Error
         // * Listening
         // ******************************************************************
         void ListenBegin(HWND hwnd);
-        void ListenPoll(XTL::XINPUT_STATE *Controller);
+        bool ListenPoll(XTL::XINPUT_STATE *Controller);
         void ListenEnd();
         bool HasInputDevice() const;
 

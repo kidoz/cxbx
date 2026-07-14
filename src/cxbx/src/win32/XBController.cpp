@@ -577,15 +577,17 @@ void XBController::ListenBegin(HWND hwnd)
 // ******************************************************************
 // * func: XBController::ListenPoll
 // ******************************************************************
-void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
+bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
 {
     if(Controller == NULL)
-        return;
+    {
+        return false;
+    }
 
     XTL::LPDIRECTINPUTDEVICE8 pDevice=NULL;
 
     HRESULT hRet=0;
-    DWORD dwFlags=0;
+    bool stateRead = false;
 
     // ******************************************************************
     // * Default values necessary for axis
@@ -614,9 +616,10 @@ void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
         if(FAILED(hRet))
         {
             hRet = pDevice->Acquire();
-
-            while(hRet == DIERR_INPUTLOST)
-                hRet = pDevice->Acquire();
+            if(FAILED(hRet))
+            {
+                continue;
+            }
         }
 
         SHORT wValue = 0;
@@ -630,6 +633,7 @@ void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
 
             if(pDevice->GetDeviceState(sizeof(JoyState), &JoyState) != DI_OK)
                 continue;
+            stateRead = true;
 
             if(dwFlags & DEVICE_FLAG_AXIS)
             {
@@ -668,6 +672,7 @@ void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
 
             if(pDevice->GetDeviceState(sizeof(KeyboardState), &KeyboardState) != DI_OK)
                 continue;
+            stateRead = true;
 
             BYTE bKey = KeyboardState[dwInfo];
 
@@ -685,6 +690,7 @@ void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
 
             if(pDevice->GetDeviceState(sizeof(MouseState), &MouseState) != DI_OK)
                 continue;
+            stateRead = true;
 
             if(dwFlags & DEVICE_FLAG_MOUSE_CLICK)
             {
@@ -849,7 +855,7 @@ void XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
         }
     }
 
-    return;
+    return stateRead;
 }
 
 // ******************************************************************

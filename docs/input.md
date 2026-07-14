@@ -39,7 +39,9 @@ occur between guest queries.
 
 The legacy DirectInput controller remains available as a port 0 fallback. When
 it is active, physical XInput transitions on that same effective port are hidden
-from the guest.
+from the guest. Device-change notifications re-enumerate configured DirectInput
+devices, and failed state reads are reported as disconnected instead of
+returning a neutral controller state.
 
 ## Synchronization
 
