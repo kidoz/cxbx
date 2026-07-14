@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/xbox_memory.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -35,8 +37,7 @@ inline constexpr std::size_t CompressedTextureMipChainSize(
 
 inline constexpr std::uint32_t XboxPhysicalAddress(std::uintptr_t address) noexcept
 {
-    constexpr std::uint32_t XboxRamMask = (64u * 1024u * 1024u) - 1u;
-    return static_cast<std::uint32_t>(address) & XboxRamMask;
+    return cxbx::XboxPhysicalAddress(address);
 }
 
 inline constexpr std::uint32_t XboxResourceDataAddress(
