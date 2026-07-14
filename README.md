@@ -6,8 +6,8 @@
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Build system: Meson](https://img.shields.io/badge/build-Meson-00ADD8.svg)](https://mesonbuild.com/)
-[![C](https://img.shields.io/badge/C-C11-555555.svg)](meson.build)
-[![C++](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](meson.build)
+[![C](https://img.shields.io/badge/C-C17-555555.svg)](meson.build)
+[![C++](https://img.shields.io/badge/C%2B%2B-20-00599C.svg)](meson.build)
 [![Target](https://img.shields.io/badge/target-Win32%20x86-lightgrey.svg)](cross/i686-windows-clang.ini)
 
 CXBX is a classic original Xbox emulator. This tree contains the emulator,
@@ -63,7 +63,7 @@ state.
 
 - **clang/LLVM** (clang, lld, llvm-lib, llvm-dlltool) — the primary toolchain.
   On Windows, install via `scoop install llvm` or download from llvm.org.
-- **Meson ≥ 0.56** and **Ninja** — `pip install meson ninja` or
+- **Meson ≥ 1.4** and **Ninja** — `pip install meson ninja` or
   `scoop install meson ninja`.
 - **Python 3.13+** with **uv** for the conformance-suite and OOVPA tooling:
   `pip install uv`.
@@ -225,7 +225,7 @@ in the guest image, and route it to a host `Emu*` wrapper. The workflow:
 
 ## The `xiso` Tool (Xbox disc images)
 
-`xiso` is a first-party C++17 host tool for listing, extracting, creating,
+`xiso` is a first-party C++20 host tool for listing, extracting, creating,
 inspecting, and verifying Xbox GDF/XDFS disc images. It builds by default in
 any build directory (see [Build](#build)):
 

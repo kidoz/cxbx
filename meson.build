@@ -2,10 +2,10 @@ project(
   'cxbx',
   ['c', 'cpp'],
   version : '0.1.0',
-  meson_version : '>=0.56.0',
+  meson_version : '>=1.4.0',
   default_options : [
-    'c_std=c11',
-    'cpp_std=c++17',
+    'c_std=c17',
+    'cpp_std=c++20',
   ],
 )
 
@@ -62,7 +62,7 @@ subdir('src/cxbx')
 # Deterministic host-side tests for input translation and other Win32 boundaries.
 subdir('tests/host')
 
-# XISO host tool (list/extract/create/verify Xbox disc images). Pure C11,
+# XISO host tool (list/extract/create/verify Xbox disc images). Pure C++20,
 # no emulator dependencies. Built on every machine -- portable host code.
 if get_option('build_xiso')
   subdir('src/xiso')

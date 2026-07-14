@@ -1,6 +1,6 @@
 // ******************************************************************
 // *
-// *  Public API for the cxbx XISO tool (C++17). A XisoImage owns a
+// *  Public API for the cxbx XISO tool (C++20). A XisoImage owns a
 // *  std::ifstream and validates the XDFS volume descriptor on
 // *  construction (RAII). All operations are free functions that take
 // *  a const XisoImage&. xiso.cpp implements them; main() dispatches.
