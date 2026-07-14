@@ -231,6 +231,12 @@ bool HostInput::Initialize()
     return true;
 }
 
+bool HostInput::IsInitialized()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_xinputGetState != nullptr && g_xinputSetState != nullptr;
+}
+
 bool HostInput::AttachWindow(void* nativeWindow)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -246,8 +252,7 @@ bool HostInput::AttachWindow(void* nativeWindow)
     }
 
     DetachWindowUnlocked();
-    auto devices = MakeRawInputDevices(
-        window, RIDEV_DEVNOTIFY | RIDEV_INPUTSINK);
+    auto devices = MakeRawInputDevices(window, RIDEV_DEVNOTIFY);
     if(!RegisterRawInputDevices(devices.data(), static_cast<UINT>(devices.size()),
                                 sizeof(RAWINPUTDEVICE)))
     {

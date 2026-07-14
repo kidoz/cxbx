@@ -22,6 +22,10 @@ forces an immediate four-port XInput connection scan. XInput remains the source
 of truth because a Raw Input device notification does not identify an XInput
 user index.
 
+The XInput backend is independent of the legacy configurable DirectInput path.
+Failure to initialize DirectInput does not disable XInput polling or prevent the
+emulation window from receiving device-change notifications.
+
 Connected ports are checked whenever the guest queries device state.
 Disconnected ports are checked at most once per second when notifications are
 missing or unavailable. This avoids polling every empty XInput slot on every

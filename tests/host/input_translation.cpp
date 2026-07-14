@@ -110,7 +110,9 @@ int main()
     Check("neutral left trigger", guest.analogButtons[6], static_cast<std::uint8_t>(0));
     Check("neutral right trigger", guest.analogButtons[7], static_cast<std::uint8_t>(0));
 
+    Check("host input initially stopped", HostInput::IsInitialized(), false);
     Check("host input initialize", HostInput::Initialize(), true);
+    Check("host input initialized", HostInput::IsInitialized(), true);
     const std::uint32_t connectedMask = HostInput::GetConnectedMask();
     std::printf("INFO connected XInput mask=0x%X\n", connectedMask);
     if((connectedMask & 1u) != 0)
@@ -125,6 +127,7 @@ int main()
               static_cast<std::uint32_t>(0));
     }
     HostInput::Shutdown();
+    Check("host input shutdown", HostInput::IsInitialized(), false);
 
     if(g_failures == 0)
     {

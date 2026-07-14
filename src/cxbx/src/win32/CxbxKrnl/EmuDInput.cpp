@@ -69,16 +69,18 @@ bool XTL::EmuDInputInit()
     g_XBController.ListenBegin(XTL::g_hEmuWindow);
 
     if (g_XBController.GetError()) {
-        return false;
+        printf("EmuDInput: legacy DirectInput initialization failed: %s\n",
+               g_XBController.GetError());
+        g_XBController.ListenEnd();
+    } else {
+        g_DirectInputReady = true;
     }
-
-    g_DirectInputReady = true;
 
     if (!HostInput::AttachWindow(XTL::g_hEmuWindow)) {
         printf("EmuDInput: host gamepad device notifications are unavailable; "
                "using polling fallback.\n");
     }
-    return true;
+    return g_DirectInputReady || HostInput::IsInitialized();
 }
 
 // ******************************************************************
