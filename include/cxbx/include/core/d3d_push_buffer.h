@@ -114,13 +114,13 @@ inline PushBufferReplay SelectPushBufferReplay(bool hasRegisteredData,
                                                std::uint32_t size,
                                                std::uint32_t allocationSize) noexcept
 {
-    if(hasRecordedDraws)
-    {
-        return PushBufferReplay::RecordedOnly;
-    }
     if(hasRegisteredData)
     {
         return PushBufferReplay::Decode;
+    }
+    if(hasRecordedDraws)
+    {
+        return PushBufferReplay::RecordedOnly;
     }
     return ClassifyPushBuffer(common, dataAddress, size, allocationSize);
 }

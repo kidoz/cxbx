@@ -9856,7 +9856,8 @@ static bool EmuVshTryDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitive
 static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveType,
                              UINT vertexCount, bool rendered, const char* reason);
 
-static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size)
+static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
+                                   const EmuRecordedPushBuffer* recording)
 {
     if(commandData == nullptr || size == 0)
     {
@@ -9874,6 +9875,7 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size)
     }
 
     std::uint32_t beginEndOperation = 0;
+    std::size_t drawIndex = 0;
     try
     {
         const bool walked = cxbx::d3d::WalkPushBuffer(
@@ -9884,8 +9886,8 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size)
                             sizeof(word));
                 return true;
             },
-            [&indices, &beginEndOperation](std::uint32_t, std::uint32_t method,
-                                           std::uint32_t data)
+            [&indices, &beginEndOperation, &drawIndex, recording](
+                std::uint32_t, std::uint32_t method, std::uint32_t data)
             {
                 constexpr std::uint32_t setBeginEnd = 0x17FCu;
                 constexpr std::uint32_t arrayElement16 = 0x1800u;
@@ -9935,6 +9937,15 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size)
 
                     bool rendered = false;
                     const bool supported = primitiveType != XTL::D3DPT_FORCE_DWORD;
+                    if(recording != nullptr && drawIndex < recording->draws.size())
+                    {
+                        const DWORD stateBlock = recording->draws[drawIndex].stateBlock;
+                        if(stateBlock != 0 && FAILED(g_pD3DDevice8->ApplyStateBlock(stateBlock)))
+                        {
+                            return false;
+                        }
+                    }
+                    ++drawIndex;
                     if(supported && g_EmuCurrentCpuVertexShader != nullptr)
                     {
                         rendered = EmuVshTryDrawCpuBound(
@@ -10020,7 +10031,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer(
                                                      pPushBuffer->Data);
                 if(hasRegisteredData && g_EmuCurrentCpuVertexShader != nullptr)
                 {
-                    if(!EmuReplayHlePushBuffer(commandData, pPushBuffer->Size))
+                    if(!EmuReplayHlePushBuffer(commandData, pPushBuffer->Size, recording))
                     {
                         printf("*Warning* RunPushBuffer rejected an invalid HLE command stream\n");
                         Result = D3DERR_INVALIDCALL;
@@ -10049,7 +10060,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer(
                 }
             }
 
-            if(SUCCEEDED(Result) && !EmuReplayRecordedPushBuffer(pPushBuffer))
+            if(SUCCEEDED(Result) && replay != cxbx::d3d::PushBufferReplay::Decode &&
+               !EmuReplayRecordedPushBuffer(pPushBuffer))
             {
                 printf("*Warning* RunPushBuffer failed to replay recorded host draws\n");
                 Result = D3DERR_INVALIDCALL;
