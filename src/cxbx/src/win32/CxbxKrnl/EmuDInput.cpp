@@ -48,6 +48,7 @@ namespace XTL
 #include "EmuShared.h"
 
 #include <cstring>
+#include <mutex>
 
 // ******************************************************************
 // * Static Variable(s)
@@ -57,30 +58,46 @@ static bool g_DirectInputReady = false;
 static XTL::XINPUT_STATE g_LastDirectInputState = {};
 static DWORD g_DirectInputPacketNumber = 0;
 static bool g_HasLastDirectInputState = false;
+static bool g_DirectInputConnected = false;
 static HostInput::ConnectionTracker g_EffectiveConnections;
+static std::mutex g_DirectInputMutex;
 
-// ******************************************************************
-// * func: XTL::EmuDInputInit
-// ******************************************************************
-bool XTL::EmuDInputInit()
+static void EmuDInputStartLegacyUnlocked()
 {
     g_EmuShared->GetXBController(&g_XBController);
-
     g_XBController.ListenBegin(XTL::g_hEmuWindow);
 
     if (g_XBController.GetError()) {
         printf("EmuDInput: legacy DirectInput initialization failed: %s\n",
                g_XBController.GetError());
         g_XBController.ListenEnd();
-    } else {
-        g_DirectInputReady = true;
+        g_DirectInputReady = false;
+        g_DirectInputConnected = false;
+        return;
+    }
+
+    g_DirectInputReady = true;
+    g_DirectInputConnected = g_XBController.HasInputDevice();
+    g_HasLastDirectInputState = false;
+}
+
+// ******************************************************************
+// * func: XTL::EmuDInputInit
+// ******************************************************************
+bool XTL::EmuDInputInit()
+{
+    bool directInputReady = false;
+    {
+        std::lock_guard<std::mutex> lock(g_DirectInputMutex);
+        EmuDInputStartLegacyUnlocked();
+        directInputReady = g_DirectInputReady;
     }
 
     if (!HostInput::AttachWindow(XTL::g_hEmuWindow)) {
         printf("EmuDInput: host gamepad device notifications are unavailable; "
                "using polling fallback.\n");
     }
-    return g_DirectInputReady || HostInput::IsInitialized();
+    return directInputReady || HostInput::IsInitialized();
 }
 
 // ******************************************************************
@@ -88,11 +105,16 @@ bool XTL::EmuDInputInit()
 // ******************************************************************
 void XTL::EmuDInputCleanup()
 {
-    if (g_DirectInputReady) {
-        g_XBController.ListenEnd();
+    {
+        std::lock_guard<std::mutex> lock(g_DirectInputMutex);
+        if (g_DirectInputReady) {
+            g_XBController.ListenEnd();
+        }
         g_DirectInputReady = false;
+        g_DirectInputConnected = false;
+        g_HasLastDirectInputState = false;
+        g_EffectiveConnections.Reset();
     }
-    g_EffectiveConnections.Reset();
     HostInput::Shutdown();
 }
 
@@ -102,6 +124,12 @@ void XTL::EmuDInputCleanup()
 void XTL::EmuDInputNotifyDeviceChange()
 {
     HostInput::NotifyDeviceChange();
+
+    std::lock_guard<std::mutex> lock(g_DirectInputMutex);
+    if (g_DirectInputReady) {
+        g_XBController.ListenEnd();
+    }
+    EmuDInputStartLegacyUnlocked();
 }
 
 // ******************************************************************
@@ -113,8 +141,8 @@ void XTL::EmuDInputGetConnectionSnapshot(BOOL Refresh, BOOL ConsumeChanges,
 {
     const HostInput::ConnectionSnapshot host =
         HostInput::GetConnectionSnapshot(Refresh != FALSE, true);
-    const DWORD fallbackMask =
-        g_DirectInputReady && g_XBController.HasInputDevice() ? 1u : 0u;
+    std::lock_guard<std::mutex> lock(g_DirectInputMutex);
+    const DWORD fallbackMask = g_DirectInputConnected ? 1u : 0u;
     const DWORD effectiveMask = host.currentMask | fallbackMask;
     const DWORD visibleHostChanges = host.changedMask & ~fallbackMask;
     g_EffectiveConnections.Observe(effectiveMask, visibleHostChanges);
@@ -168,12 +196,16 @@ bool XTL::EmuDInputPoll(DWORD Port, XTL::PXINPUT_STATE Controller)
         return true;
     }
 
-    if (Port != 0 || !g_DirectInputReady || !g_XBController.HasInputDevice()) {
+    std::lock_guard<std::mutex> lock(g_DirectInputMutex);
+    if (Port != 0 || !g_DirectInputConnected) {
         return false;
     }
 
     XTL::XINPUT_STATE directInputState{};
-    g_XBController.ListenPoll(&directInputState);
+    if (!g_XBController.ListenPoll(&directInputState)) {
+        g_HasLastDirectInputState = false;
+        return false;
+    }
 
     if (g_XBController.GetError()) {
         MessageBox(NULL, g_XBController.GetError(), "cxbx [*UNHANDLED!*]", MB_OK);  // TODO: Handle this!
@@ -196,8 +228,9 @@ bool XTL::EmuDInputPoll(DWORD Port, XTL::PXINPUT_STATE Controller)
 DWORD XTL::EmuDInputSetState(DWORD Port, WORD LeftMotorSpeed, WORD RightMotorSpeed)
 {
     DWORD result = HostInput::SetRumble(Port, LeftMotorSpeed, RightMotorSpeed);
+    std::lock_guard<std::mutex> lock(g_DirectInputMutex);
     if (result == ERROR_DEVICE_NOT_CONNECTED && Port == 0 &&
-        g_DirectInputReady && g_XBController.HasInputDevice()) {
+        g_DirectInputConnected) {
         return ERROR_SUCCESS;
     }
     return result;
