@@ -3475,17 +3475,156 @@ static void EmuD3DDebugDumpPath(char* buffer, std::size_t size,
     snprintf(buffer, size, "%s\\%s", directory, fileName);
 }
 
-// Write one locked surface level as a 32-bit top-down BMP. Only the host
-// formats the converter actually produces are expanded; anything else
-// (e.g. DXT) is skipped by returning false.
+// DXT (BC1/BC2/BC3) decompression for the texture dumper -- most of what
+// real titles register is compressed, so the dumper decodes it rather than
+// skipping it.
+#define EMU_FOURCC_DXT1 0x31545844u
+#define EMU_FOURCC_DXT2 0x32545844u
+#define EMU_FOURCC_DXT3 0x33545844u
+#define EMU_FOURCC_DXT4 0x34545844u
+#define EMU_FOURCC_DXT5 0x35545844u
+
+static DWORD EmuD3DExpand565(WORD color)
+{
+    const DWORD r = ((color >> 11) & 0x1F) * 255 / 31;
+    const DWORD g = ((color >> 5) & 0x3F) * 255 / 63;
+    const DWORD b = (color & 0x1F) * 255 / 31;
+    return (r << 16) | (g << 8) | b;
+}
+
+// Decode one 4x4 DXT block into blockPixels[16] (ARGB). The block is 8
+// bytes for DXT1, 16 bytes (alpha half + color half) for DXT2-5.
+static void EmuD3DDecodeDxtBlock(const BYTE* block, DWORD fourCC,
+                                 DWORD* blockPixels)
+{
+    const BYTE* colorBlock = fourCC == EMU_FOURCC_DXT1 ? block : block + 8;
+
+    const WORD color0 = static_cast<WORD>(colorBlock[0] | (colorBlock[1] << 8));
+    const WORD color1 = static_cast<WORD>(colorBlock[2] | (colorBlock[3] << 8));
+    const DWORD rgb0 = EmuD3DExpand565(color0);
+    const DWORD rgb1 = EmuD3DExpand565(color1);
+    const DWORD r0 = rgb0 >> 16 & 0xFF, g0 = rgb0 >> 8 & 0xFF, b0 = rgb0 & 0xFF;
+    const DWORD r1 = rgb1 >> 16 & 0xFF, g1 = rgb1 >> 8 & 0xFF, b1 = rgb1 & 0xFF;
+
+    DWORD palette[4];
+    palette[0] = 0xFF000000u | rgb0;
+    palette[1] = 0xFF000000u | rgb1;
+    // DXT2-5 color blocks always use 4-color mode; DXT1 selects punch-through
+    // alpha when color0 <= color1.
+    if(fourCC != EMU_FOURCC_DXT1 || color0 > color1)
+    {
+        palette[2] = 0xFF000000u | (((r0 * 2 + r1) / 3) << 16) |
+                     (((g0 * 2 + g1) / 3) << 8) | ((b0 * 2 + b1) / 3);
+        palette[3] = 0xFF000000u | (((r0 + r1 * 2) / 3) << 16) |
+                     (((g0 + g1 * 2) / 3) << 8) | ((b0 + b1 * 2) / 3);
+    }
+    else
+    {
+        palette[2] = 0xFF000000u | (((r0 + r1) / 2) << 16) |
+                     (((g0 + g1) / 2) << 8) | ((b0 + b1) / 2);
+        palette[3] = 0x00000000u; // punch-through
+    }
+
+    for(unsigned int texel = 0; texel < 16; ++texel)
+    {
+        const DWORD indexBits = colorBlock[4 + texel / 4];
+        blockPixels[texel] = palette[(indexBits >> ((texel % 4) * 2)) & 0x3];
+    }
+
+    if(fourCC == EMU_FOURCC_DXT2 || fourCC == EMU_FOURCC_DXT3)
+    {
+        // Explicit 4-bit alpha, low nibble first.
+        for(unsigned int texel = 0; texel < 16; ++texel)
+        {
+            const BYTE pair = block[texel / 2];
+            const DWORD alpha = ((texel & 1) ? (pair >> 4) : (pair & 0xF)) * 17u;
+            blockPixels[texel] = (blockPixels[texel] & 0x00FFFFFFu) | (alpha << 24);
+        }
+    }
+    else if(fourCC == EMU_FOURCC_DXT4 || fourCC == EMU_FOURCC_DXT5)
+    {
+        // Interpolated alpha: two endpoints + 16 3-bit codes.
+        const DWORD alpha0 = block[0];
+        const DWORD alpha1 = block[1];
+        DWORD alphaPalette[8];
+        alphaPalette[0] = alpha0;
+        alphaPalette[1] = alpha1;
+        if(alpha0 > alpha1)
+        {
+            for(DWORD i = 0; i < 6; ++i)
+                alphaPalette[2 + i] = ((6 - i) * alpha0 + (i + 1) * alpha1) / 7;
+        }
+        else
+        {
+            for(DWORD i = 0; i < 4; ++i)
+                alphaPalette[2 + i] = ((4 - i) * alpha0 + (i + 1) * alpha1) / 5;
+            alphaPalette[6] = 0;
+            alphaPalette[7] = 255;
+        }
+        unsigned long long codes = 0;
+        for(int byteIndex = 5; byteIndex >= 0; --byteIndex)
+            codes = (codes << 8) | block[2 + byteIndex];
+        for(unsigned int texel = 0; texel < 16; ++texel)
+        {
+            const DWORD alpha = alphaPalette[(codes >> (texel * 3)) & 0x7];
+            blockPixels[texel] = (blockPixels[texel] & 0x00FFFFFFu) | (alpha << 24);
+        }
+    }
+}
+
+// Decompress a whole DXT level (pitch = bytes per block row) to ARGB.
+static void EmuD3DDecodeDxt(const BYTE* bits, INT pitch, DWORD width,
+                            DWORD height, DWORD fourCC, std::vector<DWORD>& out)
+{
+    const DWORD blockBytes = fourCC == EMU_FOURCC_DXT1 ? 8 : 16;
+    const DWORD blocksAcross = (width + 3) / 4;
+    const DWORD blocksDown = (height + 3) / 4;
+    out.assign(static_cast<std::size_t>(width) * height, 0);
+
+    for(DWORD blockY = 0; blockY < blocksDown; ++blockY)
+    {
+        const BYTE* blockRow = bits + static_cast<std::size_t>(blockY) * pitch;
+        for(DWORD blockX = 0; blockX < blocksAcross; ++blockX)
+        {
+            DWORD blockPixels[16];
+            EmuD3DDecodeDxtBlock(
+                blockRow + static_cast<std::size_t>(blockX) * blockBytes, fourCC,
+                blockPixels);
+            for(DWORD y = 0; y < 4 && blockY * 4 + y < height; ++y)
+            {
+                for(DWORD x = 0; x < 4 && blockX * 4 + x < width; ++x)
+                {
+                    out[static_cast<std::size_t>(blockY * 4 + y) * width +
+                        blockX * 4 + x] = blockPixels[y * 4 + x];
+                }
+            }
+        }
+    }
+}
+
+// Write one locked surface level as a 32-bit top-down BMP. Uncompressed
+// 32/16-bit host formats are expanded directly and DXT1-5 levels are
+// decompressed first; anything else is skipped by returning false.
 static bool EmuD3DWriteBmp(const char* path, DWORD width, DWORD height,
                            INT pitch, const void* bits, XTL::D3DFORMAT format)
 {
     if(bits == NULL || width == 0 || height == 0)
         return false;
 
-    if(format != XTL::D3DFMT_A8R8G8B8 && format != XTL::D3DFMT_X8R8G8B8 &&
-       format != XTL::D3DFMT_R5G6B5 && format != XTL::D3DFMT_A4R4G4B4)
+    std::vector<DWORD> decoded;
+    const DWORD formatValue = static_cast<DWORD>(format);
+    if(formatValue == EMU_FOURCC_DXT1 || formatValue == EMU_FOURCC_DXT2 ||
+       formatValue == EMU_FOURCC_DXT3 || formatValue == EMU_FOURCC_DXT4 ||
+       formatValue == EMU_FOURCC_DXT5)
+    {
+        EmuD3DDecodeDxt(static_cast<const BYTE*>(bits), pitch, width, height,
+                        formatValue, decoded);
+        bits = decoded.data();
+        pitch = static_cast<INT>(width * 4);
+        format = XTL::D3DFMT_A8R8G8B8;
+    }
+    else if(format != XTL::D3DFMT_A8R8G8B8 && format != XTL::D3DFMT_X8R8G8B8 &&
+            format != XTL::D3DFMT_R5G6B5 && format != XTL::D3DFMT_A4R4G4B4)
         return false;
 
     HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
