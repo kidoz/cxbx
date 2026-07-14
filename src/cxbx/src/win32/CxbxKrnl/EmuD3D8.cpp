@@ -3415,6 +3415,323 @@ static void EmuApplyPixelShaderFallback(cxbx::d3d::PixelShaderFallback fallback,
 }
 
 // ******************************************************************
+// * Graphics debugging aids (all opt-in via environment variables)
+// ******************************************************************
+// CXBX_D3D_DRAW_TRACE=1      one DRAW| line per guest draw call
+// CXBX_D3D_SKIP_DRAWS=i[:j]  skip guest draws with per-frame index in [i,j)
+// CXBX_D3D_DUMP_DRAWS=i[:j]  after each guest draw with per-frame index in
+//                            [i,j), dump the backbuffer to %TEMP%\cxbx_draw\
+// CXBX_D3D_TEXTURE_DUMP=1    dump the converted level 0 of every registered
+//                            texture/surface to %TEMP%\cxbx_tex\
+// CXBX_TEX_TRACE=1           one TEX| line per registered texture/surface
+// CXBX_PSH_DUMP=1            dump the 60-dword combiner definition of every
+//                            pixel shader that lands on the fixed-function
+//                            fallback
+// CXBX_D3D_PERF_MARKERS=1    emit D3DPERF (PIX) frame/draw events so external
+//                            captures (apitrace, DXVK d3d8 + RenderDoc) are
+//                            self-describing
+
+static DWORD g_D3DDebugFrame = 0;     // increments at Swap
+static DWORD g_D3DDebugDrawIndex = 0; // resets at Swap
+
+static DWORD EmuD3DHashBytes(const void* data, std::size_t size)
+{
+    const BYTE* bytes = static_cast<const BYTE*>(data);
+    DWORD hash = 2166136261u;
+    for(std::size_t i = 0; i < size; ++i)
+    {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static bool EmuD3DParseDrawRange(const char* value, DWORD& begin, DWORD& end)
+{
+    if(value == NULL || *value == '\0')
+        return false;
+
+    char* cursor = NULL;
+    begin = strtoul(value, &cursor, 0);
+    if(cursor != NULL && (*cursor == ':' || *cursor == '-'))
+        end = strtoul(cursor + 1, NULL, 0);
+    else
+        end = begin + 1;
+    return end > begin;
+}
+
+// Build "%TEMP%\<subDirectory>\<fileName>" and make sure the directory exists.
+static void EmuD3DDebugDumpPath(char* buffer, std::size_t size,
+                                const char* subDirectory, const char* fileName)
+{
+    char tempPath[MAX_PATH] = { 0 };
+    const DWORD length = GetTempPathA(MAX_PATH, tempPath);
+    if(length == 0 || length >= MAX_PATH)
+        tempPath[0] = '\0';
+
+    char directory[MAX_PATH];
+    snprintf(directory, sizeof(directory), "%s%s", tempPath, subDirectory);
+    CreateDirectoryA(directory, NULL);
+    snprintf(buffer, size, "%s\\%s", directory, fileName);
+}
+
+// Write one locked surface level as a 32-bit top-down BMP. Only the host
+// formats the converter actually produces are expanded; anything else
+// (e.g. DXT) is skipped by returning false.
+static bool EmuD3DWriteBmp(const char* path, DWORD width, DWORD height,
+                           INT pitch, const void* bits, XTL::D3DFORMAT format)
+{
+    if(bits == NULL || width == 0 || height == 0)
+        return false;
+
+    if(format != XTL::D3DFMT_A8R8G8B8 && format != XTL::D3DFMT_X8R8G8B8 &&
+       format != XTL::D3DFMT_R5G6B5 && format != XTL::D3DFMT_A4R4G4B4)
+        return false;
+
+    HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    if(file == INVALID_HANDLE_VALUE)
+        return false;
+
+    const DWORD imageBytes = width * height * 4;
+    BITMAPFILEHEADER fileHeader = { 0 };
+    BITMAPINFOHEADER infoHeader = { 0 };
+    fileHeader.bfType = 0x4D42; // 'BM'
+    fileHeader.bfOffBits = sizeof(fileHeader) + sizeof(infoHeader);
+    fileHeader.bfSize = fileHeader.bfOffBits + imageBytes;
+    infoHeader.biSize = sizeof(infoHeader);
+    infoHeader.biWidth = static_cast<LONG>(width);
+    infoHeader.biHeight = -static_cast<LONG>(height); // top-down
+    infoHeader.biPlanes = 1;
+    infoHeader.biBitCount = 32;
+    infoHeader.biCompression = BI_RGB;
+    infoHeader.biSizeImage = imageBytes;
+
+    std::vector<DWORD> row(width);
+    DWORD written = 0;
+    bool ok = WriteFile(file, &fileHeader, sizeof(fileHeader), &written, NULL) != 0 &&
+              WriteFile(file, &infoHeader, sizeof(infoHeader), &written, NULL) != 0;
+    for(DWORD y = 0; ok && y < height; ++y)
+    {
+        const BYTE* source = static_cast<const BYTE*>(bits) +
+                             static_cast<std::size_t>(y) * pitch;
+        if(format == XTL::D3DFMT_A8R8G8B8 || format == XTL::D3DFMT_X8R8G8B8)
+        {
+            std::memcpy(row.data(), source, width * 4);
+        }
+        else if(format == XTL::D3DFMT_R5G6B5)
+        {
+            const WORD* pixels = reinterpret_cast<const WORD*>(source);
+            for(DWORD x = 0; x < width; ++x)
+            {
+                const WORD p = pixels[x];
+                const DWORD r = ((p >> 11) & 0x1F) * 255 / 31;
+                const DWORD g = ((p >> 5) & 0x3F) * 255 / 63;
+                const DWORD b = (p & 0x1F) * 255 / 31;
+                row[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+            }
+        }
+        else // A4R4G4B4
+        {
+            const WORD* pixels = reinterpret_cast<const WORD*>(source);
+            for(DWORD x = 0; x < width; ++x)
+            {
+                const WORD p = pixels[x];
+                const DWORD a = ((p >> 12) & 0xF) * 17;
+                const DWORD r = ((p >> 8) & 0xF) * 17;
+                const DWORD g = ((p >> 4) & 0xF) * 17;
+                const DWORD b = (p & 0xF) * 17;
+                row[x] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+        ok = WriteFile(file, row.data(), width * 4, &written, NULL) != 0;
+    }
+
+    CloseHandle(file);
+    return ok;
+}
+
+static bool EmuD3DDumpBackbuffer(const char* path)
+{
+    XTL::IDirect3DSurface8* backBuffer = nullptr;
+    bool dumped = false;
+    __try
+    {
+        if(g_pD3DDevice8 != 0 &&
+           SUCCEEDED(g_pD3DDevice8->GetBackBuffer(
+               0, XTL::D3DBACKBUFFER_TYPE_MONO, &backBuffer)) &&
+           backBuffer != nullptr)
+        {
+            XTL::D3DSURFACE_DESC description = {
+                XTL::D3DFMT_UNKNOWN, XTL::D3DRTYPE_SURFACE, 0, XTL::D3DPOOL_DEFAULT,
+                0, XTL::D3DMULTISAMPLE_NONE, 0, 0
+            };
+            XTL::D3DLOCKED_RECT locked{};
+            if(SUCCEEDED(backBuffer->GetDesc(&description)) &&
+               SUCCEEDED(backBuffer->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            {
+                dumped = EmuD3DWriteBmp(path, description.Width, description.Height,
+                                        locked.Pitch, locked.pBits, description.Format);
+                backBuffer->UnlockRect();
+            }
+            backBuffer->Release();
+            backBuffer = nullptr;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        if(backBuffer != nullptr)
+        {
+            backBuffer->Release();
+        }
+        dumped = false;
+    }
+    return dumped;
+}
+
+// D3DPERF (PIX-style) event bridge. The host device is d3d8, which has no
+// event API of its own; the D3DPERF_* exports live in d3d9.dll and are
+// process-wide, so capture tools that honor them (apitrace, DXVK's d3d9
+// under a DXVK d3d8 drop-in, PIX-era tools) pick the labels up regardless.
+// Without such a tool they are cheap no-ops.
+typedef int(WINAPI* EmuD3DPerfBeginEventProc)(DWORD color, LPCWSTR name);
+typedef int(WINAPI* EmuD3DPerfEndEventProc)(void);
+typedef void(WINAPI* EmuD3DPerfSetMarkerProc)(DWORD color, LPCWSTR name);
+
+static EmuD3DPerfBeginEventProc g_pfnD3DPerfBeginEvent = NULL;
+static EmuD3DPerfEndEventProc g_pfnD3DPerfEndEvent = NULL;
+static EmuD3DPerfSetMarkerProc g_pfnD3DPerfSetMarker = NULL;
+static int g_D3DPerfMarkersEnabled = -1;
+
+static bool EmuD3DPerfMarkersActive(void)
+{
+    if(g_D3DPerfMarkersEnabled < 0)
+    {
+        g_D3DPerfMarkersEnabled = 0;
+        if(getenv("CXBX_D3D_PERF_MARKERS") != NULL)
+        {
+            const HMODULE d3d9 = LoadLibraryA("d3d9.dll");
+            if(d3d9 != NULL)
+            {
+                g_pfnD3DPerfBeginEvent = reinterpret_cast<EmuD3DPerfBeginEventProc>(
+                    GetProcAddress(d3d9, "D3DPERF_BeginEvent"));
+                g_pfnD3DPerfEndEvent = reinterpret_cast<EmuD3DPerfEndEventProc>(
+                    GetProcAddress(d3d9, "D3DPERF_EndEvent"));
+                g_pfnD3DPerfSetMarker = reinterpret_cast<EmuD3DPerfSetMarkerProc>(
+                    GetProcAddress(d3d9, "D3DPERF_SetMarker"));
+                if(g_pfnD3DPerfBeginEvent != NULL && g_pfnD3DPerfEndEvent != NULL &&
+                   g_pfnD3DPerfSetMarker != NULL)
+                {
+                    g_D3DPerfMarkersEnabled = 1;
+                }
+            }
+        }
+    }
+    return g_D3DPerfMarkersEnabled == 1;
+}
+
+static void EmuD3DPerfFrameBoundary(void)
+{
+    if(!EmuD3DPerfMarkersActive())
+        return;
+
+    static bool s_FrameOpen = false;
+    if(s_FrameOpen)
+        g_pfnD3DPerfEndEvent();
+
+    WCHAR name[64];
+    swprintf(name, 64, L"Frame %lu", static_cast<unsigned long>(g_D3DDebugFrame));
+    g_pfnD3DPerfBeginEvent(0xFF4080FFu, name);
+    s_FrameOpen = true;
+}
+
+// Called at the top of every guest draw wrapper. Assigns the draw its
+// per-frame index, traces/marks it, and returns false when the draw falls
+// inside the CXBX_D3D_SKIP_DRAWS bisection range (the caller must skip it).
+static bool EmuD3DDrawGate(const char* what, DWORD pcPrimitiveType,
+                           DWORD primitiveCount)
+{
+    static int s_SkipEnabled = -1;
+    static DWORD s_SkipBegin = 0, s_SkipEnd = 0;
+    static int s_TraceEnabled = -1;
+
+    const DWORD index = g_D3DDebugDrawIndex++;
+
+    if(s_SkipEnabled < 0)
+        s_SkipEnabled = EmuD3DParseDrawRange(getenv("CXBX_D3D_SKIP_DRAWS"),
+                                             s_SkipBegin, s_SkipEnd)
+                            ? 1
+                            : 0;
+    if(s_TraceEnabled < 0)
+        s_TraceEnabled = (getenv("CXBX_D3D_DRAW_TRACE") != NULL) ? 1 : 0;
+
+    const bool skipped =
+        s_SkipEnabled == 1 && index >= s_SkipBegin && index < s_SkipEnd;
+
+    if(s_TraceEnabled == 1)
+    {
+        DWORD vertexShader = 0;
+        if(g_pD3DDevice8 != 0)
+            g_pD3DDevice8->GetVertexShader(&vertexShader);
+        printf("DRAW| frame=%lu draw=%lu %s prim=%lu count=%lu vsh=0x%08lX "
+               "psh=0x%08lX%s\n",
+               static_cast<unsigned long>(g_D3DDebugFrame),
+               static_cast<unsigned long>(index), what,
+               static_cast<unsigned long>(pcPrimitiveType),
+               static_cast<unsigned long>(primitiveCount),
+               static_cast<unsigned long>(vertexShader),
+               static_cast<unsigned long>(g_EmuCurrentPixelShaderHandle),
+               skipped ? " SKIPPED" : "");
+    }
+
+    if(!skipped && EmuD3DPerfMarkersActive())
+    {
+        WCHAR marker[128];
+        swprintf(marker, 128, L"%S draw=%lu prim=%lu count=%lu", what,
+                 static_cast<unsigned long>(index),
+                 static_cast<unsigned long>(pcPrimitiveType),
+                 static_cast<unsigned long>(primitiveCount));
+        g_pfnD3DPerfSetMarker(0xFF00FF00u, marker);
+    }
+
+    return !skipped;
+}
+
+// Called after a guest draw was submitted to the host device; dumps the
+// backbuffer when the draw falls inside the CXBX_D3D_DUMP_DRAWS range.
+static void EmuD3DDrawPost(void)
+{
+    static int s_DumpEnabled = -1;
+    static DWORD s_DumpBegin = 0, s_DumpEnd = 0;
+    static LONG s_DumpsRemaining = 64;
+
+    if(s_DumpEnabled < 0)
+        s_DumpEnabled = EmuD3DParseDrawRange(getenv("CXBX_D3D_DUMP_DRAWS"),
+                                             s_DumpBegin, s_DumpEnd)
+                            ? 1
+                            : 0;
+    if(s_DumpEnabled != 1)
+        return;
+
+    const DWORD index = g_D3DDebugDrawIndex != 0 ? g_D3DDebugDrawIndex - 1 : 0;
+    if(index < s_DumpBegin || index >= s_DumpEnd || s_DumpsRemaining <= 0)
+        return;
+
+    s_DumpsRemaining--;
+
+    char fileName[64];
+    snprintf(fileName, sizeof(fileName), "f%05lu_d%04lu.bmp",
+             static_cast<unsigned long>(g_D3DDebugFrame),
+             static_cast<unsigned long>(index));
+    char path[MAX_PATH * 2];
+    EmuD3DDebugDumpPath(path, sizeof(path), "cxbx_draw", fileName);
+    if(EmuD3DDumpBackbuffer(path))
+        printf("DRAW| dumped %s\n", path);
+    else
+        printf("DRAW| backbuffer dump failed (%s)\n", path);
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_CreatePixelShader
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
@@ -3476,6 +3793,45 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
            bytesRead == sizeof(definition))
         {
             g_EmuPixelShaderFallbacks.push_back({*pHandle, definition});
+
+            // The combiner is approximated, never translated -- always say
+            // which approximation each shader got, so a wrong material is
+            // attributable without a rebuild.
+            const DWORD hash = EmuD3DHashBytes(definition.data(), sizeof(definition));
+            const cxbx::d3d::PixelShaderFallback fallback =
+                cxbx::d3d::ClassifyPixelShaderFallback(definition);
+            printf("PSH| fallback_create handle=0x%08lX hash=0x%08lX combiners=%lu class=%s\n",
+                   static_cast<unsigned long>(*pHandle),
+                   static_cast<unsigned long>(hash),
+                   static_cast<unsigned long>(definition[53] & 0x0Fu),
+                   cxbx::d3d::PixelShaderFallbackName(fallback));
+
+            static int s_PshDumpEnabled = -1;
+            if(s_PshDumpEnabled < 0)
+                s_PshDumpEnabled = (getenv("CXBX_PSH_DUMP") != NULL) ? 1 : 0;
+            if(s_PshDumpEnabled == 1)
+            {
+                for(std::size_t word = 0;
+                    word < cxbx::d3d::XboxPixelShaderDefinitionWords; word += 6)
+                {
+                    printf("PSH|   def[%02u]", static_cast<unsigned int>(word));
+                    for(std::size_t column = 0;
+                        column < 6 &&
+                        word + column < cxbx::d3d::XboxPixelShaderDefinitionWords;
+                        ++column)
+                    {
+                        printf(" %08lX",
+                               static_cast<unsigned long>(definition[word + column]));
+                    }
+                    printf("\n");
+                }
+            }
+        }
+        else
+        {
+            printf("PSH| fallback_create handle=0x%08lX definition unreadable (0x%08lX)\n",
+                   static_cast<unsigned long>(*pHandle),
+                   reinterpret_cast<unsigned long>(pFunction));
         }
         hRet = D3D_OK;
     }
@@ -3526,6 +3882,20 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
             FAILED(g_pD3DDevice8->SetPixelShader(Handle)))
     {
         g_bUsePixelShaderFallback = true;
+
+        // Once per handle: this shader is now driving the fixed-function
+        // approximation (either a fallback marker, or a host-created shader
+        // the host device refused to bind).
+        static std::vector<DWORD> s_LoggedFallbackHandles;
+        if(std::find(s_LoggedFallbackHandles.begin(), s_LoggedFallbackHandles.end(),
+                     Handle) == s_LoggedFallbackHandles.end())
+        {
+            s_LoggedFallbackHandles.push_back(Handle);
+            printf("PSH| fallback_active handle=0x%08lX class=%s\n",
+                   static_cast<unsigned long>(Handle),
+                   cxbx::d3d::PixelShaderFallbackName(EmuCurrentPixelShaderFallback()));
+        }
+
         EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), false);
     }
     else
@@ -4998,6 +5368,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap
     // The debug runtime scopes markers to one presented frame.
     g_D3DDebugMarker = 0;
 
+    // Draw bisection/tracing counts draws per presented frame.
+    g_D3DDebugFrame++;
+    g_D3DDebugDrawIndex = 0;
+    EmuD3DPerfFrameBoundary();
+
     if(g_D3DCallStatsEnabled == 1)
     {
         static DWORD s_dwSwapCount = 0;
@@ -5183,21 +5558,33 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                 Tris[n++] = v[0]; Tris[n++] = v[1]; Tris[n++] = v[2];
                 Tris[n++] = v[0]; Tris[n++] = v[2]; Tris[n++] = v[3];
             }
-            __try
+            if(EmuD3DDrawGate("End", D3DPT_TRIANGLELIST, n / 3))
             {
-                g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+                __try
+                {
+                    g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+                }
+                __except(EXCEPTION_EXECUTE_HANDLER)
+                {
+                }
+                EmuD3DDrawPost();
             }
-            __except(EXCEPTION_EXECUTE_HANDLER) {}
         }
         else
         {
             D3DPRIMITIVETYPE PCPrim = EmuPrimitiveType((X_D3DPRIMITIVETYPE)g_EmuImPrim);
             UINT PrimCount = EmuD3DVertex2PrimitiveCount((X_D3DPRIMITIVETYPE)g_EmuImPrim, g_EmuImCount);
-            __try
+            if(EmuD3DDrawGate("End", PCPrim, PrimCount))
             {
-                g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+                __try
+                {
+                    g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+                }
+                __except(EXCEPTION_EXECUTE_HANDLER)
+                {
+                }
+                EmuD3DDrawPost();
             }
-            __except(EXCEPTION_EXECUTE_HANDLER) {}
         }
     }
 
@@ -5581,6 +5968,28 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                       dwSourceMipMapLevels))
                 : 0;
 
+            static int s_TexTraceEnabled = -1;
+            if(s_TexTraceEnabled < 0)
+                s_TexTraceEnabled = (getenv("CXBX_TEX_TRACE") != NULL) ? 1 : 0;
+            if(s_TexTraceEnabled == 1)
+            {
+                printf("TEX| register %s=0x%08lX xfmt=0x%02lX host=0x%08lX %lux%lux%lu "
+                       "pitch=%lu bpp=%lu layout=%s mips=%lu data=0x%08lX\n",
+                       dwCommonType == X_D3DCOMMON_TYPE_SURFACE ? "surface" : "texture",
+                       reinterpret_cast<unsigned long>(pResource),
+                       static_cast<unsigned long>(X_Format),
+                       static_cast<unsigned long>(Format),
+                       static_cast<unsigned long>(dwWidth),
+                       static_cast<unsigned long>(dwHeight),
+                       static_cast<unsigned long>(dwDepth),
+                       static_cast<unsigned long>(dwPitch),
+                       // dwBPP stays uninitialized on the compressed path
+                       static_cast<unsigned long>(bCompressed ? 0 : dwBPP),
+                       bSwizzled ? "swizzled" : (bCompressed ? "compressed" : "linear"),
+                       static_cast<unsigned long>(dwMipMapLevels),
+                       reinterpret_cast<unsigned long>(pBase));
+            }
+
             // ******************************************************************
             // * Create the happy little texture
             // ******************************************************************
@@ -5735,6 +6144,44 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 }
             }
 
+            // Hash-named dump of the CONVERTED level 0 -- exactly what the host
+            // device will sample, after unswizzle/pitch adjustment.
+            static int s_TextureDumpEnabled = -1;
+            if(s_TextureDumpEnabled < 0)
+                s_TextureDumpEnabled = (getenv("CXBX_D3D_TEXTURE_DUMP") != NULL) ? 1 : 0;
+            if(s_TextureDumpEnabled == 1)
+            {
+                static LONG s_TextureDumpsRemaining = 256;
+                if(s_TextureDumpsRemaining > 0)
+                {
+                    const DWORD sourceHash = sourceCopy.empty()
+                                                 ? 0
+                                                 : EmuD3DHashBytes(sourceCopy.data(), sourceCopy.size());
+                    char fileName[96];
+                    snprintf(fileName, sizeof(fileName), "%s_%08lX_x%02lX_%lux%lu.bmp",
+                             dwCommonType == X_D3DCOMMON_TYPE_SURFACE ? "surf" : "tex",
+                             static_cast<unsigned long>(sourceHash),
+                             static_cast<unsigned long>(X_Format),
+                             static_cast<unsigned long>(dwWidth),
+                             static_cast<unsigned long>(dwHeight));
+                    char path[MAX_PATH * 2];
+                    EmuD3DDebugDumpPath(path, sizeof(path), "cxbx_tex", fileName);
+                    if(EmuD3DWriteBmp(path, dwWidth, dwHeight, LockedRect.Pitch,
+                                      LockedRect.pBits, Format))
+                    {
+                        // The cap only counts written files, so a DXT-heavy
+                        // title can't exhaust it with skipped dumps.
+                        s_TextureDumpsRemaining--;
+                        printf("TEX| dumped %s\n", path);
+                    }
+                    else
+                    {
+                        printf("TEX| dump skipped (host format 0x%08lX not BMP-expandable) %s\n",
+                               static_cast<unsigned long>(Format), fileName);
+                    }
+                }
+            }
+
             if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
                 pResource->EmuSurface8->UnlockRect();
             else
@@ -5781,30 +6228,6 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                     levelHeight = levelHeight > 1 ? levelHeight / 2 : 1;
                 }
             }
-
-            // Debug Texture Dumping
-            /*
-            if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
-            {
-                static int dwDumpSurface = 0;
-
-                char szBuffer[255];
-
-                sprintf(szBuffer, "C:\\Aaron\\Textures\\Surface%.03d.bmp", dwDumpSurface++);
-
-                D3DXSaveSurfaceToFile(szBuffer, D3DXIFF_BMP, pResource->EmuSurface8, NULL, NULL);
-            }
-            else
-            {
-                static int dwDumpTex = 0;
-
-                char szBuffer[255];
-
-                sprintf(szBuffer, "C:\\Aaron\\Textures\\Texture%.03d.bmp", dwDumpTex++);
-
-                D3DXSaveTextureToFile(szBuffer, D3DXIFF_BMP, pResource->EmuTexture8, NULL);
-            }
-            //*/
         }
         break;
 
@@ -10255,6 +10678,12 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
     // Convert from Xbox to PC enumeration
     D3DPRIMITIVETYPE PCPrimitiveType = EmuPrimitiveType(PrimitiveType);
 
+    if(!EmuD3DDrawGate("DrawVertices", PCPrimitiveType, PrimitiveCount))
+    {
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
@@ -10275,6 +10704,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
         else
         {
             EmuVshLogCpuDraw("DrawVertices", PrimitiveType, VertexCount, true, "none");
+            EmuD3DDrawPost();
         }
         EmuSwapFS(); // XBox FS
         return;
@@ -10307,6 +10737,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
         if(InterlockedIncrement(&s_DrawGuardCount) <= 3)
             EmuWarning("DrawVertices: host d3d8 threw during DrawPrimitive (caught)");
     }
+
+    EmuD3DDrawPost();
 
     // TODO: use original stride here (duh!)
     if(PrimitiveType == 8) // Quad List
@@ -10365,6 +10797,12 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
     // Convert from Xbox to PC enumeration
     D3DPRIMITIVETYPE PCPrimitiveType = EmuPrimitiveType(PrimitiveType);
 
+    if(!EmuD3DDrawGate("DrawVerticesUP", PCPrimitiveType, PrimitiveCount))
+    {
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
@@ -10386,6 +10824,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         else
         {
             EmuVshLogCpuDraw("DrawVerticesUP", PrimitiveType, VertexCount, true, "none");
+            EmuD3DDrawPost();
         }
         EmuSwapFS(); // XBox FS
         return;
@@ -10434,6 +10873,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
     {
         EmuRecordPushBufferDraw(PCPrimitiveType, PrimitiveCount, pNewVertexStreamZeroData,
                                 VertexStreamZeroStride);
+        EmuD3DDrawPost();
     }
 
     if(PrimitiveType == 8) // Quad List
@@ -10494,6 +10934,12 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
     // Convert from Xbox to PC enumeration
     D3DPRIMITIVETYPE PCPrimitiveType = EmuPrimitiveType(PrimitiveType);
 
+    if(!EmuD3DDrawGate("DrawIndexedVertices", PCPrimitiveType, PrimitiveCount))
+    {
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
     if(g_EmuCurrentCpuVertexShader != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
@@ -10514,6 +10960,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
         else
         {
             EmuVshLogCpuDraw("DrawIndexedVertices", PrimitiveType, VertexCount, true, "none");
+            EmuD3DDrawPost();
         }
         EmuSwapFS(); // XBox FS
         return;
@@ -10543,6 +10990,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
         if(InterlockedIncrement(&s_DrawGuardCount) <= 3)
             EmuWarning("DrawIndexedVertices: host d3d8 threw during DrawIndexedPrimitive (caught)");
     }
+
+    EmuD3DDrawPost();
 
     if(PrimitiveType == 8)  // Quad List
         EmuQuadHackB(nStride, pOrigVertexBuffer8, pHackVertexBuffer8);
