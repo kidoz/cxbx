@@ -49,4 +49,15 @@ inline constexpr std::uint32_t XboxResourceDataAddress(
     return isPushBuffer ? resolvedAddress : resolvedAddress & ResourceAddressMask;
 }
 
+inline constexpr std::uint32_t XboxResourceHostDataAddress(
+    std::uintptr_t baseAddress, std::uint32_t dataOffset,
+    bool hasTrackedUnmaskedBacking) noexcept
+{
+    const std::uint32_t unmaskedAddress =
+        static_cast<std::uint32_t>(baseAddress) + dataOffset;
+    return hasTrackedUnmaskedBacking
+               ? unmaskedAddress
+               : XboxResourceDataAddress(baseAddress, dataOffset, false);
+}
+
 } // namespace cxbx::d3d

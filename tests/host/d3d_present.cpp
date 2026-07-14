@@ -90,6 +90,18 @@ int main()
         return 1;
     }
 
+    if(cxbx::d3d::XboxResourceHostDataAddress(0x11D00000u, 0x000254F8u, true) !=
+           0x11D254F8u ||
+       cxbx::d3d::XboxResourceHostDataAddress(0x11D00000u, 0x000254F8u, false) !=
+           0x01D254F8u ||
+       cxbx::d3d::XboxResourceHostDataAddress(0xFFFFFFF0u, 0x00000030u, true) !=
+           0x00000020u)
+    {
+        std::fputs("registered resources must retain tracked host backing aliases\n",
+                   stderr);
+        return 1;
+    }
+
     if(cxbx::d3d::CpuFallbackTextureUsable(false, 0, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 4, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 0, false, true, true) ||
