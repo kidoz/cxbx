@@ -126,6 +126,19 @@ static inline void EmuFsSwapExchange()
     unsigned long *load = Actual ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
     save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3; save[4] = s4;
     s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3]; s4 = load[4];
+    // Enter the guest at PASSIVE_LEVEL: force the KPCR.Irql byte (low byte of
+    // the 0x24 slot) to 0 on every Xbox-role load. Two failure modes leave a
+    // stale nonzero byte there otherwise -- an interruption (VEH repair,
+    // watchdog suspension) between this function's save and load halves can
+    // cross-contaminate Xbox[2] with the host TEB's ClientId thread-id byte,
+    // and a guest inline KfRaiseIrql whose matching lower sits in code an HLE
+    // patch replaced never gets undone. Inline XDK `movzx eax, fs:[0x24]` /
+    // `cmp al, 2` checks then KeBugCheck(0x0A) (Turok, ~1-2 min into
+    // rendering). The kernel HLE models IRQL in g_EmuCurrentIrql, never in
+    // this byte, so flattening it at the role boundary cannot break
+    // Raise/Lower semantics.
+    if(!Actual)
+        s2 &= 0xFFFFFF00;
     __asm
     {
         mov eax, s0
