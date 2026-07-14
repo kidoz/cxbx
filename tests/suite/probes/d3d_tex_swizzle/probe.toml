@@ -1,6 +1,6 @@
-# XDK-toolchain probe (see xdk_smoke): documents the swizzled-texture
-# fidelity gap (Morton-order uploads are not unswizzled by the HLE).
-# Expectations encode current behavior; implementing unswizzle flips them.
+# XDK-toolchain probe (see xdk_smoke): pins swizzled-texture upload fidelity
+# (Morton-order uploads are unswizzled by the HLE's lock write-through since
+# 2026-07-14). Expectations encode correct behavior.
 tags = ["xdk"]
 
 [env]

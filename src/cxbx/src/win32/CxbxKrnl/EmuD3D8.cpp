@@ -4063,6 +4063,128 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
 }
 
 // ******************************************************************
+// * Swizzled-texture write-through
+// ******************************************************************
+// Xbox SWIZZLED texture formats store texels in Morton order; titles upload
+// pre-swizzled assets through LockRect and the hardware samples them
+// swizzled. The host texture is linear, so the Morton-order bytes must be
+// unswizzled before the host samples them. Track every swizzled-format
+// texture created through the D3D wrappers; a writable LockRect marks the
+// level dirty, and the pending block is unswizzled in place right before the
+// host lock is released (SetTexture's flush, or a re-lock). The Register
+// path has its own unswizzle and does not use this.
+struct EmuSwizzledTextureLevelLock
+{
+    void *pBits;
+    INT Pitch;
+};
+
+#define EMU_SWIZZLED_TEXTURE_MAX_LEVELS 16
+
+struct EmuSwizzledTextureInfo
+{
+    XTL::IDirect3DBaseTexture8 *pHostTexture;
+    DWORD dwBPP;
+    DWORD dwDirtyLevels; // bitmask of levels with pending Morton-order writes
+    EmuSwizzledTextureLevelLock Levels[EMU_SWIZZLED_TEXTURE_MAX_LEVELS];
+};
+
+static std::vector<EmuSwizzledTextureInfo> g_EmuSwizzledTextures;
+
+static bool EmuXboxFormatIsSwizzled(DWORD XboxFormat, DWORD *pdwBPP)
+{
+    switch(XboxFormat)
+    {
+        case 0x06: /* A8R8G8B8 */
+        case 0x07: /* X8R8G8B8 */
+            *pdwBPP = 4;
+            return true;
+        case 0x04: /* A4R4G4B4 */
+        case 0x05: /* R5G6B5 */
+        case 0x28: /* G8B8 */
+        case 0x1A: /* A8L8 */
+            *pdwBPP = 2;
+            return true;
+        case 0x19: /* A8 */
+            *pdwBPP = 1;
+            return true;
+    }
+    return false;
+}
+
+static EmuSwizzledTextureInfo *EmuFindSwizzledTexture(
+    XTL::IDirect3DBaseTexture8 *pHostTexture)
+{
+    if(pHostTexture == nullptr)
+        return nullptr;
+    for(auto &info : g_EmuSwizzledTextures)
+    {
+        if(info.pHostTexture == pHostTexture)
+            return &info;
+    }
+    return nullptr;
+}
+
+static void EmuDiscardSwizzledTexture(XTL::IDirect3DBaseTexture8 *pHostTexture)
+{
+    for(auto it = g_EmuSwizzledTextures.begin(); it != g_EmuSwizzledTextures.end(); ++it)
+    {
+        if(it->pHostTexture == pHostTexture)
+        {
+            g_EmuSwizzledTextures.erase(it);
+            return;
+        }
+    }
+}
+
+// Unswizzle every dirty level in place, while the host lock that received the
+// title's Morton-order write is still held.
+static void EmuCommitSwizzledTexture(XTL::IDirect3DBaseTexture8 *pBaseTexture)
+{
+    EmuSwizzledTextureInfo *info = EmuFindSwizzledTexture(pBaseTexture);
+    if(info == nullptr || info->dwDirtyLevels == 0)
+        return;
+
+    auto *texture = static_cast<XTL::IDirect3DTexture8 *>(info->pHostTexture);
+    for(DWORD level = 0; level < EMU_SWIZZLED_TEXTURE_MAX_LEVELS; ++level)
+    {
+        if((info->dwDirtyLevels & (1u << level)) == 0)
+            continue;
+
+        const EmuSwizzledTextureLevelLock &lock = info->Levels[level];
+        XTL::D3DSURFACE_DESC description;
+        if(lock.pBits == nullptr || FAILED(texture->GetLevelDesc(level, &description)))
+            continue;
+
+        const DWORD width = description.Width;
+        const DWORD height = description.Height;
+        const DWORD rowBytes = width * info->dwBPP;
+        if(rowBytes == 0 || height == 0)
+            continue;
+
+        // The title wrote the contiguous Morton block through the row
+        // pointers the host lock reports; gather it back before unswizzling
+        // over the same memory.
+        std::vector<BYTE> morton(static_cast<std::size_t>(rowBytes) * height);
+        for(DWORD y = 0; y < height; ++y)
+        {
+            std::memcpy(&morton[static_cast<std::size_t>(y) * rowBytes],
+                        static_cast<const BYTE *>(lock.pBits) +
+                            static_cast<std::size_t>(y) * lock.Pitch,
+                        rowBytes);
+        }
+
+        RECT sourceRect = {0, 0, 0, 0};
+        POINT destinationPoint = {0, 0};
+        XTL::EmuXGUnswizzleRect(morton.data(), width, height, 1, lock.pBits,
+                                lock.Pitch, sourceRect, destinationPoint,
+                                info->dwBPP);
+    }
+
+    info->dwDirtyLevels = 0;
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_CreateTexture2
 // ******************************************************************
 XTL::X_D3DResource * WINAPI XTL::EmuIDirect3DDevice8_CreateTexture2
@@ -4173,6 +4295,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
 
         if(FAILED(hRet))
             printf("*Warning* CreateTexture FAILED\n");
+
+        DWORD dwSwizzledBPP = 0;
+        if(SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
+           EmuXboxFormatIsSwizzled(static_cast<DWORD>(Format), &dwSwizzledBPP))
+        {
+            g_EmuSwizzledTextures.push_back(
+                {(*ppTexture)->EmuTexture8, dwSwizzledBPP, 0, {}});
+        }
     }
     else
     {
@@ -4511,6 +4641,9 @@ static void EmuFlushHostTextureLocks(XTL::IDirect3DBaseTexture8* baseTexture)
     {
         return;
     }
+
+    // Unswizzle pending Morton-order writes while their lock still holds.
+    EmuCommitSwizzledTexture(baseTexture);
 
     constexpr DWORD maximumMipLevels = 32;
     __try
@@ -6403,6 +6536,8 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
             {
                 EmuDiscardRegisteredVertexBuffer(static_cast<X_D3DVertexBuffer*>(pThis));
             }
+            EmuDiscardSwizzledTexture(
+                reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
             delete pThis;
         }
     }
@@ -6826,10 +6961,27 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_LockRect
     if(Flags & !(0x80 | 0x40))
         EmuCleanup("EmuIDirect3DTexture8_LockRect: Unknown Flags! (0x%.08X)", Flags);
 
+    // Commit any pending Morton-order write before releasing its lock.
+    EmuCommitSwizzledTexture(pTexture8);
+
     // Remove old lock(s)
     pTexture8->UnlockRect(Level);
 
     HRESULT hRet = pTexture8->LockRect(Level, pLockedRect, pRect, NewFlags);
+
+    // A writable full-level lock of a swizzled-format texture receives the
+    // title's pre-swizzled (Morton-order) texels; remember the lock so the
+    // block can be unswizzled in place when the lock is flushed.
+    if(SUCCEEDED(hRet) && pRect == NULL && (NewFlags & D3DLOCK_READONLY) == 0)
+    {
+        EmuSwizzledTextureInfo *pSwizzled = EmuFindSwizzledTexture(pTexture8);
+        if(pSwizzled != NULL && Level < EMU_SWIZZLED_TEXTURE_MAX_LEVELS)
+        {
+            pSwizzled->dwDirtyLevels |= 1u << Level;
+            pSwizzled->Levels[Level].pBits = pLockedRect->pBits;
+            pSwizzled->Levels[Level].Pitch = pLockedRect->Pitch;
+        }
+    }
 
     EmuSwapFS();   // XBox FS
 

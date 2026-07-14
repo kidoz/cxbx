@@ -1,16 +1,18 @@
-// d3d_tex_swizzle -- documents the SWIZZLED-texture fidelity gap in the D3D8
-// HLE. Real titles upload pre-swizzled (Morton-order) texel data into
+// d3d_tex_swizzle -- pins SWIZZLED-texture upload fidelity in the D3D8 HLE.
+// Real titles upload pre-swizzled (Morton-order) texel data into
 // swizzled-format textures (X_D3DFMT_A8R8G8B8 = 0x06); real hardware reads
-// them swizzled. The HLE currently maps swizzled formats to the same host
-// linear format WITHOUT unswizzling (EmuXB2PC_D3DFormat), so the host samples
-// the Morton-order bytes as if linear -> scrambled texels.
+// them swizzled. The HLE tracks swizzled-format textures created through
+// CreateTexture2 and unswizzles a locked level's pending Morton-order write
+// in place when the lock is flushed (EmuCommitSwizzledTexture), so the host
+// samples the texels the title intended.
 //
-// Both behaviors are checked, with expectations encoding CURRENT reality:
-//   swz.linear_read_*  expect=1  -- pixels match the linear (mis)interpretation
-//   swz.unswizzled_*   expect=0  -- pixels match the CORRECT unswizzled value
-// When unswizzling is implemented, both groups flip -> update expectations
-// and the golden. (For the 2x2-block corner texels linear and correct agree;
-// sample points below are chosen where they differ.)
+// Both interpretations are checked, expectations encoding CORRECT behavior:
+//   swz.linear_read_*  expect=0  -- pixels match the linear (mis)interpretation
+//   swz.unswizzled_*   expect=1  -- pixels match the CORRECT unswizzled value
+// (Before the 2026-07-14 unswizzle fix both groups were inverted; if this
+// probe regresses to linear reads, the write-through commit broke. For the
+// 2x2-block corner texels linear and correct agree; sample points below are
+// chosen where they differ.)
 #include "xdk_xtrace.h"
 
 static const D3DCOLOR COL_CLEAR = 0xFF202020;
@@ -132,10 +134,10 @@ void __cdecl main()
                 char name[64];
                 _snprintf(name, sizeof(name) - 1, "swz.linear_read_%d%d", tx, ty);
                 name[sizeof(name) - 1] = 0;
-                xt_chk(name, 1, got == linear);
+                xt_chk(name, 0, got == linear);
                 _snprintf(name, sizeof(name) - 1, "swz.unswizzled_%d%d", tx, ty);
                 name[sizeof(name) - 1] = 0;
-                xt_chk(name, 0, got == correct);
+                xt_chk(name, 1, got == correct);
             }
         }
     }
