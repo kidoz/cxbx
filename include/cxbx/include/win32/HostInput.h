@@ -78,6 +78,7 @@ void TranslateXInputGamepad(const XInputGamepad& host, GamepadState& guest);
 // calls from the guest thread then avoid the LoadLibrary/GetProcAddress path
 // whose CRT throws cross the FS boundary.
 bool Initialize();
+bool IsInitialized();
 bool AttachWindow(void* nativeWindow);
 void NotifyDeviceChange();
 ConnectionSnapshot GetConnectionSnapshot(bool refresh, bool consumeChanges);
