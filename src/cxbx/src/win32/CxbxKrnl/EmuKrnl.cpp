@@ -4932,16 +4932,32 @@ extern "C" VOID NTAPI EmuHalRegisterShutdownNotification(PVOID ShutdownRegistrat
         ULONG *Stack = (ULONG *)&ShutdownRegistration;
         int Printed = 0;
 
-        for(int i = 0; i < 512 && Printed < 24; i++)
+        // Bound the scan by the committed stack region instead of probing each
+        // dword with IsBadReadPtr: the probe read faults when the call site sits
+        // near the stack top, and on a guest thread in legacy FS mode the TIB
+        // stack bounds are guest-role values, so SEH cannot dispatch the
+        // "recoverable" probe fault and the whole process dies (seen as the
+        // gfx_present PARTIAL flake -- all CHKs delivered, #result lost).
+        SIZE_T Limit = 0;
+        MEMORY_BASIC_INFORMATION Info;
+        if(VirtualQuery(Stack, &Info, sizeof(Info)) == sizeof(Info) &&
+           Info.State == MEM_COMMIT && (Info.Protect & PAGE_GUARD) == 0 &&
+           (Info.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ |
+                            PAGE_EXECUTE_READWRITE)) != 0)
         {
-            if(IsBadReadPtr(&Stack[i], sizeof(ULONG)))
-                break;
+            const ULONG_PTR End = (ULONG_PTR)Info.BaseAddress + Info.RegionSize;
+            Limit = (End - (ULONG_PTR)Stack) / sizeof(ULONG);
+            if(Limit > 512)
+                Limit = 512;
+        }
 
+        for(SIZE_T i = 0; i < Limit && Printed < 24; i++)
+        {
             ULONG Word = Stack[i];
 
             if(Word >= 0x00011000 && Word < 0x00400000)
             {
-                printf("EmuKrnl (0x%lX): HalShutdown unwind stack[%03d] = 0x%.08lX\n",
+                printf("EmuKrnl (0x%lX): HalShutdown unwind stack[%03zu] = 0x%.08lX\n",
                        GetCurrentThreadId(), i, Word);
                 Printed++;
             }
