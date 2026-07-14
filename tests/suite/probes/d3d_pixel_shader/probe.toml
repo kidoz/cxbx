@@ -1,0 +1,9 @@
+# XDK-toolchain probe (see xdk_smoke): pixel-exact verification of Xbox
+# register-combiner pixel shaders through the HLE ps.1.1 translator. The
+# invert case cannot be expressed by the fixed-function fallback, so its
+# check discriminates real translation from approximation.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
