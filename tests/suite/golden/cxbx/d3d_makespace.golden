@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_makespace
+#result d3d_makespace verdict=PASS checks=5 fail=0

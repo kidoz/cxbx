@@ -1835,6 +1835,26 @@ SOOVPA<11> IDirect3DTexture8_GetSurfaceLevel_1_0_4361 =
 };
 
 // ******************************************************************
+// * IDirect3DDevice8_MakeSpace
+// ******************************************************************
+// Generated from ?MakeSpace@D3D@@YGPCKXZ in the 4361 retail library and
+// verified unique across the multi-SDK d3d_makespace probe matrix.
+SOOVPA<8> IDirect3DDevice8_MakeSpace_1_0_4361 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x50 },
+        { 0x06, 0xD1 },
+        { 0x07, 0xE8 },
+        { 0x08, 0x50 },
+        { 0x09, 0xE8 },
+        { 0x0E, 0xC3 },
+        { 0x0F, 0x90 }
+    }
+};
+
+// ******************************************************************
 // * D3D8_1_0_4361
 // ******************************************************************
 OOVPATable D3D8_1_0_4361[] =
@@ -1847,6 +1867,16 @@ OOVPATable D3D8_1_0_4361[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3D8_CreateDevice" 
+        #endif
+    },
+    // IDirect3DDevice8::MakeSpace
+    {
+        (OOVPA*)&IDirect3DDevice8_MakeSpace_1_0_4361,
+
+        XTL::EmuIDirect3DDevice8_MakeSpace,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_MakeSpace"
         #endif
     },
     // IDirect3D8::GetAdapterModeCount

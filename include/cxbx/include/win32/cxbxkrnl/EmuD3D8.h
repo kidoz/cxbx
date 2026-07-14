@@ -1012,7 +1012,7 @@ HRESULT WINAPI EmuIDirect3DDevice8_Swap
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_MakeSpace
 // ******************************************************************
-VOID WINAPI EmuIDirect3DDevice8_MakeSpace();
+DWORD* WINAPI EmuIDirect3DDevice8_MakeSpace();
 
 // ******************************************************************
 // * immediate-mode drawing (Begin / SetVertexData* / End)
