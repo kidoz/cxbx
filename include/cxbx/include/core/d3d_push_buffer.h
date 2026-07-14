@@ -107,6 +107,24 @@ inline PushBufferReplay ClassifyPushBuffer(std::uint32_t common, std::uint32_t d
     return PushBufferReplay::Decode;
 }
 
+inline PushBufferReplay SelectPushBufferReplay(bool hasRegisteredData,
+                                               bool hasRecordedDraws,
+                                               std::uint32_t common,
+                                               std::uint32_t dataAddress,
+                                               std::uint32_t size,
+                                               std::uint32_t allocationSize) noexcept
+{
+    if(hasRecordedDraws)
+    {
+        return PushBufferReplay::RecordedOnly;
+    }
+    if(hasRegisteredData)
+    {
+        return PushBufferReplay::Decode;
+    }
+    return ClassifyPushBuffer(common, dataAddress, size, allocationSize);
+}
+
 template <typename ReadWord, typename HandleMethod>
 bool WalkPushBuffer(std::uint32_t size, ReadWord&& readWord,
                     HandleMethod&& handleMethod)

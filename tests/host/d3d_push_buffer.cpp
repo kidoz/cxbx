@@ -106,6 +106,16 @@ int main()
     passed &= Check(cxbx::d3d::PushBufferReplay::Invalid, cpuCopy, 0x1000,
                     cxbx::d3d::PushBufferMaxBytes + 4,
                     cxbx::d3d::PushBufferMaxBytes + 4, "hard_limit");
+    if(cxbx::d3d::SelectPushBufferReplay(true, true, cpuCopy, 0x1000, 4, 4) !=
+           cxbx::d3d::PushBufferReplay::RecordedOnly ||
+       cxbx::d3d::SelectPushBufferReplay(true, false, 0, 0, 4, 4) !=
+           cxbx::d3d::PushBufferReplay::Decode ||
+       cxbx::d3d::SelectPushBufferReplay(false, false, 0, 0, 4, 4) !=
+           cxbx::d3d::PushBufferReplay::RecordedOnly)
+    {
+        std::fputs("recorded HLE draws must take precedence over registered data\n", stderr);
+        passed = false;
+    }
     passed &= CheckWalk({ 0x00080100, 0x11, 0x22 }, { { 0x100, 0x11 }, { 0x104, 0x22 } },
                         "incrementing_methods");
     passed &= CheckWalk({ 0x40080100, 0x11, 0x22 }, { { 0x100, 0x11 }, { 0x100, 0x22 } },
