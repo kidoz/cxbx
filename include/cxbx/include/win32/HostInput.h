@@ -49,6 +49,28 @@ struct GamepadState
     std::int16_t rightThumbY;
 };
 
+struct ConnectionSnapshot
+{
+    std::uint32_t currentMask;
+    std::uint32_t changedMask;
+    std::array<std::uint32_t, MaxPorts> generations;
+};
+
+class ConnectionTracker
+{
+  public:
+    void Reset();
+    void Observe(std::uint32_t currentMask,
+                 std::uint32_t additionalChangedMask = 0);
+    ConnectionSnapshot Snapshot() const;
+    ConnectionSnapshot Consume();
+
+  private:
+    std::uint32_t m_currentMask = 0;
+    std::uint32_t m_changedMask = 0;
+    std::array<std::uint32_t, MaxPorts> m_generations{};
+};
+
 void TranslateXInputGamepad(const XInputGamepad& host, GamepadState& guest);
 
 // Initialize the host XInput backend. Safe to call from the launcher thread
@@ -56,6 +78,9 @@ void TranslateXInputGamepad(const XInputGamepad& host, GamepadState& guest);
 // calls from the guest thread then avoid the LoadLibrary/GetProcAddress path
 // whose CRT throws cross the FS boundary.
 bool Initialize();
+bool AttachWindow(void* nativeWindow);
+void NotifyDeviceChange();
+ConnectionSnapshot GetConnectionSnapshot(bool refresh, bool consumeChanges);
 std::uint32_t GetConnectedMask();
 bool Poll(std::uint32_t port, GamepadState& state);
 std::uint32_t SetRumble(std::uint32_t port, std::uint16_t leftMotorSpeed,

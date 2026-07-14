@@ -66,43 +66,221 @@ static bool EmuXInputInjectionConfigured()
     return GetEnvironmentVariableA("CXBX_INPUT_STATE", buffer, sizeof(buffer)) != 0;
 }
 
-static DWORD EmuXInputConnectedMask()
+struct EmuInputConnectionSnapshot
 {
-    if(EmuXInputInjectionConfigured()) {
-        return 1u;
-    }
+    DWORD currentMask;
+    DWORD changedMask;
+    DWORD generations[4];
+};
 
-    DWORD connectedMask = 0;
-    __try {
-        connectedMask = XTL::EmuDInputGetConnectedMask();
+struct EmuInjectedConnectionState
+{
+    bool initialized;
+    bool firstRefreshPending;
+    DWORD masks[32];
+    DWORD maskCount;
+    DWORD nextMask;
+    EmuInputConnectionSnapshot snapshot;
+};
+
+static EmuInjectedConnectionState g_EmuInjectedConnections = {};
+
+static void EmuXInputObserveInjectedMask(DWORD currentMask)
+{
+    currentMask &= 0x0Fu;
+    const DWORD transitionMask =
+        g_EmuInjectedConnections.snapshot.currentMask ^ currentMask;
+    g_EmuInjectedConnections.snapshot.currentMask = currentMask;
+    g_EmuInjectedConnections.snapshot.changedMask |= transitionMask;
+    for(DWORD port = 0; port < 4; ++port)
+    {
+        if((transitionMask & (1u << port)) != 0)
         {
-            static LONG s_FirstCall = 0;
-            if(InterlockedExchange(&s_FirstCall, 1) == 0) {
-                printf("EmuXapi (0x%X): XInput connected mask = 0x%X.\n",
-                       GetCurrentThreadId(), connectedMask);
-                fflush(stdout);
+            ++g_EmuInjectedConnections.snapshot.generations[port];
+            if(g_EmuInjectedConnections.snapshot.generations[port] == 0)
+            {
+                ++g_EmuInjectedConnections.snapshot.generations[port];
             }
         }
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void EmuXInputInitializeInjectedConnections()
+{
+    if(g_EmuInjectedConnections.initialized)
+    {
+        return;
+    }
+
+    char buffer[256] = {};
+    const DWORD length = GetEnvironmentVariableA(
+        "CXBX_INPUT_MASK_SEQUENCE", buffer, sizeof(buffer));
+    if(length != 0 && length < sizeof(buffer))
+    {
+        char* cursor = buffer;
+        while(g_EmuInjectedConnections.maskCount < 32)
+        {
+            char* end = nullptr;
+            const DWORD mask = static_cast<DWORD>(strtoul(cursor, &end, 0));
+            if(end == cursor)
+            {
+                break;
+            }
+
+            g_EmuInjectedConnections.masks[g_EmuInjectedConnections.maskCount++] =
+                mask & 0x0Fu;
+            if(*end != ',')
+            {
+                break;
+            }
+            cursor = end + 1;
+        }
+    }
+
+    if(g_EmuInjectedConnections.maskCount == 0)
+    {
+        g_EmuInjectedConnections.masks[0] = 1u;
+        g_EmuInjectedConnections.maskCount = 1;
+    }
+
+    EmuXInputObserveInjectedMask(g_EmuInjectedConnections.masks[0]);
+    g_EmuInjectedConnections.nextMask = 1;
+    g_EmuInjectedConnections.firstRefreshPending = true;
+    g_EmuInjectedConnections.initialized = true;
+}
+
+static EmuInputConnectionSnapshot EmuXInputInjectedConnectionSnapshot(
+    bool advance, bool consumeChanges)
+{
+    EmuXInputInitializeInjectedConnections();
+    if(advance)
+    {
+        if(g_EmuInjectedConnections.firstRefreshPending)
+        {
+            g_EmuInjectedConnections.firstRefreshPending = false;
+        }
+        else if(g_EmuInjectedConnections.nextMask <
+                g_EmuInjectedConnections.maskCount)
+        {
+            EmuXInputObserveInjectedMask(
+                g_EmuInjectedConnections.masks[g_EmuInjectedConnections.nextMask++]);
+        }
+    }
+
+    EmuInputConnectionSnapshot snapshot = g_EmuInjectedConnections.snapshot;
+    if(consumeChanges)
+    {
+        g_EmuInjectedConnections.snapshot.changedMask = 0;
+    }
+    return snapshot;
+}
+
+static EmuInputConnectionSnapshot EmuXInputConnectionSnapshot(
+    bool advanceInjectedMask, bool consumeChanges)
+{
+    if(EmuXInputInjectionConfigured())
+    {
+        return EmuXInputInjectedConnectionSnapshot(advanceInjectedMask,
+                                                   consumeChanges);
+    }
+
+    EmuInputConnectionSnapshot snapshot = {};
+    __try
+    {
+        XTL::EmuDInputGetConnectionSnapshot(TRUE, consumeChanges ? TRUE : FALSE,
+                                            &snapshot.currentMask,
+                                            &snapshot.changedMask,
+                                            snapshot.generations);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
         static LONG s_Warned = 0;
-        if(InterlockedExchange(&s_Warned, 1) == 0) {
+        if(InterlockedExchange(&s_Warned, 1) == 0)
+        {
             printf("EmuXapi (0x%X): *WARNING* host input query faulted (0x%08lX); reporting no devices.\n",
                    GetCurrentThreadId(), GetExceptionCode());
             fflush(stdout);
         }
     }
-    return connectedMask;
+    return snapshot;
 }
 
-static bool EmuXInputHandleToPort(HANDLE handle, DWORD* port)
+static void EmuXInputRefreshDeviceType(
+    XTL::PXPP_DEVICE_TYPE deviceType,
+    const EmuInputConnectionSnapshot& snapshot)
 {
+    const DWORD observedChanges =
+        (deviceType->CurrentConnected ^ snapshot.currentMask) |
+        snapshot.changedMask;
+    deviceType->CurrentConnected = snapshot.currentMask;
+    deviceType->ChangeConnected |= observedChanges;
+}
+
+static DWORD EmuXInputEncodedGeneration(DWORD generation)
+{
+    constexpr std::uintptr_t PortBits = 3;
+    const std::uintptr_t generationMask = UINTPTR_MAX >> PortBits;
+    DWORD encodedGeneration =
+        generation & static_cast<DWORD>(generationMask);
+    if(encodedGeneration == 0)
+    {
+        encodedGeneration = 1;
+    }
+    return encodedGeneration;
+}
+
+static HANDLE EmuXInputMakeHandle(DWORD port, DWORD generation)
+{
+    constexpr std::uintptr_t PortBits = 3;
+    const std::uintptr_t encodedGeneration =
+        EmuXInputEncodedGeneration(generation);
+    const std::uintptr_t value =
+        (encodedGeneration << PortBits) | static_cast<std::uintptr_t>(port + 1);
+    return reinterpret_cast<HANDLE>(value);
+}
+
+static bool EmuXInputHandleToPort(HANDLE handle, DWORD* port, DWORD* generation)
+{
+    constexpr std::uintptr_t PortMask = 0x07u;
     const std::uintptr_t handleValue = reinterpret_cast<std::uintptr_t>(handle);
-    if (port == nullptr || handleValue < 1 || handleValue > 4) {
+    const std::uintptr_t portValue = handleValue & PortMask;
+    const std::uintptr_t generationValue = handleValue >> 3;
+    if(port == nullptr || generation == nullptr || portValue < 1 ||
+       portValue > 4 || generationValue == 0)
+    {
         return false;
     }
 
-    *port = static_cast<DWORD>(handleValue - 1);
+    *port = static_cast<DWORD>(portValue - 1);
+    *generation = static_cast<DWORD>(generationValue);
     return true;
+}
+
+enum class EmuInputHandleStatus
+{
+    Invalid,
+    Disconnected,
+    Connected,
+};
+
+static EmuInputHandleStatus EmuXInputValidateHandle(HANDLE handle, DWORD* port)
+{
+    DWORD handleGeneration = 0;
+    if(!EmuXInputHandleToPort(handle, port, &handleGeneration))
+    {
+        return EmuInputHandleStatus::Invalid;
+    }
+
+    const EmuInputConnectionSnapshot snapshot =
+        EmuXInputConnectionSnapshot(false, false);
+    const DWORD currentGeneration =
+        EmuXInputEncodedGeneration(snapshot.generations[*port]);
+    if((snapshot.currentMask & (1u << *port)) == 0 ||
+       currentGeneration != handleGeneration)
+    {
+        return EmuInputHandleStatus::Disconnected;
+    }
+    return EmuInputHandleStatus::Connected;
 }
 
 // ******************************************************************
@@ -454,9 +632,13 @@ DWORD WINAPI XTL::EmuXGetDevices
 
     DWORD ret = 0;
 
-    if (DeviceType != nullptr && DeviceType->Reserved[0] == 0 &&
-        DeviceType->Reserved[1] == 0 && DeviceType->Reserved[2] == 0) {
-        ret = EmuXInputConnectedMask();
+    if (DeviceType != nullptr) {
+        const EmuInputConnectionSnapshot snapshot =
+            EmuXInputConnectionSnapshot(true, true);
+        EmuXInputRefreshDeviceType(DeviceType, snapshot);
+        ret = DeviceType->CurrentConnected;
+        DeviceType->ChangeConnected = 0;
+        DeviceType->PreviousConnected = DeviceType->CurrentConnected;
     } else {
         EmuCleanup("Unknown DeviceType");
     }
@@ -493,18 +675,30 @@ BOOL WINAPI XTL::EmuXGetDeviceChanges
     }
     #endif
 
-    static DWORD previousConnectedMask = 0;
-    static bool hasPreviousMask = false;
-
     BOOL changed = FALSE;
     if (DeviceType != nullptr && pdwInsertions != nullptr && pdwRemovals != nullptr) {
-        const DWORD connectedMask = EmuXInputConnectedMask();
-        const DWORD oldMask = hasPreviousMask ? previousConnectedMask : 0;
-        *pdwInsertions = connectedMask & ~oldMask;
-        *pdwRemovals = oldMask & ~connectedMask;
-        changed = (*pdwInsertions != 0 || *pdwRemovals != 0) ? TRUE : FALSE;
-        previousConnectedMask = connectedMask;
-        hasPreviousMask = true;
+        const EmuInputConnectionSnapshot snapshot =
+            EmuXInputConnectionSnapshot(true, true);
+        EmuXInputRefreshDeviceType(DeviceType, snapshot);
+        if (DeviceType->ChangeConnected == 0) {
+            *pdwInsertions = 0;
+            *pdwRemovals = 0;
+        } else {
+            *pdwInsertions = DeviceType->CurrentConnected &
+                             ~DeviceType->PreviousConnected;
+            *pdwRemovals = DeviceType->PreviousConnected &
+                           ~DeviceType->CurrentConnected;
+
+            const DWORD removeInsert = DeviceType->ChangeConnected &
+                                       DeviceType->CurrentConnected &
+                                       DeviceType->PreviousConnected;
+            *pdwInsertions |= removeInsert;
+            *pdwRemovals |= removeInsert;
+            changed = (*pdwInsertions | *pdwRemovals) != 0 ? TRUE : FALSE;
+
+            DeviceType->ChangeConnected = 0;
+            DeviceType->PreviousConnected = DeviceType->CurrentConnected;
+        }
     }
 
     EmuSwapFS();   // XBox FS
@@ -543,9 +737,12 @@ HANDLE WINAPI XTL::EmuXInputOpen
 
     HANDLE ret = nullptr;
 
-    if (DeviceType != nullptr && dwPort < 4 &&
-        (EmuXInputConnectedMask() & (1u << dwPort)) != 0) {
-        ret = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(dwPort + 1));
+    if (DeviceType != nullptr && dwPort < 4) {
+        const EmuInputConnectionSnapshot snapshot =
+            EmuXInputConnectionSnapshot(false, false);
+        if ((snapshot.currentMask & (1u << dwPort)) != 0) {
+            ret = EmuXInputMakeHandle(dwPort, snapshot.generations[dwPort]);
+        }
     }
 
     EmuSwapFS();   // XBox FS
@@ -613,20 +810,25 @@ DWORD WINAPI XTL::EmuXInputGetCapabilities
 
     if (pCapabilities == nullptr) {
         ret = ERROR_INVALID_PARAMETER;
-    } else if (EmuXInputHandleToPort(hDevice, &port) &&
-               (EmuXInputConnectedMask() & (1u << port)) != 0) {
-        ZeroMemory(pCapabilities, sizeof(*pCapabilities));
-        pCapabilities->SubType = XINPUT_DEVSUBTYPE_GC_GAMEPAD;
-        pCapabilities->In.Gamepad.wButtons = 0x00FFu;
-        memset(pCapabilities->In.Gamepad.bAnalogButtons, 0xFF,
-               sizeof(pCapabilities->In.Gamepad.bAnalogButtons));
-        pCapabilities->In.Gamepad.sThumbLX = 32767;
-        pCapabilities->In.Gamepad.sThumbLY = 32767;
-        pCapabilities->In.Gamepad.sThumbRX = 32767;
-        pCapabilities->In.Gamepad.sThumbRY = 32767;
-        pCapabilities->Out.Rumble.wLeftMotorSpeed = 0xFFFFu;
-        pCapabilities->Out.Rumble.wRightMotorSpeed = 0xFFFFu;
-        ret = ERROR_SUCCESS;
+    } else {
+        const EmuInputHandleStatus status =
+            EmuXInputValidateHandle(hDevice, &port);
+        if (status == EmuInputHandleStatus::Disconnected) {
+            ret = ERROR_DEVICE_NOT_CONNECTED;
+        } else if (status == EmuInputHandleStatus::Connected) {
+            ZeroMemory(pCapabilities, sizeof(*pCapabilities));
+            pCapabilities->SubType = XINPUT_DEVSUBTYPE_GC_GAMEPAD;
+            pCapabilities->In.Gamepad.wButtons = 0x00FFu;
+            memset(pCapabilities->In.Gamepad.bAnalogButtons, 0xFF,
+                   sizeof(pCapabilities->In.Gamepad.bAnalogButtons));
+            pCapabilities->In.Gamepad.sThumbLX = 32767;
+            pCapabilities->In.Gamepad.sThumbLY = 32767;
+            pCapabilities->In.Gamepad.sThumbRX = 32767;
+            pCapabilities->In.Gamepad.sThumbRY = 32767;
+            pCapabilities->Out.Rumble.wLeftMotorSpeed = 0xFFFFu;
+            pCapabilities->Out.Rumble.wRightMotorSpeed = 0xFFFFu;
+            ret = ERROR_SUCCESS;
+        }
     }
 
     EmuSwapFS();   // XBox FS
@@ -711,10 +913,15 @@ DWORD WINAPI XTL::EmuXInputGetState
 
     if (pState == nullptr) {
         ret = ERROR_INVALID_PARAMETER;
-    } else if (EmuXInputHandleToPort(hDevice, &port)) {
-        if (port == 0 && EmuXInputInjectState(pState)) {
+    } else {
+        const EmuInputHandleStatus status =
+            EmuXInputValidateHandle(hDevice, &port);
+        if (status == EmuInputHandleStatus::Disconnected) {
+            ret = ERROR_DEVICE_NOT_CONNECTED;
+        } else if (status == EmuInputHandleStatus::Connected &&
+                   port == 0 && EmuXInputInjectState(pState)) {
             ret = ERROR_SUCCESS;
-        } else {
+        } else if (status == EmuInputHandleStatus::Connected) {
             __try {
                 if (EmuDInputPoll(port, pState)) {
                     ret = ERROR_SUCCESS;
@@ -762,10 +969,15 @@ DWORD WINAPI XTL::EmuXInputSetState
 
     if (pFeedback == nullptr) {
         ret = ERROR_INVALID_PARAMETER;
-    } else if (EmuXInputHandleToPort(hDevice, &port)) {
-        if (port == 0 && EmuXInputInjectionConfigured()) {
+    } else {
+        const EmuInputHandleStatus status =
+            EmuXInputValidateHandle(hDevice, &port);
+        if (status == EmuInputHandleStatus::Disconnected) {
+            ret = ERROR_DEVICE_NOT_CONNECTED;
+        } else if (status == EmuInputHandleStatus::Connected &&
+                   port == 0 && EmuXInputInjectionConfigured()) {
             ret = ERROR_SUCCESS;
-        } else {
+        } else if (status == EmuInputHandleStatus::Connected) {
             ret = EmuDInputSetState(port, pFeedback->Rumble.wLeftMotorSpeed,
                                     pFeedback->Rumble.wRightMotorSpeed);
         }

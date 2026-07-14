@@ -57,6 +57,7 @@ static bool g_DirectInputReady = false;
 static XTL::XINPUT_STATE g_LastDirectInputState = {};
 static DWORD g_DirectInputPacketNumber = 0;
 static bool g_HasLastDirectInputState = false;
+static HostInput::ConnectionTracker g_EffectiveConnections;
 
 // ******************************************************************
 // * func: XTL::EmuDInputInit
@@ -72,6 +73,11 @@ bool XTL::EmuDInputInit()
     }
 
     g_DirectInputReady = true;
+
+    if (!HostInput::AttachWindow(XTL::g_hEmuWindow)) {
+        printf("EmuDInput: host gamepad device notifications are unavailable; "
+               "using polling fallback.\n");
+    }
     return true;
 }
 
@@ -84,7 +90,47 @@ void XTL::EmuDInputCleanup()
         g_XBController.ListenEnd();
         g_DirectInputReady = false;
     }
+    g_EffectiveConnections.Reset();
     HostInput::Shutdown();
+}
+
+// ******************************************************************
+// * func: XTL::EmuDInputNotifyDeviceChange
+// ******************************************************************
+void XTL::EmuDInputNotifyDeviceChange()
+{
+    HostInput::NotifyDeviceChange();
+}
+
+// ******************************************************************
+// * func: XTL::EmuDInputGetConnectionSnapshot
+// ******************************************************************
+void XTL::EmuDInputGetConnectionSnapshot(BOOL Refresh, BOOL ConsumeChanges,
+                                         PDWORD CurrentMask, PDWORD ChangedMask,
+                                         PDWORD Generations)
+{
+    const HostInput::ConnectionSnapshot host =
+        HostInput::GetConnectionSnapshot(Refresh != FALSE, true);
+    const DWORD fallbackMask =
+        g_DirectInputReady && g_XBController.HasInputDevice() ? 1u : 0u;
+    const DWORD effectiveMask = host.currentMask | fallbackMask;
+    const DWORD visibleHostChanges = host.changedMask & ~fallbackMask;
+    g_EffectiveConnections.Observe(effectiveMask, visibleHostChanges);
+
+    const HostInput::ConnectionSnapshot effective = ConsumeChanges != FALSE
+                                                        ? g_EffectiveConnections.Consume()
+                                                        : g_EffectiveConnections.Snapshot();
+    if (CurrentMask != nullptr) {
+        *CurrentMask = effective.currentMask;
+    }
+    if (ChangedMask != nullptr) {
+        *ChangedMask = effective.changedMask;
+    }
+    if (Generations != nullptr) {
+        for (DWORD port = 0; port < HostInput::MaxPorts; ++port) {
+            Generations[port] = effective.generations[port];
+        }
+    }
 }
 
 // ******************************************************************
@@ -92,10 +138,8 @@ void XTL::EmuDInputCleanup()
 // ******************************************************************
 DWORD XTL::EmuDInputGetConnectedMask()
 {
-    DWORD connectedMask = HostInput::GetConnectedMask();
-    if (g_DirectInputReady && g_XBController.HasInputDevice()) {
-        connectedMask |= 1u;
-    }
+    DWORD connectedMask = 0;
+    EmuDInputGetConnectionSnapshot(TRUE, FALSE, &connectedMask, nullptr, nullptr);
     return connectedMask;
 }
 
