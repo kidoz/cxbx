@@ -394,6 +394,7 @@ inline PixelShaderTranslation TranslatePixelShader(
     {
         const std::uint32_t stageC0 = def[Constant0 + (uniqueC0 ? stage : 0)];
         const std::uint32_t stageC1 = def[Constant1 + (uniqueC1 ? stage : 0)];
+        const std::uint32_t writtenBeforeStage = emitter.writtenRegs;
 
         for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
         {
@@ -412,6 +413,27 @@ inline PixelShaderTranslation TranslatePixelShader(
             {
                 emitter.Fail("alpha_dot");
                 break;
+            }
+
+            // NV2A evaluates the whole stage in parallel: the alpha portion
+            // reads the PRE-stage blue channel of any register the RGB
+            // portion writes. Sequential ps.1.1 cannot express that.
+            if(alphaPortion)
+            {
+                const std::uint32_t rgbWrites =
+                    emitter.writtenRegs & ~writtenBeforeStage;
+                bool blueHazard = false;
+                for(const Operand* op : { &p.a, &p.b, &p.c, &p.d })
+                {
+                    blueHazard = blueHazard ||
+                                 (!op->alphaChannel && op->reg != RegZero &&
+                                  (rgbWrites & (1u << op->reg)) != 0);
+                }
+                if(blueHazard)
+                {
+                    emitter.Fail("stage_blue_hazard");
+                    break;
+                }
             }
 
             const std::uint32_t mask = alphaPortion ? MaskA : MaskRgb;
@@ -434,50 +456,97 @@ inline PixelShaderTranslation TranslatePixelShader(
 
             const bool abZero = OperandIsZero(p.a) || OperandIsZero(p.b);
             const bool cdZero = OperandIsZero(p.c) || OperandIsZero(p.d);
+            const bool abStored = p.abDest != RegZero;
+            const bool cdStored = p.cdDest != RegZero;
 
-            if(p.abDest != RegZero)
-                product(p.abDest, p.a, p.b, p.abDot);
-            if(p.cdDest != RegZero)
-                product(p.cdDest, p.c, p.d, p.cdDot);
+            // Parallel-portion write hazards: storing one product must not
+            // clobber the other's inputs before they are read. Pick a safe
+            // emission order; bail when neither order works. stale* records
+            // which original inputs the chosen order clobbers before the
+            // sum could re-read them.
+            const bool abClobbersCd =
+                abStored && !cdZero &&
+                (p.c.reg == p.abDest || p.d.reg == p.abDest);
+            const bool cdClobbersAb =
+                cdStored && !abZero &&
+                (p.a.reg == p.cdDest || p.b.reg == p.cdDest);
+            bool staleAB = false, staleCD = false;
+            if(abClobbersCd && cdClobbersAb)
+            {
+                emitter.Fail("portion_hazard");
+                break;
+            }
+            if(abClobbersCd)
+            {
+                if(cdStored)
+                    product(p.cdDest, p.c, p.d, p.cdDot);
+                if(abStored)
+                    product(p.abDest, p.a, p.b, p.abDot);
+                staleCD = true;
+            }
+            else
+            {
+                if(abStored)
+                    product(p.abDest, p.a, p.b, p.abDot);
+                if(cdStored)
+                    product(p.cdDest, p.c, p.d, p.cdDot);
+                staleAB = cdClobbersAb;
+            }
 
             if(p.sumDest == RegZero)
                 continue;
 
             // sum = AB + CD, using whichever halves already exist.
-            if(p.abDest != RegZero && p.cdDest != RegZero)
+            if(abStored && cdStored)
                 emitter.Arithmetic(OpAdd, dst(p.sumDest),
                                    { regSrc(p.abDest), regSrc(p.cdDest) });
-            else if(cdZero && p.abDest != RegZero)
+            else if(cdZero && abStored)
                 emitter.Arithmetic(OpMov, dst(p.sumDest), { regSrc(p.abDest) });
             else if(cdZero)
                 product(p.sumDest, p.a, p.b, p.abDot);
-            else if(abZero && p.cdDest != RegZero)
+            else if(abZero && cdStored)
                 emitter.Arithmetic(OpMov, dst(p.sumDest), { regSrc(p.cdDest) });
             else if(abZero)
                 product(p.sumDest, p.c, p.d, p.cdDot);
-            else if(p.abDest != RegZero && !p.cdDot)
+            else if(abStored && !p.cdDot && !staleCD)
                 emitter.Arithmetic(OpMad, dst(p.sumDest),
                                    { src(p.c), src(p.d), regSrc(p.abDest) });
-            else if(p.cdDest != RegZero && !p.abDot)
+            else if(cdStored && !p.abDot && !staleAB)
                 emitter.Arithmetic(OpMad, dst(p.sumDest),
                                    { src(p.a), src(p.b), regSrc(p.cdDest) });
+            else if(abStored || cdStored)
+                emitter.Fail("portion_hazard");
             else if(OperandIsOne(p.d) && !p.abDot && !p.cdDot)
                 emitter.Arithmetic(OpMad, dst(p.sumDest),
                                    { src(p.a), src(p.b), src(p.c) });
             else if(OperandIsOne(p.b) && !p.abDot && !p.cdDot)
                 emitter.Arithmetic(OpMad, dst(p.sumDest),
                                    { src(p.c), src(p.d), src(p.a) });
-            else if(emitter.scratchReg != 0 && !p.cdDot)
+            else if(OperandIsOne(p.c) && !p.abDot && !p.cdDot)
+                emitter.Arithmetic(OpMad, dst(p.sumDest),
+                                   { src(p.a), src(p.b), src(p.d) });
+            else if(OperandIsOne(p.a) && !p.abDot && !p.cdDot)
+                emitter.Arithmetic(OpMad, dst(p.sumDest),
+                                   { src(p.c), src(p.d), src(p.b) });
+            else if(emitter.scratchReg != 0 && !p.abDot)
             {
                 emitter.Arithmetic(p.cdDot ? OpDp3 : OpMul,
                                    emitter.DestToken(emitter.scratchReg, mask, 0),
                                    { src(p.c), src(p.d) });
-                if(p.abDot)
-                    emitter.Fail("dot_sum_shape");
-                else
-                    emitter.Arithmetic(OpMad, dst(p.sumDest),
-                                       { src(p.a), src(p.b),
-                                         regSrc(emitter.scratchReg) });
+                emitter.Arithmetic(OpMad, dst(p.sumDest),
+                                   { src(p.a), src(p.b),
+                                     regSrc(emitter.scratchReg) });
+            }
+            else if(!p.abDot && !p.cdDot && p.a.reg != p.sumDest &&
+                    p.b.reg != p.sumDest)
+            {
+                // No free scratch: the sum destination itself can stage the
+                // CD product as long as A/B do not read it afterwards. Only
+                // the final mad carries the output shift.
+                emitter.Arithmetic(OpMul, emitter.DestToken(p.sumDest, mask, 0),
+                                   { src(p.c), src(p.d) });
+                emitter.Arithmetic(OpMad, dst(p.sumDest),
+                                   { src(p.a), src(p.b), regSrc(p.sumDest) });
             }
             else
                 emitter.Fail("sum_shape");
@@ -487,7 +556,6 @@ inline PixelShaderTranslation TranslatePixelShader(
     // ---- Final combiner: out.rgb = A*B + (1-A)*C + D, out.a = G.
     if(out.failure == nullptr && hasFinalCombiner)
     {
-        const std::uint32_t settings = def[FinalInputsEFG] & 0xE0u;
         const Operand e = DecodeOperand(def[FinalInputsEFG], 0);
         const Operand f = DecodeOperand(def[FinalInputsEFG], 1);
         const Operand g = DecodeOperand(def[FinalInputsEFG], 2);
@@ -496,21 +564,14 @@ inline PixelShaderTranslation TranslatePixelShader(
         const Operand c = DecodeOperand(def[FinalInputsABCD], 2);
         const Operand d = DecodeOperand(def[FinalInputsABCD], 3);
 
-        if(settings != 0)
-            emitter.Fail("final_combiner_settings");
-        else if(!OperandIsZero(e) || !OperandIsZero(f))
+        // The PS_FINALCOMBINERSETTING flags (byte 0 of EFG) only shape the
+        // V1R0_SUM special input; when nothing reads it they are inert, so
+        // they need no handling here. Special registers that ARE read fail
+        // in MapRegister. E/F feed only EF_PROD, which likewise fails when
+        // read; non-zero E/F with no EF_PROD reader would be inert too, but
+        // bail conservatively rather than assume.
+        if(!OperandIsZero(e) || !OperandIsZero(f))
             emitter.Fail("final_combiner_ef");
-        else
-        {
-            for(const Operand* op : { &a, &b, &c, &d, &g })
-            {
-                if(op->reg == RegV1R0Sum || op->reg == RegEfProd)
-                {
-                    emitter.Fail("final_combiner_special_register");
-                    break;
-                }
-            }
-        }
 
         if(out.failure == nullptr)
         {
@@ -519,26 +580,62 @@ inline PixelShaderTranslation TranslatePixelShader(
             auto src = [&](const Operand& op) {
                 return emitter.SourceToken(op, false, c0, c1);
             };
+            auto isR0RgbIdentity = [&](const Operand& op) {
+                return op.reg == RegR0 && !op.alphaChannel &&
+                       (op.mapping == MapUnsignedIdentity ||
+                        op.mapping == MapSignedIdentity);
+            };
 
-            // lrp computes src0*src1 + (1-src0)*src2 -- the final combiner
-            // shape exactly. A trailing +D needs its own add.
-            const bool dZero = OperandIsZero(d);
-            if(dZero)
-                emitter.Arithmetic(OpLrp, emitter.DestToken(RegR0, MaskRgb, 0),
-                                   { src(a), src(b), src(c) });
-            else if(emitter.scratchReg != 0)
+            // Algebraic pre-simplification: a degenerate A collapses the
+            // lerp, and the dropped term's register is never even mapped
+            // (titles routinely park FOG in the dead slot).
+            if(OperandIsOne(a))
             {
-                emitter.Arithmetic(
-                    OpLrp, emitter.DestToken(emitter.scratchReg, MaskRgb, 0),
-                    { src(a), src(b), src(c) });
-                emitter.Arithmetic(
-                    OpAdd, emitter.DestToken(RegR0, MaskRgb, 0),
-                    { emitter.SourceToken({ emitter.scratchReg, false,
-                                            MapSignedIdentity }, false, c0, c1),
-                      src(d) });
+                // rgb = B + D
+                if(OperandIsZero(d))
+                {
+                    if(!isR0RgbIdentity(b))
+                        emitter.Arithmetic(OpMov, emitter.DestToken(RegR0, MaskRgb, 0),
+                                           { src(b) });
+                }
+                else
+                    emitter.Arithmetic(OpAdd, emitter.DestToken(RegR0, MaskRgb, 0),
+                                       { src(b), src(d) });
+            }
+            else if(OperandIsZero(a))
+            {
+                // rgb = C + D
+                if(OperandIsZero(d))
+                {
+                    if(!isR0RgbIdentity(c))
+                        emitter.Arithmetic(OpMov, emitter.DestToken(RegR0, MaskRgb, 0),
+                                           { src(c) });
+                }
+                else
+                    emitter.Arithmetic(OpAdd, emitter.DestToken(RegR0, MaskRgb, 0),
+                                       { src(c), src(d) });
             }
             else
-                emitter.Fail("final_combiner_no_scratch");
+            {
+                // lrp computes src0*src1 + (1-src0)*src2 -- the final
+                // combiner shape exactly. A trailing +D needs its own add.
+                if(OperandIsZero(d))
+                    emitter.Arithmetic(OpLrp, emitter.DestToken(RegR0, MaskRgb, 0),
+                                       { src(a), src(b), src(c) });
+                else if(emitter.scratchReg != 0)
+                {
+                    emitter.Arithmetic(
+                        OpLrp, emitter.DestToken(emitter.scratchReg, MaskRgb, 0),
+                        { src(a), src(b), src(c) });
+                    emitter.Arithmetic(
+                        OpAdd, emitter.DestToken(RegR0, MaskRgb, 0),
+                        { emitter.SourceToken({ emitter.scratchReg, false,
+                                                MapSignedIdentity }, false, c0, c1),
+                          src(d) });
+                }
+                else
+                    emitter.Fail("final_combiner_no_scratch");
+            }
 
             // Alpha: r0.a = G. Skip the identity case (G == r0.a).
             if(out.failure == nullptr &&
