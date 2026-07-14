@@ -62,11 +62,11 @@ extern "C" CXBXKRNL_API void NTAPI EmuCleanThread();
 // ******************************************************************
 // * func: EmuWarning
 // ******************************************************************
-#ifdef _DEBUG_WARNINGS
-extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char *szWarningMessage, ...);
-#else
-inline void NTAPI EmuWarning(const char *szWarningMessage, ...) { }
-#endif
+// Always compiled; printing is gated at runtime by CXBX_WARN=1 (or forced on
+// by building with _DEBUG_WARNINGS). Warnings used to be an inline no-op in
+// non-_DEBUG_WARNINGS builds, which made every "unsupported X, degrading"
+// diagnostic invisible without a rebuild.
+extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char* szWarningMessage, ...);
 
 // ******************************************************************
 // * func: EmuCleanup

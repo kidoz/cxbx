@@ -7211,10 +7211,22 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 // ******************************************************************
 // * func: EmuWarning
 // ******************************************************************
-#ifdef _DEBUG_WARNINGS
 extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char* szWarningMessage, ...)
 {
-    if(szWarningMessage == NULL)
+    // Runtime-gated: CXBX_WARN=1 enables warnings without a rebuild
+    // (_DEBUG_WARNINGS builds force them on).
+    static int s_WarningsEnabled = -1;
+    if(s_WarningsEnabled < 0)
+    {
+#ifdef _DEBUG_WARNINGS
+        s_WarningsEnabled = 1;
+#else
+        const char* enable = getenv("CXBX_WARN");
+        s_WarningsEnabled = (enable != NULL && *enable != '0') ? 1 : 0;
+#endif
+    }
+
+    if(!s_WarningsEnabled || szWarningMessage == NULL)
     {
         return;
     }
@@ -7239,7 +7251,6 @@ extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char* szWarningMessage, ...)
     printf("%s\n", szBuffer);
     fflush(stdout);
 }
-#endif
 
 // ******************************************************************
 // * func: EmuCleanup
