@@ -674,7 +674,15 @@ struct EmuRecordedPushBuffer
     std::size_t byteCount = 0;
 };
 
+struct EmuRegisteredVertexBuffer
+{
+    XTL::X_D3DVertexBuffer* resource = nullptr;
+    const BYTE* guestData = nullptr;
+    DWORD byteSize = 0;
+};
+
 static std::vector<EmuRecordedPushBuffer> g_EmuRecordedPushBuffers;
+static std::vector<EmuRegisteredVertexBuffer> g_EmuRegisteredVertexBuffers;
 constexpr std::size_t EMU_RECORDED_DRAW_LIMIT = 256;
 constexpr std::size_t EMU_RECORDED_BYTE_LIMIT = 16 * 1024 * 1024;
 
@@ -717,6 +725,54 @@ static EmuRecordedPushBuffer* EmuFindRecordedPushBuffer(XTL::X_D3DPushBuffer* pu
         }
     }
     return NULL;
+}
+
+static EmuRegisteredVertexBuffer* EmuFindRegisteredVertexBuffer(
+    XTL::X_D3DVertexBuffer* vertexBuffer)
+{
+    for(EmuRegisteredVertexBuffer& registration : g_EmuRegisteredVertexBuffers)
+    {
+        if(registration.resource == vertexBuffer)
+        {
+            return &registration;
+        }
+    }
+    return nullptr;
+}
+
+static void EmuDiscardRegisteredVertexBuffer(XTL::X_D3DVertexBuffer* vertexBuffer)
+{
+    for(std::vector<EmuRegisteredVertexBuffer>::iterator registration =
+            g_EmuRegisteredVertexBuffers.begin();
+        registration != g_EmuRegisteredVertexBuffers.end(); ++registration)
+    {
+        if(registration->resource == vertexBuffer)
+        {
+            g_EmuRegisteredVertexBuffers.erase(registration);
+            return;
+        }
+    }
+}
+
+static void EmuResetRegisteredVertexBuffer(XTL::X_D3DVertexBuffer* vertexBuffer,
+                                           const void* guestData, DWORD byteSize)
+{
+    EmuRegisteredVertexBuffer* registration = EmuFindRegisteredVertexBuffer(vertexBuffer);
+    if(registration != nullptr)
+    {
+        registration->guestData = static_cast<const BYTE*>(guestData);
+        registration->byteSize = byteSize;
+        return;
+    }
+
+    try
+    {
+        g_EmuRegisteredVertexBuffers.push_back(
+            { vertexBuffer, static_cast<const BYTE*>(guestData), byteSize });
+    }
+    catch(...)
+    {
+    }
 }
 
 static void EmuReleaseRecordedPushBufferState(EmuRecordedPushBuffer& recording)
@@ -1495,6 +1551,7 @@ static bool EmuD3DIsReadableRange(const void* base, DWORD bytes)
     return true;
 }
 
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG* BlockSize);
 extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
 
 static bool EmuD3DCopyReadableRange(const void* source, DWORD bytes,
@@ -5218,6 +5275,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
     const DWORD dwRegisterBase = reinterpret_cast<DWORD>(pBase);
     const DWORD dwDataOffset = pThis->Data;
+    const DWORD dwUnmaskedDataAddress = dwRegisterBase + dwDataOffset;
     const bool isPushBuffer = dwCommonType == X_D3DCOMMON_TYPE_PUSHBUFFER;
 
     // Xbox D3DResource::Register adds the resource's Data offset to pBase and
@@ -5246,7 +5304,23 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             // * Create the vertex buffer
             // ******************************************************************
             {
-                DWORD dwSize = EmuCheckAllocationSize(pBase);
+                ULONG contiguousBlockSize = 0;
+                const ULONG contiguousBlockBase =
+                    EmuContiguousBlockBase(dwUnmaskedDataAddress, &contiguousBlockSize);
+                const bool hasTrackedBacking = contiguousBlockBase != 0;
+                const DWORD vertexDataAddress = cxbx::d3d::XboxResourceHostDataAddress(
+                    dwRegisterBase, dwDataOffset, hasTrackedBacking);
+                PVOID vertexData = reinterpret_cast<PVOID>(vertexDataAddress);
+                const DWORD dwSize = hasTrackedBacking
+                                         ? contiguousBlockSize -
+                                               (dwUnmaskedDataAddress - contiguousBlockBase)
+                                         : EmuCheckAllocationSize(vertexData);
+
+                // Registered Xbox vertex buffers retain their title-owned UMA
+                // backing store. Preserve that live source separately from the
+                // host D3D copy so CPU vertex-shader draws observe later guest
+                // writes instead of the registration-time snapshot.
+                EmuResetRegisteredVertexBuffer(pVertexBuffer, vertexData, dwSize);
 
                 hRet = g_pD3DDevice8->CreateVertexBuffer
                 (
@@ -5265,6 +5339,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                                dwSize, hRet);
                     pResource->EmuVertexBuffer8 = 0;
                     pResource->Data = 0;
+                    EmuDiscardRegisteredVertexBuffer(pVertexBuffer);
                     break;
                 }
 
@@ -5275,6 +5350,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 if(FAILED(hRet) || pData == 0)
                 {
                     EmuWarning("EmuIDirect3DResource8_Register: VertexBuffer Lock failed -- resource left unbacked");
+                    EmuDiscardRegisteredVertexBuffer(pVertexBuffer);
                     break;
                 }
 
@@ -5284,14 +5360,15 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 // the resource unbacked instead of crashing the process.
                 __try
                 {
-                    memcpy(pData, (void*)pBase, dwSize);
+                    memcpy(pData, vertexData, dwSize);
                 }
                 __except(EXCEPTION_EXECUTE_HANDLER)
                 {
-                    EmuWarning("EmuIDirect3DResource8_Register: VertexBuffer data copy fault at 0x%.08X -- resource left unbacked", (DWORD)pBase);
+                    EmuWarning("EmuIDirect3DResource8_Register: VertexBuffer data copy fault at 0x%.08X -- resource left unbacked", (DWORD)vertexData);
                     pResource->EmuVertexBuffer8->Unlock();
                     pResource->EmuVertexBuffer8 = 0;
                     pResource->Data = 0;
+                    EmuDiscardRegisteredVertexBuffer(pVertexBuffer);
                     break;
                 }
 
@@ -5889,6 +5966,10 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
             #ifdef _DEBUG_TRACE
             printf("EmuIDirect3DResource8_Release (0x%X): Cleaned up a Resource!\n", GetCurrentThreadId());
             #endif
+            if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_VERTEXBUFFER)
+            {
+                EmuDiscardRegisteredVertexBuffer(static_cast<X_D3DVertexBuffer*>(pThis));
+            }
             delete pThis;
         }
     }
@@ -7914,6 +7995,13 @@ VOID WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock
     IDirect3DVertexBuffer8 *pVertexBuffer8 = ppVertexBuffer->EmuVertexBuffer8;
 
     HRESULT hRet = pVertexBuffer8->Lock(OffsetToLock, SizeToLock, ppbData, Flags);
+    if(SUCCEEDED(hRet))
+    {
+        // A title that locks a registered buffer is now updating the host D3D
+        // copy. Stop preferring its original UMA registration span for CPU
+        // vertex-shader draws so those writes remain visible.
+        EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -7951,6 +8039,10 @@ BYTE* WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock2
     BYTE *pbData = NULL;
 
     HRESULT hRet = pVertexBuffer8->Lock(0, 0, &pbData, Flags);
+    if(SUCCEEDED(hRet))
+    {
+        EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -9166,7 +9258,197 @@ struct EmuVshCpuVertex
     DWORD diffuse;
     DWORD specular;
     float texCoords[4][2];
+    float clipPosition[4];
+    float diffuseComponents[4];
+    float specularComponents[4];
 };
+
+static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport);
+
+static void EmuVshProjectCpuVertex(EmuVshCpuVertex& vertex,
+                                   const XTL::D3DVIEWPORT8& viewport)
+{
+    const float w = vertex.clipPosition[3];
+    const float inverseW = w > 1.0e-8f || w < -1.0e-8f ? 1.0f / w : 1.0f;
+    vertex.x = static_cast<float>(viewport.X) +
+               (vertex.clipPosition[0] * inverseW + 1.0f) *
+                   static_cast<float>(viewport.Width) * 0.5f;
+    vertex.y = static_cast<float>(viewport.Y) +
+               (1.0f - vertex.clipPosition[1] * inverseW) *
+                   static_cast<float>(viewport.Height) * 0.5f;
+    vertex.z = viewport.MinZ + vertex.clipPosition[2] * inverseW *
+                                  (viewport.MaxZ - viewport.MinZ);
+    vertex.rhw = inverseW;
+    vertex.diffuse = XTL::VshDiagnostics::PackD3DColor(vertex.diffuseComponents);
+    vertex.specular = XTL::VshDiagnostics::PackD3DColor(vertex.specularComponents);
+}
+
+static float EmuVshClipDistance(const EmuVshCpuVertex& vertex, std::size_t plane)
+{
+    const float x = vertex.clipPosition[0];
+    const float y = vertex.clipPosition[1];
+    const float z = vertex.clipPosition[2];
+    const float w = vertex.clipPosition[3];
+    switch(plane)
+    {
+        case 0: return x + w;
+        case 1: return w - x;
+        case 2: return y + w;
+        case 3: return w - y;
+        case 4: return z;
+        case 5: return w - z;
+        default: return -1.0f;
+    }
+}
+
+static EmuVshCpuVertex EmuVshInterpolateCpuVertex(const EmuVshCpuVertex& begin,
+                                                   const EmuVshCpuVertex& end,
+                                                   float amount)
+{
+    EmuVshCpuVertex result{};
+    result.pointSize = begin.pointSize + (end.pointSize - begin.pointSize) * amount;
+    for(std::size_t component = 0; component < 4; ++component)
+    {
+        result.clipPosition[component] = begin.clipPosition[component] +
+                                         (end.clipPosition[component] -
+                                          begin.clipPosition[component]) * amount;
+        result.diffuseComponents[component] = begin.diffuseComponents[component] +
+                                              (end.diffuseComponents[component] -
+                                               begin.diffuseComponents[component]) * amount;
+        result.specularComponents[component] = begin.specularComponents[component] +
+                                               (end.specularComponents[component] -
+                                                begin.specularComponents[component]) * amount;
+        result.texCoords[component][0] = begin.texCoords[component][0] +
+                                         (end.texCoords[component][0] -
+                                          begin.texCoords[component][0]) * amount;
+        result.texCoords[component][1] = begin.texCoords[component][1] +
+                                         (end.texCoords[component][1] -
+                                          begin.texCoords[component][1]) * amount;
+    }
+    return result;
+}
+
+static bool EmuVshClipCpuTriangles(XTL::D3DPRIMITIVETYPE& primitiveType,
+                                   UINT& primitiveCount,
+                                   std::vector<EmuVshCpuVertex>& vertices)
+{
+    if(primitiveType != XTL::D3DPT_TRIANGLELIST &&
+       primitiveType != XTL::D3DPT_TRIANGLESTRIP &&
+       primitiveType != XTL::D3DPT_TRIANGLEFAN)
+    {
+        return true;
+    }
+
+    XTL::D3DVIEWPORT8 viewport{};
+    if(FAILED(EmuVshGetViewport(&viewport)))
+    {
+        return false;
+    }
+
+    const UINT requiredVertices = EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
+    if(requiredVertices > vertices.size())
+    {
+        return false;
+    }
+
+    std::vector<EmuVshCpuVertex> clipped;
+    try
+    {
+        clipped.reserve(static_cast<std::size_t>(primitiveCount) * 6);
+    }
+    catch(...)
+    {
+        return false;
+    }
+
+    for(UINT primitive = 0; primitive < primitiveCount; ++primitive)
+    {
+        std::array<EmuVshCpuVertex, 12> polygon{};
+        std::array<EmuVshCpuVertex, 12> scratch{};
+        if(primitiveType == XTL::D3DPT_TRIANGLELIST)
+        {
+            polygon[0] = vertices[primitive * 3];
+            polygon[1] = vertices[primitive * 3 + 1];
+            polygon[2] = vertices[primitive * 3 + 2];
+        }
+        else if(primitiveType == XTL::D3DPT_TRIANGLESTRIP)
+        {
+            const UINT first = primitive;
+            polygon[0] = vertices[first + (primitive & 1u ? 1u : 0u)];
+            polygon[1] = vertices[first + (primitive & 1u ? 0u : 1u)];
+            polygon[2] = vertices[first + 2];
+        }
+        else
+        {
+            polygon[0] = vertices[0];
+            polygon[1] = vertices[primitive + 1];
+            polygon[2] = vertices[primitive + 2];
+        }
+
+        std::size_t polygonSize = 3;
+        for(std::size_t plane = 0; plane < 6 && polygonSize != 0; ++plane)
+        {
+            std::size_t scratchSize = 0;
+            EmuVshCpuVertex previous = polygon[polygonSize - 1];
+            float previousDistance = EmuVshClipDistance(previous, plane);
+            bool previousInside = std::isfinite(previousDistance) && previousDistance >= 0.0f;
+            for(std::size_t vertexIndex = 0; vertexIndex < polygonSize; ++vertexIndex)
+            {
+                const EmuVshCpuVertex& current = polygon[vertexIndex];
+                const float currentDistance = EmuVshClipDistance(current, plane);
+                const bool currentInside =
+                    std::isfinite(currentDistance) && currentDistance >= 0.0f;
+                if(previousInside != currentInside)
+                {
+                    const float denominator = previousDistance - currentDistance;
+                    const float amount = denominator == 0.0f
+                                             ? 0.0f
+                                             : previousDistance / denominator;
+                    if(scratchSize >= scratch.size())
+                    {
+                        return false;
+                    }
+                    scratch[scratchSize++] =
+                        EmuVshInterpolateCpuVertex(previous, current, amount);
+                }
+                if(currentInside)
+                {
+                    if(scratchSize >= scratch.size())
+                    {
+                        return false;
+                    }
+                    scratch[scratchSize++] = current;
+                }
+                previous = current;
+                previousDistance = currentDistance;
+                previousInside = currentInside;
+            }
+            polygon = scratch;
+            polygonSize = scratchSize;
+        }
+
+        for(std::size_t triangle = 1; triangle + 1 < polygonSize; ++triangle)
+        {
+            if(clipped.size() > 262144 - 3)
+            {
+                return false;
+            }
+            EmuVshCpuVertex triangleVertices[3] = {
+                polygon[0], polygon[triangle], polygon[triangle + 1]
+            };
+            for(EmuVshCpuVertex& vertex : triangleVertices)
+            {
+                EmuVshProjectCpuVertex(vertex, viewport);
+                clipped.push_back(vertex);
+            }
+        }
+    }
+
+    vertices.swap(clipped);
+    primitiveType = XTL::D3DPT_TRIANGLELIST;
+    primitiveCount = static_cast<UINT>(vertices.size() / 3);
+    return true;
+}
 
 struct EmuVshLockedStream
 {
@@ -9413,6 +9695,50 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             SUCCEEDED(g_pD3DDevice8->GetTexture(0, &stage0Texture)) &&
             stage0Texture != nullptr;
         const bool stage0TextureHasData = EmuHostTextureHasData(stage0Texture);
+        DWORD stage0TextureType = 0;
+        DWORD stage0TextureFormat = 0;
+        UINT stage0TextureWidth = 0;
+        UINT stage0TextureHeight = 0;
+        if(stage0Texture != nullptr)
+        {
+            stage0TextureType = static_cast<DWORD>(stage0Texture->GetType());
+            if(stage0TextureType == XTL::D3DRTYPE_TEXTURE)
+            {
+                XTL::D3DSURFACE_DESC description{};
+                if(SUCCEEDED(static_cast<XTL::IDirect3DTexture8*>(stage0Texture)
+                                 ->GetLevelDesc(0, &description)))
+                {
+                    stage0TextureFormat = static_cast<DWORD>(description.Format);
+                    stage0TextureWidth = description.Width;
+                    stage0TextureHeight = description.Height;
+                }
+            }
+        }
+        XTL::IDirect3DBaseTexture8* stage3Texture = nullptr;
+        DWORD stage3TextureType = 0;
+        DWORD stage3TextureFormat = 0;
+        UINT stage3TextureWidth = 0;
+        UINT stage3TextureHeight = 0;
+        const bool stage3TextureBound =
+            SUCCEEDED(g_pD3DDevice8->GetTexture(3, &stage3Texture)) &&
+            stage3Texture != nullptr;
+        const bool stage3TextureHasData = EmuHostTextureHasData(stage3Texture);
+        if(stage3Texture != nullptr)
+        {
+            stage3TextureType = static_cast<DWORD>(stage3Texture->GetType());
+            if(stage3TextureType == XTL::D3DRTYPE_TEXTURE)
+            {
+                XTL::D3DSURFACE_DESC description{};
+                if(SUCCEEDED(static_cast<XTL::IDirect3DTexture8*>(stage3Texture)
+                                 ->GetLevelDesc(0, &description)))
+                {
+                    stage3TextureFormat = static_cast<DWORD>(description.Format);
+                    stage3TextureWidth = description.Width;
+                    stage3TextureHeight = description.Height;
+                }
+            }
+            stage3Texture->Release();
+        }
         if(stage0Texture != nullptr)
         {
             stage0Texture->Release();
@@ -9446,10 +9772,18 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
            !g_EmuCurrentCpuVertexShader->materialLogged)
         {
             printf("VSH| cpu_material hash=%08X pixel=%08lX stage0_texture=%u texcoord=%lu "
+                   "texture_type=%lu texture_format=%lu texture_size=%ux%u "
+                   "stage3_texture=%u stage3_type=%lu stage3_format=%lu "
+                   "stage3_size=%ux%u stage3_data=%u "
                    "finite=%u varies=%u texture_data=%u mode=%s "
                    "combiner=%s\n",
                    static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash),
                    g_EmuCurrentPixelShaderHandle, stage0TextureBound ? 1u : 0u, texCoordIndex,
+                   stage0TextureType, stage0TextureFormat, stage0TextureWidth,
+                   stage0TextureHeight,
+                   stage3TextureBound ? 1u : 0u, stage3TextureType,
+                   stage3TextureFormat, stage3TextureWidth, stage3TextureHeight,
+                   stage3TextureHasData ? 1u : 0u,
                    texCoordsFinite ? 1u : 0u, texCoordsVary ? 1u : 0u,
                    stage0TextureHasData ? 1u : 0u,
                    material == cxbx::d3d::CpuFallbackMaterial::TextureModulate
@@ -9621,26 +9955,22 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         {
             return false;
         }
-
-        const float inverseW = position[3] > 1.0e-8f || position[3] < -1.0e-8f ? 1.0f / position[3] : 1.0f;
         EmuVshCpuVertex& vertex = output[outputIndex];
-        vertex.x = static_cast<float>(viewport.X) + (position[0] * inverseW + 1.0f) *
-                                                        static_cast<float>(viewport.Width) * 0.5f;
-        vertex.y = static_cast<float>(viewport.Y) + (1.0f - position[1] * inverseW) *
-                                                        static_cast<float>(viewport.Height) * 0.5f;
-        vertex.z = viewport.MinZ + position[2] * inverseW * (viewport.MaxZ - viewport.MinZ);
-        vertex.rhw = inverseW;
+        std::copy(std::begin(position), std::end(position), vertex.clipPosition);
+        std::copy(&colors[0], &colors[4], vertex.diffuseComponents);
+        std::copy(&colors[4], &colors[8], vertex.specularComponents);
+        vertex.specularComponents[3] = XTL::VshDiagnostics::SelectRasterOutput(
+            rasterOutputs.fog, rasterOutputs.fogWriteMask, 1.0f);
         const float pointSize = XTL::VshDiagnostics::SelectRasterOutput(
             rasterOutputs.pointSize, rasterOutputs.pointSizeWriteMask, defaultPointSize);
         vertex.pointSize = XTL::VshDiagnostics::ClampPointSize(
             pointSize, defaultPointSize, g_D3DCaps.MaxPointSize);
-        vertex.diffuse = XTL::VshDiagnostics::PackD3DColor(&colors[0]);
-        vertex.specular = XTL::VshDiagnostics::PackD3DSpecularFog(&colors[4], rasterOutputs);
         for(std::size_t texCoord = 0; texCoord < 4; ++texCoord)
         {
             vertex.texCoords[texCoord][0] = texCoords[texCoord * 4];
             vertex.texCoords[texCoord][1] = texCoords[texCoord * 4 + 1];
         }
+        EmuVshProjectCpuVertex(vertex, viewport);
     }
 
     if(vertexCount >= 3 && capturedFirstInputs &&
@@ -9727,6 +10057,18 @@ static bool EmuVshDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveTyp
         {
             continue;
         }
+        const EmuRegisteredVertexBuffer* registration =
+            EmuFindRegisteredVertexBuffer(resource);
+        if(registration != nullptr && registration->guestData != nullptr &&
+           EmuD3DIsReadableRange(registration->guestData, registration->byteSize))
+        {
+            streams[stream] = {
+                registration->guestData,
+                registration->byteSize,
+                g_EmuVshCpuStreamStrides[stream],
+            };
+            continue;
+        }
         locked[stream].buffer = resource->EmuVertexBuffer8;
         if(locked[stream].buffer == nullptr ||
            FAILED(EmuVshLockVertexBuffer(resource, &locked[stream].data, &locked[stream].byteSize)))
@@ -9749,7 +10091,12 @@ static bool EmuVshDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveTyp
                                                  firstVertex, vertexCount, vertices);
     }
     lockedStreamsGuard.Unlock();
-    return transformed && SUCCEEDED(EmuVshDrawPrimitiveUp(primitiveType, primitiveCount, vertices.data()));
+    if(!transformed || !EmuVshClipCpuTriangles(primitiveType, primitiveCount, vertices))
+    {
+        return false;
+    }
+    return vertices.empty() ||
+           SUCCEEDED(EmuVshDrawPrimitiveUp(primitiveType, primitiveCount, vertices.data()));
 }
 
 static bool EmuVshDrawCpuUp(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
@@ -9771,7 +10118,13 @@ static bool EmuVshDrawCpuUp(bool quadList, XTL::D3DPRIMITIVETYPE primitiveType,
     std::array<XTL::VshDiagnostics::VertexStreamView, 16> streams{};
     streams[0] = { data, static_cast<std::size_t>(sourceVertexCount) * stride, stride };
     std::vector<EmuVshCpuVertex> vertices;
-    return EmuVshTransformCpuVertices(streams.data(), streams.size(), indices, 0, vertexCount, vertices) &&
+    if(!EmuVshTransformCpuVertices(streams.data(), streams.size(), indices, 0, vertexCount,
+                                   vertices) ||
+       !EmuVshClipCpuTriangles(primitiveType, primitiveCount, vertices))
+    {
+        return false;
+    }
+    return vertices.empty() ||
            SUCCEEDED(EmuVshDrawPrimitiveUp(primitiveType, primitiveCount, vertices.data()));
 }
 
