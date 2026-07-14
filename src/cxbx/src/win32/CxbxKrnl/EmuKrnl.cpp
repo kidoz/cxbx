@@ -64,6 +64,7 @@ namespace NtDll
 #include "EmuFS.h"
 #include "EmuFile.h"
 #include "core/trace.h"
+#include "core/xbox_memory.h"
 
 extern "C" uint32 __cdecl EmuDbgPrint(const char *Format, ...)
 {
@@ -3490,6 +3491,33 @@ extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress)
 
         if(Base != 0 && PhysicalAddress >= Phys && PhysicalAddress < Phys + Size)
             return Base + (PhysicalAddress - Phys);
+    }
+
+    return 0;
+}
+
+extern "C" ULONG EmuSystemHostFromPhysical(ULONG PhysicalAddress, ULONG Size)
+{
+    if(Size == 0 || PhysicalAddress >= EmuXboxPhysicalMemoryBytes)
+    {
+        return 0;
+    }
+
+    for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) /
+                              sizeof(g_EmuSystemMemoryAllocations[0]);
+        ++i)
+    {
+        const ULONG Base = (ULONG)g_EmuSystemMemoryAllocations[i].Address;
+        const ULONG AllocationSize =
+            g_EmuSystemMemoryAllocations[i].Pages * EmuPageSize;
+        const ULONG AllocationPhysical = Base & (EmuXboxPhysicalMemoryBytes - 1);
+        std::size_t Offset = 0;
+        if(Base != 0 &&
+           cxbx::XboxPhysicalSpanOffset(PhysicalAddress, AllocationPhysical,
+                                        AllocationSize, Size, Offset))
+        {
+            return Base + static_cast<ULONG>(Offset);
+        }
     }
 
     return 0;

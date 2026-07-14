@@ -1558,6 +1558,7 @@ static bool EmuD3DIsReadableRange(const void* base, DWORD bytes)
 
 extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG* BlockSize);
 extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
+extern "C" ULONG EmuSystemHostFromPhysical(ULONG PhysicalAddress, ULONG Size);
 
 static bool EmuD3DCopyReadableRange(const void* source, DWORD bytes,
                                     std::vector<BYTE>& copy)
@@ -1590,7 +1591,11 @@ static bool EmuD3DCopyReadableRange(const void* source, DWORD bytes,
     // to a live guest allocation, so arbitrary unreadable host pointers fail closed.
     const ULONG physicalAddress = cxbx::d3d::XboxPhysicalAddress(
         reinterpret_cast<std::uintptr_t>(source));
-    const ULONG hostAddress = EmuContiguousHostFromPhysical(physicalAddress);
+    ULONG hostAddress = EmuContiguousHostFromPhysical(physicalAddress);
+    if(hostAddress == 0)
+    {
+        hostAddress = EmuSystemHostFromPhysical(physicalAddress, bytes);
+    }
     bytesRead = 0;
     if(hostAddress == 0 ||
        !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(hostAddress),

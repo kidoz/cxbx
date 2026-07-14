@@ -76,6 +76,23 @@ int main()
         return 1;
     }
 
+    std::size_t physicalOffset = 0;
+    if(!cxbx::XboxPhysicalSpanOffset(0x00001200u, 0x00001000u, 0x1000u, 0x100u,
+                                     physicalOffset) ||
+       physicalOffset != 0x200u ||
+       !cxbx::XboxPhysicalSpanOffset(0x00000100u, 0x03FFF000u, 0x2000u, 0x100u,
+                                     physicalOffset) ||
+       physicalOffset != 0x1100u ||
+       cxbx::XboxPhysicalSpanOffset(0x00002000u, 0x00001000u, 0x1000u, 1u,
+                                    physicalOffset) ||
+       cxbx::XboxPhysicalSpanOffset(0x00001000u, 0x00001000u, 0x1000u, 0u,
+                                    physicalOffset))
+    {
+        std::fputs("physical aliases must resolve only inside tracked allocation spans\n",
+                   stderr);
+        return 1;
+    }
+
     if(cxbx::d3d::XboxResourceDataAddress(0x528B0000u, 0x00006EB2u, false) !=
            0x028B6EB2u ||
        cxbx::d3d::XboxResourceDataAddress(0x0B210000u, 0x0000D578u, false) !=
