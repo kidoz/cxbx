@@ -23,6 +23,7 @@ import argparse
 import difflib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,6 +126,49 @@ def probe_golden_mode(suite_dir: Path, name: str) -> str:
     if mode not in {"verdicts", "values"}:
         raise ValueError(f"{path}: golden must be 'verdicts' or 'values'")
     return mode
+
+
+def probe_golden_images(suite_dir: Path, name: str) -> list[dict[str, Any]]:
+    """Image-golden entries from optional [[golden_image]] tables in
+    probes/<name>/probe.toml. Each entry names a BMP artifact the emulator
+    writes into %TEMP% during the run (e.g. a scanout dump); the runner
+    compares it pixel-wise against golden/<emulator>/images/<probe>/<name>.
+
+        [[golden_image]]
+        artifact = "cxbx_fb1.bmp"     # file the emulator dumps into %TEMP%
+        clean = "cxbx_fb*.bmp"        # glob of stale files to delete pre-run
+                                      #   (defaults to the artifact name)
+        max_channel_delta = 0         # per-channel tolerance (0 = exact)
+        max_diff_fraction = 0.0       # fraction of pixels allowed above it
+    """
+    path = suite_dir / "probes" / name / "probe.toml"
+    if not path.exists():
+        return []
+    with open(path, "rb") as file:
+        entries = tomllib.load(file).get("golden_image", [])
+    parsed = []
+    for entry in entries:
+        parsed.append(
+            {
+                "artifact": str(entry["artifact"]),
+                "clean": str(entry.get("clean", entry["artifact"])),
+                "max_channel_delta": int(entry.get("max_channel_delta", 0)),
+                "max_diff_fraction": float(entry.get("max_diff_fraction", 0.0)),
+            }
+        )
+    return parsed
+
+
+def clean_golden_image_artifacts(suite_dir: Path, name: str) -> None:
+    """Delete stale artifact files from earlier runs so a probe that fails to
+    dump cannot silently compare against a leftover."""
+    temp = Path(tempfile.gettempdir())
+    for entry in probe_golden_images(suite_dir, name):
+        for stale in temp.glob(entry["clean"]):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
 
 def target_capabilities(cfg: Config, args: argparse.Namespace) -> set[str] | None:
@@ -298,6 +342,8 @@ class ProbeResult:
         self.timed_out = False
         self.host_trace_text = ""
         self.host_trace_error = ""
+        self.image_lines: list[str] = []  # per-artifact image-golden outcomes
+        self.image_fail = False
 
 
 CHK_RE = re.compile(r"^CHK (\S+) .*?(PASS|FAIL)\s*$")
@@ -419,6 +465,113 @@ def golden_compare(
 
 
 # --------------------------------------------------------------------------- #
+# Image goldens (pixel regression on emulator-dumped BMPs)
+# --------------------------------------------------------------------------- #
+
+
+def read_bmp_pixels(path: Path) -> tuple[int, int, bytearray]:
+    """Minimal reader for the emulator's own dumps: uncompressed 24/32-bit BMP,
+    top-down or bottom-up. Returns (width, height, BGR triples, row 0 = top)."""
+    data = path.read_bytes()
+    if len(data) < 54 or data[:2] != b"BM":
+        raise ValueError(f"{path.name}: not a BMP")
+    offset = int.from_bytes(data[10:14], "little")
+    width = int.from_bytes(data[18:22], "little", signed=True)
+    height = int.from_bytes(data[22:26], "little", signed=True)
+    bpp = int.from_bytes(data[28:30], "little")
+    compression = int.from_bytes(data[30:34], "little")
+    if compression != 0 or bpp not in (24, 32) or width <= 0 or height == 0:
+        raise ValueError(f"{path.name}: unsupported BMP (bpp={bpp} comp={compression})")
+    top_down = height < 0
+    height = abs(height)
+    step = bpp // 8
+    stride = (width * step + 3) & ~3
+    if len(data) < offset + stride * height:
+        raise ValueError(f"{path.name}: truncated BMP")
+    pixels = bytearray(width * height * 3)
+    for y in range(height):
+        source_y = y if top_down else height - 1 - y
+        row = data[offset + source_y * stride : offset + source_y * stride + width * step]
+        for x in range(width):
+            i = (y * width + x) * 3
+            pixels[i : i + 3] = row[x * step : x * step + 3]
+    return width, height, pixels
+
+
+def compare_bmp_images(
+    actual: Path, golden: Path, max_channel_delta: int, max_diff_fraction: float
+) -> tuple[bool, str]:
+    """Pixel-compare two BMPs on the BGR channels (alpha is dump-dependent).
+    Exact byte equality short-circuits; otherwise pixels whose worst channel
+    delta exceeds max_channel_delta count as differing, and the differing
+    fraction must stay within max_diff_fraction."""
+    actual_w, actual_h, actual_px = read_bmp_pixels(actual)
+    golden_w, golden_h, golden_px = read_bmp_pixels(golden)
+    if (actual_w, actual_h) != (golden_w, golden_h):
+        return False, f"size {actual_w}x{actual_h} != golden {golden_w}x{golden_h}"
+    if actual_px == golden_px:
+        return True, "identical"
+    differing = 0
+    worst = 0
+    for i in range(0, len(actual_px), 3):
+        delta = max(
+            abs(actual_px[i] - golden_px[i]),
+            abs(actual_px[i + 1] - golden_px[i + 1]),
+            abs(actual_px[i + 2] - golden_px[i + 2]),
+        )
+        if delta > worst:
+            worst = delta
+        if delta > max_channel_delta:
+            differing += 1
+    fraction = differing / (actual_w * actual_h)
+    ok = fraction <= max_diff_fraction
+    return ok, (
+        f"{differing}/{actual_w * actual_h} pixels differ "
+        f"(fraction={fraction:.4f}, worst_delta={worst}; "
+        f"tolerance delta<={max_channel_delta} fraction<={max_diff_fraction})"
+    )
+
+
+def golden_images_compare(
+    suite_dir: Path, emulator: str, res: ProbeResult, update: bool
+) -> None:
+    entries = probe_golden_images(suite_dir, res.name)
+    if not entries:
+        return
+    temp = Path(tempfile.gettempdir())
+    golden_dir = suite_dir / "golden" / emulator / "images" / res.name
+    for entry in entries:
+        artifact = temp / entry["artifact"]
+        golden_path = golden_dir / entry["artifact"]
+        if not artifact.exists():
+            res.image_fail = True
+            res.image_lines.append(f"{entry['artifact']}: MISSING (no dump was written)")
+            continue
+        if update:
+            golden_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(artifact, golden_path)
+            res.image_lines.append(f"{entry['artifact']}: WROTE golden")
+            continue
+        if not golden_path.exists():
+            res.image_lines.append(f"{entry['artifact']}: NEW (no golden; use --update-golden)")
+            continue
+        try:
+            ok, detail = compare_bmp_images(
+                artifact,
+                golden_path,
+                entry["max_channel_delta"],
+                entry["max_diff_fraction"],
+            )
+        except ValueError as error:
+            ok, detail = False, str(error)
+        if ok:
+            res.image_lines.append(f"{entry['artifact']}: OK ({detail})")
+        else:
+            res.image_fail = True
+            res.image_lines.append(f"{entry['artifact']}: DIFF ({detail})")
+
+
+# --------------------------------------------------------------------------- #
 # Reporting
 # --------------------------------------------------------------------------- #
 
@@ -459,10 +612,18 @@ def print_report(results: Sequence[ProbeResult], emulator: str) -> bool:
             print(f"\n  [{r.name}] golden diff:")
             for line in r.diff.splitlines():
                 print("    " + line)
+        if r.image_lines:
+            print(f"\n  [{r.name}] image goldens:")
+            for line in r.image_lines:
+                print("    " + line)
         if r.host_trace_error:
             print(f"\n  [{r.name}] host trace error: {r.host_trace_error}")
     print()
-    return n_fail == 0 and not any(r.host_trace_error for r in results)
+    return (
+        n_fail == 0
+        and not any(r.host_trace_error for r in results)
+        and not any(r.image_fail for r in results)
+    )
 
 
 def write_junit(results: Sequence[ProbeResult], emulator: str) -> None:
@@ -471,7 +632,7 @@ def write_junit(results: Sequence[ProbeResult], emulator: str) -> None:
         "testsuite",
         name=f"xbox-conformance:{emulator}",
         tests=str(len(results)),
-        failures=str(sum(1 for r in results if r.verdict != "PASS")),
+        failures=str(sum(1 for r in results if r.verdict != "PASS" or r.image_fail)),
     )
     for r in results:
         tc = ET.SubElement(
@@ -481,12 +642,14 @@ def write_junit(results: Sequence[ProbeResult], emulator: str) -> None:
             name=r.name,
             assertions=str(r.checks),
         )
-        if r.verdict != "PASS":
+        if r.verdict != "PASS" or r.image_fail:
             msg = f"verdict={r.verdict} fails={r.fails}"
             if r.fail_names:
                 msg += " (" + ", ".join(r.fail_names) + ")"
+            if r.image_fail:
+                msg += "; image golden mismatch"
             fail = ET.SubElement(tc, "failure", message=msg, type=r.verdict)
-            fail.text = (r.diff or r.trace_text)[:4000]
+            fail.text = "\n".join(r.image_lines) + "\n" + (r.diff or r.trace_text)[:4000]
     path = OUT_DIR / "results.xml"
     ET.ElementTree(ts).write(path, encoding="utf-8", xml_declaration=True)
     print(f"  JUnit: {path}")
@@ -567,6 +730,7 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         # fails identically twice, so the retry cannot mask a real regression.
         event_path: Path | None = None
         for attempt in range(2):
+            clean_golden_image_artifacts(suite_dir, name)
             runtime_env = probe_env(suite_dir, name)
             if args.host_channel:
                 OUT_DIR.mkdir(exist_ok=True)
@@ -612,7 +776,11 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         if res.trace_text:
             keep_values = args.golden_values or probe_golden_mode(suite_dir, name) == "values"
             golden_compare(suite_dir, args.emulator, res, args.update_golden, keep_values)
-        print(res.verdict + (f" ({res.golden})" if res.golden not in ("-",) else ""))
+        golden_images_compare(suite_dir, args.emulator, res, args.update_golden)
+        status = res.verdict + (f" ({res.golden})" if res.golden not in ("-",) else "")
+        if res.image_fail:
+            status += " IMGDIFF"
+        print(status)
         results.append(res)
 
     ok = print_report(results, args.emulator)

@@ -1,0 +1,11 @@
+# Display-scanout probe: the emulator's CRTC scanout capture dumps the
+# on-screen frame to %TEMP%\cxbx_fbN.bmp. fb0 is pbkit's init-time flip to
+# its triple-buffer block (640x1440); fb1 is the probe's CPU-composed frame
+# (640x480, byte-identical across the later flips). Pixel-compare it against
+# the checked-in golden -- the frame is CPU-composed, so the comparison is
+# exact on every host GPU. (No tags: like the other gfx_* probes it runs on
+# every target.)
+
+[[golden_image]]
+artifact = "cxbx_fb1.bmp"
+clean = "cxbx_fb*.bmp"
