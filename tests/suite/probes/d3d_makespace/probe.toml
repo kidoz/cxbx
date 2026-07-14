@@ -1,0 +1,6 @@
+# XDK D3D MakeSpace writable-cursor return ABI probe.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

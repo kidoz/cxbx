@@ -5968,7 +5968,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_MakeSpace
 // ******************************************************************
-VOID WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()
+DWORD* WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()
 {
     EmuSwapFS();   // Win2k/XP FS
     D3D_TRACE("MakeSpace");
@@ -5982,12 +5982,16 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()
     }
     #endif
 
-    // Xbox extension: reserve room in the NV2A push buffer. The host device
-    // has no guest-visible push buffer, so there is nothing to reserve.
+    // Xbox extension: reserve room in the NV2A push buffer and return its
+    // writable cursor. HLE has no guest-visible host push buffer, but callers
+    // still emit packets through the returned pointer before advancing their
+    // device cursor. Give each guest thread discardable storage for that ABI.
+    alignas(64) static thread_local std::array<DWORD, 16 * 1024> pushBufferScratch{};
+    DWORD* const pushBuffer = pushBufferScratch.data();
 
     EmuSwapFS();   // XBox FS
 
-    return;
+    return pushBuffer;
 }
 
 // ******************************************************************

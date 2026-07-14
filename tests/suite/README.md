@@ -189,6 +189,7 @@ after locking the backbuffer.
 | `xdk_smoke`  | XDK runtime (HLE)    | XDK-5849-built XBE boots via xapilib, file I/O, clean exit  |
 | `hle_resolve`| OOVPA/HLE database   | per-function: the HLE pass patched this real d3d8/dsound.lib function (expect=0 entries = documented signature debt) |
 | `d3d_clear_present` | D3D8 HLE (host GPU) | CreateDevice → Clear → Swap → pixel-exact backbuffer readback |
+| `d3d_makespace` | XDK D3D8 push cursor | MakeSpace HLE resolution plus non-null, writable eight-DWORD return storage |
 | `d3d_draw`   | D3D8 HLE draw paths  | DrawVerticesUP triangles + immediate-mode Begin/End quad, pixel-exact |
 | `d3d_texture`| D3D8 HLE texture path | CreateTexture2 → LockRect upload → SetTexture → textured draws (both paths), pixel-exact |
 | `d3d_state`  | D3D8 HLE state       | Set/GetTransform bit-exact round-trips, SetRenderState_* family survival, GetDisplayMode sanity |
