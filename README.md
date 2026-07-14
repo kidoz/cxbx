@@ -81,8 +81,12 @@ the conformance runner, and the docs:
 
 ```powershell
 just init          # uv sync --dev  (Python tooling)
-meson setup build-min --cross-file cross/i686-windows-clang.ini
+meson setup build-min --cross-file cross/i686-windows-clang.ini --buildtype debugoptimized
 ```
+
+The optimized debug build retains symbols while keeping CPU-based emulation
+paths usable. To update an existing unoptimized build directory, run
+`meson configure build-min -Dbuildtype=debugoptimized` once.
 
 ### Build
 
