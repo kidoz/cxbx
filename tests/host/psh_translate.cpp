@@ -293,6 +293,70 @@ int main()
         Check(CountToken(t, 0x12) == 1, "final combiner emits lrp");
     }
 
+    // 10a. Turok Evolution's 4-combiner material shader (hash 0xB29D9DD0,
+    //      captured via CXBX_PSH_DUMP): C==ONE mad sums, a final combiner
+    //      whose dead (1-A) slot parks FOG, CLAMP_SUM settings with no
+    //      V1R0_SUM reader, and G = C0.a. Exactly 8 instructions.
+    {
+        static const std::uint32_t turok[60] = {
+            0xD4301010, 0xDBD53035, 0xDDDB1010, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x200C0300, 0x00001180,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x000000D0, 0x00000B00, 0x000000D0, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0xC4200000,
+            0xCBD52035, 0xCDCB0000, 0xC8CD0000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x000000D0, 0x00000B00, 0x000000D0, 0x000100C0, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00011104, 0x00008001,
+            0x00000000, 0x00000000, 0xFFFFFFFF, 0xFFFFFFFF, 0x000001F7,
+        };
+        XboxPixelShaderDefinition def{};
+        for(unsigned i = 0; i < 60; ++i)
+            def[i] = turok[i];
+        const PixelShaderTranslation t = TranslatePixelShader(def);
+        Check(t.ok(), "turok 0xB29D9DD0 translates");
+        if(!t.ok())
+            std::printf("  reason: %s\n", t.failure);
+        Check(t.arithmetic == 8, "turok shader uses exactly 8 instructions");
+        Check(t.textures == 2, "turok shader loads t0 and t3");
+    }
+
+    // 10b. The alpha portion reading the BLUE channel of a register the same
+    //      stage's RGB portion writes is a parallel-evaluation hazard.
+    {
+        DefBuilder b;
+        b.Combiners(1)
+            .TextureMode(0, 1)
+            .Rgb(0, Inputs(In(T0), In(V0), In(ZERO), In(ZERO)),
+                 Outputs(R0, DISCARD, DISCARD))
+            .Alpha(0, Inputs(In(R0, CH_BLUE, 0xC0), In(V0, CH_ALPHA), In(ZERO | CH_ALPHA), In(ZERO | CH_ALPHA)),
+                   Outputs(R1, DISCARD, DISCARD));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(!t.ok() && std::strcmp(t.failure, "stage_blue_hazard") == 0,
+              "stage blue-read hazard bails");
+    }
+
+    // 10c. A stored product clobbering the other half's inputs before the
+    //      sum can read them bails as a portion hazard.
+    {
+        DefBuilder b;
+        b.Combiners(2)
+            .TextureMode(0, 1)
+            .Rgb(0, Inputs(In(T0), In(V0), In(ZERO), In(ZERO)),
+                 Outputs(R0, DISCARD, DISCARD))
+            .Alpha(0, Inputs(In(T0, CH_ALPHA), In(V0, CH_ALPHA), In(ZERO), In(ZERO)),
+                   Outputs(R0, DISCARD, DISCARD))
+            .Rgb(1, Inputs(In(V0), In(T0), In(R0, CH_RGB, 0xC0), In(V0)),
+                 Outputs(R0, DISCARD, R1))
+            .Alpha(1, Inputs(In(T0, CH_ALPHA), In(V0, CH_ALPHA), In(ZERO), In(ZERO)),
+                   Outputs(R1, DISCARD, DISCARD));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(!t.ok() && std::strcmp(t.failure, "portion_hazard") == 0,
+              "portion write hazard bails");
+    }
+
     // 10. Instruction budget: 8 combiners of rgb+alpha exceed ps.1.1.
     {
         DefBuilder b;
