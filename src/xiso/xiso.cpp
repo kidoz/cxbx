@@ -1,5 +1,5 @@
 //
-//  cxbx XISO tool (C++17): list, extract, create, inspect, and verify
+//  cxbx XISO tool (C++20): list, extract, create, inspect, and verify
 //  Xbox Game Disc Format (GDF / XDFS) disc images. Clean-room re-
 //  implementation based on the on-disc format spec.
 //
