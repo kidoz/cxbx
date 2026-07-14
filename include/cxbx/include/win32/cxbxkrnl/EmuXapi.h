@@ -143,7 +143,9 @@ XINPUT_POLLING_PARAMETERS, *PXINPUT_POLLING_PARAMETERS;
 // ******************************************************************
 typedef struct _XPP_DEVICE_TYPE
 {
-    ULONG Reserved[3];
+    ULONG CurrentConnected;
+    ULONG ChangeConnected;
+    ULONG PreviousConnected;
 }
 XPP_DEVICE_TYPE, *PXPP_DEVICE_TYPE;
 

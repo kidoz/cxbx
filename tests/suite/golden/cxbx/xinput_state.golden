@@ -1,3 +1,3 @@
 #suite xbox-conformance v1
 #probe xinput_state
-#result xinput_state verdict=PASS checks=12 fail=0
+#result xinput_state verdict=PASS checks=18 fail=0

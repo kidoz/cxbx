@@ -27,6 +27,48 @@ constexpr std::uint16_t Button(HostInput::XInputButton button)
 
 int main()
 {
+    HostInput::ConnectionTracker connections;
+    HostInput::ConnectionSnapshot connection = connections.Snapshot();
+    Check("connections initial current", connection.currentMask,
+          static_cast<std::uint32_t>(0));
+    Check("connections initial changed", connection.changedMask,
+          static_cast<std::uint32_t>(0));
+
+    connections.Observe(1u);
+    connection = connections.Consume();
+    Check("connections insertion current", connection.currentMask,
+          static_cast<std::uint32_t>(1));
+    Check("connections insertion changed", connection.changedMask,
+          static_cast<std::uint32_t>(1));
+    Check("connections insertion generation", connection.generations[0],
+          static_cast<std::uint32_t>(1));
+
+    connections.Observe(0u);
+    connections.Observe(1u);
+    connection = connections.Consume();
+    Check("connections rapid reconnect current", connection.currentMask,
+          static_cast<std::uint32_t>(1));
+    Check("connections rapid reconnect latched", connection.changedMask,
+          static_cast<std::uint32_t>(1));
+    Check("connections rapid reconnect generation", connection.generations[0],
+          static_cast<std::uint32_t>(3));
+
+    connections.Observe(1u, 1u);
+    connection = connections.Consume();
+    Check("connections notified reconnect current", connection.currentMask,
+          static_cast<std::uint32_t>(1));
+    Check("connections notified reconnect latched", connection.changedMask,
+          static_cast<std::uint32_t>(1));
+    Check("connections notified reconnect generation", connection.generations[0],
+          static_cast<std::uint32_t>(4));
+
+    connections.Observe(0x0Au);
+    connection = connections.Consume();
+    Check("connections multi-port current", connection.currentMask,
+          static_cast<std::uint32_t>(0x0A));
+    Check("connections multi-port changed", connection.changedMask,
+          static_cast<std::uint32_t>(0x0B));
+
     HostInput::XInputGamepad host{};
     host.buttons = Button(HostInput::XInputButton::DPadUp) |
                    Button(HostInput::XInputButton::Start) |
@@ -68,6 +110,7 @@ int main()
     Check("neutral left trigger", guest.analogButtons[6], static_cast<std::uint8_t>(0));
     Check("neutral right trigger", guest.analogButtons[7], static_cast<std::uint8_t>(0));
 
+    Check("host input initialize", HostInput::Initialize(), true);
     const std::uint32_t connectedMask = HostInput::GetConnectedMask();
     std::printf("INFO connected XInput mask=0x%X\n", connectedMask);
     if((connectedMask & 1u) != 0)

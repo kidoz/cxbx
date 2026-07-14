@@ -21,14 +21,10 @@ void __cdecl main()
     DWORD devices = XGetDevices(XDEVICE_TYPE_GAMEPAD);
     xt_chk("xi.getdevices_port0", 1, (devices & 1) != 0);
 
-    DWORD ins = 0, rem = 0;
+    DWORD ins = 0xFFFFFFFF, rem = 0xFFFFFFFF;
     BOOL changed = XGetDeviceChanges(XDEVICE_TYPE_GAMEPAD, &ins, &rem);
-    xt_chk("xi.changes_insertion", 1, changed && (ins & 1) != 0 && rem == 0);
-
-    ins = 0xFFFFFFFF;
-    rem = 0xFFFFFFFF;
-    changed = XGetDeviceChanges(XDEVICE_TYPE_GAMEPAD, &ins, &rem);
-    xt_chk("xi.changes_stable", 1, !changed && ins == 0 && rem == 0);
+    xt_chk("xi.changes_after_snapshot", 1,
+           !changed && ins == 0 && rem == 0);
 
     HANDLE hPad = XInputOpen(XDEVICE_TYPE_GAMEPAD, XDEVICE_PORT0,
                              XDEVICE_NO_SLOT, NULL);
@@ -65,13 +61,39 @@ void __cdecl main()
     XInputGetState(hPad, &state);
     xt_chk("xi.packet_advances", 1, state.dwPacketNumber != packet1);
 
+    ins = 0;
+    rem = 0;
+    changed = XGetDeviceChanges(XDEVICE_TYPE_GAMEPAD, &ins, &rem);
+    xt_chk("xi.changes_removal", 1,
+           changed && ins == 0 && (rem & 1) != 0);
+    xt_chk("xi.removed_handle_disconnected", 1,
+           XInputGetState(hPad, &state) == ERROR_DEVICE_NOT_CONNECTED);
+
+    ins = 0;
+    rem = 0;
+    changed = XGetDeviceChanges(XDEVICE_TYPE_GAMEPAD, &ins, &rem);
+    xt_chk("xi.changes_reinsertion", 1,
+           changed && (ins & 1) != 0 && rem == 0);
+    xt_chk("xi.stale_handle_disconnected", 1,
+           XInputGetState(hPad, &state) == ERROR_DEVICE_NOT_CONNECTED);
+
+    HANDLE hReconnectedPad = XInputOpen(XDEVICE_TYPE_GAMEPAD, XDEVICE_PORT0,
+                                        XDEVICE_NO_SLOT, NULL);
+    xt_chk("xi.reopen_ok", 1, hReconnectedPad != NULL);
+    xt_chk("xi.reopen_new_generation", 1,
+           hReconnectedPad != NULL && hReconnectedPad != hPad);
+    xt_chk("xi.reconnected_state", 1,
+           hReconnectedPad != NULL &&
+               XInputGetState(hReconnectedPad, &state) == ERROR_SUCCESS);
+
     XINPUT_FEEDBACK feedback;
     ZeroMemory(&feedback, sizeof(feedback));
     feedback.Header.dwStatus = 0xFFFFFFFF;
-    ret = XInputSetState(hPad, &feedback);
+    ret = XInputSetState(hReconnectedPad, &feedback);
     xt_chk("xi.rumble_zero", 1,
            ret == ERROR_SUCCESS && feedback.Header.dwStatus == ERROR_SUCCESS);
 
+    XInputClose(hReconnectedPad);
     XInputClose(hPad);
     xt_chk("xi.close_survived", 1, 1);
 

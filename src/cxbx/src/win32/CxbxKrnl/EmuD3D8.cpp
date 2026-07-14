@@ -1229,6 +1229,10 @@ static LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
             PostQuitMessage(0);
             return 0;
 
+        case WM_INPUT_DEVICE_CHANGE:
+            XTL::EmuDInputNotifyDeviceChange();
+            return 0;
+
         case WM_KEYDOWN:
             if(wParam == VK_ESCAPE)
                 PostMessage(hWnd, WM_CLOSE, 0, 0);

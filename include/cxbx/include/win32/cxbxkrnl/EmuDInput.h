@@ -48,7 +48,19 @@ extern bool EmuDInputInit();
 extern void EmuDInputCleanup();
 
 // ******************************************************************
-// * func: EmuDInputPoll
+// * func: EmuDInputNotifyDeviceChange
+// ******************************************************************
+extern void EmuDInputNotifyDeviceChange();
+
+// ******************************************************************
+// * func: EmuDInputGetConnectionSnapshot
+// ******************************************************************
+extern void EmuDInputGetConnectionSnapshot(BOOL Refresh, BOOL ConsumeChanges,
+                                           PDWORD CurrentMask, PDWORD ChangedMask,
+                                           PDWORD Generations);
+
+// ******************************************************************
+// * func: EmuDInputGetConnectedMask
 // ******************************************************************
 extern DWORD EmuDInputGetConnectedMask();
 

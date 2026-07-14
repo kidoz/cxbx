@@ -201,6 +201,16 @@ OOVPATable XAPI_1_0_4627[] =
         "EmuXGetDevices" 
         #endif
     },
+    // XGetDeviceChanges (* unchanged since 1.0.4361 *)
+    {
+        (OOVPA*)&XGetDeviceChanges_1_0_4361,
+
+        XTL::EmuXGetDeviceChanges,
+
+        #ifdef _DEBUG_TRACE
+        "EmuXGetDeviceChanges"
+        #endif
+    },
     // XInputOpen (* unchanged since 1.0.4361 *)
     {
         (OOVPA*)&XInputOpen_1_0_4361,

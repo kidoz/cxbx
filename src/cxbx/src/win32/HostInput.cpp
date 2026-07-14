@@ -17,6 +17,8 @@ constexpr std::size_t AnalogBlack = 4;
 constexpr std::size_t AnalogWhite = 5;
 constexpr std::size_t AnalogLeftTrigger = 6;
 constexpr std::size_t AnalogRightTrigger = 7;
+constexpr DWORD DisconnectedProbeIntervalMs = 1000;
+constexpr std::uint32_t ValidPortMask = (1u << HostInput::MaxPorts) - 1u;
 
 struct NativeXInputState
 {
@@ -46,6 +48,9 @@ XInputSetStateFunction g_xinputSetState = nullptr;
 std::array<HostInput::GamepadState, HostInput::MaxPorts> g_lastState{};
 std::array<bool, HostInput::MaxPorts> g_hasLastState{};
 std::array<std::uint32_t, HostInput::MaxPorts> g_packetNumber{};
+std::array<DWORD, HostInput::MaxPorts> g_lastConnectionProbe{};
+HostInput::ConnectionTracker g_connections;
+HWND g_notificationWindow = nullptr;
 std::mutex g_mutex;
 
 constexpr bool HasButton(std::uint16_t buttons, HostInput::XInputButton button)
@@ -102,12 +107,173 @@ bool InitializeUnlocked()
 
     return false;
 }
+
+void ObservePortConnectionUnlocked(std::uint32_t port, bool connected)
+{
+    HostInput::ConnectionSnapshot snapshot = g_connections.Snapshot();
+    const std::uint32_t portMask = 1u << port;
+    const std::uint32_t currentMask = connected
+                                          ? snapshot.currentMask | portMask
+                                          : snapshot.currentMask & ~portMask;
+    g_connections.Observe(currentMask);
+    g_lastConnectionProbe[port] = GetTickCount();
+}
+
+void RefreshConnectionsUnlocked(bool force)
+{
+    if(g_xinputGetState == nullptr)
+    {
+        return;
+    }
+
+    const DWORD now = GetTickCount();
+    std::uint32_t observedMask = g_connections.Snapshot().currentMask;
+    for(std::uint32_t port = 0; port < HostInput::MaxPorts; ++port)
+    {
+        const std::uint32_t portMask = 1u << port;
+        const bool connected = (observedMask & portMask) != 0;
+        const bool probeDisconnected =
+            now - g_lastConnectionProbe[port] >= DisconnectedProbeIntervalMs;
+        if(!force && !connected && !probeDisconnected)
+        {
+            continue;
+        }
+
+        NativeXInputState nativeState{};
+        const DWORD result = g_xinputGetState(port, &nativeState);
+        g_lastConnectionProbe[port] = now;
+        if(result == ERROR_SUCCESS)
+        {
+            observedMask |= portMask;
+        }
+        else if(result == ERROR_DEVICE_NOT_CONNECTED)
+        {
+            observedMask &= ~portMask;
+            g_hasLastState[port] = false;
+        }
+    }
+    g_connections.Observe(observedMask);
+}
+
+std::array<RAWINPUTDEVICE, 3> MakeRawInputDevices(HWND window, DWORD flags)
+{
+    return { RAWINPUTDEVICE{ 0x01, 0x04, flags, window },
+             RAWINPUTDEVICE{ 0x01, 0x05, flags, window },
+             RAWINPUTDEVICE{ 0x01, 0x08, flags, window } };
+}
+
+void DetachWindowUnlocked()
+{
+    if(g_notificationWindow == nullptr)
+    {
+        return;
+    }
+
+    auto devices = MakeRawInputDevices(nullptr, RIDEV_REMOVE);
+    RegisterRawInputDevices(devices.data(), static_cast<UINT>(devices.size()),
+                            sizeof(RAWINPUTDEVICE));
+    g_notificationWindow = nullptr;
+}
 } // namespace
+
+void HostInput::ConnectionTracker::Reset()
+{
+    m_currentMask = 0;
+    m_changedMask = 0;
+    m_generations.fill(0);
+}
+
+void HostInput::ConnectionTracker::Observe(std::uint32_t currentMask,
+                                           std::uint32_t additionalChangedMask)
+{
+    currentMask &= ValidPortMask;
+    const std::uint32_t transitionMask =
+        (m_currentMask ^ currentMask) | (additionalChangedMask & ValidPortMask);
+    m_changedMask |= transitionMask;
+    m_currentMask = currentMask;
+
+    for(std::uint32_t port = 0; port < MaxPorts; ++port)
+    {
+        if((transitionMask & (1u << port)) == 0)
+        {
+            continue;
+        }
+
+        ++m_generations[port];
+        if(m_generations[port] == 0)
+        {
+            ++m_generations[port];
+        }
+    }
+}
+
+HostInput::ConnectionSnapshot HostInput::ConnectionTracker::Snapshot() const
+{
+    return { m_currentMask, m_changedMask, m_generations };
+}
+
+HostInput::ConnectionSnapshot HostInput::ConnectionTracker::Consume()
+{
+    ConnectionSnapshot snapshot = Snapshot();
+    m_changedMask = 0;
+    return snapshot;
+}
 
 bool HostInput::Initialize()
 {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return InitializeUnlocked();
+    if(!InitializeUnlocked())
+    {
+        return false;
+    }
+
+    RefreshConnectionsUnlocked(true);
+    return true;
+}
+
+bool HostInput::AttachWindow(void* nativeWindow)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if(g_xinputGetState == nullptr || nativeWindow == nullptr)
+    {
+        return false;
+    }
+
+    HWND window = static_cast<HWND>(nativeWindow);
+    if(g_notificationWindow == window)
+    {
+        return true;
+    }
+
+    DetachWindowUnlocked();
+    auto devices = MakeRawInputDevices(
+        window, RIDEV_DEVNOTIFY | RIDEV_INPUTSINK);
+    if(!RegisterRawInputDevices(devices.data(), static_cast<UINT>(devices.size()),
+                                sizeof(RAWINPUTDEVICE)))
+    {
+        return false;
+    }
+
+    g_notificationWindow = window;
+    RefreshConnectionsUnlocked(true);
+    return true;
+}
+
+void HostInput::NotifyDeviceChange()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    RefreshConnectionsUnlocked(true);
+}
+
+HostInput::ConnectionSnapshot HostInput::GetConnectionSnapshot(
+    bool refresh, bool consumeChanges)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if(refresh)
+    {
+        RefreshConnectionsUnlocked(false);
+    }
+    return consumeChanges ? g_connections.Consume() : g_connections.Snapshot();
 }
 
 void HostInput::TranslateXInputGamepad(const XInputGamepad& host,
@@ -133,22 +299,7 @@ void HostInput::TranslateXInputGamepad(const XInputGamepad& host,
 
 std::uint32_t HostInput::GetConnectedMask()
 {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if(!InitializeUnlocked())
-    {
-        return 0;
-    }
-
-    std::uint32_t connectedMask = 0;
-    for(std::uint32_t port = 0; port < MaxPorts; ++port)
-    {
-        NativeXInputState nativeState{};
-        if(g_xinputGetState(port, &nativeState) == ERROR_SUCCESS)
-        {
-            connectedMask |= (1u << port);
-        }
-    }
-    return connectedMask;
+    return GetConnectionSnapshot(true, false).currentMask;
 }
 
 bool HostInput::Poll(std::uint32_t port, GamepadState& state)
@@ -159,17 +310,23 @@ bool HostInput::Poll(std::uint32_t port, GamepadState& state)
     }
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    if(!InitializeUnlocked())
+    if(g_xinputGetState == nullptr)
     {
         return false;
     }
 
     NativeXInputState nativeState{};
-    if(g_xinputGetState(port, &nativeState) != ERROR_SUCCESS)
+    const DWORD result = g_xinputGetState(port, &nativeState);
+    if(result != ERROR_SUCCESS)
     {
-        g_hasLastState[port] = false;
+        if(result == ERROR_DEVICE_NOT_CONNECTED)
+        {
+            ObservePortConnectionUnlocked(port, false);
+            g_hasLastState[port] = false;
+        }
         return false;
     }
+    ObservePortConnectionUnlocked(port, true);
 
     GamepadState translated{};
     TranslateXInputGamepad(nativeState.gamepad, translated);
@@ -195,22 +352,35 @@ std::uint32_t HostInput::SetRumble(std::uint32_t port,
     }
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    if(!InitializeUnlocked())
+    if(g_xinputSetState == nullptr)
     {
         return ERROR_DEVICE_NOT_CONNECTED;
     }
 
     NativeXInputVibration vibration{ leftMotorSpeed, rightMotorSpeed };
-    return g_xinputSetState(port, &vibration);
+    const DWORD result = g_xinputSetState(port, &vibration);
+    if(result == ERROR_SUCCESS)
+    {
+        ObservePortConnectionUnlocked(port, true);
+    }
+    else if(result == ERROR_DEVICE_NOT_CONNECTED)
+    {
+        ObservePortConnectionUnlocked(port, false);
+        g_hasLastState[port] = false;
+    }
+    return result;
 }
 
 void HostInput::Shutdown()
 {
     std::lock_guard<std::mutex> lock(g_mutex);
+    DetachWindowUnlocked();
     g_xinputGetState = nullptr;
     g_xinputSetState = nullptr;
     g_hasLastState.fill(false);
     g_packetNumber.fill(0);
+    g_lastConnectionProbe.fill(0);
+    g_connections.Reset();
 
     if(g_xinputModule != nullptr)
     {
