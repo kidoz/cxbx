@@ -48,6 +48,7 @@ namespace xboxkrnl
 #include "EmuShared.h"
 #include "core/d3d_push_buffer.h"
 #include "core/d3d_pixel_shader.h"
+#include "core/d3d_pixel_shader_translate.h"
 #include "core/d3d_present.h"
 #include "core/d3d_texture.h"
 #include "core/trace.h"
@@ -3870,6 +3871,40 @@ static void EmuD3DDrawPost(void)
         printf("DRAW| backbuffer dump failed (%s)\n", path);
 }
 
+// Combiner programs the ps.1.1 translator compiled to real host shaders,
+// keyed by host handle; their constants are applied at SetPixelShader.
+struct EmuTranslatedPixelShader
+{
+    DWORD handle;
+    std::vector<cxbx::d3d::PixelShaderConstant> constants;
+};
+
+static std::vector<EmuTranslatedPixelShader> g_EmuTranslatedPixelShaders;
+
+static HRESULT EmuHostCreatePixelShader(const DWORD *pTokens, DWORD *pHandle)
+{
+    __try
+    {
+        return g_pD3DDevice8->CreatePixelShader(pTokens, pHandle);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return D3DERR_INVALIDCALL;
+    }
+}
+
+static void EmuApplyTranslatedPixelShaderConstants(DWORD Handle)
+{
+    for(const auto& shader : g_EmuTranslatedPixelShaders)
+    {
+        if(shader.handle != Handle)
+            continue;
+        for(const auto& constant : shader.constants)
+            g_pD3DDevice8->SetPixelShaderConstant(constant.index, constant.value, 1);
+        return;
+    }
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_CreatePixelShader
 // ******************************************************************
@@ -3897,53 +3932,84 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
     #endif
 
     // ******************************************************************
-    // * redirect to windows d3d
+    // * translate, else approximate
     // ******************************************************************
     // pFunction is an Xbox X_D3DPIXELSHADERDEF (NV2A register-combiner state),
-    // not PC ps.1.x bytecode, so the host CreatePixelShader rejects it. Rather
-    // than run with NO pixel shader (which leaves the bound textures unsampled
-    // and the surface near-black), hand back a fallback marker handle; SetPixel-
-    // Shader routes it to a fixed-function modulate of the bound texture(s) with
-    // the vertex-lit diffuse -- an approximation of the combiner that at least
-    // shows the textures and lighting instead of a black silhouette.
+    // not PC ps.1.x bytecode. Combiner programs the conservative translator
+    // can express exactly become real host ps.1.1 shaders; everything else
+    // gets a fallback marker handle, which SetPixelShader routes to the
+    // fixed-function modulate approximation of the bound texture(s) with the
+    // vertex-lit diffuse.
     static DWORD s_PixelShaderFallbackCounter = 0;
 
-    HRESULT hRet = D3D_OK;
-    __try
+    cxbx::d3d::XboxPixelShaderDefinition definition{};
+    SIZE_T bytesRead = 0;
+    const bool definitionReadable =
+        ReadProcessMemory(GetCurrentProcess(), pFunction, definition.data(),
+                          sizeof(definition), &bytesRead) &&
+        bytesRead == sizeof(definition);
+
+    static int s_PshTranslateEnabled = -1;
+    if(s_PshTranslateEnabled < 0)
     {
-        hRet = g_pD3DDevice8->CreatePixelShader
-        (
-            pFunction,
-            pHandle
-        );
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-        hRet = D3DERR_INVALIDCALL;
+        const char *value = getenv("CXBX_PSH_TRANSLATE");
+        s_PshTranslateEnabled = (value == NULL || *value != '0') ? 1 : 0;
     }
 
-    if(FAILED(hRet))
+    const char *failureReason = "translate_disabled";
+    if(definitionReadable && s_PshTranslateEnabled == 1)
+    {
+        cxbx::d3d::PixelShaderTranslation translation =
+            cxbx::d3d::TranslatePixelShader(definition);
+        if(translation.ok())
+        {
+            if(SUCCEEDED(EmuHostCreatePixelShader(
+                   reinterpret_cast<const DWORD *>(translation.bytecode.data()),
+                   pHandle)))
+            {
+                const DWORD hash =
+                    EmuD3DHashBytes(definition.data(), sizeof(definition));
+                printf("PSH| translated handle=0x%08lX hash=0x%08lX combiners=%lu "
+                       "arith=%u tex=%u const=%u\n",
+                       static_cast<unsigned long>(*pHandle),
+                       static_cast<unsigned long>(hash),
+                       static_cast<unsigned long>(definition[53] & 0x0Fu),
+                       translation.arithmetic, translation.textures,
+                       static_cast<unsigned>(translation.constants.size()));
+
+                g_EmuTranslatedPixelShaders.push_back(
+                    {*pHandle, std::move(translation.constants)});
+
+                EmuSwapFS();   // XBox FS
+                return D3D_OK;
+            }
+            failureReason = "host_rejected_bytecode";
+        }
+        else
+        {
+            failureReason = translation.failure;
+        }
+    }
+
+    HRESULT hRet = D3D_OK;
     {
         *pHandle = X_PIXELSHADER_FALLBACK_MARKER | (++s_PixelShaderFallbackCounter & 0x00FFFFFF);
-        cxbx::d3d::XboxPixelShaderDefinition definition{};
-        SIZE_T bytesRead = 0;
-        if(ReadProcessMemory(GetCurrentProcess(), pFunction, definition.data(),
-                             sizeof(definition), &bytesRead) &&
-           bytesRead == sizeof(definition))
+        if(definitionReadable)
         {
             g_EmuPixelShaderFallbacks.push_back({*pHandle, definition});
 
-            // The combiner is approximated, never translated -- always say
-            // which approximation each shader got, so a wrong material is
-            // attributable without a rebuild.
+            // The combiner was approximated, not translated -- always say
+            // which approximation each shader got and why translation bailed,
+            // so a wrong material is attributable without a rebuild.
             const DWORD hash = EmuD3DHashBytes(definition.data(), sizeof(definition));
             const cxbx::d3d::PixelShaderFallback fallback =
                 cxbx::d3d::ClassifyPixelShaderFallback(definition);
-            printf("PSH| fallback_create handle=0x%08lX hash=0x%08lX combiners=%lu class=%s\n",
+            printf("PSH| fallback_create handle=0x%08lX hash=0x%08lX combiners=%lu class=%s reason=%s\n",
                    static_cast<unsigned long>(*pHandle),
                    static_cast<unsigned long>(hash),
                    static_cast<unsigned long>(definition[53] & 0x0Fu),
-                   cxbx::d3d::PixelShaderFallbackName(fallback));
+                   cxbx::d3d::PixelShaderFallbackName(fallback),
+                   failureReason);
 
             static int s_PshDumpEnabled = -1;
             if(s_PshDumpEnabled < 0)
@@ -4040,6 +4106,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
     else
     {
         g_bUsePixelShaderFallback = false;
+        // Translated combiner programs carry their baked stage constants.
+        EmuApplyTranslatedPixelShaderConstants(Handle);
     }
 
     EmuSwapFS();   // XBox FS
@@ -4186,6 +4254,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
         {
             EmuWarning("DeletePixelShader failed for handle 0x%.08X", Handle);
         }
+
+        g_EmuTranslatedPixelShaders.erase(
+            std::remove_if(g_EmuTranslatedPixelShaders.begin(),
+                           g_EmuTranslatedPixelShaders.end(),
+                           [Handle](const EmuTranslatedPixelShader& shader) {
+                               return shader.handle == Handle;
+                           }),
+            g_EmuTranslatedPixelShaders.end());
     }
     else if((Handle & X_PIXELSHADER_FALLBACK_MASK) == X_PIXELSHADER_FALLBACK_MARKER)
     {

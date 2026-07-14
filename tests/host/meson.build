@@ -34,6 +34,15 @@ host_d3d_push_buffer_test = executable(
 
 test('host-d3d-push-buffer', host_d3d_push_buffer_test)
 
+host_psh_translate_test = executable(
+  'host_psh_translate_test',
+  'psh_translate.cpp',
+  include_directories : cxbx_inc,
+  install : false,
+)
+
+test('host-psh-translate', host_psh_translate_test)
+
 host_pcm_test = executable(
   'host_pcm_test',
   'pcm_conversion.cpp',
