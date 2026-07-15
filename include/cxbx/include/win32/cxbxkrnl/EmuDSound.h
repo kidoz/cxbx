@@ -304,6 +304,16 @@ HRESULT WINAPI EmuIDirectSound8_SynchPlayback
 );
 
 // ******************************************************************
+// * func: EmuIDirectSound8_GetOutputLevels
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSound8_GetOutputLevels
+(
+    LPDIRECTSOUND8          pThis,
+    PVOID                   pOutputLevels,
+    BOOL                    fResetPeakValues
+);
+
+// ******************************************************************
 // * func: EmuIDirectSound8_DownloadEffectsImage
 // ******************************************************************
 HRESULT WINAPI EmuIDirectSound8_DownloadEffectsImage
@@ -552,6 +562,33 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_SetBufferData
 );
 
 // ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetOutputBuffer
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetOutputBuffer
+(
+    X_CDirectSoundBuffer   *pThis,
+    X_CDirectSoundBuffer   *pOutputBuffer
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Use3DVoiceData
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_Use3DVoiceData
+(
+    X_CDirectSoundBuffer   *pThis,
+    BOOL                    bUse3DVoiceData
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetFormat
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetFormat
+(
+    X_CDirectSoundBuffer   *pThis,
+    const WAVEFORMATEX     *pWaveFormat
+);
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetPlayRegion
 // ******************************************************************
 HRESULT WINAPI EmuIDirectSoundBuffer8_SetPlayRegion
@@ -605,6 +642,16 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_GetCurrentPosition
 HRESULT WINAPI EmuIDirectSoundBuffer8_Stop
 (
     X_CDirectSoundBuffer   *pThis
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_StopEx
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_StopEx
+(
+    X_CDirectSoundBuffer   *pThis,
+    LONGLONG                rtTimeStamp,
+    DWORD                   dwFlags
 );
 
 // ******************************************************************

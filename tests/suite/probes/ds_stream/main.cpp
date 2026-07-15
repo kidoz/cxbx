@@ -61,6 +61,11 @@ void __cdecl main()
     xt_chk("stream.status_ready", 1,
            SUCCEEDED(result) && (stream_status & DSSTREAMSTATUS_READY) != 0);
 
+    result = stream->Pause(DSSTREAMPAUSE_SYNCHPLAYBACK);
+    xt_chk("stream.pause_synch", 1, SUCCEEDED(result));
+    result = stream->Pause(DSSTREAMPAUSE_RESUME);
+    xt_chk("stream.pause_resume", 1, SUCCEEDED(result));
+
     for(DWORD sample = 0; sample < PACKET_BYTES / sizeof(short); sample++)
     {
         g_pcm[sample] = ((sample / 50) & 1) != 0 ? 5000 : -5000;

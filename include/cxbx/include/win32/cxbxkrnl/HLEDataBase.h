@@ -192,6 +192,22 @@ enum XRefDataBaseOffset
     XREF_DS5849_BUF_GETSTATUS,
     XREF_DS5849_DOWORK,
     XREF_DS5849_STR_FLUSHEX,
+    // XDK 5659 DSOUND stream pause internals. The CDirectSoundStream method
+    // shares all non-relocated bytes with GetStatus, so its MCPX callee
+    // identifies the correct wrapper.
+    XREF_DS5659_STREAM_PAUSE,
+    // XDK 5659 DSOUND has two byte-identical public SynchPlayback thunks.
+    // Their distinct CDirectSound callees identify the IDirectSound wrapper.
+    XREF_DS5659_SYNCHPLAYBACK,
+    // XDK 5659 DSOUND output-routing internals. The public buffer thunk and
+    // CDirectSoundBuffer method require their call targets for disambiguation.
+    XREF_DS5659_BUFFER_SETOUTPUTBUFFER_T,
+    XREF_DS5659_BUFFER_SETOUTPUTBUFFER,
+    XREF_DS5659_BUFFER_USE3DVOICEDATA,
+    XREF_DS5659_BUFFER_SETFORMAT_T,
+    XREF_DS5659_BUFFER_SETFORMAT,
+    XREF_DS5659_BUFFER_STOPEX,
+    XREF_DS5659_GETOUTPUTLEVELS,
     // XDK 5849 XAPI input: XID_fCloseDevice internal (the 12-byte
     // XInputClose thin wrapper is matched by its call target).
     XREF_XAPI5849_XINPUTCLOSE,

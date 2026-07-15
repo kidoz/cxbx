@@ -83,6 +83,10 @@ constexpr DWORD kXmoStatusAcceptInput = 0x00000001;
 constexpr DWORD kDsStreamStatusPlaying = 0x00010000;
 constexpr DWORD kDsStreamStatusPaused = 0x00020000;
 constexpr DWORD kDsStreamStatusStarved = 0x00040000;
+constexpr DWORD kDsStreamPauseResume = 0;
+constexpr DWORD kDsStreamPausePause = 1;
+constexpr DWORD kDsStreamPauseSynchPlayback = 2;
+constexpr DWORD kDsStreamPauseNoActivate = 3;
 
 struct StreamPacket
 {
@@ -114,6 +118,7 @@ struct XTL::X_DSoundStreamState
     LONG Volume;
     bool Playing;
     bool Paused;
+    bool Synchronized;
     bool DownmixPcmToStereo;
     CRITICAL_SECTION Lock;
     X_DSoundStreamState* Next;
@@ -214,6 +219,23 @@ XTL::X_CDirectSoundStream* ResolveStream(const void* streamPointer)
     }
     ReleaseSRWLockShared(&g_DSoundStreamListLock);
 
+    return result;
+}
+
+HRESULT StartStreamPlaybackLocked(XTL::X_DSoundStreamState* state)
+{
+    if(state->PacketCount == 0)
+    {
+        return DS_OK;
+    }
+
+    DWORD playCursor = 0;
+    DWORD writeCursor = 0;
+    state->HostBuffer->GetCurrentPosition(&playCursor, &writeCursor);
+    state->LastPlayCursor = playCursor;
+
+    const HRESULT result = state->HostBuffer->Play(0, 0, DSBPLAY_LOOPING);
+    state->Playing = SUCCEEDED(result);
     return result;
 }
 
@@ -361,6 +383,7 @@ void FlushStream(XTL::X_DSoundStreamState* state, bool invokeCallbacks)
         {
             ResetStoppedStream(state);
             state->Paused = false;
+            state->Synchronized = false;
         }
         LeaveCriticalSection(&state->Lock);
 
@@ -1065,12 +1088,7 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Process(
 
             if(!state->Playing && !state->Paused)
             {
-                DWORD playCursor = 0;
-                DWORD writeCursor = 0;
-                state->HostBuffer->GetCurrentPosition(&playCursor, &writeCursor);
-                state->LastPlayCursor = playCursor;
-                hRet = state->HostBuffer->Play(0, 0, DSBPLAY_LOOPING);
-                state->Playing = SUCCEEDED(hRet);
+                hRet = StartStreamPlaybackLocked(state);
             }
 
             if(FAILED(hRet))
@@ -1217,7 +1235,7 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Pause
     #endif
 
     X_CDirectSoundStream* stream = ResolveStream(pStream);
-    if(stream == NULL || stream->EmuState == NULL || dwPause > 1)
+    if(stream == NULL || stream->EmuState == NULL || dwPause > kDsStreamPauseNoActivate)
     {
         EmuSwapFS(); // XBox FS
         return E_INVALIDARG;
@@ -1229,26 +1247,24 @@ HRESULT WINAPI XTL::EmuCDirectSoundStream_Pause
 
     EnterCriticalSection(&state->Lock);
     HRESULT hRet = DS_OK;
-    if(dwPause != 0)
+    switch(dwPause)
     {
+    case kDsStreamPausePause:
+    case kDsStreamPauseSynchPlayback:
+    case kDsStreamPauseNoActivate:
         hRet = state->HostBuffer->Stop();
         if(SUCCEEDED(hRet))
         {
             state->Paused = true;
+            state->Synchronized = dwPause == kDsStreamPauseSynchPlayback;
         }
-    }
-    else
-    {
+        break;
+
+    case kDsStreamPauseResume:
         state->Paused = false;
-        if(state->PacketCount != 0)
-        {
-            DWORD playCursor = 0;
-            DWORD writeCursor = 0;
-            state->HostBuffer->GetCurrentPosition(&playCursor, &writeCursor);
-            state->LastPlayCursor = playCursor;
-            hRet = state->HostBuffer->Play(0, 0, DSBPLAY_LOOPING);
-            state->Playing = SUCCEEDED(hRet);
-        }
+        state->Synchronized = false;
+        hRet = StartStreamPlaybackLocked(state);
+        break;
     }
     LeaveCriticalSection(&state->Lock);
 
@@ -1346,9 +1362,60 @@ HRESULT WINAPI XTL::EmuIDirectSound8_SynchPlayback
     }
     #endif
 
-    // On hardware this blocks until the APU voice queue reaches a sync point.
-    // Cxbx has no APU voice model and the host mixer plays independently, so
-    // there is nothing to wait on -- report success immediately.
+    HRESULT hRet = DS_OK;
+
+    AcquireSRWLockShared(&g_DSoundStreamListLock);
+    for(X_DSoundStreamState* state = g_DSoundStreams; state != NULL; state = state->Next)
+    {
+        EnterCriticalSection(&state->Lock);
+        if(state->Synchronized)
+        {
+            state->Synchronized = false;
+            state->Paused = false;
+
+            const HRESULT streamResult = StartStreamPlaybackLocked(state);
+            if(FAILED(streamResult) && SUCCEEDED(hRet))
+            {
+                hRet = streamResult;
+            }
+        }
+        LeaveCriticalSection(&state->Lock);
+    }
+    ReleaseSRWLockShared(&g_DSoundStreamListLock);
+
+    EmuSwapFS();   // XBox FS
+
+    return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSound8_GetOutputLevels
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSound8_GetOutputLevels
+(
+    LPDIRECTSOUND8          pThis,
+    PVOID                   pOutputLevels,
+    BOOL                    fResetPeakValues
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSound8_GetOutputLevels\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   pOutputLevels             : 0x%.08X\n"
+               "   fResetPeakValues          : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, pOutputLevels, fResetPeakValues);
+    }
+    #endif
+
+    if(pOutputLevels != NULL)
+    {
+        ZeroMemory(pOutputLevels, 16 * sizeof(DWORD));
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -2186,6 +2253,93 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
 }
 
 // ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetOutputBuffer
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetOutputBuffer
+(
+    X_CDirectSoundBuffer   *pThis,
+    X_CDirectSoundBuffer   *pOutputBuffer
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_SetOutputBuffer\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   pOutputBuffer             : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, pOutputBuffer);
+    }
+    #endif
+
+    // Host DirectSound has no Xbox output-buffer routing equivalent. Accept
+    // the request; a null destination selects the default hardware output.
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_Use3DVoiceData
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Use3DVoiceData
+(
+    X_CDirectSoundBuffer   *pThis,
+    BOOL                    bUse3DVoiceData
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_Use3DVoiceData\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   bUse3DVoiceData           : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, bUse3DVoiceData);
+    }
+    #endif
+
+    // Xbox voice-data reuse has no host DirectSound equivalent. The HLE
+    // buffer already owns its host-side 3D state, so accept the mode change.
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetFormat
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetFormat
+(
+    X_CDirectSoundBuffer   *pThis,
+    const WAVEFORMATEX     *pWaveFormat
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_SetFormat\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   pWaveFormat               : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, pWaveFormat);
+    }
+    #endif
+
+    // Secondary host DirectSound buffers cannot change format in place. Keep
+    // the format selected at creation and accept the Xbox format update.
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetPlayRegion
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetPlayRegion
@@ -2456,6 +2610,41 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Stop
 
     if(pThis != NULL && pThis->EmuDirectSoundBuffer8 != NULL)
         hRet = pThis->EmuDirectSoundBuffer8->Stop();
+
+    EmuSwapFS();   // XBox FS
+
+    return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_StopEx
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_StopEx
+(
+    X_CDirectSoundBuffer   *pThis,
+    LONGLONG                rtTimeStamp,
+    DWORD                   dwFlags
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_StopEx\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   rtTimeStamp               : 0x%.016I64X\n"
+               "   dwFlags                   : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, rtTimeStamp, dwFlags);
+    }
+    #endif
+
+    HRESULT hRet = DS_OK;
+    if(pThis != NULL && pThis->EmuDirectSoundBuffer8 != NULL)
+    {
+        hRet = pThis->EmuDirectSoundBuffer8->Stop();
+    }
 
     EmuSwapFS();   // XBox FS
 
