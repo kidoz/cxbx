@@ -56,6 +56,7 @@ namespace XTL
 #include "Xapi.1.0.4134.inl"
 #include "Xapi.1.0.4361.inl"
 #include "Xapi.1.0.4627.inl"
+#include "Xapi.1.0.5233.inl"
 #include "Xapi.1.0.5849.inl"
 #include "Xapi.1.0.5659.inl"
 #include "D3D8.1.0.3925.inl"
@@ -125,6 +126,13 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         XAPI_1_0_4627,
         XAPI_1_0_4627_SIZE
+    },
+    // Xapilib Version 1.0.5233
+    {
+        "XAPILIB",
+        1, 0, 5233,
+        XAPI_1_0_5233,
+        XAPI_1_0_5233_SIZE
     },
     // Xapilib Version 1.0.5659
     {
@@ -517,6 +525,7 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_BLOCKONTIME
     -1, // XREF_KICKOFF
     -1, // XREF_KICKOFFANDWAITFORIDLE
+    -1, // XREF_XAPI5233_XINPUTCLOSE
 };
 
 // ******************************************************************
