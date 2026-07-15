@@ -19,8 +19,9 @@ the called ones must be patched: once CreateDevice is HLE'd the guest's own D3D
 globals are never initialised, so a called-but-unpatched function faults -- while an
 uncalled one is harmless dead code.
 
-Cross-reference with --located (addresses that gen_oovpa_ltcg.py resolved) to get
-the exact gap: entry points the game calls that are NOT yet covered.
+Cross-reference with --located (addresses where the table's OOVPAs resolve, from
+scan_oovpa.py --located-out) to get the exact gap: entry points the game calls
+that are NOT yet covered.
 
     python xbe_api_usage.py "other/games/Samurai Showdown V/default.xbe" \\
         [--section D3D] [--located addrs.txt] [--kernel]
