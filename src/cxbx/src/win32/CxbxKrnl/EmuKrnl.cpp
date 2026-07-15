@@ -5242,6 +5242,12 @@ static DWORD WINAPI EmuAciDmaThread(LPVOID)
 
 extern "C" void EmuAciStartDmaThread()
 {
+    char enabled[8] = {0};
+    if(GetEnvironmentVariableA("CXBX_AC97_DMA", enabled, sizeof(enabled)) == 0)
+    {
+        return;
+    }
+
     if(InterlockedExchange(&g_EmuAciDmaThreadStarted, 1) == 0)
     {
         printf("EmuKrnl (0x%lX): starting AC97 DMA thread.\n", GetCurrentThreadId());

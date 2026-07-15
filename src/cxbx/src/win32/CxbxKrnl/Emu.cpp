@@ -7154,12 +7154,6 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                GetCurrentThreadId(), Addr, g_Crc32OrigByte);
     }
 
-    // Start the AC97 bus-master DMA engine (EmuKrnl.cpp). It idles until a
-    // title sets a channel run bit; started here (not from the MMIO trap
-    // handler) because CreateThread inside the vectored-exception path wedges
-    // the faulting thread.
-    EmuAciStartDmaThread();
-
     // Initialize the host XInput backend before the guest thread starts.
     // LoadLibrary/GetProcAddress inside the host XInput DLLs uses CRT
     // synchronization whose C++ throws have no catch frame across the
@@ -7174,6 +7168,11 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     printf("Emu (0x%X): Initializing Direct3D.\n", GetCurrentThreadId());
 
     XTL::EmuD3DInit(pXbeHeader, dwXbeHeaderSize);
+
+    // Low-level AC97 DMA delivery is opt-in (CXBX_AC97_DMA). HLE DirectSound
+    // titles do not program this device, and creating an unnecessary worker at
+    // guest entry can perturb their startup ordering.
+    EmuAciStartDmaThread();
 
     printf("Emu (0x%X): Initial thread starting.\n", GetCurrentThreadId());
 
