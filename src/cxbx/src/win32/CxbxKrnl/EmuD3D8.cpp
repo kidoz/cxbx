@@ -6470,7 +6470,17 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                                                    dwSourceHeight;
 
             std::vector<BYTE> sourceCopy;
-            if(!EmuD3DCopyReadableRange(pBase, dwSourceSize, sourceCopy))
+            bool copiedSource = EmuD3DCopyReadableRange(pBase, dwSourceSize, sourceCopy);
+            if(!copiedSource && dwUnmaskedDataAddress != reinterpret_cast<DWORD>(pBase))
+            {
+                // Register may receive a directly readable host alias that does not
+                // belong to a tracked Xbox allocation. Preserve that exact alias
+                // before declaring its masked UMA address unreadable.
+                copiedSource = EmuD3DCopyReadableRange(
+                    reinterpret_cast<const void*>(dwUnmaskedDataAddress), dwSourceSize,
+                    sourceCopy);
+            }
+            if(!copiedSource)
             {
                 printf("*Warning* Register skipped copying a texture with an unreadable source "
                        "(resource=0x%.08lX common=0x%.08lX base_arg=0x%.08lX data=0x%.08lX "
