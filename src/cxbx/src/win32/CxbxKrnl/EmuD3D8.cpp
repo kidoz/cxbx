@@ -706,8 +706,16 @@ struct EmuRegisteredVertexBuffer
     DWORD byteSize = 0;
 };
 
+struct EmuCreatedIndexBuffer
+{
+    XTL::X_D3DIndexBuffer* resource = nullptr;
+    BYTE* guestData = nullptr;
+    DWORD byteSize = 0;
+};
+
 static std::vector<EmuRecordedPushBuffer> g_EmuRecordedPushBuffers;
 static std::vector<EmuRegisteredVertexBuffer> g_EmuRegisteredVertexBuffers;
+static std::vector<EmuCreatedIndexBuffer> g_EmuCreatedIndexBuffers;
 constexpr std::size_t EMU_RECORDED_DRAW_LIMIT = 256;
 constexpr std::size_t EMU_RECORDED_BYTE_LIMIT = 16 * 1024 * 1024;
 
@@ -797,6 +805,48 @@ static void EmuResetRegisteredVertexBuffer(XTL::X_D3DVertexBuffer* vertexBuffer,
     }
     catch(...)
     {
+    }
+}
+
+static EmuCreatedIndexBuffer* EmuFindCreatedIndexBuffer(
+    XTL::X_D3DIndexBuffer* indexBuffer)
+{
+    for(EmuCreatedIndexBuffer& created : g_EmuCreatedIndexBuffers)
+    {
+        if(created.resource == indexBuffer)
+        {
+            return &created;
+        }
+    }
+    return nullptr;
+}
+
+static bool EmuTrackCreatedIndexBuffer(XTL::X_D3DIndexBuffer* indexBuffer,
+                                       BYTE* guestData, DWORD byteSize)
+{
+    try
+    {
+        g_EmuCreatedIndexBuffers.push_back({ indexBuffer, guestData, byteSize });
+        return true;
+    }
+    catch(...)
+    {
+        return false;
+    }
+}
+
+static void EmuDiscardCreatedIndexBuffer(XTL::X_D3DIndexBuffer* indexBuffer)
+{
+    for(std::vector<EmuCreatedIndexBuffer>::iterator created =
+            g_EmuCreatedIndexBuffers.begin();
+        created != g_EmuCreatedIndexBuffers.end(); ++created)
+    {
+        if(created->resource == indexBuffer)
+        {
+            delete[] created->guestData;
+            g_EmuCreatedIndexBuffers.erase(created);
+            return;
+        }
     }
 }
 
@@ -2433,6 +2483,44 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport
         hRet = D3D_OK;
 
     return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_GetViewportOffsetAndScale
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_GetViewportOffsetAndScale
+(
+    FLOAT *pOffset,
+    FLOAT *pScale
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("GetViewportOffsetAndScale");
+
+    D3DVIEWPORT8 Viewport = {};
+    const HRESULT Result = g_pD3DDevice8->GetViewport(&Viewport);
+    if(SUCCEEDED(Result))
+    {
+        const FLOAT HalfWidth = static_cast<FLOAT>(Viewport.Width) * 0.5f;
+        const FLOAT HalfHeight = static_cast<FLOAT>(Viewport.Height) * 0.5f;
+
+        pOffset[0] = static_cast<FLOAT>(Viewport.X) + HalfWidth;
+        pOffset[1] = static_cast<FLOAT>(Viewport.Y) + HalfHeight;
+        pOffset[2] = Viewport.MinZ;
+        pOffset[3] = 0.0f;
+
+        pScale[0] = HalfWidth;
+        pScale[1] = -HalfHeight;
+        pScale[2] = Viewport.MaxZ - Viewport.MinZ;
+        pScale[3] = 0.0f;
+    }
+    else
+    {
+        memset(pOffset, 0, sizeof(FLOAT) * 4);
+        memset(pScale, 0, sizeof(FLOAT) * 4);
+    }
+
+    EmuSwapFS();   // Xbox FS
 }
 
 // ******************************************************************
@@ -4167,6 +4255,26 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetPixelShaderProgram
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderProgram
+(
+    CONST DWORD    *pFunction
+)
+{
+    D3D_TRACE("SetPixelShaderProgram");
+
+    DWORD Handle = 0;
+    HRESULT Result = EmuIDirect3DDevice8_CreatePixelShader(pFunction, &Handle);
+    if(SUCCEEDED(Result))
+    {
+        Result = EmuIDirect3DDevice8_SetPixelShader(Handle);
+    }
+
+    return Result;
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetPixelShaderConstant
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderConstant
@@ -4790,22 +4898,72 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateIndexBuffer
     }
     #endif
 
-    *ppIndexBuffer = new X_D3DIndexBuffer();
+    *ppIndexBuffer = new (std::nothrow) X_D3DIndexBuffer();
+    if(*ppIndexBuffer == NULL)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_OUTOFMEMORY;
+    }
 
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
     HRESULT hRet = g_pD3DDevice8->CreateIndexBuffer
     (
-        Length, D3DUSAGE_DYNAMIC, D3DFMT_INDEX16, D3DPOOL_MANAGED, &((*ppIndexBuffer)->EmuIndexBuffer8)
+        Length, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &((*ppIndexBuffer)->EmuIndexBuffer8)
     );
 
     if(FAILED(hRet))
+    {
         printf("*Warning* CreateIndexBuffer FAILED\n");
+        delete *ppIndexBuffer;
+        *ppIndexBuffer = NULL;
+    }
+    else
+    {
+        BYTE* guestData = new (std::nothrow) BYTE[Length];
+        if(guestData == NULL ||
+           !EmuTrackCreatedIndexBuffer(*ppIndexBuffer, guestData, Length))
+        {
+            delete[] guestData;
+            (*ppIndexBuffer)->EmuIndexBuffer8->Release();
+            delete *ppIndexBuffer;
+            *ppIndexBuffer = NULL;
+            hRet = E_OUTOFMEMORY;
+        }
+        else
+        {
+            memset(guestData, 0, Length);
+            (*ppIndexBuffer)->Common = X_D3DCOMMON_TYPE_INDEXBUFFER |
+                                      X_D3DCOMMON_D3DCREATED | 1;
+            (*ppIndexBuffer)->Data = reinterpret_cast<DWORD>(guestData);
+        }
+    }
 
     EmuSwapFS();   // XBox FS
 
     return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_CreateIndexBuffer2
+// ******************************************************************
+XTL::X_D3DIndexBuffer * WINAPI XTL::EmuIDirect3DDevice8_CreateIndexBuffer2
+(
+    UINT Length
+)
+{
+    D3D_TRACE("CreateIndexBuffer2");
+
+    X_D3DIndexBuffer *IndexBuffer = NULL;
+    const HRESULT Result = EmuIDirect3DDevice8_CreateIndexBuffer(
+        Length, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &IndexBuffer);
+    if(FAILED(Result))
+    {
+        return NULL;
+    }
+
+    return IndexBuffer;
 }
 
 // ******************************************************************
@@ -4839,6 +4997,27 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
     if(pIndexData != 0)
     {
         EmuVerifyResourceIsRegistered(pIndexData);
+
+        EmuCreatedIndexBuffer* created = EmuFindCreatedIndexBuffer(pIndexData);
+        if(created != nullptr)
+        {
+            BYTE* hostData = nullptr;
+            HRESULT uploadResult = pIndexData->EmuIndexBuffer8->Lock(
+                0, created->byteSize, &hostData, 0);
+            if(SUCCEEDED(uploadResult))
+            {
+                if(hostData != nullptr)
+                {
+                    memcpy(hostData, created->guestData, created->byteSize);
+                }
+                pIndexData->EmuIndexBuffer8->Unlock();
+            }
+            if(FAILED(uploadResult) || hostData == nullptr)
+            {
+                EmuWarning("SetIndices could not upload a created index buffer (0x%.08X)",
+                           uploadResult);
+            }
+        }
 
         pIndexBuffer = pIndexData->EmuIndexBuffer8;
     }
@@ -6885,6 +7064,10 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
             if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_VERTEXBUFFER)
             {
                 EmuDiscardRegisteredVertexBuffer(static_cast<X_D3DVertexBuffer*>(pThis));
+            }
+            else if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_INDEXBUFFER)
+            {
+                EmuDiscardCreatedIndexBuffer(static_cast<X_D3DIndexBuffer*>(pThis));
             }
             EmuDiscardSwizzledTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));

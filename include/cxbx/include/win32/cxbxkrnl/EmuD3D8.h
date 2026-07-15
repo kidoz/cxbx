@@ -708,6 +708,12 @@ HRESULT WINAPI EmuIDirect3DDevice8_SetViewport
     CONST D3DVIEWPORT8 *pViewport
 );
 
+VOID WINAPI EmuIDirect3DDevice8_GetViewportOffsetAndScale
+(
+    FLOAT              *pOffset,
+    FLOAT              *pScale
+);
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetShaderConstantMode
 // ******************************************************************
@@ -826,6 +832,11 @@ HRESULT WINAPI EmuIDirect3DDevice8_SetPixelShader
     DWORD           Handle
 );
 
+HRESULT WINAPI EmuIDirect3DDevice8_SetPixelShaderProgram
+(
+    CONST DWORD    *pFunction
+);
+
 HRESULT WINAPI EmuIDirect3DDevice8_SetPixelShaderConstant
 (
     DWORD           Register,
@@ -929,6 +940,11 @@ HRESULT WINAPI EmuIDirect3DDevice8_CreateIndexBuffer
     D3DFORMAT            Format,
     D3DPOOL              Pool,
     X_D3DIndexBuffer   **ppIndexBuffer
+);
+
+X_D3DIndexBuffer * WINAPI EmuIDirect3DDevice8_CreateIndexBuffer2
+(
+    UINT                 Length
 );
 
 // ******************************************************************

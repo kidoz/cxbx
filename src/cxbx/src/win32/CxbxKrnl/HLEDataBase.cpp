@@ -69,6 +69,7 @@ namespace XTL
 #include "D3D8.1.0.5659.inl"
 #include "D3D8.1.0.5788.inl"
 #include "D3D8.1.0.3911.inl"
+#include "D3D8.1.0.5233.inl"
 #include "D3D8D.1.0.5849.inl"
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
@@ -189,6 +190,13 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         D3D8_1_0_4627,
         D3D8_1_0_4627_SIZE
+    },
+    // D3D8 Version 1.0.5233
+    {
+        "D3D8",
+        1, 0, 5233,
+        D3D8_1_0_5233,
+        D3D8_1_0_5233_SIZE
     },
     // D3D8 Version 1.0.5344 (generated from XDK 5344 d3d8.lib; fills the
     // mid-cycle gap between 4627 and 5558 that many 2003-era titles link)
