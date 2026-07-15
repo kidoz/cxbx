@@ -239,12 +239,32 @@ inline X_D3DFORMAT EmuPC2XB_D3DFormat(D3DFORMAT Format)
 {
     switch(Format)
     {
+        case D3DFMT_A4R4G4B4:
+            return 0x04;
         case D3DFMT_YUY2:
             return 0x24;
         case D3DFMT_R5G6B5:
             return 0x05;
+        case D3DFMT_P8:
+            return 0x0B;
+        case D3DFMT_DXT1:
+            return 0x0C;
+        case D3DFMT_DXT2:
+            return 0x0E;
+        case D3DFMT_DXT3:
+            return 0x0F;
         case D3DFMT_D24S8:
             return 0x2A;
+        case D3DFMT_D16:
+            return 0x2C;
+        case D3DFMT_V8U8:
+            return 0x28;
+        case D3DFMT_A8:
+            return 0x19;
+        case D3DFMT_A8L8:
+            return 0x1A;
+        case D3DFMT_L8:
+            return 0x13;
         case D3DFMT_X8R8G8B8:
 //            return 0x1E;    // Linear (X_D3DFMT_LIN_X8R8G8B8)
             return 0x07;
@@ -1374,6 +1394,15 @@ VOID WINAPI EmuIDirect3DDevice8_SetTransform
 (
     D3DTRANSFORMSTATETYPE State,
     CONST D3DMATRIX      *pMatrix
+);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_SetGammaRamp
+// ******************************************************************
+VOID WINAPI EmuIDirect3DDevice8_SetGammaRamp
+(
+    DWORD                  Flags,
+    CONST D3DGAMMARAMP    *pRamp
 );
 
 // ******************************************************************

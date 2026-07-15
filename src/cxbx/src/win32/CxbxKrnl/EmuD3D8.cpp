@@ -67,6 +67,7 @@ namespace XTL
 #include <process.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <clocale>
 #include <cmath>
 #include <cstring>
@@ -123,7 +124,7 @@ static Xbe::Header                 *g_XbeHeader     = NULL; // XbeHeader
 static uint32                       g_XbeHeaderSize = 0;    // XbeHeaderSize
 static XTL::D3DCAPS8                g_D3DCaps;              // Direct3D8 Caps
 static HBRUSH                       g_hBgBrush      = NULL; // Background Brush
-static volatile bool                g_bRenderWindowActive = false;
+static std::atomic_bool             g_bRenderWindowActive{ false };
 static XBVideo                      g_XBVideo;
 static DWORD                        g_D3DDebugMarker = 0;
 static uint08                      *g_pD3DPerfStatistics = NULL;
@@ -571,6 +572,8 @@ struct EmuYuy2TextureInfo
     DWORD               Pitch;
     ULONG               RefCount;
     DWORD               DataSize;   // Pitch * Height (start of the canary tail)
+    DWORD               ContentHash;
+    bool                HashValid;
 };
 
 // The video decoder writes frames into pPixels through LockRect; a decoder
@@ -616,6 +619,8 @@ static XTL::X_D3DTexture *EmuCreateYuy2Texture(DWORD Width, DWORD Height)
         pInfo->Pitch = Pitch;
         pInfo->RefCount = 1;
         pInfo->DataSize = DataSize;
+        pInfo->ContentHash = 0;
+        pInfo->HashValid = false;
 
         return (XTL::X_D3DTexture*)pInfo->pHandle;
     }
@@ -646,6 +651,25 @@ static HRESULT EmuLockYuy2Texture(EmuYuy2TextureInfo *pInfo,
 
     pLockedRect->Pitch = pInfo->Pitch;
     pLockedRect->pBits = pInfo->pPixels + (size_t)Top * pInfo->Pitch + (size_t)Left * 2;
+
+    static int s_YuvLockTraceEnabled = -1;
+    static DWORD s_YuvLockSequence = 0;
+    if(s_YuvLockTraceEnabled < 0)
+    {
+        s_YuvLockTraceEnabled = getenv("CXBX_YUV_TRACE") != NULL ? 1 : 0;
+    }
+    if(s_YuvLockTraceEnabled == 1)
+    {
+        const DWORD sequence = ++s_YuvLockSequence;
+        if(sequence <= 8 || sequence % 60 == 0)
+        {
+            printf("YUV| lock seq=%lu handle=0x%.08lX bits=0x%.08lX pitch=%lu\n",
+                   static_cast<unsigned long>(sequence),
+                   reinterpret_cast<unsigned long>(pInfo->pHandle),
+                   reinterpret_cast<unsigned long>(pLockedRect->pBits),
+                   static_cast<unsigned long>(pLockedRect->Pitch));
+        }
+    }
     return D3D_OK;
 }
 
@@ -1006,12 +1030,14 @@ VOID XTL::EmuD3DInit(Xbe::Header *XbeHeader, uint32 XbeHeaderSize)
     {
         DWORD dwThreadId;
 
-        g_bRenderWindowActive = false;
+        g_bRenderWindowActive.store(false, std::memory_order_relaxed);
 
         CreateThread(NULL, NULL, EmuRenderWindow, NULL, NULL, &dwThreadId);
 
-        while(!g_bRenderWindowActive)
+        while(!g_bRenderWindowActive.load(std::memory_order_acquire))
+        {
             Sleep(10);
+        }
 
         Sleep(50);
     }
@@ -1048,6 +1074,7 @@ VOID XTL::EmuD3DInit(Xbe::Header *XbeHeader, uint32 XbeHeaderSize)
 
         if(FAILED(hRet))
             EmuCleanup("Could not set cooperative level");
+
     }
 
     // ******************************************************************
@@ -1193,21 +1220,22 @@ static DWORD WINAPI EmuRenderWindow(LPVOID)
         MSG msg;
 
         ZeroMemory(&msg, sizeof(msg));
+        g_bRenderWindowActive.store(true, std::memory_order_release);
 
         while(msg.message != WM_QUIT)
         {
             if(PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
             {
-                g_bRenderWindowActive = true;
-
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
             else
+            {
                 Sleep(10);
+            }
         }
 
-        g_bRenderWindowActive = false;
+        g_bRenderWindowActive.store(false, std::memory_order_release);
 
         EmuCleanup(NULL);
     }
@@ -4840,8 +4868,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
 // YUV->RGB the Xbox YuvEnable render state would have done in hardware.
 static XTL::IDirect3DTexture8 *g_pYuvConvertTexture = NULL;
 static DWORD g_dwYuvConvertW = 0, g_dwYuvConvertH = 0;
+static const EmuYuy2TextureInfo *g_pYuvConvertedSource = NULL;
 
-static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const EmuYuy2TextureInfo *pInfo)
+static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(EmuYuy2TextureInfo *pInfo)
 {
     if(pInfo == NULL)
         return NULL;
@@ -4859,7 +4888,18 @@ static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const EmuYuy2TextureInfo *p
                                                XTL::D3DPOOL_MANAGED, &g_pYuvConvertTexture)))
             return NULL;
         g_dwYuvConvertW = w; g_dwYuvConvertH = h;
+        g_pYuvConvertedSource = NULL;
     }
+
+    DWORD hash = 2166136261u;
+    for(DWORD offset = 0; offset < pInfo->DataSize; ++offset)
+    {
+        const BYTE value = pInfo->pPixels[offset];
+        hash = (hash ^ value) * 16777619u;
+    }
+
+    if(pInfo->HashValid && pInfo->ContentHash == hash && g_pYuvConvertedSource == pInfo)
+        return g_pYuvConvertTexture;
 
     XTL::D3DLOCKED_RECT lr;
     if(FAILED(g_pYuvConvertTexture->LockRect(0, &lr, NULL, 0)))
@@ -4869,7 +4909,46 @@ static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(const EmuYuy2TextureInfo *p
         pInfo->pPixels, pInfo->Pitch, static_cast<uint08*>(lr.pBits),
         static_cast<size_t>(lr.Pitch), w, h);
 
+    static int s_YuvTraceEnabled = -1;
+    static DWORD s_YuvTraceSequence = 0;
+    if(s_YuvTraceEnabled < 0)
+    {
+        s_YuvTraceEnabled = getenv("CXBX_YUV_TRACE") != NULL ? 1 : 0;
+    }
+    if(s_YuvTraceEnabled == 1)
+    {
+        BYTE minimum = 0xFF;
+        BYTE maximum = 0;
+        for(DWORD offset = 0; offset < pInfo->DataSize; ++offset)
+        {
+            minimum = (std::min)(minimum, pInfo->pPixels[offset]);
+            maximum = (std::max)(maximum, pInfo->pPixels[offset]);
+        }
+
+        const DWORD sequence = ++s_YuvTraceSequence;
+        if(sequence <= 8 || sequence % 60 == 0)
+        {
+            printf("YUV| convert seq=%lu handle=0x%.08lX size=%lux%lu pitch=%lu "
+                   "range=%u-%u hash=0x%.08lX converted=%u\n",
+                   static_cast<unsigned long>(sequence),
+                   reinterpret_cast<unsigned long>(pInfo->pHandle),
+                   static_cast<unsigned long>(pInfo->Width),
+                   static_cast<unsigned long>(pInfo->Height),
+                   static_cast<unsigned long>(pInfo->Pitch),
+                   static_cast<unsigned>(minimum),
+                   static_cast<unsigned>(maximum),
+                   static_cast<unsigned long>(hash),
+                   converted ? 1u : 0u);
+        }
+    }
+
     g_pYuvConvertTexture->UnlockRect(0);
+    if(converted)
+    {
+        pInfo->ContentHash = hash;
+        pInfo->HashValid = true;
+        g_pYuvConvertedSource = pInfo;
+    }
     return converted ? g_pYuvConvertTexture : NULL;
 }
 
@@ -5195,6 +5274,23 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus
     {
         pFieldStatus->Field       = 3; // D3DFIELD_PROGRESSIVE
         pFieldStatus->VBlankCount  = (DWORD)(((unsigned __int64)GetTickCount() * 60) / 1000);
+
+        static int s_FieldTraceEnabled = -1;
+        static DWORD s_FieldTraceSequence = 0;
+        if(s_FieldTraceEnabled < 0)
+            s_FieldTraceEnabled = getenv("CXBX_FIELD_TRACE") != NULL ? 1 : 0;
+        if(s_FieldTraceEnabled == 1)
+        {
+            const DWORD sequence = ++s_FieldTraceSequence;
+            if(sequence <= 8 || sequence % 120 == 0)
+            {
+                printf("FIELD| seq=%lu type=%lu vblank=%lu tick=%lu\n",
+                       static_cast<unsigned long>(sequence),
+                       static_cast<unsigned long>(pFieldStatus->Field),
+                       static_cast<unsigned long>(pFieldStatus->VBlankCount),
+                       static_cast<unsigned long>(GetTickCount()));
+            }
+        }
     }
 
     EmuSwapFS();   // XBox FS
@@ -6739,6 +6835,8 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
                 printf("EmuD3D8 (0x%X): YUY2 texture %ux%u was overwritten 0x%X bytes past its %u-byte buffer.\n",
                        GetCurrentThreadId(), pYuy2->Width, pYuy2->Height, dwOverrun, pYuy2->DataSize);
 
+            if(g_pYuvConvertedSource == pYuy2)
+                g_pYuvConvertedSource = NULL;
             delete[] pYuy2->pPixels;
             memset(pYuy2, 0, sizeof(*pYuy2));
         }
@@ -8757,6 +8855,37 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {}
 
+    EmuSwapFS();   // XBox FS
+
+    return;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_SetGammaRamp
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetGammaRamp
+(
+    DWORD                  Flags,
+    CONST D3DGAMMARAMP    *pRamp
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetGammaRamp");
+
+    #ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_SetGammaRamp\n"
+               "(\n"
+               "   Flags               : 0x%.08X\n"
+               "   pRamp               : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), Flags, pRamp);
+    }
+    #endif
+
+    // The Xbox implementation writes the console video DAC. Applying the
+    // ramp through host D3D would alter the entire desktop, so retain it as
+    // accepted emulated display state until per-window gamma is available.
     EmuSwapFS();   // XBox FS
 
     return;
