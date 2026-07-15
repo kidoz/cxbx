@@ -245,7 +245,9 @@ enum XRefDataBaseOffset
     XREF_SETFENCE,
     XREF_BLOCKONTIME,
     XREF_KICKOFF,
-    XREF_KICKOFFANDWAITFORIDLE
+    XREF_KICKOFFANDWAITFORIDLE,
+    // XDK 5233 XAPI input: XID_fCloseDevice identifies XInputClose's thunk.
+    XREF_XAPI5233_XINPUTCLOSE
 };
 
 #endif
