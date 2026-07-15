@@ -140,7 +140,14 @@ static void EmuRedirectStdStream(DWORD StdHandle, int FileDescriptor, FILE* Stre
     if(_dup2(NewDescriptor, FileDescriptor) == 0)
     {
         SetStdHandle(StdHandle, (HANDLE)_get_osfhandle(FileDescriptor));
-        setvbuf(Stream, NULL, _IOFBF, 64 * 1024);
+        if(getenv("CXBX_LOG_UNBUFFERED") != NULL)
+        {
+            setvbuf(Stream, NULL, _IONBF, 0);
+        }
+        else
+        {
+            setvbuf(Stream, NULL, _IOFBF, 64 * 1024);
+        }
     }
 
     if(NewDescriptor != FileDescriptor)
@@ -8244,7 +8251,11 @@ void EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*En
 void EmuXRefFailure()
 {
     EmuSwapFS();    // Win2k/XP FS
-    
+
+    printf("Emu (0x%lX): XRef-only function called from guest return address 0x%.08lX.\n",
+           GetCurrentThreadId(), (ULONG)__builtin_return_address(0));
+    fflush(stdout);
+
     EmuCleanup("XRef-only function body reached. Fatal Error.");
 }
 
