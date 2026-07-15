@@ -3136,7 +3136,10 @@ static EmuSystemMemoryAllocation g_EmuSystemMemoryAllocations[128] = {};
 static EmuContiguousMemoryAllocation g_EmuContiguousMemoryAllocations[128] = {};
 static EmuIoSpaceMapping g_EmuIoSpaceMappings[64] = {};
 static EmuKernelStackAllocation g_EmuKernelStackAllocations[64] = {};
-static ULONG g_EmuNextSystemMemoryAddress = 0xD0000000;
+static const ULONG EmuSystemMemoryBase = 0xD0000000;
+static const ULONG EmuSystemMemoryLimit = 0xF0000000;
+static ULONG g_EmuNextSystemMemoryAddress = EmuSystemMemoryBase;
+static volatile LONG g_EmuSystemMemoryArenaState = 0;
 static ULONG g_EmuNextContiguousPhysicalAddress = 0x00100000;
 static const ULONG EmuPageSize = 0x1000;
 static const ULONG EmuXboxPhysicalMemoryBytes = 64 * 1024 * 1024;
@@ -3170,6 +3173,26 @@ static ULONG EmuSystemMemoryPages(ULONG NumberOfBytes)
 static ULONG EmuRoundToPageSize(ULONG NumberOfBytes)
 {
     return EmuSystemMemoryPages(NumberOfBytes) * EmuPageSize;
+}
+
+static bool EmuEnsureSystemMemoryArena()
+{
+    if(InterlockedCompareExchange(&g_EmuSystemMemoryArenaState, 2, 2) == 2)
+        return true;
+
+    if(InterlockedCompareExchange(&g_EmuSystemMemoryArenaState, 1, 0) == 0)
+    {
+        PVOID Arena = VirtualAlloc((PVOID)EmuSystemMemoryBase,
+                                   EmuSystemMemoryLimit - EmuSystemMemoryBase,
+                                   MEM_RESERVE, PAGE_NOACCESS);
+        InterlockedExchange(&g_EmuSystemMemoryArenaState, Arena != NULL ? 2 : 3);
+        return Arena != NULL;
+    }
+
+    while(InterlockedCompareExchange(&g_EmuSystemMemoryArenaState, 2, 2) == 1)
+        Sleep(0);
+
+    return InterlockedCompareExchange(&g_EmuSystemMemoryArenaState, 2, 2) == 2;
 }
 
 static void EmuTrackKernelStack(PVOID BaseAddress, PVOID StackBase, PVOID StackLimit, ULONG Size, BOOLEAN DebuggerThread)
@@ -7590,20 +7613,24 @@ XBSYSAPI EXPORTNUM(167) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateSystemMemory
 
     PVOID pRet = NULL;
 
-    if(EmuIsValidSystemMemoryProtect(Protect))
+    if(EmuIsValidSystemMemoryProtect(Protect) && EmuEnsureSystemMemoryArena())
     {
         const ULONG Pages = EmuSystemMemoryPages(NumberOfBytes);
         const ULONG Size = Pages * EmuPageSize;
 
         if(Pages != 0 && g_EmuNextSystemMemoryAddress + Size >= g_EmuNextSystemMemoryAddress &&
-           g_EmuNextSystemMemoryAddress + Size <= 0xF0000000)
+           g_EmuNextSystemMemoryAddress + Size <= EmuSystemMemoryLimit)
         {
             for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
             {
                 if(g_EmuSystemMemoryAllocations[i].Address != NULL)
                     continue;
 
-                pRet = (PVOID)g_EmuNextSystemMemoryAddress;
+                pRet = VirtualAlloc((PVOID)g_EmuNextSystemMemoryAddress, Size,
+                                    MEM_COMMIT, Protect);
+                if(pRet == NULL)
+                    break;
+
                 g_EmuSystemMemoryAllocations[i].Address = pRet;
                 g_EmuSystemMemoryAllocations[i].Pages = Pages;
                 g_EmuNextSystemMemoryAddress += Size;
@@ -7618,7 +7645,7 @@ XBSYSAPI EXPORTNUM(167) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateSystemMemory
         for(ULONG i = 0; i < sizeof(g_EmuSystemMemoryAllocations) / sizeof(g_EmuSystemMemoryAllocations[0]); i++)
             if(g_EmuSystemMemoryAllocations[i].Address != NULL)
                 Used++;
-        printf("EmuKrnl (0x%lX): *ALLOC FAILED* MmAllocateContiguousMemoryEx bytes=0x%lX protect=0x%lX "
+        printf("EmuKrnl (0x%lX): *ALLOC FAILED* MmAllocateSystemMemory bytes=0x%lX protect=0x%lX "
                "slots=%lu/128 next=0x%.08lX\n",
                GetCurrentThreadId(), NumberOfBytes, Protect, Used,
                (ULONG)g_EmuNextSystemMemoryAddress);
@@ -8030,7 +8057,7 @@ extern "C" NTSTATUS NTAPI EmuMmQueryStatistics
         MemoryStatistics->AvailablePages = (CommittedBytes < EmuXboxPhysicalMemoryBytes) ?
                                            (EmuXboxPhysicalMemoryBytes - CommittedBytes) / EmuPageSize : 0;
         MemoryStatistics->VirtualMemoryBytesCommitted = SystemBytes;
-        MemoryStatistics->VirtualMemoryBytesReserved = g_EmuNextSystemMemoryAddress - 0xD0000000;
+        MemoryStatistics->VirtualMemoryBytesReserved = g_EmuNextSystemMemoryAddress - EmuSystemMemoryBase;
         MemoryStatistics->CachePagesCommitted = 0;
         MemoryStatistics->PoolPagesCommitted = EmuSystemMemoryPages(ContiguousBytes);
         MemoryStatistics->StackPagesCommitted = EmuSystemMemoryPages(StackBytes);
