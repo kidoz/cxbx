@@ -1,6 +1,7 @@
 // D3D8 Version 1.0.5659 OOVPA table.
 // Generated from XDK 5659 d3d8.lib via reuse-then-generate.
-// 74 reused, 1 fresh, 5 skipped.
+// 74 reused, 12 fresh, 5 skipped. Some 5659.4 titles use the 5788 alias
+// bodies noted below while still reporting library version 5659.
 
 // Fresh signature definitions
 SOOVPA<8> D3DDevice_RunPushBuffer_1_0_5659 =
@@ -15,6 +16,202 @@ SOOVPA<8> D3DDevice_RunPushBuffer_1_0_5659 =
         { 0xB6, 0x8B },
         { 0xDA, 0x50 },
         { 0xFF, 0x48 }
+    }
+};
+
+// _D3DDevice_Swap@4 (d3d8.lib 5659, 229 bytes)
+SOOVPA<12> IDirect3DDevice8_Swap_1_0_5659 =
+{
+    0, 12, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x14, 0x08 },
+        { 0x29, 0x05 },
+        { 0x3E, 0xE8 },
+        { 0x52, 0x00 },
+        { 0x67, 0xE8 },
+        { 0x7C, 0x6A },
+        { 0x91, 0x19 },
+        { 0xA5, 0x00 },
+        { 0xB9, 0x0D },
+        { 0xCF, 0x08 },
+        { 0xE4, 0x00 }
+    }
+};
+
+// _D3DDevice_GetDisplayFieldStatus@4 (d3d8.lib 5659, 58 bytes).
+// Native XMV calls this every frame to pace decode against the vblank tally.
+SOOVPA<8> IDirect3DDevice8_GetDisplayFieldStatus_1_0_5659 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0xA1 },
+        { 0x05, 0x8B },
+        { 0x07, 0xE8 },
+        { 0x0B, 0x8B },
+        { 0x0F, 0x89 },
+        { 0x12, 0xF7 },
+        { 0x1C, 0x74 },
+        { 0x30, 0xC2 }
+    }
+};
+
+// _D3DDevice_SetTextureState_BorderColor@8 (d3d8.lib 5659, 61 bytes)
+SOOVPA<8> IDirect3DDevice8_SetTextureState_BorderColor_1_0_5659 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x08, 0x06 },
+        { 0x13, 0x8B },
+        { 0x19, 0xC1 },
+        { 0x22, 0x89 },
+        { 0x2A, 0x04 },
+        { 0x33, 0x89 },
+        { 0x3C, 0x00 }
+    }
+};
+
+// _D3DDevice_BeginVisibilityTest@0 (d3d8.lib 5659, 43 bytes)
+SOOVPA<8> IDirect3DDevice8_BeginVisibilityTest_1_0_5659 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x07, 0x8B },
+        { 0x0C, 0x72 },
+        { 0x13, 0xC7 },
+        { 0x18, 0x00 },
+        { 0x1E, 0x89 },
+        { 0x24, 0x83 },
+        { 0x2A, 0xC3 }
+    }
+};
+
+// _D3DDevice_EndVisibilityTest@4 (d3d8.lib 5659, 90 bytes)
+SOOVPA<8> IDirect3DDevice8_EndVisibilityTest_1_0_5659 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0C, 0xF0 },
+        { 0x19, 0x00 },
+        { 0x26, 0x8B },
+        { 0x32, 0xC7 },
+        { 0x3F, 0x40 },
+        { 0x4C, 0x70 },
+        { 0x59, 0x00 }
+    }
+};
+
+// _D3DDevice_GetVisibilityTestResult@12 (d3d8.lib 5659, 97 bytes)
+SOOVPA<8> IDirect3DDevice8_GetVisibilityTestResult_1_0_5659 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x0D, 0xEA },
+        { 0x1B, 0x00 },
+        { 0x29, 0x75 },
+        { 0x34, 0xE8 },
+        { 0x44, 0x8B },
+        { 0x52, 0x8B },
+        { 0x60, 0x00 }
+    }
+};
+
+// PixelJar::Get2DSurfaceDesc (5659.4/5788 alias body, 177 bytes)
+SOOVPA<8> Get2DSurfaceDesc_1_0_5659 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x19, 0x8B },
+        { 0x30, 0x82 },
+        { 0x4B, 0x00 },
+        { 0x64, 0x6C },
+        { 0x7D, 0x50 },
+        { 0x96, 0x24 },
+        { 0xB0, 0x00 }
+    }
+};
+
+// D3D::SetFence (5659.4/5788 alias body, 184 bytes)
+SOOVPA<7> SetFence_1_0_5659 =
+{
+    0, 7, XREF_SETFENCE, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x1E, 0xD7 },
+        { 0x3D, 0xC7 },
+        { 0x5B, 0x1C },
+        { 0x7A, 0x4E },
+        { 0x98, 0x83 },
+        { 0xB7, 0x00 }
+    }
+};
+
+// _D3DDevice_InsertFence@0 (d3d8.lib 5659, 8 bytes)
+SOOVPA<5> D3DDevice_InsertFence_1_0_5659 =
+{
+    0, 5, -1, 1,
+    {
+        { 0x03, XREF_SETFENCE },
+        { 0x00, 0x6A },
+        { 0x01, 0x00 },
+        { 0x02, 0xE8 },
+        { 0x07, 0xC3 }
+    }
+};
+
+// D3D::BlockOnTime (d3d8.lib 5659, 362 bytes)
+SOOVPA<7> BlockOnTime_1_0_5659 =
+{
+    0, 7, XREF_BLOCKONTIME, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x2A, 0xE8 },
+        { 0x55, 0x3B },
+        { 0x7F, 0x0F },
+        { 0xAA, 0x8B },
+        { 0xD2, 0xE8 },
+        { 0xFF, 0x18 }
+    }
+};
+
+// _D3DDevice_BlockOnFence@4 (d3d8.lib 5659, 15 bytes)
+SOOVPA<8> D3DDevice_BlockOnFence_1_0_5659 =
+{
+    0, 8, -1, 1,
+    {
+        { 0x08, XREF_BLOCKONTIME },
+        { 0x00, 0x8B },
+        { 0x01, 0x44 },
+        { 0x02, 0x24 },
+        { 0x04, 0x6A },
+        { 0x07, 0xE8 },
+        { 0x0C, 0xC2 },
+        { 0x0E, 0x00 }
+    }
+};
+
+// _D3DDevice_SetGammaRamp@8 (d3d8.lib 5659, 131 bytes)
+SOOVPA<12> D3DDevice_SetGammaRamp_1_0_5659 =
+{
+    0, 12, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x0D, 0x8B },
+        { 0x17, 0x00 },
+        { 0x23, 0xE6 },
+        { 0x2F, 0xFD },
+        { 0x3B, 0x74 },
+        { 0x46, 0xDC },
+        { 0x52, 0xFB },
+        { 0x5E, 0x00 },
+        { 0x6A, 0x5F },
+        { 0x76, 0x00 },
+        { 0x82, 0x00 }
     }
 };
 
@@ -53,6 +250,15 @@ OOVPATable D3D8_1_0_5659[] =
         "EmuIDirect3DDevice8_RunPushBuffer"
         #endif
     },
+    // D3D::CDevice::KickOff. The 5659 body is byte-identical to 5849 and
+    // otherwise polls the NV2A writeback register forever under HLE.
+    {
+        (OOVPA*)&KickOff_1_0_5849,
+        XTL::EmuIDirect3DDevice8_KickPushBuffer,
+        #ifdef _DEBUG_TRACE
+        "D3D::CDevice::KickOff"
+        #endif
+    },
     // D3DDevice::GetPushBufferOffset
     {
         (OOVPA*)&D3DDevice_GetPushBufferOffset_1_0_5849,
@@ -63,10 +269,40 @@ OOVPATable D3D8_1_0_5659[] =
     },
     // IDirect3DDevice8::GetDisplayFieldStatus
     {
-        (OOVPA*)&IDirect3DDevice8_GetDisplayFieldStatus_1_0_5558,
+        (OOVPA*)&IDirect3DDevice8_GetDisplayFieldStatus_1_0_5659,
         XTL::EmuIDirect3DDevice8_GetDisplayFieldStatus,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_GetDisplayFieldStatus"
+        #endif
+    },
+    // D3DDevice::InsertFence (XRef chain: SetFence -> InsertFence)
+    {
+        (OOVPA*)&SetFence_1_0_5659,
+        XTL::EmuIDirect3DDevice8_InsertFence,
+        #ifdef _DEBUG_TRACE
+        "SetFence (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_InsertFence_1_0_5659,
+        XTL::EmuIDirect3DDevice8_InsertFence,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_InsertFence"
+        #endif
+    },
+    // D3DDevice::BlockOnFence (XRef chain: BlockOnTime -> BlockOnFence)
+    {
+        (OOVPA*)&BlockOnTime_1_0_5659,
+        XTL::EmuIDirect3DDevice8_BlockOnFence,
+        #ifdef _DEBUG_TRACE
+        "BlockOnTime (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_BlockOnFence_1_0_5659,
+        XTL::EmuIDirect3DDevice8_BlockOnFence,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BlockOnFence"
         #endif
     },
     // IDirect3D8::CreateDevice
@@ -231,7 +467,7 @@ OOVPATable D3D8_1_0_5659[] =
     },
     // IDirect3DDevice8::Swap
     {
-        (OOVPA*)&IDirect3DDevice8_Swap_1_0_5558,
+        (OOVPA*)&IDirect3DDevice8_Swap_1_0_5659,
         XTL::EmuIDirect3DDevice8_Swap,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_Swap"
@@ -347,6 +583,38 @@ OOVPATable D3D8_1_0_5659[] =
         XTL::EmuIDirect3DDevice8_SetTextureState_TexCoordIndex,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetTextureState_TexCoordIndex"
+        #endif
+    },
+    // IDirect3DDevice8::SetTextureState_BorderColor
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTextureState_BorderColor_1_0_5659,
+        XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTextureState_BorderColor"
+        #endif
+    },
+    // IDirect3DDevice8::BeginVisibilityTest
+    {
+        (OOVPA*)&IDirect3DDevice8_BeginVisibilityTest_1_0_5659,
+        XTL::EmuIDirect3DDevice8_BeginVisibilityTest,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BeginVisibilityTest"
+        #endif
+    },
+    // IDirect3DDevice8::EndVisibilityTest
+    {
+        (OOVPA*)&IDirect3DDevice8_EndVisibilityTest_1_0_5659,
+        XTL::EmuIDirect3DDevice8_EndVisibilityTest,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_EndVisibilityTest"
+        #endif
+    },
+    // IDirect3DDevice8::GetVisibilityTestResult
+    {
+        (OOVPA*)&IDirect3DDevice8_GetVisibilityTestResult_1_0_5659,
+        XTL::EmuIDirect3DDevice8_GetVisibilityTestResult,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_GetVisibilityTestResult"
         #endif
     },
     // IDirect3DDevice8::SetRenderState_CullMode (* unchanged since 4134 *)
@@ -469,6 +737,14 @@ OOVPATable D3D8_1_0_5659[] =
         "EmuIDirect3DDevice8_SetTransform"
         #endif
     },
+    // IDirect3DDevice8::SetGammaRamp
+    {
+        (OOVPA*)&D3DDevice_SetGammaRamp_1_0_5659,
+        XTL::EmuIDirect3DDevice8_SetGammaRamp,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetGammaRamp"
+        #endif
+    },
     // IDirect3DDevice8::GetTransform (* unchanged since 4361 *)
     {
         (OOVPA*)&IDirect3DDevice8_GetTransform_1_0_5849,
@@ -575,7 +851,7 @@ OOVPATable D3D8_1_0_5659[] =
     },
     // Get2DSurfaceDesc
     {
-        (OOVPA*)&Get2DSurfaceDesc_1_0_5558,
+        (OOVPA*)&Get2DSurfaceDesc_1_0_5659,
         XTL::EmuGet2DSurfaceDesc,
         #ifdef _DEBUG_TRACE
         "EmuGet2DSurfaceDesc"
