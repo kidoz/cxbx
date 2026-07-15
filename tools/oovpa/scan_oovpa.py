@@ -167,7 +167,13 @@ def main() -> int:
     ap.add_argument("--image", action="append", required=True,
                     help="XBE (or raw binary) to scan (repeatable)")
     ap.add_argument("--quiet", action="store_true", help="only print the summary")
+    ap.add_argument("--located-out",
+                    help="write the addresses of OK matches (one 0x-address plus "
+                         "the emu function per line) for xbe_api_usage.py "
+                         "--located; requires exactly one --image")
     args = ap.parse_args()
+    if args.located_out and len(args.image) != 1:
+        sys.exit("--located-out requires exactly one --image")
 
     inls = [Path(p) for g in args.inl for p in glob.glob(g, recursive=True)]
     if not inls:
@@ -209,6 +215,12 @@ def main() -> int:
                 if status != "OK":
                     print(f"    {status:5s} {emufn:52s} {signame}")
         print()
+
+        if args.located_out:
+            Path(args.located_out).write_text("".join(
+                f"{where}  {emufn}\n" for st, _sig, emufn, where in rows if st == "OK"
+            ))
+            print(f"    -> wrote {ok} OK address(es) to {args.located_out}\n")
 
         # Machine-readable miss list: the functions an LTCG table must supply.
         misses = [s for st, s, _, _ in rows if st in ("MISS", "MULTI")]
