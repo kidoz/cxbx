@@ -1563,6 +1563,7 @@ static void EmuNv2aWriteBackendSemaphore(ULONG Data);
 static void EmuNv2aClearSurface(ULONG Flags);
 static void EmuNv2aPresentColorSurface();
 static void EmuNv2aInvalidateSampler(ULONG Stage);
+static void EmuNv2aInvalidateFrameSamplers();
 
 static bool EmuNv2aTextureDumpEnabled()
 {
@@ -1728,11 +1729,25 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
     {
         if(Method == NV097_SET_CONTEXT_DMA_A)
         {
-            g_EmuNv2aContextDmaAHandle = Data;
+            if(g_EmuNv2aContextDmaAHandle != Data)
+            {
+                g_EmuNv2aContextDmaAHandle = Data;
+                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+                {
+                    EmuNv2aInvalidateSampler(Stage);
+                }
+            }
         }
         else if(Method == NV097_SET_CONTEXT_DMA_B)
         {
-            g_EmuNv2aContextDmaBHandle = Data;
+            if(g_EmuNv2aContextDmaBHandle != Data)
+            {
+                g_EmuNv2aContextDmaBHandle = Data;
+                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+                {
+                    EmuNv2aInvalidateSampler(Stage);
+                }
+            }
         }
         else if(Method == NV097_SET_FLIP_READ)
         {
@@ -1753,10 +1768,7 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         else if(Method == NV097_FLIP_STALL)
         {
             EmuNv2aPresentColorSurface();
-            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
-            {
-                EmuNv2aInvalidateSampler(Stage);
-            }
+            EmuNv2aInvalidateFrameSamplers();
         }
         else if(Method >= NV097_SET_TEXTURE_OFFSET_0 &&
                 Method < NV097_SET_TEXTURE_OFFSET_0 + EmuNv2aTextureStageStride * EmuNv2aTextureStageCount)
@@ -3281,11 +3293,13 @@ static ULONG EmuNv2aUnpackTexel(ULONG Raw, ULONG Kind)
 struct EmuNv2aSampler
 {
     ULONG *Pixels;
+    BYTE* Source;
     ULONG Size, Width, Height, SourcePitch, Bpp, Kind, LogW, LogH;
     ULONG  Palette[256];
     ULONG Address;
     bool   Swizzled;
     bool   Bilinear;   // mag filter == LINEAR
+    bool OwnsSource;
 };
 
 static EmuNv2aSampler g_EmuNv2aSamplerCache[EmuNv2aTextureStageCount] = {};
@@ -3303,7 +3317,27 @@ static void EmuNv2aInvalidateSampler(ULONG Stage)
         delete[] g_EmuNv2aSamplerCache[Stage].Pixels;
         g_EmuNv2aSamplerCache[Stage].Pixels = nullptr;
     }
+    if(g_EmuNv2aSamplerCache[Stage].OwnsSource &&
+       g_EmuNv2aSamplerCache[Stage].Source != nullptr)
+    {
+        delete[] g_EmuNv2aSamplerCache[Stage].Source;
+    }
+    g_EmuNv2aSamplerCache[Stage].Source = nullptr;
+    g_EmuNv2aSamplerCache[Stage].OwnsSource = false;
     g_EmuNv2aSamplerCacheValid[Stage] = false;
+}
+
+static void EmuNv2aInvalidateFrameSamplers()
+{
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        const EmuNv2aSampler& Sampler = g_EmuNv2aSamplerCache[Stage];
+        if(!g_EmuNv2aSamplerCacheValid[Stage] ||
+           Sampler.Kind != 5 || Sampler.OwnsSource)
+        {
+            EmuNv2aInvalidateSampler(Stage);
+        }
+    }
 }
 
 static bool EmuNv2aLoadSamplerPalette(ULONG Stage, EmuNv2aSampler* Sampler)
@@ -3395,18 +3429,35 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     S->Size = S->Swizzled
                   ? S->Width * S->Height * S->Bpp
                   : S->SourcePitch * S->Height;
-    BYTE* Source = new BYTE[S->Size];
-
     ULONG Host = EmuNv2aHostPointer(Address);
-    bool Loaded = Host != 0 && EmuTryReadHost(Host, Source, S->Size);
-    if(!Loaded)
+    BYTE* Source = nullptr;
+    bool OwnsSource = true;
+    bool Loaded = false;
+    if(S->Kind == 5 && Host != 0)
     {
-        ULONG Phys = Address;
-        if(!EmuIsPhysicalMapAddress(Phys))
+        BYTE Probe = 0;
+        Loaded = EmuTryReadHost(Host, &Probe, sizeof(Probe)) &&
+                 EmuTryReadHost(Host + S->Size - 1, &Probe, sizeof(Probe));
+        if(Loaded)
         {
-            Phys = EmuPhysicalMapBase + (Phys & EmuPhysicalRamMirrorMask);
+            Source = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(Host));
+            OwnsSource = false;
         }
-        Loaded = EmuReadPhysicalMapBlock(Phys, Source, S->Size);
+    }
+
+    if(Source == nullptr)
+    {
+        Source = new BYTE[S->Size];
+        Loaded = Host != 0 && EmuTryReadHost(Host, Source, S->Size);
+        if(!Loaded)
+        {
+            ULONG Phys = Address;
+            if(!EmuIsPhysicalMapAddress(Phys))
+            {
+                Phys = EmuPhysicalMapBase + (Phys & EmuPhysicalRamMirrorMask);
+            }
+            Loaded = EmuReadPhysicalMapBlock(Phys, Source, S->Size);
+        }
     }
     if(!Loaded)
     {
@@ -3425,17 +3476,30 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
             ULONG ByteOffset = S->Swizzled
                                    ? TexelIndex * S->Bpp
                                    : Y * S->SourcePitch + X * S->Bpp;
-            ULONG Raw = 0;
-            for(ULONG Byte = 0; Byte < S->Bpp; ++Byte)
+            if(S->Kind == 5)
             {
-                Raw |= static_cast<ULONG>(Source[ByteOffset + Byte]) << (Byte * 8);
+                S->Pixels[Y * S->Width + X] = ByteOffset;
             }
-            S->Pixels[Y * S->Width + X] = S->Kind == 5
-                                              ? Raw & 0xFFu
-                                              : EmuNv2aUnpackTexel(Raw, S->Kind);
+            else
+            {
+                ULONG Raw = 0;
+                for(ULONG Byte = 0; Byte < S->Bpp; ++Byte)
+                {
+                    Raw |= static_cast<ULONG>(Source[ByteOffset + Byte]) << (Byte * 8);
+                }
+                S->Pixels[Y * S->Width + X] = EmuNv2aUnpackTexel(Raw, S->Kind);
+            }
         }
     }
-    delete[] Source;
+    if(S->Kind == 5)
+    {
+        S->Source = Source;
+        S->OwnsSource = OwnsSource;
+    }
+    else
+    {
+        delete[] Source;
+    }
     return true;
 }
 
@@ -3461,7 +3525,11 @@ static ULONG EmuNv2aFetchTexel(const EmuNv2aSampler* S, int X, int Y)
 
     const ULONG Pixel = S->Pixels[static_cast<ULONG>(Y) * S->Width +
                                   static_cast<ULONG>(X)];
-    return S->Kind == 5 ? S->Palette[Pixel & 0xFFu] : Pixel;
+    if(S->Kind == 5)
+    {
+        return S->Palette[S->Source[Pixel]];
+    }
+    return Pixel;
 }
 
 static const EmuNv2aSampler* EmuNv2aGetSampler(ULONG Stage)
@@ -5048,8 +5116,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     const EmuNv2aSampler* Sampler = nullptr;
     bool SamplerReady = false;
     const ULONG TextureMode0 = g_EmuNv2aShaderStageProgram & 0x1Fu;
-    bool TexBound = g_EmuNv2aTexture[0].Offset != 0 &&
-                    g_EmuNv2aTexture[0].Format != 0 &&
+    bool TexBound = g_EmuNv2aTexture[0].Format != 0 &&
                     (g_EmuNv2aTexture[0].Control0 & 0x40000000u) != 0 &&
                     TextureMode0 != 0;
     if(TexBound && (VpActive || TexStride != 0))
