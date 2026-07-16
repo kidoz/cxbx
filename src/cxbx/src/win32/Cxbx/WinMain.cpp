@@ -266,11 +266,9 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     {
         static const struct { ULONG Base; ULONG Size; } kFences[] = {
             { 0x80000000, 0x10000000 },   // Xbox physical identity view
-            { 0xF0000000, 0x04000000 },   // physical shadow aperture
+            { 0xF0000000, 0x0D000000 },   // physical/AGP shadow aperture
             { 0xFD000000, 0x01000000 },   // NV2A MMIO
-            { 0xFE800000, 0x00100000 },   // APU
-            { 0xFEC00000, 0x00100000 },   // ACI/AC97
-            { 0xFED00000, 0x00100000 },   // USB0 OHCI
+            { 0xFE000000, 0x01000000 },   // APU/ACI/USB/NVNET stub MMIO
         };
         for(unsigned f = 0; f < sizeof(kFences) / sizeof(kFences[0]); f++)
         {

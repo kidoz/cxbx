@@ -3142,7 +3142,7 @@ struct EmuMmStatistics
 };
 
 static EmuSystemMemoryAllocation g_EmuSystemMemoryAllocations[128] = {};
-static EmuContiguousMemoryAllocation g_EmuContiguousMemoryAllocations[128] = {};
+static EmuContiguousMemoryAllocation g_EmuContiguousMemoryAllocations[1024] = {};
 static EmuIoSpaceMapping g_EmuIoSpaceMappings[64] = {};
 static EmuKernelStackAllocation g_EmuKernelStackAllocations[64] = {};
 static const ULONG EmuSystemMemoryBase = 0xD0000000;
@@ -3380,6 +3380,10 @@ static void EmuTrackContiguousMemoryAllocation(PVOID Address, ULONG Size)
         g_EmuNextContiguousPhysicalAddress += EmuRoundToPageSize(Size);
         return;
     }
+
+    printf("EmuKrnl (0x%lX): contiguous allocation tracker exhausted for 0x%.08lX (%lu bytes).\n",
+           GetCurrentThreadId(), (ULONG)Address, Size);
+    fflush(stdout);
 }
 
 // Allocate contiguous "physical" memory from the low Xbox-RAM window the launcher
@@ -5769,11 +5773,8 @@ static LONGLONG EmuGetScaledPerformanceCounter(LONGLONG TargetFrequency)
     return Whole + Part;
 }
 
-extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter(xboxkrnl::PLARGE_INTEGER Frequency)
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter()
 {
-    if(Frequency != NULL)
-        Frequency->QuadPart = EMU_XBOX_ACPI_FREQUENCY;
-
     xboxkrnl::LARGE_INTEGER Counter;
     Counter.QuadPart = EmuGetScaledPerformanceCounter(EMU_XBOX_ACPI_FREQUENCY);
     return Counter;
@@ -8403,6 +8404,42 @@ static bool EmuFileIoTraceEnabled()
     return EmuFileIoTraceLevel() >= 1;
 }
 
+static HANDLE EmuCreateBlankPartitionHandle()
+{
+    char TempDirectory[MAX_PATH];
+    char TempPath[MAX_PATH];
+    const ::DWORD TempDirectoryLength = GetTempPathA(MAX_PATH, TempDirectory);
+    if(TempDirectoryLength == 0 || TempDirectoryLength >= MAX_PATH ||
+       GetTempFileNameA(TempDirectory, "cxb", 0, TempPath) == 0)
+    {
+        return NULL;
+    }
+
+    HANDLE File = CreateFileA(TempPath, GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              NULL, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE |
+                                  FILE_FLAG_RANDOM_ACCESS,
+                              NULL);
+    if(File == reinterpret_cast<HANDLE>(static_cast<::LONG_PTR>(-1)))
+    {
+        DeleteFileA(TempPath);
+        return NULL;
+    }
+
+    ::LARGE_INTEGER Size;
+    Size.QuadPart = 64ll * 1024 * 1024;
+    if(!SetFilePointerEx(File, Size, NULL, FILE_BEGIN) || !SetEndOfFile(File))
+    {
+        CloseHandle(File);
+        return NULL;
+    }
+
+    Size.QuadPart = 0;
+    SetFilePointerEx(File, Size, NULL, FILE_BEGIN);
+    return File;
+}
+
 // ******************************************************************
 // * 0x00BE - NtCreateFile
 // ******************************************************************
@@ -8536,14 +8573,38 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
     else if(_strnicmp(szBuffer, "\\Device\\Harddisk0\\Partition", 27) == 0 &&
             szBuffer[27] >= '0' && szBuffer[27] <= '9')
     {
+        const char PartitionNumber = szBuffer[27];
         szBuffer += 28;                 // skip "\Device\Harddisk0\PartitionN"
         while(szBuffer[0] == '\\')
             szBuffer += 1;              // skip separator(s) to leave a relative path
 
-        ObjectAttributes->RootDirectory = g_hCurDir;
+        // The retail dashboard provides E:\CACHE. Keep title cache files isolated
+        // under CxbxCache while preserving the existing mapping for other paths.
+        ObjectAttributes->RootDirectory =
+            (PartitionNumber == '1' && _strnicmp(szBuffer, "CACHE\\", 6) == 0) ? g_hZDrive : g_hCurDir;
 
-        printf("EmuKrnl (0x%X): NtCreateFile mapped hard-disk partition to XBE dir: \"%s\"\n",
-               GetCurrentThreadId(), szBuffer);
+        printf("EmuKrnl (0x%X): NtCreateFile mapped hard-disk partition to %s: \"%s\"\n",
+               GetCurrentThreadId(), ObjectAttributes->RootDirectory == g_hZDrive ? "title cache" : "XBE dir",
+               szBuffer);
+
+        if(szBuffer[0] == '\0' && FileHandle != NULL)
+        {
+            HANDLE Partition = EmuCreateBlankPartitionHandle();
+            if(Partition != NULL)
+            {
+                *FileHandle = Partition;
+                if(IoStatusBlock != NULL)
+                {
+                    IoStatusBlock->u1.Status = STATUS_SUCCESS;
+                    IoStatusBlock->Information = (xboxkrnl::ULONG_PTR)(::ULONG_PTR)1; // FILE_OPENED
+                }
+
+                printf("EmuKrnl (0x%X): NtCreateFile created blank backing for partition root.\n",
+                       GetCurrentThreadId());
+                EmuSwapFS();   // Xbox FS
+                return STATUS_SUCCESS;
+            }
+        }
     }
 
     // ******************************************************************
@@ -10373,6 +10434,10 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx
 XBSYSAPI EXPORTNUM(258) VOID NTAPI xboxkrnl::PsTerminateSystemThread(IN NTSTATUS ExitStatus)
 {
     EmuSwapFS();   // Win2k/XP FS
+
+    printf("EmuKrnl (0x%lX): PsTerminateSystemThread status=0x%.08lX.\n",
+           GetCurrentThreadId(), ExitStatus);
+    fflush(stdout);
 
     // ******************************************************************
     // * debug trace
