@@ -171,6 +171,7 @@ enum XRefDataBaseOffset
     XREF_DS5849_SETPOSITION,
     XREF_DS5849_SETVELOCITY,
     XREF_DS5849_COMMITDEFERRED,
+    XREF_DS5849_STR_PAUSE_T,
     // XDK 5849 DSOUND buffer-method internals; _T entries are chain leaves
     // (the internal is itself twin-identical and is discriminated by ITS
     // callee -- see gen_oovpa.py --xref-func chained resolution).
@@ -192,6 +193,15 @@ enum XRefDataBaseOffset
     XREF_DS5849_BUF_GETSTATUS,
     XREF_DS5849_DOWORK,
     XREF_DS5849_STR_FLUSHEX,
+    XREF_DS5849_BUF_SETOUTPUTBUFFER_T,
+    XREF_DS5849_BUF_SETOUTPUTBUFFER,
+    XREF_DS5849_BUF_USE3DVOICEDATA,
+    XREF_DS5849_VOICE_SETPITCH,
+    XREF_DS5849_MCPX_GETVOICEPROPS,
+    XREF_DS5849_VOICE_GETVOICEPROPS,
+    XREF_DS5849_BUF_SETFORMAT_T,
+    XREF_DS5849_BUF_SETFORMAT,
+    XREF_DS5849_BUF_STOPEX,
     // XDK 5659 DSOUND stream pause internals. The CDirectSoundStream method
     // shares all non-relocated bytes with GetStatus, so its MCPX callee
     // identifies the correct wrapper.

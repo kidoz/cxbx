@@ -53,6 +53,24 @@ SOOVPA<8> XGSwizzleRect_1_0_5849 =
     }
 };
 
+// The LTCG body differs from the archived xgraphics.lib function at address-
+// dependent operands. This image-derived signature was verified to resolve
+// exactly once in each local 5849 XGRAPHCL image.
+SOOVPA<8> XGSwizzleRect_1_0_5849_LTCG =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x24, 0xCC },
+        { 0x45, 0x86 },
+        { 0x6D, 0x75 },
+        { 0x91, 0x3B },
+        { 0xB6, 0x14 },
+        { 0xDA, 0x74 },
+        { 0xFF, 0x45 }
+    }
+};
+
 // ******************************************************************
 // * XG_1_0_5849
 // ******************************************************************
@@ -77,3 +95,24 @@ OOVPATable XG_1_0_5849[] =
 // * XG_1_0_5849_SIZE
 // ******************************************************************
 uint32 XG_1_0_5849_SIZE = sizeof(XG_1_0_5849);
+
+// ******************************************************************
+// * XG_LTCG_1_0_5849
+// ******************************************************************
+OOVPATable XG_LTCG_1_0_5849[] =
+{
+    {
+        (OOVPA*)&XGSwizzleRect_1_0_5849_LTCG,
+
+        XTL::EmuXGSwizzleRect,
+
+        #ifdef _DEBUG_TRACE
+        "EmuXGSwizzleRect"
+        #endif
+    },
+};
+
+// ******************************************************************
+// * XG_LTCG_1_0_5849_SIZE
+// ******************************************************************
+uint32 XG_LTCG_1_0_5849_SIZE = sizeof(XG_LTCG_1_0_5849);

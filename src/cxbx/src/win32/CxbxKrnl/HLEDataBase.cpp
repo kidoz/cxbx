@@ -364,6 +364,13 @@ HLEData HLEDataBase[] =
         XG_1_0_5849,
         XG_1_0_5849_SIZE
     },
+    // XG LTCG Version 1.0.5849
+    {
+        "XGRAPHCL",
+        1, 0, 5849,
+        XG_LTCG_1_0_5849,
+        XG_LTCG_1_0_5849_SIZE
+    },
     // XG Version 1.0.5933 (NestopiaX 1.3): adjacent build to 5849 -- reuse its
     // table; the OOVPA byte-matches, so only genuinely unchanged functions
     // resolve. XGRAPHC is a stateless utility library, so a partial hook is
@@ -476,6 +483,7 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5849_SETPOSITION
     -1, // XREF_DS5849_SETVELOCITY
     -1, // XREF_DS5849_COMMITDEFERRED
+    -1, // XREF_DS5849_STR_PAUSE_T
     -1, // XREF_DS5849_BUF_SETBUFFERDATA
     -1, // XREF_DS5849_BUF_PLAY_T
     -1, // XREF_DS5849_BUF_PLAY
@@ -494,6 +502,15 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5849_BUF_GETSTATUS
     -1, // XREF_DS5849_DOWORK
     -1, // XREF_DS5849_STR_FLUSHEX
+    -1, // XREF_DS5849_BUF_SETOUTPUTBUFFER_T
+    -1, // XREF_DS5849_BUF_SETOUTPUTBUFFER
+    -1, // XREF_DS5849_BUF_USE3DVOICEDATA
+    -1, // XREF_DS5849_VOICE_SETPITCH
+    -1, // XREF_DS5849_MCPX_GETVOICEPROPS
+    -1, // XREF_DS5849_VOICE_GETVOICEPROPS
+    -1, // XREF_DS5849_BUF_SETFORMAT_T
+    -1, // XREF_DS5849_BUF_SETFORMAT
+    -1, // XREF_DS5849_BUF_STOPEX
     -1, // XREF_DS5659_STREAM_PAUSE
     -1, // XREF_DS5659_SYNCHPLAYBACK
     -1, // XREF_DS5659_BUFFER_SETOUTPUTBUFFER_T
