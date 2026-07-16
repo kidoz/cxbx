@@ -192,7 +192,7 @@ extern "C" VOID NTAPI EmuKeLowerIrql(UCHAR NewIrql);
 extern "C" LONG NTAPI EmuKePulseEvent(PVOID Event, LONG Increment, BOOLEAN Wait);
 extern "C" LONG NTAPI EmuKeQueryBasePriorityThread(xboxkrnl::PKTHREAD Thread);
 extern "C" ULONGLONG NTAPI EmuKeQueryInterruptTime();
-extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter(xboxkrnl::PLARGE_INTEGER Frequency);
+extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceCounter();
 extern "C" xboxkrnl::LARGE_INTEGER NTAPI EmuKeQueryPerformanceFrequency();
 extern "C" LONG NTAPI EmuKeReleaseMutant(PVOID Mutant, LONG Increment, BOOLEAN Abandoned, BOOLEAN Wait);
 extern "C" LONG NTAPI EmuKeReleaseSemaphore(PVOID Semaphore, LONG Increment, LONG Adjustment, BOOLEAN Wait);
