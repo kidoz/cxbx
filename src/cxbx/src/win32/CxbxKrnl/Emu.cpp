@@ -1299,6 +1299,9 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 #define NV097_SET_BEGIN_END            0x17FCu
 #define NV097_SET_TEXTURE_OFFSET_0     0x1B00u
 #define NV097_SET_TEXTURE_FORMAT_0     0x1B04u
+#define NV097_SET_TEXTURE_ADDRESS_0    0x1B08u
+#define NV097_SET_TEXTURE_CONTROL0_0   0x1B0Cu
+#define NV097_SET_TEXTURE_CONTROL1_0   0x1B10u
 #define NV097_SET_TEXTURE_IMAGE_RECT_0 0x1B1Cu
 #define NV097_SET_TEXTURE_PALETTE_0    0x1B20u
 #define EmuNv2aTextureStageStride      0x40u
@@ -1310,6 +1313,9 @@ struct EmuNv2aTextureState
 {
     ULONG Offset;
     ULONG Format;
+    ULONG Address;
+    ULONG Control0;
+    ULONG Control1;
     ULONG ImageRect;
     ULONG Filter;
     ULONG Palette;
@@ -1384,6 +1390,14 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_TRANSFORM_PROGRAM_LOAD    0x1E9Cu
 #define NV097_SET_TRANSFORM_PROGRAM_START   0x1EA0u
 #define NV097_SET_TRANSFORM_CONSTANT_LOAD   0x1EA4u
+#define NV097_SET_COMBINER_ALPHA_ICW           0x0260u
+#define NV097_SET_COMBINER_FACTOR0             0x0A60u
+#define NV097_SET_COMBINER_FACTOR1             0x0A80u
+#define NV097_SET_COMBINER_ALPHA_OCW           0x0AA0u
+#define NV097_SET_COMBINER_COLOR_ICW           0x0AC0u
+#define NV097_SET_COMBINER_COLOR_OCW           0x1E40u
+#define NV097_SET_COMBINER_CONTROL             0x1E60u
+#define NV097_SET_SHADER_STAGE_PROGRAM         0x1E70u
 #define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
 #define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
 #define NV097_ARRAY_ELEMENT16                0x1800u
@@ -1502,6 +1516,14 @@ static ULONG g_EmuNv2aZStencilClearValue = 0;
 static ULONG g_EmuNv2aColorClearValue = 0;
 static ULONG g_EmuNv2aClearRectHorizontal = 0;
 static ULONG g_EmuNv2aClearRectVertical = 0;
+static ULONG g_EmuNv2aCombinerAlphaIcw[8] = {};
+static ULONG g_EmuNv2aCombinerColorIcw[8] = {};
+static ULONG g_EmuNv2aCombinerAlphaOcw[8] = {};
+static ULONG g_EmuNv2aCombinerColorOcw[8] = {};
+static ULONG g_EmuNv2aCombinerFactor0[8] = {};
+static ULONG g_EmuNv2aCombinerFactor1[8] = {};
+static ULONG g_EmuNv2aCombinerControl = 0;
+static ULONG g_EmuNv2aShaderStageProgram = 0;
 
 extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
 {
@@ -1540,6 +1562,7 @@ static void EmuNv2aRasterizeInlineArray();
 static void EmuNv2aWriteBackendSemaphore(ULONG Data);
 static void EmuNv2aClearSurface(ULONG Flags);
 static void EmuNv2aPresentColorSurface();
+static void EmuNv2aInvalidateSampler(ULONG Stage);
 
 static bool EmuNv2aTextureDumpEnabled()
 {
@@ -1730,6 +1753,10 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         else if(Method == NV097_FLIP_STALL)
         {
             EmuNv2aPresentColorSurface();
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+            {
+                EmuNv2aInvalidateSampler(Stage);
+            }
         }
         else if(Method >= NV097_SET_TEXTURE_OFFSET_0 &&
                 Method < NV097_SET_TEXTURE_OFFSET_0 + EmuNv2aTextureStageStride * EmuNv2aTextureStageCount)
@@ -1737,16 +1764,53 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             ULONG Stage = (Method - NV097_SET_TEXTURE_OFFSET_0) / EmuNv2aTextureStageStride;
             ULONG StageMethod = NV097_SET_TEXTURE_OFFSET_0 + Stage * EmuNv2aTextureStageStride;
 
+            ULONG* State = nullptr;
+            bool InvalidatesTexels = true;
             if(Method == StageMethod)
-                g_EmuNv2aTexture[Stage].Offset = Data;
+            {
+                State = &g_EmuNv2aTexture[Stage].Offset;
+            }
             else if(Method == StageMethod + 4)
-                g_EmuNv2aTexture[Stage].Format = Data;
+            {
+                State = &g_EmuNv2aTexture[Stage].Format;
+            }
+            else if(Method == StageMethod + (NV097_SET_TEXTURE_ADDRESS_0 - NV097_SET_TEXTURE_OFFSET_0))
+            {
+                State = &g_EmuNv2aTexture[Stage].Address;
+                InvalidatesTexels = false;
+            }
+            else if(Method == StageMethod + (NV097_SET_TEXTURE_CONTROL0_0 - NV097_SET_TEXTURE_OFFSET_0))
+            {
+                State = &g_EmuNv2aTexture[Stage].Control0;
+                InvalidatesTexels = false;
+            }
+            else if(Method == StageMethod + (NV097_SET_TEXTURE_CONTROL1_0 - NV097_SET_TEXTURE_OFFSET_0))
+            {
+                State = &g_EmuNv2aTexture[Stage].Control1;
+            }
             else if(Method == StageMethod + (NV097_SET_TEXTURE_IMAGE_RECT_0 - NV097_SET_TEXTURE_OFFSET_0))
-                g_EmuNv2aTexture[Stage].ImageRect = Data;
+            {
+                State = &g_EmuNv2aTexture[Stage].ImageRect;
+            }
             else if(Method == StageMethod + (NV097_SET_TEXTURE_FILTER_0 - NV097_SET_TEXTURE_OFFSET_0))
-                g_EmuNv2aTexture[Stage].Filter = Data;
+            {
+                State = &g_EmuNv2aTexture[Stage].Filter;
+                InvalidatesTexels = false;
+            }
             else if(Method == StageMethod + (NV097_SET_TEXTURE_PALETTE_0 - NV097_SET_TEXTURE_OFFSET_0))
-                g_EmuNv2aTexture[Stage].Palette = Data;
+            {
+                State = &g_EmuNv2aTexture[Stage].Palette;
+                InvalidatesTexels = false;
+            }
+
+            if(State != nullptr && *State != Data)
+            {
+                *State = Data;
+                if(InvalidatesTexels)
+                {
+                    EmuNv2aInvalidateSampler(Stage);
+                }
+            }
 
             if(g_EmuNv2aTextureMethodLogCount < 32)
             {
@@ -1853,9 +1917,41 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_TRANSFORM_PROGRAM_LOAD:   g_EmuNv2aVpWriteDword = Data * 4; break;
             case NV097_SET_TRANSFORM_PROGRAM_START:  g_EmuNv2aVpStart = Data; break;
             case NV097_SET_TRANSFORM_CONSTANT_LOAD:  g_EmuNv2aConstWriteFloat = Data * 4; break;
+            case NV097_SET_COMBINER_CONTROL: g_EmuNv2aCombinerControl = Data; break;
+            case NV097_SET_SHADER_STAGE_PROGRAM: g_EmuNv2aShaderStageProgram = Data; break;
             default:
-                if(Method >= NV097_SET_TRANSFORM_PROGRAM &&
-                   Method < NV097_SET_TRANSFORM_PROGRAM + 0x80)
+                if(Method >= NV097_SET_COMBINER_ALPHA_ICW &&
+                   Method < NV097_SET_COMBINER_ALPHA_ICW + 8 * 4)
+                {
+                    g_EmuNv2aCombinerAlphaIcw[(Method - NV097_SET_COMBINER_ALPHA_ICW) / 4] = Data;
+                }
+                else if(Method >= NV097_SET_COMBINER_FACTOR0 &&
+                        Method < NV097_SET_COMBINER_FACTOR0 + 8 * 4)
+                {
+                    g_EmuNv2aCombinerFactor0[(Method - NV097_SET_COMBINER_FACTOR0) / 4] = Data;
+                }
+                else if(Method >= NV097_SET_COMBINER_FACTOR1 &&
+                        Method < NV097_SET_COMBINER_FACTOR1 + 8 * 4)
+                {
+                    g_EmuNv2aCombinerFactor1[(Method - NV097_SET_COMBINER_FACTOR1) / 4] = Data;
+                }
+                else if(Method >= NV097_SET_COMBINER_ALPHA_OCW &&
+                        Method < NV097_SET_COMBINER_ALPHA_OCW + 8 * 4)
+                {
+                    g_EmuNv2aCombinerAlphaOcw[(Method - NV097_SET_COMBINER_ALPHA_OCW) / 4] = Data;
+                }
+                else if(Method >= NV097_SET_COMBINER_COLOR_ICW &&
+                        Method < NV097_SET_COMBINER_COLOR_ICW + 8 * 4)
+                {
+                    g_EmuNv2aCombinerColorIcw[(Method - NV097_SET_COMBINER_COLOR_ICW) / 4] = Data;
+                }
+                else if(Method >= NV097_SET_COMBINER_COLOR_OCW &&
+                        Method < NV097_SET_COMBINER_COLOR_OCW + 8 * 4)
+                {
+                    g_EmuNv2aCombinerColorOcw[(Method - NV097_SET_COMBINER_COLOR_OCW) / 4] = Data;
+                }
+                else if(Method >= NV097_SET_TRANSFORM_PROGRAM &&
+                        Method < NV097_SET_TRANSFORM_PROGRAM + 0x80)
                 {
                     // Microcode upload: append one 32-bit word at the load cursor.
                     if(g_EmuNv2aVpWriteDword < EmuNv2aVpMaxInstr * 4)
@@ -3180,23 +3276,74 @@ static ULONG EmuNv2aUnpackTexel(ULONG Raw, ULONG Kind)
     return (A << 24) | (R << 16) | (G << 8) | B;
 }
 
-// A bound texture prepared for point sampling: the decoded texel block plus the
-// geometry needed to address it. Set up once per DRAW_ARRAYS, freed after.
+// A bound texture prepared for sampling. Decoded texels remain cached until the
+// texture memory descriptor changes or the guest finishes the frame.
 struct EmuNv2aSampler
 {
     ULONG *Pixels;
-    ULONG  Size, Width, Height, Bpp, Kind, LogW, LogH;
+    ULONG Size, Width, Height, SourcePitch, Bpp, Kind, LogW, LogH;
     ULONG  Palette[256];
-    ULONG  PaletteSize;
+    ULONG Address;
     bool   Swizzled;
     bool   Bilinear;   // mag filter == LINEAR
 };
+
+static EmuNv2aSampler g_EmuNv2aSamplerCache[EmuNv2aTextureStageCount] = {};
+static bool g_EmuNv2aSamplerCacheValid[EmuNv2aTextureStageCount] = {};
+
+static void EmuNv2aInvalidateSampler(ULONG Stage)
+{
+    if(Stage >= EmuNv2aTextureStageCount)
+    {
+        return;
+    }
+
+    if(g_EmuNv2aSamplerCache[Stage].Pixels != nullptr)
+    {
+        delete[] g_EmuNv2aSamplerCache[Stage].Pixels;
+        g_EmuNv2aSamplerCache[Stage].Pixels = nullptr;
+    }
+    g_EmuNv2aSamplerCacheValid[Stage] = false;
+}
+
+static bool EmuNv2aLoadSamplerPalette(ULONG Stage, EmuNv2aSampler* Sampler)
+{
+    const ULONG PaletteState = g_EmuNv2aTexture[Stage].Palette;
+    const ULONG PaletteHandle = (PaletteState & 1u) != 0
+                                    ? g_EmuNv2aContextDmaBHandle
+                                    : g_EmuNv2aContextDmaAHandle;
+    const ULONG PaletteBase = EmuNv2aResolveDmaBase(PaletteHandle);
+    const ULONG PaletteAddress = PaletteBase + (PaletteState & 0xFFFFFFC0u);
+    const ULONG PaletteHost = EmuNv2aHostPointer(PaletteAddress);
+    const ULONG PaletteBytes = sizeof(Sampler->Palette);
+    if(PaletteHost != 0 && EmuTryReadHost(PaletteHost, Sampler->Palette, PaletteBytes))
+    {
+        return true;
+    }
+
+    ULONG PalettePhysical = PaletteAddress;
+    if(!EmuIsPhysicalMapAddress(PalettePhysical))
+    {
+        PalettePhysical = EmuPhysicalMapBase +
+                          (PalettePhysical & EmuPhysicalRamMirrorMask);
+    }
+    return EmuReadPhysicalMapBlock(PalettePhysical,
+                                   reinterpret_cast<BYTE*>(Sampler->Palette),
+                                   PaletteBytes);
+}
 
 static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
 {
     ZeroMemory(S, sizeof(*S));
     if(Stage >= EmuNv2aTextureStageCount)
+    {
         return false;
+    }
+
+    if((g_EmuNv2aTexture[Stage].Control0 & 0x40000000u) == 0)
+    {
+        return false;
+    }
 
     ULONG Format = g_EmuNv2aTexture[Stage].Format;
     ULONG Color = (Format >> 8) & 0xFF;
@@ -3204,34 +3351,13 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     ULONG SizeV = (Format >> 24) & 0xF;
     ULONG ImageRect = g_EmuNv2aTexture[Stage].ImageRect;
     if(!EmuNv2aTextureFormatInfo(Color, &S->Bpp, &S->Kind, &S->Swizzled))
+    {
         return false;
+    }
 
     if(S->Kind == 5)
     {
-        ULONG PaletteState = g_EmuNv2aTexture[Stage].Palette;
-        ULONG LengthCode = (PaletteState >> 2) & 0x3;
-        S->PaletteSize = 256u >> LengthCode;
-        ULONG PaletteHandle = (PaletteState & 1) != 0
-                                  ? g_EmuNv2aContextDmaBHandle
-                                  : g_EmuNv2aContextDmaAHandle;
-        ULONG PaletteBase = EmuNv2aResolveDmaBase(PaletteHandle);
-        ULONG PaletteAddress = PaletteBase + (PaletteState & 0xFFFFFFC0);
-        ULONG PaletteHost = EmuNv2aHostPointer(PaletteAddress);
-        ULONG PaletteBytes = sizeof(S->Palette);
-        bool PaletteLoaded = PaletteHost != 0 &&
-                             EmuTryReadHost(PaletteHost, S->Palette, PaletteBytes);
-        if(!PaletteLoaded)
-        {
-            ULONG PalettePhysical = PaletteAddress;
-            if(!EmuIsPhysicalMapAddress(PalettePhysical))
-            {
-                PalettePhysical = EmuPhysicalMapBase +
-                                  (PalettePhysical & EmuPhysicalRamMirrorMask);
-            }
-            PaletteLoaded = EmuReadPhysicalMapBlock(
-                PalettePhysical, reinterpret_cast<BYTE*>(S->Palette), PaletteBytes);
-        }
-        if(!PaletteLoaded)
+        if(!EmuNv2aLoadSamplerPalette(Stage, S))
         {
             return false;
         }
@@ -3248,15 +3374,27 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
         S->Height = ImageRect & 0xFFFF;
     }
     if(S->Width == 0 || S->Height == 0 || S->Width > 4096 || S->Height > 4096)
+    {
         return false;
+    }
 
     S->LogW = EmuNv2aLog2(S->Width);
     S->LogH = EmuNv2aLog2(S->Height);
     S->Bilinear = (((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xF) == 2); // MAG == LINEAR
+    S->Address = g_EmuNv2aTexture[Stage].Address;
 
     ULONG Base = EmuNv2aResolveDmaBase(EmuNv2aTextureDmaHandle(Format));
     ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
-    S->Size = S->Width * S->Height * S->Bpp;
+    S->SourcePitch = S->Swizzled
+                         ? S->Width * S->Bpp
+                         : ((g_EmuNv2aTexture[Stage].Control1 >> 16) & 0xFFFF);
+    if(S->SourcePitch < S->Width * S->Bpp)
+    {
+        S->SourcePitch = S->Width * S->Bpp;
+    }
+    S->Size = S->Swizzled
+                  ? S->Width * S->Height * S->Bpp
+                  : S->SourcePitch * S->Height;
     BYTE* Source = new BYTE[S->Size];
 
     ULONG Host = EmuNv2aHostPointer(Address);
@@ -3284,45 +3422,112 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
             ULONG TexelIndex = S->Swizzled
                                    ? EmuNv2aSwizzleTexelIndex(X, Y, S->LogW, S->LogH)
                                    : Y * S->Width + X;
-            ULONG ByteOffset = TexelIndex * S->Bpp;
+            ULONG ByteOffset = S->Swizzled
+                                   ? TexelIndex * S->Bpp
+                                   : Y * S->SourcePitch + X * S->Bpp;
             ULONG Raw = 0;
             for(ULONG Byte = 0; Byte < S->Bpp; ++Byte)
             {
                 Raw |= static_cast<ULONG>(Source[ByteOffset + Byte]) << (Byte * 8);
             }
-            S->Pixels[Y * S->Width + X] =
-                S->Kind == 5 ? S->Palette[Raw & 0xFF]
-                              : EmuNv2aUnpackTexel(Raw, S->Kind);
+            S->Pixels[Y * S->Width + X] = S->Kind == 5
+                                              ? Raw & 0xFFu
+                                              : EmuNv2aUnpackTexel(Raw, S->Kind);
         }
     }
     delete[] Source;
     return true;
 }
 
-static void EmuNv2aFreeSampler(EmuNv2aSampler *S)
+// Fetch one texel at integer coordinates (clamped to the edge, swizzle-aware).
+static ULONG EmuNv2aFetchTexel(const EmuNv2aSampler* S, int X, int Y)
 {
-    if(S->Pixels != NULL)
+    if(X < 0)
     {
-        delete[] S->Pixels;
-        S->Pixels = NULL;
+        X = 0;
     }
+    if(X >= static_cast<int>(S->Width))
+    {
+        X = static_cast<int>(S->Width) - 1;
+    }
+    if(Y < 0)
+    {
+        Y = 0;
+    }
+    if(Y >= static_cast<int>(S->Height))
+    {
+        Y = static_cast<int>(S->Height) - 1;
+    }
+
+    const ULONG Pixel = S->Pixels[static_cast<ULONG>(Y) * S->Width +
+                                  static_cast<ULONG>(X)];
+    return S->Kind == 5 ? S->Palette[Pixel & 0xFFu] : Pixel;
 }
 
-// Fetch one texel at integer coordinates (clamped to the edge, swizzle-aware).
-static ULONG EmuNv2aFetchTexel(const EmuNv2aSampler *S, int X, int Y)
+static const EmuNv2aSampler* EmuNv2aGetSampler(ULONG Stage)
 {
-    if(X < 0) X = 0; if(X >= (int)S->Width)  X = (int)S->Width - 1;
-    if(Y < 0) Y = 0; if(Y >= (int)S->Height) Y = (int)S->Height - 1;
+    if(Stage >= EmuNv2aTextureStageCount)
+    {
+        return nullptr;
+    }
 
-    return S->Pixels[static_cast<ULONG>(Y) * S->Width + static_cast<ULONG>(X)];
+    if(!g_EmuNv2aSamplerCacheValid[Stage])
+    {
+        EmuNv2aInvalidateSampler(Stage);
+        if(!EmuNv2aSetupSampler(Stage, &g_EmuNv2aSamplerCache[Stage]))
+        {
+            return nullptr;
+        }
+        g_EmuNv2aSamplerCacheValid[Stage] = true;
+    }
+    else if(g_EmuNv2aSamplerCache[Stage].Kind == 5 &&
+            !EmuNv2aLoadSamplerPalette(Stage, &g_EmuNv2aSamplerCache[Stage]))
+    {
+        EmuNv2aInvalidateSampler(Stage);
+        return nullptr;
+    }
+    g_EmuNv2aSamplerCache[Stage].Address = g_EmuNv2aTexture[Stage].Address;
+    g_EmuNv2aSamplerCache[Stage].Bilinear =
+        ((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xFu) == 2u;
+    return &g_EmuNv2aSamplerCache[Stage];
+}
+
+static float EmuNv2aAddressCoordinate(float Coordinate, ULONG Mode)
+{
+    if(Mode == 1u)
+    {
+        int Whole = static_cast<int>(Coordinate);
+        if(Coordinate < static_cast<float>(Whole))
+        {
+            --Whole;
+        }
+        return Coordinate - static_cast<float>(Whole);
+    }
+
+    if(Mode == 2u)
+    {
+        int Whole = static_cast<int>(Coordinate);
+        if(Coordinate < static_cast<float>(Whole))
+        {
+            --Whole;
+        }
+        float Fraction = Coordinate - static_cast<float>(Whole);
+        return (Whole & 1) != 0 ? 1.0f - Fraction : Fraction;
+    }
+    return Coordinate;
 }
 
 // Sample at normalized (u,v): nearest, or bilinear (4-texel blend) when the mag
 // filter is LINEAR.
 static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
 {
+    u = EmuNv2aAddressCoordinate(u, S->Address & 0x7u);
+    v = EmuNv2aAddressCoordinate(v, (S->Address >> 8) & 0x7u);
+
     if(!S->Bilinear)
+    {
         return EmuNv2aFetchTexel(S, (int)(u * (float)S->Width), (int)(v * (float)S->Height));
+    }
 
     // Sample the 2x2 texel neighborhood around the point (texel centers at +0.5).
     float fx = u * (float)S->Width  - 0.5f;
@@ -3978,9 +4183,22 @@ struct EmuNv2aRasterTarget
     ULONG  BlendSFactor, BlendDFactor, BlendEquation;
     bool   AlphaTest;
     ULONG  AlphaFunc, AlphaRef;
+    ULONG CombinerControl;
+    ULONG CombinerColorIcw, CombinerAlphaIcw;
+    ULONG CombinerColorOcw, CombinerAlphaOcw;
+    ULONG CombinerFactor0, CombinerFactor1;
+    ULONG CombinerMode;
     bool   StencilTest;
     ULONG  StencilFunc, StencilRef, StencilFuncMask, StencilMask;
     ULONG  StencilOpFail, StencilOpZFail, StencilOpZPass;
+};
+
+enum EmuNv2aCombinerMode : ULONG
+{
+    EmuNv2aCombinerGeneric,
+    EmuNv2aCombinerDiffuse,
+    EmuNv2aCombinerTexture,
+    EmuNv2aCombinerModulate,
 };
 
 // The blend factor for one channel (all normalized 0..1). SRC/DST_COLOR use the
@@ -4040,6 +4258,190 @@ static ULONG EmuNv2aBlend(ULONG Src, ULONG Dst, ULONG Sf, ULONG Df, ULONG Eq)
     return (A << 24) | (R << 16) | (G << 8) | B;
 }
 
+static int EmuNv2aCombinerSource(ULONG Input, int Component, bool Alpha,
+                                 ULONG Diffuse, ULONG Texture,
+                                 ULONG Factor0, ULONG Factor1, ULONG R0)
+{
+    const ULONG Register = Input & 0x0Fu;
+    ULONG Value = 0;
+    switch(Register)
+    {
+        case 0x01: Value = Factor0; break;
+        case 0x02: Value = Factor1; break;
+        case 0x04: Value = Diffuse; break;
+        case 0x08: Value = Texture; break;
+        case 0x0C: Value = R0; break;
+        default: break;
+    }
+
+    int Shift = 0;
+    if(Alpha)
+    {
+        Shift = (Input & 0x10u) != 0 ? 24 : 0;
+    }
+    else if((Input & 0x10u) != 0)
+    {
+        Shift = 24;
+    }
+    else
+    {
+        Shift = Component == 0 ? 16 : (Component == 1 ? 8 : 0);
+    }
+    int Channel = static_cast<int>((Value >> Shift) & 0xFFu);
+
+    switch(Input & 0xE0u)
+    {
+        case 0x20: return 255 - Channel;
+        case 0x40: return Channel * 2 - 255;
+        case 0x60: return 255 - Channel * 2;
+        case 0x80: return Channel - 128;
+        case 0xA0: return 128 - Channel;
+        case 0xC0: return Channel;
+        case 0xE0: return -Channel;
+        default: return Channel;
+    }
+}
+
+static int EmuNv2aCombinerMapOutput(int Value, ULONG Flags)
+{
+    switch(Flags & 0x38u)
+    {
+        case 0x08: Value -= 128; break;
+        case 0x10: Value *= 2; break;
+        case 0x18: Value = (Value - 128) * 2; break;
+        case 0x20: Value *= 4; break;
+        case 0x30: Value /= 2; break;
+        default: break;
+    }
+    if(Value < 0)
+    {
+        return 0;
+    }
+    if(Value > 255)
+    {
+        return 255;
+    }
+    return Value;
+}
+
+static int EmuNv2aRunCombinerChannel(ULONG Icw, ULONG Ocw, int Component, bool Alpha,
+                                     ULONG Diffuse, ULONG Texture,
+                                     ULONG Factor0, ULONG Factor1, ULONG R0)
+{
+    const ULONG AInput = (Icw >> 24) & 0xFFu;
+    const ULONG BInput = (Icw >> 16) & 0xFFu;
+    const ULONG CInput = (Icw >> 8) & 0xFFu;
+    const ULONG DInput = Icw & 0xFFu;
+    const int A = EmuNv2aCombinerSource(AInput, Component, Alpha, Diffuse, Texture,
+                                        Factor0, Factor1, R0);
+    const int B = EmuNv2aCombinerSource(BInput, Component, Alpha, Diffuse, Texture,
+                                        Factor0, Factor1, R0);
+    const int C = EmuNv2aCombinerSource(CInput, Component, Alpha, Diffuse, Texture,
+                                        Factor0, Factor1, R0);
+    const int D = EmuNv2aCombinerSource(DInput, Component, Alpha, Diffuse, Texture,
+                                        Factor0, Factor1, R0);
+    const ULONG Flags = Ocw >> 12;
+    const int AB = EmuNv2aCombinerMapOutput((A * B) / 255, Flags);
+    const int CD = EmuNv2aCombinerMapOutput((C * D) / 255, Flags);
+    int Result = static_cast<int>((R0 >> (Alpha ? 24 : (Component == 0 ? 16 : (Component == 1 ? 8 : 0)))) & 0xFFu);
+
+    if(((Ocw >> 4) & 0x0Fu) == 0x0Cu)
+    {
+        Result = AB;
+    }
+    if((Ocw & 0x0Fu) == 0x0Cu)
+    {
+        Result = CD;
+    }
+    if(((Ocw >> 8) & 0x0Fu) == 0x0Cu)
+    {
+        Result = EmuNv2aCombinerMapOutput(AB + CD, Flags);
+    }
+    return Result;
+}
+
+static ULONG EmuNv2aRunStage0Combiner(const EmuNv2aRasterTarget* Target,
+                                      ULONG Diffuse, ULONG Texture)
+{
+    switch(Target->CombinerMode)
+    {
+        case EmuNv2aCombinerDiffuse:
+            return Diffuse;
+        case EmuNv2aCombinerTexture:
+            return Texture;
+        case EmuNv2aCombinerModulate:
+        {
+            const ULONG A = (((Diffuse >> 24) & 0xFFu) * ((Texture >> 24) & 0xFFu)) / 255;
+            const ULONG R = (((Diffuse >> 16) & 0xFFu) * ((Texture >> 16) & 0xFFu)) / 255;
+            const ULONG G = (((Diffuse >> 8) & 0xFFu) * ((Texture >> 8) & 0xFFu)) / 255;
+            const ULONG B = ((Diffuse & 0xFFu) * (Texture & 0xFFu)) / 255;
+            return (A << 24) | (R << 16) | (G << 8) | B;
+        }
+        default:
+            break;
+    }
+
+    if((Target->CombinerControl & 0xFFu) == 0)
+    {
+        if(Target->Sampler == nullptr)
+        {
+            return Diffuse;
+        }
+        const ULONG A = (((Diffuse >> 24) & 0xFFu) * ((Texture >> 24) & 0xFFu)) / 255;
+        const ULONG R = (((Diffuse >> 16) & 0xFFu) * ((Texture >> 16) & 0xFFu)) / 255;
+        const ULONG G = (((Diffuse >> 8) & 0xFFu) * ((Texture >> 8) & 0xFFu)) / 255;
+        const ULONG B = ((Diffuse & 0xFFu) * (Texture & 0xFFu)) / 255;
+        return (A << 24) | (R << 16) | (G << 8) | B;
+    }
+
+    ULONG R0 = Target->Sampler != nullptr ? (Texture & 0xFF000000u) : 0xFF000000u;
+    const int R = EmuNv2aRunCombinerChannel(Target->CombinerColorIcw,
+                                            Target->CombinerColorOcw, 0, false,
+                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Target->CombinerFactor1, R0);
+    const int G = EmuNv2aRunCombinerChannel(Target->CombinerColorIcw,
+                                            Target->CombinerColorOcw, 1, false,
+                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Target->CombinerFactor1, R0);
+    const int B = EmuNv2aRunCombinerChannel(Target->CombinerColorIcw,
+                                            Target->CombinerColorOcw, 2, false,
+                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Target->CombinerFactor1, R0);
+    R0 = (R0 & 0xFF000000u) | (static_cast<ULONG>(R) << 16) |
+         (static_cast<ULONG>(G) << 8) | static_cast<ULONG>(B);
+    const int A = EmuNv2aRunCombinerChannel(Target->CombinerAlphaIcw,
+                                            Target->CombinerAlphaOcw, 3, true,
+                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Target->CombinerFactor1, R0);
+    return (static_cast<ULONG>(A) << 24) | (R0 & 0x00FFFFFFu);
+}
+
+static ULONG EmuNv2aClassifyStage0Combiner(const EmuNv2aRasterTarget* Target)
+{
+    if((Target->CombinerControl & 0xFFu) != 1u ||
+       Target->CombinerColorOcw != 0x00000C00u ||
+       Target->CombinerAlphaOcw != 0x00000C00u)
+    {
+        return EmuNv2aCombinerGeneric;
+    }
+    if(Target->CombinerColorIcw == 0x00002004u &&
+       Target->CombinerAlphaIcw == 0x00002014u)
+    {
+        return EmuNv2aCombinerDiffuse;
+    }
+    if(Target->CombinerColorIcw == 0x08200000u &&
+       Target->CombinerAlphaIcw == 0x18200000u)
+    {
+        return EmuNv2aCombinerTexture;
+    }
+    if(Target->CombinerColorIcw == 0x08040000u &&
+       Target->CombinerAlphaIcw == 0x18140000u)
+    {
+        return EmuNv2aCombinerModulate;
+    }
+    return EmuNv2aCombinerGeneric;
+}
+
 static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
 {
     switch(Func)
@@ -4071,6 +4473,101 @@ static ULONG EmuNv2aStencilOp(ULONG Op, ULONG Value, ULONG Ref)
     }
 }
 
+static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
+                              float Z, ULONG Diffuse, float U, float V)
+{
+    ULONG Texture = 0;
+    if(Target->Sampler != nullptr)
+    {
+        Texture = EmuNv2aSampleTexel(Target->Sampler, U, V);
+    }
+    ULONG Color = EmuNv2aRunStage0Combiner(Target, Diffuse, Texture);
+
+    if(Target->AlphaTest &&
+       !EmuNv2aDepthPass(Target->AlphaFunc, (Color >> 24) & 0xFFu,
+                         Target->AlphaRef))
+    {
+        return;
+    }
+
+    if(Target->Depth != nullptr)
+    {
+        const bool Depth24 = Target->DepthFormat == 2;
+        const float DepthMax = Depth24 ? 16777215.0f : 65535.0f;
+        if(Z < 0.0f)
+        {
+            Z = 0.0f;
+        }
+        if(Z > DepthMax)
+        {
+            Z = DepthMax;
+        }
+        const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
+        const int DepthPitchElements = Depth24
+                                           ? Target->DepthPitchB / 4
+                                           : Target->DepthPitchB / 2;
+
+        if(Depth24)
+        {
+            ULONG* Slot = static_cast<ULONG*>(Target->Depth) +
+                          Y * DepthPitchElements + X;
+            const ULONG Stored = *Slot;
+            const ULONG DestinationDepth = Stored >> 8;
+            ULONG Stencil = Stored & 0xFFu;
+            const bool StencilPass = !Target->StencilTest ||
+                                     EmuNv2aDepthPass(Target->StencilFunc,
+                                                      Target->StencilRef & Target->StencilFuncMask,
+                                                      Stencil & Target->StencilFuncMask);
+            const bool DepthPass = !Target->DepthTest ||
+                                   EmuNv2aDepthPass(Target->DepthFunc, SourceDepth, DestinationDepth);
+
+            if(Target->StencilTest)
+            {
+                const ULONG Operation = !StencilPass
+                                            ? Target->StencilOpFail
+                                            : (!DepthPass ? Target->StencilOpZFail
+                                                          : Target->StencilOpZPass);
+                const ULONG NewStencil = EmuNv2aStencilOp(Operation, Stencil,
+                                                          Target->StencilRef);
+                Stencil = (NewStencil & Target->StencilMask) |
+                          (Stencil & ~Target->StencilMask);
+            }
+            const ULONG NewDepth = Target->DepthTest && StencilPass && DepthPass &&
+                                           Target->DepthWrite
+                                       ? SourceDepth
+                                       : DestinationDepth;
+            *Slot = (NewDepth << 8) | (Stencil & 0xFFu);
+            if(!StencilPass || !DepthPass)
+            {
+                return;
+            }
+        }
+        else
+        {
+            auto* Slot = static_cast<unsigned short*>(Target->Depth) +
+                         Y * DepthPitchElements + X;
+            const ULONG DestinationDepth = *Slot;
+            if(Target->DepthTest &&
+               !EmuNv2aDepthPass(Target->DepthFunc, SourceDepth, DestinationDepth))
+            {
+                return;
+            }
+            if(Target->DepthTest && Target->DepthWrite)
+            {
+                *Slot = static_cast<unsigned short>(SourceDepth);
+            }
+        }
+    }
+
+    ULONG* Destination = &Target->Color[Y * Target->PitchPx + X];
+    if(Target->BlendEnable)
+    {
+        Color = EmuNv2aBlend(Color, *Destination, Target->BlendSFactor,
+                             Target->BlendDFactor, Target->BlendEquation);
+    }
+    *Destination = Color;
+}
+
 // Gouraud-fill one screen-space triangle (vertices i0,i1,i2 in the transformed
 // arrays) into a 32bpp surface with the edge-function (half-plane) test.
 // Barycentric weights (normalized by the signed area, so winding is handled
@@ -4091,7 +4588,9 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
 
     float Area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
     if(Area > -1e-3f && Area < 1e-3f)
+    {
         return; // degenerate / zero-area
+    }
     float InvArea = 1.0f / Area;
 
     float LoXf = ax < bx ? (ax < cx ? ax : cx) : (bx < cx ? bx : cx);
@@ -4101,10 +4600,22 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
 
     int MinX = (int)LoXf;       int MinY = (int)LoYf;
     int MaxX = (int)HiXf + 1;   int MaxY = (int)HiYf + 1;
-    if(MinX < 0) MinX = 0;
-    if(MinY < 0) MinY = 0;
-    if(MaxX > T->Width)  MaxX = T->Width;
-    if(MaxY > T->Height) MaxY = T->Height;
+    if(MinX < 0)
+    {
+        MinX = 0;
+    }
+    if(MinY < 0)
+    {
+        MinY = 0;
+    }
+    if(MaxX > T->Width)
+    {
+        MaxX = T->Width;
+    }
+    if(MaxY > T->Height)
+    {
+        MaxY = T->Height;
+    }
 
     bool Uniform = (Ca == Cb && Cb == Cc);
     float Aa = (float)((Ca >> 24) & 0xFF), Ra = (float)((Ca >> 16) & 0xFF);
@@ -4113,11 +4624,6 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
     float Gb = (float)((Cb >>  8) & 0xFF), Bvb = (float)(Cb & 0xFF);
     float Ac = (float)((Cc >> 24) & 0xFF), Rc = (float)((Cc >> 16) & 0xFF);
     float Gc = (float)((Cc >>  8) & 0xFF), Bvc = (float)(Cc & 0xFF);
-
-    bool  UseDepth   = (T->Depth != NULL);
-    bool  Depth24    = (T->DepthFormat == 2);
-    float DepthMaxF  = Depth24 ? 16777215.0f : 65535.0f;
-    int   DepthPitchElem = Depth24 ? (T->DepthPitchB / 4) : (T->DepthPitchB / 2);
 
     bool  UseTex = (T->Sampler != NULL);
     float au = VU[i0], av = VV[i0], aiw = VIW[i0];
@@ -4134,7 +4640,9 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
             float lb = ((ax - cx) * (py - cy) - (ay - cy) * (px - cx)) * InvArea;
             float lc = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * InvArea;
             if(la < -1e-4f || lb < -1e-4f || lc < -1e-4f)
+            {
                 continue;
+            }
 
             ULONG Color;
             if(Uniform)
@@ -4150,81 +4658,143 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                 Color = (A << 24) | (R << 16) | (G << 8) | B;
             }
 
+            float u = 0.0f;
+            float v = 0.0f;
             if(UseTex)
             {
                 // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
                 float iw = la * aiw + lb * biw + lc * ciw;
                 float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
-                float u = (la * au * aiw + lb * bu * biw + lc * cu * ciw) * inv;
-                float v = (la * av * aiw + lb * bv * biw + lc * cv * ciw) * inv;
-                ULONG Tex = EmuNv2aSampleTexel(T->Sampler, u, v);
-                // MODULATE: (texel * diffuse) / 255 per channel.
-                ULONG ca = (Color >> 24) & 0xFF, cr = (Color >> 16) & 0xFF;
-                ULONG cg = (Color >> 8) & 0xFF,  cb = Color & 0xFF;
-                ULONG ta = (Tex >> 24) & 0xFF, tr = (Tex >> 16) & 0xFF;
-                ULONG tg = (Tex >> 8) & 0xFF,  tb = Tex & 0xFF;
-                Color = (((ca * ta) / 255) << 24) | (((cr * tr) / 255) << 16) |
-                        (((cg * tg) / 255) << 8)  |  ((cb * tb) / 255);
+                u = (la * au * aiw + lb * bu * biw + lc * cu * ciw) * inv;
+                v = (la * av * aiw + lb * bv * biw + lc * cv * ciw) * inv;
             }
+            const float z = la * az + lb * bz + lc * cz;
+            EmuNv2aShadePixel(T, X, Y, z, Color, u, v);
+        }
+    }
+}
 
-            if(T->AlphaTest &&
-               !EmuNv2aDepthPass(T->AlphaFunc, (Color >> 24) & 0xFF, T->AlphaRef))
+static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
+                                       const float* VX, const float* VY,
+                                       const float* VZ, const float* VU,
+                                       const float* VV, const float* VIW,
+                                       const ULONG* VC, ULONG Base)
+{
+    const auto NearlyEqual = [](float A, float B)
+    {
+        const float Difference = A - B;
+        return Difference > -0.01f && Difference < 0.01f;
+    };
+    const ULONG I0 = Base;
+    const ULONG I1 = Base + 1;
+    const ULONG I2 = Base + 2;
+    const ULONG I3 = Base + 3;
+    const bool VerticalFirst = NearlyEqual(VX[I0], VX[I1]) &&
+                               NearlyEqual(VX[I2], VX[I3]) &&
+                               NearlyEqual(VY[I0], VY[I3]) &&
+                               NearlyEqual(VY[I1], VY[I2]);
+    const bool HorizontalFirst = NearlyEqual(VY[I0], VY[I1]) &&
+                                 NearlyEqual(VY[I2], VY[I3]) &&
+                                 NearlyEqual(VX[I0], VX[I3]) &&
+                                 NearlyEqual(VX[I1], VX[I2]);
+    if(!VerticalFirst && !HorizontalFirst)
+    {
+        return false;
+    }
+
+    const float Left = VX[I0];
+    const float Top = VY[I0];
+    const float Right = VerticalFirst ? VX[I2] : VX[I1];
+    const float Bottom = VerticalFirst ? VY[I1] : VY[I2];
+    if(Right - Left < 0.01f || Bottom - Top < 0.01f)
+    {
+        return false;
+    }
+
+    int MinX = static_cast<int>(Left);
+    int MinY = static_cast<int>(Top);
+    int MaxX = static_cast<int>(Right) + 1;
+    int MaxY = static_cast<int>(Bottom) + 1;
+    if(MinX < 0)
+    {
+        MinX = 0;
+    }
+    if(MinY < 0)
+    {
+        MinY = 0;
+    }
+    if(MaxX > Target->Width)
+    {
+        MaxX = Target->Width;
+    }
+    if(MaxY > Target->Height)
+    {
+        MaxY = Target->Height;
+    }
+
+    const ULONG TopRight = VerticalFirst ? I3 : I1;
+    const ULONG BottomLeft = VerticalFirst ? I1 : I3;
+    const ULONG BottomRight = I2;
+    const bool UniformColor = VC[I0] == VC[TopRight] &&
+                              VC[I0] == VC[BottomLeft] &&
+                              VC[I0] == VC[BottomRight];
+    for(int Y = MinY; Y < MaxY; ++Y)
+    {
+        const float PixelY = static_cast<float>(Y) + 0.5f;
+        if(PixelY < Top || PixelY > Bottom)
+        {
+            continue;
+        }
+        const float Ty = (PixelY - Top) / (Bottom - Top);
+        for(int X = MinX; X < MaxX; ++X)
+        {
+            const float PixelX = static_cast<float>(X) + 0.5f;
+            if(PixelX < Left || PixelX > Right)
             {
                 continue;
             }
+            const float Tx = (PixelX - Left) / (Right - Left);
+            const float W0 = (1.0f - Tx) * (1.0f - Ty);
+            const float W1 = Tx * (1.0f - Ty);
+            const float W2 = Tx * Ty;
+            const float W3 = (1.0f - Tx) * Ty;
 
-            if(UseDepth)
+            ULONG Color = VC[I0];
+            if(!UniformColor)
             {
-                float zf = la * az + lb * bz + lc * cz;
-                if(zf < 0.0f) zf = 0.0f;
-                if(zf > DepthMaxF) zf = DepthMaxF;
-                ULONG Src = (ULONG)(zf + 0.5f);
-
-                if(Depth24)
+                const auto Channel = [&](int Shift)
                 {
-                    // Z24S8: 24-bit depth in the high bits, 8-bit stencil in the
-                    // low byte. Stencil test first, then depth; the stencil op
-                    // (fail / zfail / zpass) updates the stored stencil.
-                    ULONG *Slot = (ULONG *)T->Depth + Y * DepthPitchElem + X;
-                    ULONG Stored = *Slot;
-                    ULONG Dst = Stored >> 8;
-                    ULONG Sten = Stored & 0xFF;
-
-                    bool SPass = !T->StencilTest ||
-                        EmuNv2aDepthPass(T->StencilFunc, T->StencilRef & T->StencilFuncMask,
-                                         Sten & T->StencilFuncMask);
-                    bool DPass = !T->DepthTest || EmuNv2aDepthPass(T->DepthFunc, Src, Dst);
-
-                    if(T->StencilTest)
-                    {
-                        ULONG Op = !SPass ? T->StencilOpFail
-                                          : (!DPass ? T->StencilOpZFail : T->StencilOpZPass);
-                        ULONG NewSt = EmuNv2aStencilOp(Op, Sten, T->StencilRef);
-                        Sten = (NewSt & T->StencilMask) | (Sten & ~T->StencilMask);
-                    }
-                    ULONG NewDepth = (T->DepthTest && SPass && DPass && T->DepthWrite) ? Src : Dst;
-                    *Slot = (NewDepth << 8) | (Sten & 0xFF);
-                    if(!SPass || !DPass)
-                        continue;   // fragment killed -> no color
-                }
-                else
-                {
-                    unsigned short *Slot = (unsigned short *)T->Depth + Y * DepthPitchElem + X;
-                    ULONG Dst = *Slot;
-                    if(T->DepthTest && !EmuNv2aDepthPass(T->DepthFunc, Src, Dst))
-                        continue;
-                    if(T->DepthTest && T->DepthWrite)
-                        *Slot = (unsigned short)Src;
-                }
+                    return EmuNv2aClampByte(
+                        W0 * static_cast<float>((VC[I0] >> Shift) & 0xFFu) +
+                        W1 * static_cast<float>((VC[TopRight] >> Shift) & 0xFFu) +
+                        W2 * static_cast<float>((VC[BottomRight] >> Shift) & 0xFFu) +
+                        W3 * static_cast<float>((VC[BottomLeft] >> Shift) & 0xFFu));
+                };
+                Color = (Channel(24) << 24) | (Channel(16) << 16) |
+                        (Channel(8) << 8) | Channel(0);
             }
 
-            if(T->BlendEnable)
-                Color = EmuNv2aBlend(Color, T->Color[Y * T->PitchPx + X],
-                                     T->BlendSFactor, T->BlendDFactor, T->BlendEquation);
-
-            T->Color[Y * T->PitchPx + X] = Color;
+            const float InvW = W0 * VIW[I0] + W1 * VIW[TopRight] +
+                               W2 * VIW[BottomRight] + W3 * VIW[BottomLeft];
+            const float ReciprocalW = InvW > 1e-9f || InvW < -1e-9f
+                                          ? 1.0f / InvW
+                                          : 0.0f;
+            const float U = (W0 * VU[I0] * VIW[I0] +
+                             W1 * VU[TopRight] * VIW[TopRight] +
+                             W2 * VU[BottomRight] * VIW[BottomRight] +
+                             W3 * VU[BottomLeft] * VIW[BottomLeft]) *
+                            ReciprocalW;
+            const float V = (W0 * VV[I0] * VIW[I0] +
+                             W1 * VV[TopRight] * VIW[TopRight] +
+                             W2 * VV[BottomRight] * VIW[BottomRight] +
+                             W3 * VV[BottomLeft] * VIW[BottomLeft]) *
+                            ReciprocalW;
+            const float Z = W0 * VZ[I0] + W1 * VZ[TopRight] +
+                            W2 * VZ[BottomRight] + W3 * VZ[BottomLeft];
+            EmuNv2aShadePixel(Target, X, Y, Z, Color, U, V);
         }
     }
+    return true;
 }
 
 // Phase 0 draw: fetch pre-transformed vertices from the position/diffuse arrays,
@@ -4383,6 +4953,14 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     Target.AlphaTest = g_EmuNv2aAlphaTest;
     Target.AlphaFunc = g_EmuNv2aAlphaFunc;
     Target.AlphaRef = g_EmuNv2aAlphaRef;
+    Target.CombinerControl = g_EmuNv2aCombinerControl;
+    Target.CombinerColorIcw = g_EmuNv2aCombinerColorIcw[0];
+    Target.CombinerAlphaIcw = g_EmuNv2aCombinerAlphaIcw[0];
+    Target.CombinerColorOcw = g_EmuNv2aCombinerColorOcw[0];
+    Target.CombinerAlphaOcw = g_EmuNv2aCombinerAlphaOcw[0];
+    Target.CombinerFactor0 = g_EmuNv2aCombinerFactor0[0];
+    Target.CombinerFactor1 = g_EmuNv2aCombinerFactor1[0];
+    Target.CombinerMode = EmuNv2aClassifyStage0Combiner(&Target);
 
     // Resolve the depth (zeta) surface when depth OR stencil testing is enabled
     // and a zeta surface is bound (same base-0 raw-pointer fallback as color).
@@ -4467,13 +5045,22 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
     // Texture stage 0: sample when a texture is bound and a texcoord source is
     // available (the attr-9 array, or the vertex program's oT0).
-    EmuNv2aSampler Sampler;
+    const EmuNv2aSampler* Sampler = nullptr;
     bool SamplerReady = false;
-    bool TexBound = (g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0);
+    const ULONG TextureMode0 = g_EmuNv2aShaderStageProgram & 0x1Fu;
+    bool TexBound = g_EmuNv2aTexture[0].Offset != 0 &&
+                    g_EmuNv2aTexture[0].Format != 0 &&
+                    (g_EmuNv2aTexture[0].Control0 & 0x40000000u) != 0 &&
+                    TextureMode0 != 0;
     if(TexBound && (VpActive || TexStride != 0))
-        SamplerReady = EmuNv2aSetupSampler(0, &Sampler);
+    {
+        Sampler = EmuNv2aGetSampler(0);
+        SamplerReady = Sampler != nullptr;
+    }
     if(SamplerReady)
-        Target.Sampler = &Sampler;
+    {
+        Target.Sampler = Sampler;
+    }
 
     static float VX[4096];
     static float VY[4096];
@@ -4670,8 +5257,14 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 8: // QUADS
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+2);
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+2, i+3);
+                    if(!EmuNv2aFillAxisAlignedQuad(&Target, VX, VY, VZ, VU, VV,
+                                                   VIW, VC, i))
+                    {
+                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW,
+                                            VC, i, i + 1, i + 2);
+                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW,
+                                            VC, i, i + 2, i + 3);
+                    }
                     Triangles += 2;
                 }
                 break;
@@ -4711,7 +5304,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         if(SamplerReady)
         {
             TextureSample = EmuNv2aSampleTexel(
-                &Sampler, (VU[0] + VU[1] + VU[2]) / 3.0f,
+                Sampler, (VU[0] + VU[1] + VU[2]) / 3.0f,
                 (VV[0] + VV[1] + VV[2]) / 3.0f);
         }
         printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu@%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) blend=%u(0x%lX,0x%lX) vp_scale=(%.1f,%.1f,%.1f) vp_off=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f) uv=(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f) c0=0x%.08lX texel=0x%.08lX sample[%d,%d]=0x%.08lX\n",
@@ -4719,7 +5312,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                SurfaceHost, Width, Height, PitchB,
                VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount, g_EmuNv2aVpStart,
                Target.Depth ? "on" : "off", g_EmuNv2aSurfaceZetaFormat, g_EmuNv2aDepthFunc,
-               SamplerReady ? "on" : "off", SamplerReady ? Sampler.Width : 0, SamplerReady ? Sampler.Height : 0,
+               SamplerReady ? "on" : "off", SamplerReady ? Sampler->Width : 0, SamplerReady ? Sampler->Height : 0,
                Target.BlendEnable ? 1u : 0u, Target.BlendSFactor, Target.BlendDFactor,
                g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1], g_EmuNv2aViewportScale[2],
                g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1], g_EmuNv2aViewportOffset[2],
@@ -4729,11 +5322,6 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                VC[0], TextureSample, SampleX, SampleY, Sample);
         fflush(stdout);
         g_EmuNv2aRasterLogCount++;
-    }
-
-    if(SamplerReady)
-    {
-        EmuNv2aFreeSampler(&Sampler);
     }
 }
 
