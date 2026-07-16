@@ -224,6 +224,27 @@ SOOVPA<12> IDirect3DDevice8_SetPixelShaderProgram_1_0_5233 =
     }
 };
 
+// Generated from the 5344 d3d8.lib body and verified unique in the local XBE
+// corpus. The signature resolves to the 5233 symbol database address.
+SOOVPA<12> IDirect3DDevice8_SetPalette_1_0_5233 =
+{
+    0, 12, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x0D, 0x8B },
+        { 0x1A, 0x2C },
+        { 0x27, 0x81 },
+        { 0x34, 0x00 },
+        { 0x41, 0x24 },
+        { 0x4E, 0x55 },
+        { 0x5B, 0x1C },
+        { 0x68, 0x05 },
+        { 0x75, 0xDD },
+        { 0x82, 0xC0 },
+        { 0x8F, 0x90 }
+    }
+};
+
 #ifdef _DEBUG_TRACE
 #define D3D8_5233_TRACE_NAME(Name) , #Name
 #else
@@ -290,6 +311,7 @@ OOVPATable D3D8_1_0_5233[] =
     { (OOVPA*)&IDirect3DDevice8_SetViewport_1_0_5233, XTL::EmuIDirect3DDevice8_SetViewport D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_SetViewport) },
     { (OOVPA*)&IDirect3DDevice8_GetViewportOffsetAndScale_1_0_5233, XTL::EmuIDirect3DDevice8_GetViewportOffsetAndScale D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_GetViewportOffsetAndScale) },
     { (OOVPA*)&IDirect3DDevice8_SetTexture_1_0_5558, XTL::EmuIDirect3DDevice8_SetTexture D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_SetTexture) },
+    { (OOVPA*)&IDirect3DDevice8_SetPalette_1_0_5233, XTL::EmuIDirect3DDevice8_SetPalette D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_SetPalette) },
     { (OOVPA*)&IDirect3DDevice8_SetIndices_1_0_5558, XTL::EmuIDirect3DDevice8_SetIndices D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_SetIndices) },
     { (OOVPA*)&IDirect3DDevice8_BeginVisibilityTest_1_0_4627, XTL::EmuIDirect3DDevice8_BeginVisibilityTest D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_BeginVisibilityTest) },
     { (OOVPA*)&IDirect3DDevice8_EndVisibilityTest_1_0_5659, XTL::EmuIDirect3DDevice8_EndVisibilityTest D3D8_5233_TRACE_NAME(EmuIDirect3DDevice8_EndVisibilityTest) },
