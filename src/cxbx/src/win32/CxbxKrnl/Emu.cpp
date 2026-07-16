@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "EmuFS.h"
 #include "EmuNV2ALogging.h"
 #include "core/d3d_push_buffer.h"
+#include "core/nv2a_raster.h"
 #include "core/trace.h"
 
 // ******************************************************************
@@ -5143,6 +5144,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         ULONG Index = Indices == nullptr ? Start + i : Indices[i];
         float Xc, Yc, Zc = 0.0f, W;
         float U = 0.0f, V = 0.0f;
+        float Q = 1.0f;
         ULONG Color = 0xFFFFFFFF;
 
         if(VpActive)
@@ -5192,7 +5194,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                                  (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
                                  Input, OutPos, OutCol, OutTex);
             Xc = OutPos[0]; Yc = OutPos[1]; Zc = OutPos[2]; W = OutPos[3];
-            U = OutTex[0]; V = OutTex[1];
+            U = OutTex[0]; V = OutTex[1]; Q = OutTex[3];
             ULONG R = EmuNv2aClampByte(OutCol[0] * 255.0f);
             ULONG G = EmuNv2aClampByte(OutCol[1] * 255.0f);
             ULONG B = EmuNv2aClampByte(OutCol[2] * 255.0f);
@@ -5288,9 +5290,20 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
             VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
         }
-        VU[i] = U;
-        VV[i] = V;
-        VIW[i] = InvW;
+        if(TextureMode0 == 1u)
+        {
+            const cxbx::nv2a::ProjectedTextureCoordinates Projected =
+                cxbx::nv2a::ProjectTexture2D(U, V, Q, InvW);
+            VU[i] = Projected.u;
+            VV[i] = Projected.v;
+            VIW[i] = Projected.interpolationWeight;
+        }
+        else
+        {
+            VU[i] = U;
+            VV[i] = V;
+            VIW[i] = InvW;
+        }
         VC[i] = Color;
     }
 

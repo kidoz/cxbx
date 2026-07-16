@@ -34,6 +34,15 @@ host_d3d_push_buffer_test = executable(
 
 test('host-d3d-push-buffer', host_d3d_push_buffer_test)
 
+host_nv2a_raster_test = executable(
+  'host_nv2a_raster_test',
+  'nv2a_raster.cpp',
+  include_directories : cxbx_inc,
+  install : false,
+)
+
+test('host-nv2a-raster', host_nv2a_raster_test)
+
 host_psh_translate_test = executable(
   'host_psh_translate_test',
   'psh_translate.cpp',
