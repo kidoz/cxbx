@@ -2022,6 +2022,37 @@ HRESULT WINAPI XTL::EmuIDirectSound8_CreateSoundBuffer
 }
 
 // ******************************************************************
+// * func: EmuIDirectSound8_CreateSoundStream
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSound8_CreateSoundStream
+(
+    LPDIRECTSOUND8          pThis,
+    X_DSSTREAMDESC         *pdssd,
+    X_CDirectSoundStream  **ppStream,
+    LPUNKNOWN               pUnkOuter
+)
+{
+    // ******************************************************************
+    // * debug trace
+    // ******************************************************************
+    #ifdef _DEBUG_TRACE
+    {
+        EmuSwapFS();   // Win2k/XP FS
+        printf("EmuDSound (0x%X): EmuIDirectSound8_CreateSoundStream\n"
+               "(\n"
+               "   pdssd                     : 0x%.08X\n"
+               "   ppStream                  : 0x%.08X\n"
+               "   pUnkOuter                 : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pdssd, ppStream, pUnkOuter);
+        EmuSwapFS();   // XBox FS
+    }
+    #endif
+
+    return EmuDirectSoundCreateStream(pdssd, ppStream);
+}
+
+// ******************************************************************
 // * func: EmuIDirectSound8_SetI3DL2Listener
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirectSound8_SetI3DL2Listener
@@ -2847,6 +2878,52 @@ HRESULT WINAPI XTL::EmuIDirectSoundStream_SetMixBinsS
     #endif
 
     // Xbox-only speaker-routing matrix; accept and ignore.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetOutputBuffer
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundStream_SetOutputBuffer
+(
+    X_CDirectSoundStream   *pThis,
+    X_CDirectSoundBuffer   *pOutputBuffer
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuIDirectSoundStream_SetOutputBuffer(0x%.08X, 0x%.08X);\n", GetCurrentThreadId(), pThis, pOutputBuffer);
+    #endif
+
+    // Host DirectSound has no Xbox output-buffer (submix) routing equivalent.
+    // Accept the request; a null destination selects the default output.
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetFormat
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundStream_SetFormat
+(
+    X_CDirectSoundStream   *pThis,
+    const WAVEFORMATEX     *pWaveFormat
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    #ifdef _DEBUG_TRACE
+    printf("EmuDSound (0x%X): EmuIDirectSoundStream_SetFormat(0x%.08X, 0x%.08X);\n", GetCurrentThreadId(), pThis, pWaveFormat);
+    #endif
+
+    // The host stream buffer keeps the format selected at creation; accept
+    // the Xbox format update (same policy as the buffer SetFormat above).
 
     EmuSwapFS();   // XBox FS
 
