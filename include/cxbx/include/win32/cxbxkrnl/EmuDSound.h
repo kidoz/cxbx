@@ -550,6 +550,17 @@ HRESULT WINAPI EmuIDirectSound8_CreateSoundBuffer
     LPUNKNOWN               pUnkOuter
 );
 
+// ******************************************************************
+// * func: EmuIDirectSound8_CreateSoundStream
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSound8_CreateSoundStream
+(
+    LPDIRECTSOUND8          pThis,
+    X_DSSTREAMDESC         *pdssd,
+    X_CDirectSoundStream  **ppStream,
+    LPUNKNOWN               pUnkOuter
+);
+
 
 // ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetBufferData
@@ -762,6 +773,24 @@ HRESULT WINAPI EmuIDirectSoundStream_SetMixBinsS
 (
     X_CDirectSoundStream   *pThis,
     LPVOID                  pMixBins
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetOutputBuffer
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundStream_SetOutputBuffer
+(
+    X_CDirectSoundStream   *pThis,
+    X_CDirectSoundBuffer   *pOutputBuffer
+);
+
+// ******************************************************************
+// * func: EmuIDirectSoundStream_SetFormat
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundStream_SetFormat
+(
+    X_CDirectSoundStream   *pThis,
+    const WAVEFORMATEX     *pWaveFormat
 );
 
 // ******************************************************************

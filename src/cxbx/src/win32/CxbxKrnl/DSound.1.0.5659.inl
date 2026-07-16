@@ -25,6 +25,181 @@ SOOVPA<13> IDirectSound8_CreateSoundBuffer_1_0_5659 =
     }
 };
 
+// _IDirectSound_CreateSoundStream@16 (Arx Fatalis 5659 image, 36 bytes;
+// call@0x1D -> XREF_DS5849_CREATESOUNDSTREAM). Same this-adjusting thin
+// wrapper family as IDirectSound_CreateSoundBuffer above; only the XRef
+// call target tells them apart. XACTENG reaches DSOUND streams through
+// this COM method rather than the global DirectSoundCreateStream.
+SOOVPA<10> IDirectSound8_CreateSoundStream_1_0_5659 =
+{
+    0, 10, -1, 1,
+    {
+        { 0x1D, XREF_DS5849_CREATESOUNDSTREAM },
+        { 0x00, 0xFF },
+        { 0x04, 0x8B },
+        { 0x07, 0x08 },
+        { 0x0C, 0x8B },
+        { 0x12, 0x83 },
+        { 0x15, 0xF7 },
+        { 0x19, 0x23 },
+        { 0x1B, 0x51 },
+        { 0x22, 0x10 }
+    }
+};
+
+// The four IDirectSoundStream_* setter APIs XACTENG calls (Arx Fatalis 5659
+// image). All share one 64-byte template (lock preamble, error check,
+// this+4 voice adjust, call the shared voice leaf, ret 8) and differ ONLY in
+// the rel32 leaf target at +0x36, so each signature is the same byte set
+// plus a discriminating XRef pair against the leaf's save enum.
+// _IDirectSoundStream_SetVolume@8 (call@0x36 -> XREF_DS5849_BUF_SETVOLUME_T)
+SOOVPA<11> IDirectSoundStream_SetVolume_1_0_5659 =
+{
+    0, 11, -1, 1,
+    {
+        { 0x36, XREF_DS5849_BUF_SETVOLUME_T },
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x12, 0x85 },
+        { 0x21, 0xB8 },
+        { 0x28, 0x8B },
+        { 0x31, 0x83 },
+        { 0x33, 0x04 },
+        { 0x3A, 0x85 },
+        { 0x3C, 0x8B }
+    }
+};
+
+// _IDirectSoundStream_SetMixBins@8 (call@0x36 -> XREF_DS5849_BUF_SETMIXBINS_T)
+SOOVPA<11> IDirectSoundStream_SetMixBins_1_0_5659 =
+{
+    0, 11, -1, 1,
+    {
+        { 0x36, XREF_DS5849_BUF_SETMIXBINS_T },
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x12, 0x85 },
+        { 0x21, 0xB8 },
+        { 0x28, 0x8B },
+        { 0x31, 0x83 },
+        { 0x33, 0x04 },
+        { 0x3A, 0x85 },
+        { 0x3C, 0x8B }
+    }
+};
+
+// _IDirectSoundStream_SetOutputBuffer@8 (call@0x36 -> XREF_DS5659_BUFFER_SETOUTPUTBUFFER_T)
+SOOVPA<11> IDirectSoundStream_SetOutputBuffer_1_0_5659 =
+{
+    0, 11, -1, 1,
+    {
+        { 0x36, XREF_DS5659_BUFFER_SETOUTPUTBUFFER_T },
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x12, 0x85 },
+        { 0x21, 0xB8 },
+        { 0x28, 0x8B },
+        { 0x31, 0x83 },
+        { 0x33, 0x04 },
+        { 0x3A, 0x85 },
+        { 0x3C, 0x8B }
+    }
+};
+
+// _IDirectSoundStream_SetFormat@8 (call@0x36 -> XREF_DS5659_BUFFER_SETFORMAT_T)
+SOOVPA<11> IDirectSoundStream_SetFormat_1_0_5659 =
+{
+    0, 11, -1, 1,
+    {
+        { 0x36, XREF_DS5659_BUFFER_SETFORMAT_T },
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x12, 0x85 },
+        { 0x21, 0xB8 },
+        { 0x28, 0x8B },
+        { 0x31, 0x83 },
+        { 0x33, 0x04 },
+        { 0x3A, 0x85 },
+        { 0x3C, 0x8B }
+    }
+};
+
+// Setter twin-family sweep signatures (Arx Fatalis 5659 image). Every
+// remaining unhooked public DSOUND API is a 2-arg setter built from one of
+// three compiler templates (identified against dsound.lib 5659: the
+// SetPitch/SetLFO/SetEG/SetFilter/SetHeadroom class for buffers and
+// streams, plus stream Use3DVoiceData). Their raw bodies poke fields of the
+// fake HLE voice objects (fatal), so a PATCH_ALL fallback maps every
+// still-unpatched member to the accept-and-ignore impl. Specifically-hooked
+// members (SetVolume/SetMixBins/SetOutputBuffer/SetFormat...) are E9-patched
+// before the sweep runs and are skipped via the offset-0 byte mismatch.
+// Template A: lock preamble / this+4 voice adjust / call leaf / ret 8.
+SOOVPA<12> IDirectSoundVoice_SetterAdjusted_1_0_5659 =
+{
+    0, 12, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x12, 0x85 },
+        { 0x21, 0xB8 },
+        { 0x26, 0xEB },
+        { 0x27, 0x26 },
+        { 0x28, 0x8B },
+        { 0x31, 0x83 },
+        { 0x33, 0x04 },
+        { 0x3A, 0x85 },
+        { 0x3C, 0x8B }
+    }
+};
+
+// Template B: lock preamble / arguments passed through / call leaf / ret 8.
+SOOVPA<13> IDirectSoundVoice_SetterPassthrough_1_0_5659 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x06, 0x83 },
+        { 0x0D, 0x0F },
+        { 0x12, 0x85 },
+        { 0x21, 0xB8 },
+        { 0x26, 0xEB },
+        { 0x27, 0x22 },
+        { 0x28, 0x57 },
+        { 0x29, 0xFF },
+        { 0x2D, 0xFF },
+        { 0x31, 0xE8 },
+        { 0x36, 0x85 },
+        { 0x38, 0x8B }
+    }
+};
+
+// Template C: register variant (ecx result, esi saved late) — stream
+// Use3DVoiceData in the Arx image.
+SOOVPA<13> IDirectSoundVoice_SetterRegVariant_1_0_5659 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0xE8 },
+        { 0x05, 0x83 },
+        { 0x0C, 0x0F },
+        { 0x0F, 0x74 },
+        { 0x11, 0x85 },
+        { 0x20, 0xB8 },
+        { 0x25, 0xEB },
+        { 0x27, 0x8B },
+        { 0x2B, 0x56 },
+        { 0x30, 0x83 },
+        { 0x32, 0x04 },
+        { 0x39, 0x85 },
+        { 0x3B, 0x8B }
+    }
+};
+
 // ?Pause@CMcpxStream@DirectSound@@QAEJK@Z (dsound.lib 5659, 142 bytes)
 SOOVPA<12> CMcpxStream_Pause_1_0_5659 =
 {
@@ -477,6 +652,46 @@ OOVPATable DSound_1_0_5659[] =
         XTL::EmuDirectSoundCreateStream,
         #ifdef _DEBUG_TRACE
         "EmuDirectSoundCreateStream"
+        #endif
+    },
+    // IDirectSound8::CreateSoundStream (COM method wrapper; XACTENG path)
+    {
+        (OOVPA*)&IDirectSound8_CreateSoundStream_1_0_5659,
+        XTL::EmuIDirectSound8_CreateSoundStream,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSound8_CreateSoundStream"
+        #endif
+    },
+    // IDirectSoundStream_SetVolume (XACTENG path)
+    {
+        (OOVPA*)&IDirectSoundStream_SetVolume_1_0_5659,
+        XTL::EmuCDirectSoundStream_SetVolume,
+        #ifdef _DEBUG_TRACE
+        "EmuCDirectSoundStream_SetVolume"
+        #endif
+    },
+    // IDirectSoundStream_SetMixBins (XACTENG path)
+    {
+        (OOVPA*)&IDirectSoundStream_SetMixBins_1_0_5659,
+        XTL::EmuIDirectSoundStream_SetMixBinsS,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_SetMixBinsS"
+        #endif
+    },
+    // IDirectSoundStream_SetOutputBuffer (XACTENG path)
+    {
+        (OOVPA*)&IDirectSoundStream_SetOutputBuffer_1_0_5659,
+        XTL::EmuIDirectSoundStream_SetOutputBuffer,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_SetOutputBuffer"
+        #endif
+    },
+    // IDirectSoundStream_SetFormat (XACTENG path)
+    {
+        (OOVPA*)&IDirectSoundStream_SetFormat_1_0_5659,
+        XTL::EmuIDirectSoundStream_SetFormat,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_SetFormat"
         #endif
     },
     // CDirectSound::SetI3DL2Listener (XREF save)
@@ -933,6 +1148,33 @@ OOVPATable DSound_1_0_5659[] =
         #ifdef _DEBUG_TRACE
         "EmuDirectSoundUseFullHRTF"
         #endif
+    },
+    // Setter twin-family sweeps (patch-all FALLBACK; must stay the LAST
+    // DSOUND entries so every specifically-hooked member is already
+    // E9-patched and skipped)
+    {
+        (OOVPA*)&IDirectSoundVoice_SetterAdjusted_1_0_5659,
+        XTL::EmuIDirectSoundStream_SetMixBinsS,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_SetMixBinsS (setter sweep A)",
+        #endif
+        OOVPA_FLAG_PATCH_ALL
+    },
+    {
+        (OOVPA*)&IDirectSoundVoice_SetterPassthrough_1_0_5659,
+        XTL::EmuIDirectSoundStream_SetMixBinsS,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_SetMixBinsS (setter sweep B)",
+        #endif
+        OOVPA_FLAG_PATCH_ALL
+    },
+    {
+        (OOVPA*)&IDirectSoundVoice_SetterRegVariant_1_0_5659,
+        XTL::EmuIDirectSoundStream_SetMixBinsS,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundStream_SetMixBinsS (setter sweep C)",
+        #endif
+        OOVPA_FLAG_PATCH_ALL
     },
 };
 
