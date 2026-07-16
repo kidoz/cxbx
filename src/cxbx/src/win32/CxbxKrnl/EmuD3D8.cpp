@@ -79,6 +79,8 @@ namespace XTL
 extern "C" bool EmuNv2aExecutePushBuffer(const DWORD* Buffer, DWORD Size);
 extern "C" bool EmuNv2aExecuteGuestPushBuffer(DWORD GuestAddress, DWORD Size);
 extern "C" void EmuNv2aEnableHleRaster();
+extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Value);
+extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Value);
 
 // ******************************************************************
 // * Global(s)
@@ -3285,6 +3287,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
                 if(hardwareIndex >= 0 && hardwareIndex < 192)
                 {
                     std::memcpy(&g_EmuVshCpuConstants[hardwareIndex * 4], &source[constant * 4], 4 * sizeof(float));
+                    EmuNv2aSetTransformConstant(static_cast<ULONG>(hardwareIndex),
+                                                &source[constant * 4]);
                 }
             }
         }
@@ -8315,6 +8319,7 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple
 )
 {
     EmuSwapFS();   // Win2k/XP FS
+    EmuNv2aSetRenderState(Method, Value);
 
     // ******************************************************************
     // * debug trace

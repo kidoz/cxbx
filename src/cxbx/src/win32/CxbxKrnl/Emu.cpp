@@ -1289,11 +1289,18 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 // texture is bound.
 // ---------------------------------------------------------------------------
 #define NV097_SET_CONTEXT_DMA_A        0x1A60u
+#define NV097_SET_CONTEXT_DMA_B        0x1A64u
 #define NV097_NO_OPERATION             0x0100u
+#define NV097_SET_FLIP_READ            0x0120u
+#define NV097_SET_FLIP_WRITE           0x0124u
+#define NV097_SET_FLIP_MODULO          0x0128u
+#define NV097_FLIP_INCREMENT_WRITE     0x012Cu
+#define NV097_FLIP_STALL               0x0130u
 #define NV097_SET_BEGIN_END            0x17FCu
 #define NV097_SET_TEXTURE_OFFSET_0     0x1B00u
 #define NV097_SET_TEXTURE_FORMAT_0     0x1B04u
 #define NV097_SET_TEXTURE_IMAGE_RECT_0 0x1B1Cu
+#define NV097_SET_TEXTURE_PALETTE_0    0x1B20u
 #define EmuNv2aTextureStageStride      0x40u
 #define EmuNv2aTextureStageCount       4u
 
@@ -1305,10 +1312,15 @@ struct EmuNv2aTextureState
     ULONG Format;
     ULONG ImageRect;
     ULONG Filter;
+    ULONG Palette;
 };
 
 static EmuNv2aTextureState g_EmuNv2aTexture[EmuNv2aTextureStageCount] = {};
 static ULONG g_EmuNv2aContextDmaAHandle = 0;
+static ULONG g_EmuNv2aContextDmaBHandle = 0;
+static ULONG g_EmuNv2aFlipRead = 0;
+static ULONG g_EmuNv2aFlipWrite = 0;
+static ULONG g_EmuNv2aFlipModulo = 1;
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
 static ULONG g_EmuNv2aTextureMethodLogCount = 0;
 static ULONG g_EmuNv2aScanoutDumpIndex = 0;
@@ -1344,6 +1356,7 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_SURFACE_PITCH             0x020Cu
 #define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
 #define NV097_SET_SURFACE_ZETA_OFFSET       0x0214u
+#define NV097_SET_ALPHA_TEST_ENABLE         0x0300u
 #define NV097_SET_BLEND_ENABLE              0x0304u
 #define NV097_SET_DEPTH_TEST_ENABLE         0x030Cu
 #define NV097_SET_STENCIL_TEST_ENABLE       0x032Cu
@@ -1357,6 +1370,8 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_BLEND_FUNC_SFACTOR        0x0344u
 #define NV097_SET_BLEND_FUNC_DFACTOR        0x0348u
 #define NV097_SET_BLEND_EQUATION            0x0350u
+#define NV097_SET_ALPHA_FUNC                0x033Cu
+#define NV097_SET_ALPHA_REF                 0x0340u
 #define NV097_SET_DEPTH_FUNC                0x0354u
 #define NV097_SET_DEPTH_MASK                0x035Cu
 #define NV097_SET_PROJECTION_MATRIX         0x0440u
@@ -1374,14 +1389,21 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_ARRAY_ELEMENT16                0x1800u
 #define NV097_ARRAY_ELEMENT32                0x1808u
 #define NV097_DRAW_ARRAYS                   0x1810u
+#define NV097_INLINE_ARRAY                  0x1818u
 #define NV097_SET_CONTEXT_DMA_SEMAPHORE     0x01A4u
 #define NV097_SET_SEMAPHORE_OFFSET          0x1D6Cu
 #define NV097_BACK_END_WRITE_SEMAPHORE_RELEASE 0x1D70u
+#define NV097_SET_ZSTENCIL_CLEAR_VALUE      0x1D8Cu
+#define NV097_SET_COLOR_CLEAR_VALUE         0x1D90u
+#define NV097_CLEAR_SURFACE                 0x1D94u
+#define NV097_SET_CLEAR_RECT_HORIZONTAL     0x1D98u
+#define NV097_SET_CLEAR_RECT_VERTICAL       0x1D9Cu
 #define EmuNv2aVertexAttrCount              16u
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
 #define EmuNv2aAttrTexcoord0                9u
 #define EmuNv2aVpMaxInstr                   136u
+#define EmuNv2aInlineWordCapacity           65536u
 
 // CPU vertex-program interpreter (implemented in EmuVshDecoder.cpp): transform
 // one vertex through the loaded NV2A microcode. Inputs are the 16 attribute
@@ -1409,6 +1431,9 @@ static ULONG g_EmuNv2aSurfaceClipH = 0;
 static ULONG g_EmuNv2aBeginOp = 0;
 static ULONG g_EmuNv2aElementIndices[4096] = {};
 static ULONG g_EmuNv2aElementIndexCount = 0;
+static ULONG g_EmuNv2aInlineWords[EmuNv2aInlineWordCapacity] = {};
+static ULONG g_EmuNv2aInlineWordCount = 0;
+static bool  g_EmuNv2aInlineOverflow = false;
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
 static bool  g_bEmuNv2aHleRaster = false;
@@ -1437,6 +1462,15 @@ static ULONG g_EmuNv2aVpStart = 0;        // SET_TRANSFORM_PROGRAM_START
 static ULONG g_EmuNv2aVpExecMode = 0;     // SET_TRANSFORM_EXECUTION_MODE & 3
 static float g_EmuNv2aTransformConstant[192 * 4] = {};
 static ULONG g_EmuNv2aConstWriteFloat = 0; // SET_TRANSFORM_CONSTANT upload cursor
+
+extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Value)
+{
+    if(HardwareIndex < 192 && Value != nullptr)
+    {
+        memcpy(&g_EmuNv2aTransformConstant[HardwareIndex * 4], Value, 4 * sizeof(float));
+    }
+}
+
 // Depth buffer (Phase 3): bound zeta surface + the depth-test state. Testing is
 // off by default so Phase 0-2 titles (which never enable it) are unaffected.
 static ULONG g_EmuNv2aContextDmaZeta = 0;
@@ -1446,6 +1480,9 @@ static ULONG g_EmuNv2aSurfaceZetaFormat = 0; // 1=Z16, 2=Z24S8
 static bool  g_EmuNv2aDepthTest = false;
 static bool  g_EmuNv2aDepthWrite = true;
 static ULONG g_EmuNv2aDepthFunc = 0x0201;    // LESS
+static bool  g_EmuNv2aAlphaTest = false;
+static ULONG g_EmuNv2aAlphaFunc = 0x0207;     // ALWAYS
+static ULONG g_EmuNv2aAlphaRef = 0;
 // Alpha blending. Disabled by default (source overwrites), so titles that never
 // enable it are unaffected. Defaults mirror the NV2A reset state (ONE/ZERO/ADD).
 static bool  g_EmuNv2aBlendEnable = false;
@@ -1461,12 +1498,60 @@ static ULONG g_EmuNv2aStencilMask = 0xFF;        // write mask
 static ULONG g_EmuNv2aStencilOpFail = 0x1E00;    // KEEP
 static ULONG g_EmuNv2aStencilOpZFail = 0x1E00;
 static ULONG g_EmuNv2aStencilOpZPass = 0x1E00;
+static ULONG g_EmuNv2aZStencilClearValue = 0;
+static ULONG g_EmuNv2aColorClearValue = 0;
+static ULONG g_EmuNv2aClearRectHorizontal = 0;
+static ULONG g_EmuNv2aClearRectVertical = 0;
+
+extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
+{
+    switch(Method & 0x1FFCu)
+    {
+        case NV097_SET_ALPHA_TEST_ENABLE:   g_EmuNv2aAlphaTest = (Data != 0); break;
+        case NV097_SET_ALPHA_FUNC:          g_EmuNv2aAlphaFunc = Data; break;
+        case NV097_SET_ALPHA_REF:           g_EmuNv2aAlphaRef = Data & 0xFF; break;
+        case NV097_SET_DEPTH_TEST_ENABLE:   g_EmuNv2aDepthTest = (Data != 0); break;
+        case NV097_SET_DEPTH_FUNC:          g_EmuNv2aDepthFunc = Data; break;
+        case NV097_SET_DEPTH_MASK:          g_EmuNv2aDepthWrite = (Data != 0); break;
+        case NV097_SET_BLEND_ENABLE:        g_EmuNv2aBlendEnable = (Data != 0); break;
+        case NV097_SET_BLEND_FUNC_SFACTOR:  g_EmuNv2aBlendSFactor = Data; break;
+        case NV097_SET_BLEND_FUNC_DFACTOR:  g_EmuNv2aBlendDFactor = Data; break;
+        case NV097_SET_BLEND_EQUATION:      g_EmuNv2aBlendEquation = Data; break;
+        case NV097_SET_STENCIL_TEST_ENABLE: g_EmuNv2aStencilTest = (Data != 0); break;
+        case NV097_SET_STENCIL_MASK:        g_EmuNv2aStencilMask = Data & 0xFF; break;
+        case NV097_SET_STENCIL_FUNC:        g_EmuNv2aStencilFunc = Data; break;
+        case NV097_SET_STENCIL_FUNC_REF:    g_EmuNv2aStencilRef = Data & 0xFF; break;
+        case NV097_SET_STENCIL_FUNC_MASK:   g_EmuNv2aStencilFuncMask = Data & 0xFF; break;
+        case NV097_SET_STENCIL_OP_FAIL:     g_EmuNv2aStencilOpFail = Data; break;
+        case NV097_SET_STENCIL_OP_ZFAIL:    g_EmuNv2aStencilOpZFail = Data; break;
+        case NV097_SET_STENCIL_OP_ZPASS:    g_EmuNv2aStencilOpZPass = Data; break;
+        default: break;
+    }
+}
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
-                                       const ULONG* Indices = nullptr);
+                                       const ULONG* Indices = nullptr,
+                                       const BYTE* InlineData = nullptr,
+                                       ULONG InlineStride = 0,
+                                       const ULONG* InlineOffsets = nullptr);
+static void EmuNv2aRasterizeInlineArray();
 static void EmuNv2aWriteBackendSemaphore(ULONG Data);
+static void EmuNv2aClearSurface(ULONG Flags);
+static void EmuNv2aPresentColorSurface();
+
+static bool EmuNv2aTextureDumpEnabled()
+{
+    static int Enabled = -1;
+    if(Enabled < 0)
+    {
+        char Buffer[8] = {};
+        DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_TEXTURE_DUMP", Buffer, sizeof(Buffer));
+        Enabled = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
+    }
+    return Enabled == 1;
+}
 
 // Opt-in PGRAPH method histogram (CXBX_NV2A_METHOD_STATS=1): count every
 // dispatched method per object class so a title's method vocabulary — in
@@ -1622,6 +1707,30 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         {
             g_EmuNv2aContextDmaAHandle = Data;
         }
+        else if(Method == NV097_SET_CONTEXT_DMA_B)
+        {
+            g_EmuNv2aContextDmaBHandle = Data;
+        }
+        else if(Method == NV097_SET_FLIP_READ)
+        {
+            g_EmuNv2aFlipRead = Data;
+        }
+        else if(Method == NV097_SET_FLIP_WRITE)
+        {
+            g_EmuNv2aFlipWrite = Data;
+        }
+        else if(Method == NV097_SET_FLIP_MODULO)
+        {
+            g_EmuNv2aFlipModulo = Data != 0 ? Data : 1;
+        }
+        else if(Method == NV097_FLIP_INCREMENT_WRITE)
+        {
+            g_EmuNv2aFlipWrite = (g_EmuNv2aFlipWrite + 1) % g_EmuNv2aFlipModulo;
+        }
+        else if(Method == NV097_FLIP_STALL)
+        {
+            EmuNv2aPresentColorSurface();
+        }
         else if(Method >= NV097_SET_TEXTURE_OFFSET_0 &&
                 Method < NV097_SET_TEXTURE_OFFSET_0 + EmuNv2aTextureStageStride * EmuNv2aTextureStageCount)
         {
@@ -1636,6 +1745,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 g_EmuNv2aTexture[Stage].ImageRect = Data;
             else if(Method == StageMethod + (NV097_SET_TEXTURE_FILTER_0 - NV097_SET_TEXTURE_OFFSET_0))
                 g_EmuNv2aTexture[Stage].Filter = Data;
+            else if(Method == StageMethod + (NV097_SET_TEXTURE_PALETTE_0 - NV097_SET_TEXTURE_OFFSET_0))
+                g_EmuNv2aTexture[Stage].Palette = Data;
 
             if(g_EmuNv2aTextureMethodLogCount < 32)
             {
@@ -1647,12 +1758,16 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         }
         else if(Method == NV097_SET_BEGIN_END && Data != 0)
         {
-            if(g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0)
+            if(EmuNv2aTextureDumpEnabled() &&
+               g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0)
+            {
                 EmuNv2aDumpSourceTexture(0);
+            }
         }
 
         // Phase 0 rasterizer state: track the color surface, the vertex arrays,
         // and the active primitive so a DRAW_ARRAYS can be turned into pixels.
+        EmuNv2aSetRenderState(Method, Data);
         switch(Method)
         {
             case NV097_SET_CONTEXT_DMA_COLOR:    g_EmuNv2aContextDmaColor = Data; break;
@@ -1672,35 +1787,33 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 break;
             case NV097_SET_SURFACE_COLOR_OFFSET: g_EmuNv2aSurfaceColorOffset = Data; break;
             case NV097_SET_SURFACE_ZETA_OFFSET:  g_EmuNv2aSurfaceZetaOffset = Data; break;
-            case NV097_SET_DEPTH_TEST_ENABLE:    g_EmuNv2aDepthTest = (Data != 0); break;
-            case NV097_SET_DEPTH_FUNC:           g_EmuNv2aDepthFunc = Data; break;
-            case NV097_SET_DEPTH_MASK:           g_EmuNv2aDepthWrite = (Data != 0); break;
-            case NV097_SET_BLEND_ENABLE:         g_EmuNv2aBlendEnable = (Data != 0); break;
-            case NV097_SET_BLEND_FUNC_SFACTOR:   g_EmuNv2aBlendSFactor = Data; break;
-            case NV097_SET_BLEND_FUNC_DFACTOR:   g_EmuNv2aBlendDFactor = Data; break;
-            case NV097_SET_BLEND_EQUATION:       g_EmuNv2aBlendEquation = Data; break;
-            case NV097_SET_STENCIL_TEST_ENABLE:  g_EmuNv2aStencilTest = (Data != 0); break;
-            case NV097_SET_STENCIL_MASK:         g_EmuNv2aStencilMask = Data & 0xFF; break;
-            case NV097_SET_STENCIL_FUNC:         g_EmuNv2aStencilFunc = Data; break;
-            case NV097_SET_STENCIL_FUNC_REF:     g_EmuNv2aStencilRef = Data & 0xFF; break;
-            case NV097_SET_STENCIL_FUNC_MASK:    g_EmuNv2aStencilFuncMask = Data & 0xFF; break;
-            case NV097_SET_STENCIL_OP_FAIL:      g_EmuNv2aStencilOpFail = Data; break;
-            case NV097_SET_STENCIL_OP_ZFAIL:     g_EmuNv2aStencilOpZFail = Data; break;
-            case NV097_SET_STENCIL_OP_ZPASS:     g_EmuNv2aStencilOpZPass = Data; break;
+            case NV097_SET_ZSTENCIL_CLEAR_VALUE: g_EmuNv2aZStencilClearValue = Data; break;
+            case NV097_SET_COLOR_CLEAR_VALUE:    g_EmuNv2aColorClearValue = Data; break;
+            case NV097_CLEAR_SURFACE:             EmuNv2aClearSurface(Data); break;
+            case NV097_SET_CLEAR_RECT_HORIZONTAL: g_EmuNv2aClearRectHorizontal = Data; break;
+            case NV097_SET_CLEAR_RECT_VERTICAL:   g_EmuNv2aClearRectVertical = Data; break;
             case NV097_SET_BEGIN_END:
                 if(Data == 0)
                 {
-                    if(g_EmuNv2aElementIndexCount >= 3)
+                    if(g_EmuNv2aInlineWordCount != 0)
+                    {
+                        EmuNv2aRasterizeInlineArray();
+                    }
+                    else if(g_EmuNv2aElementIndexCount >= 3)
                     {
                         EmuNv2aRasterizeDrawArrays(
                             0, g_EmuNv2aElementIndexCount,
                             g_EmuNv2aElementIndices);
                     }
                     g_EmuNv2aElementIndexCount = 0;
+                    g_EmuNv2aInlineWordCount = 0;
+                    g_EmuNv2aInlineOverflow = false;
                 }
                 else
                 {
                     g_EmuNv2aElementIndexCount = 0;
+                    g_EmuNv2aInlineWordCount = 0;
+                    g_EmuNv2aInlineOverflow = false;
                 }
                 g_EmuNv2aBeginOp = Data;
                 break;
@@ -1725,6 +1838,16 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_DRAW_ARRAYS:
                 EmuNv2aRasterizeDrawArrays(
                     Data & 0xFFFFFF, ((Data >> 24) & 0xFF) + 1);
+                break;
+            case NV097_INLINE_ARRAY:
+                if(g_EmuNv2aInlineWordCount < std::size(g_EmuNv2aInlineWords))
+                {
+                    g_EmuNv2aInlineWords[g_EmuNv2aInlineWordCount++] = Data;
+                }
+                else
+                {
+                    g_EmuNv2aInlineOverflow = true;
+                }
                 break;
             case NV097_SET_TRANSFORM_EXECUTION_MODE: g_EmuNv2aVpExecMode = Data & 0x3; break;
             case NV097_SET_TRANSFORM_PROGRAM_LOAD:   g_EmuNv2aVpWriteDword = Data * 4; break;
@@ -2118,9 +2241,7 @@ static const ULONG EmuPhysicalMapEnd = 0x8FFFFFFF;
 static const ULONG EmuPhysicalRamMirrorSize = 0x04000000;
 static const ULONG EmuPhysicalRamMirrorMask = EmuPhysicalRamMirrorSize - 1;
 static const ULONG EmuPhysicalShadowBase = 0xF0000000;
-static const ULONG EmuPhysicalShadowEnd = EmuPhysicalShadowBase + EmuPhysicalRamMirrorSize - 1;
-static const ULONG EmuPhysicalHighApertureBase = 0xF8000000;
-static const ULONG EmuPhysicalHighApertureEnd = 0xFCFFFFFF;
+static const ULONG EmuPhysicalShadowEnd = 0xFCFFFFFF;
 static const ULONG EmuPhysicalPageSize = 0x1000;
 static const ULONG EmuPhysicalPageSlotCount = 4096;
 
@@ -2136,8 +2257,7 @@ static ULONG g_EmuPhysicalMovntpsLogCount = 0;
 static bool EmuIsPhysicalMapAddress(ULONG Address)
 {
     return (Address >= EmuPhysicalMapBase && Address <= EmuPhysicalMapEnd) ||
-           (Address >= EmuPhysicalShadowBase && Address <= EmuPhysicalShadowEnd) ||
-           (Address >= EmuPhysicalHighApertureBase && Address <= EmuPhysicalHighApertureEnd);
+           (Address >= EmuPhysicalShadowBase && Address <= EmuPhysicalShadowEnd);
 }
 
 static ULONG EmuPhysicalMapPageAddress(ULONG Address)
@@ -2194,6 +2314,38 @@ static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
 extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize);
 extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
 
+static bool EmuIsWritableHostRange(ULONG Address, ULONG Size)
+{
+    if(Address == 0 || Size == 0 || Address + Size < Address)
+        return false;
+
+    const ULONG End = Address + Size;
+    ULONG Current = Address;
+    while(Current < End)
+    {
+        MEMORY_BASIC_INFORMATION Memory;
+        if(VirtualQuery((const void *)(uintptr_t)Current, &Memory, sizeof(Memory)) != sizeof(Memory) ||
+           Memory.State != MEM_COMMIT || (Memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        {
+            return false;
+        }
+
+        const DWORD Access = Memory.Protect & 0xFF;
+        if(Access != PAGE_READWRITE && Access != PAGE_WRITECOPY &&
+           Access != PAGE_EXECUTE_READWRITE && Access != PAGE_EXECUTE_WRITECOPY)
+        {
+            return false;
+        }
+
+        const ULONG RegionEnd = (ULONG)(uintptr_t)Memory.BaseAddress + (ULONG)Memory.RegionSize;
+        if(RegionEnd <= Current)
+            return false;
+        Current = RegionEnd < End ? RegionEnd : End;
+    }
+
+    return true;
+}
+
 static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
 {
     // Kill switch for A/B attribution: CXBX_PHYS_NO_HOST_SPAN=1 restores the
@@ -2204,11 +2356,25 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
     if(s_Disabled)
         return NULL;
 
-    if(Address < EmuPhysicalMapBase || Address > EmuPhysicalMapEnd || Size == 0)
+    if(Size == 0)
+        return NULL;
+
+    ULONG BlockSize = 0;
+    if(Address >= EmuPhysicalShadowBase && Address <= EmuPhysicalShadowEnd)
+    {
+        // Xbox D3D obtains a CPU-visible AGP pointer by ORing a contiguous
+        // address with 0xF0000000. Heap fallback allocations preserve their
+        // host low 28 bits, so recover and validate that pointer first.
+        ULONG HostAlias = Address & 0x0FFFFFFF;
+        ULONG Base = EmuContiguousBlockBase(HostAlias, &BlockSize);
+        if(Base != 0 && HostAlias + Size >= HostAlias && HostAlias + Size <= Base + BlockSize)
+            return (BYTE *)(uintptr_t)HostAlias;
+    }
+
+    if(Address < EmuPhysicalMapBase || Address > EmuPhysicalMapEnd)
         return NULL;
 
     ULONG Physical = Address - EmuPhysicalMapBase;
-    ULONG BlockSize = 0;
     ULONG Base = EmuContiguousBlockBase(Physical, &BlockSize);
 
     if(Base != 0 && Physical + Size <= Base + BlockSize)
@@ -2221,6 +2387,24 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
         if(Base != 0 && Host + Size <= Base + BlockSize)
             return (BYTE *)(uintptr_t)Host;
     }
+
+    // Oversized images can force D3D resources into ordinary host heap blocks.
+    // Their Xbox identity-map pointers preserve the host low 28 bits even though
+    // those blocks are absent from the contiguous-memory tracker. Accept the
+    // alias only when the complete recovered span is committed and writable.
+    // The loaded XBE occupies the same low-address space, so never reinterpret
+    // its bytes as backing for the synthesized 0x80010000 kernel image.
+    const ULONG HostAlias = Address & 0x0FFFFFFF;
+    const ULONG GuestImageBase = g_pXbeHeader != NULL ? g_pXbeHeader->dwBaseAddr : 0;
+    const ULONG GuestImageEnd = g_pXbeHeader != NULL &&
+                                        g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage >=
+                                            g_pXbeHeader->dwBaseAddr
+                                    ? g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage
+                                    : 0;
+    const bool InGuestImage = GuestImageEnd > GuestImageBase &&
+                              HostAlias >= GuestImageBase && HostAlias < GuestImageEnd;
+    if(!InGuestImage && EmuIsWritableHostRange(HostAlias, Size))
+        return (BYTE *)(uintptr_t)HostAlias;
 
     return NULL;
 }
@@ -2615,6 +2799,11 @@ static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size
     return true;
 }
 
+extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE *Data, ULONG Size)
+{
+    return EmuWritePhysicalMapBytes(Address, Data, Size);
+}
+
 static bool EmuWritePhysicalMapRepeated(ULONG Address, ULONG Count, ULONG Size, ULONG Value, bool DirectionDown)
 {
     if(Count == 0 || Size == 0)
@@ -2849,6 +3038,15 @@ static ULONG EmuNv2aResolveDmaBase(ULONG Handle)
     return (Frame & 0x07FFFFFF) | (Flags & 0x00000FFF);
 }
 
+static ULONG EmuNv2aTextureDmaHandle(ULONG Format)
+{
+    // NV097_SET_TEXTURE_FORMAT_CONTEXT_DMA is a two-bit field, but hardware
+    // treats every non-zero value as context DMA B.
+    return (Format & 0x3) != 0
+               ? g_EmuNv2aContextDmaBHandle
+               : g_EmuNv2aContextDmaAHandle;
+}
+
 // Execute NV097_BACK_END_WRITE_SEMAPHORE_RELEASE: real hardware writes the
 // release value into the bound semaphore DMA object's memory once the back end
 // drains; D3D's fence spins on that dword, so a model that ignores the method
@@ -2938,7 +3136,8 @@ static ULONG EmuNv2aLog2(ULONG Value)
 }
 
 // Decode a KELVIN texture color format code to bytes-per-texel, an unpack kind
-// (0=A8R8G8B8/X8R8G8B8, 1=R5G6B5, 2=A1R5G5B5, 3=A4R4G4B4, 4=Y8), and whether it
+// (0=A8R8G8B8/X8R8G8B8, 1=R5G6B5, 2=A1R5G5B5, 3=A4R4G4B4, 4=Y8,
+// 5=P8 palette index), and whether it
 // is swizzled (Morton) or linear. Returns false for unsupported codes.
 static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG *Bpp, ULONG *Kind, bool *Swizzled)
 {
@@ -2955,6 +3154,7 @@ static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG *Bpp, ULONG *Kind, bool 
         case 0x11: *Bpp = 2; *Kind = 1; *Swizzled = false; return true; // LU_R5G6B5
         case 0x06: *Bpp = 4; *Kind = 0; *Swizzled = true;  return true; // SZ_A8R8G8B8
         case 0x07: *Bpp = 4; *Kind = 0; *Swizzled = true;  return true; // SZ_X8R8G8B8
+        case 0x0B: *Bpp = 1; *Kind = 5; *Swizzled = true;  return true; // SZ_I8_A8R8G8B8 (P8)
         case 0x12: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8R8G8B8
         case 0x1A: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8R8G8B8 (rect)
         case 0x1C: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_X8R8G8B8
@@ -2984,8 +3184,10 @@ static ULONG EmuNv2aUnpackTexel(ULONG Raw, ULONG Kind)
 // geometry needed to address it. Set up once per DRAW_ARRAYS, freed after.
 struct EmuNv2aSampler
 {
-    BYTE  *Data;
+    ULONG *Pixels;
     ULONG  Size, Width, Height, Bpp, Kind, LogW, LogH;
+    ULONG  Palette[256];
+    ULONG  PaletteSize;
     bool   Swizzled;
     bool   Bilinear;   // mag filter == LINEAR
 };
@@ -3004,6 +3206,37 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     if(!EmuNv2aTextureFormatInfo(Color, &S->Bpp, &S->Kind, &S->Swizzled))
         return false;
 
+    if(S->Kind == 5)
+    {
+        ULONG PaletteState = g_EmuNv2aTexture[Stage].Palette;
+        ULONG LengthCode = (PaletteState >> 2) & 0x3;
+        S->PaletteSize = 256u >> LengthCode;
+        ULONG PaletteHandle = (PaletteState & 1) != 0
+                                  ? g_EmuNv2aContextDmaBHandle
+                                  : g_EmuNv2aContextDmaAHandle;
+        ULONG PaletteBase = EmuNv2aResolveDmaBase(PaletteHandle);
+        ULONG PaletteAddress = PaletteBase + (PaletteState & 0xFFFFFFC0);
+        ULONG PaletteHost = EmuNv2aHostPointer(PaletteAddress);
+        ULONG PaletteBytes = sizeof(S->Palette);
+        bool PaletteLoaded = PaletteHost != 0 &&
+                             EmuTryReadHost(PaletteHost, S->Palette, PaletteBytes);
+        if(!PaletteLoaded)
+        {
+            ULONG PalettePhysical = PaletteAddress;
+            if(!EmuIsPhysicalMapAddress(PalettePhysical))
+            {
+                PalettePhysical = EmuPhysicalMapBase +
+                                  (PalettePhysical & EmuPhysicalRamMirrorMask);
+            }
+            PaletteLoaded = EmuReadPhysicalMapBlock(
+                PalettePhysical, reinterpret_cast<BYTE*>(S->Palette), PaletteBytes);
+        }
+        if(!PaletteLoaded)
+        {
+            return false;
+        }
+    }
+
     if(S->Swizzled || ImageRect == 0)
     {
         S->Width = 1ul << SizeU;
@@ -3021,32 +3254,57 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     S->LogH = EmuNv2aLog2(S->Height);
     S->Bilinear = (((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xF) == 2); // MAG == LINEAR
 
-    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaAHandle);
+    ULONG Base = EmuNv2aResolveDmaBase(EmuNv2aTextureDmaHandle(Format));
     ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
     S->Size = S->Width * S->Height * S->Bpp;
-    S->Data = new BYTE[S->Size];
+    BYTE* Source = new BYTE[S->Size];
 
     ULONG Host = EmuNv2aHostPointer(Address);
-    if(Host != 0 && EmuTryReadHost(Host, S->Data, S->Size))
-        return true;
+    bool Loaded = Host != 0 && EmuTryReadHost(Host, Source, S->Size);
+    if(!Loaded)
+    {
+        ULONG Phys = Address;
+        if(!EmuIsPhysicalMapAddress(Phys))
+        {
+            Phys = EmuPhysicalMapBase + (Phys & EmuPhysicalRamMirrorMask);
+        }
+        Loaded = EmuReadPhysicalMapBlock(Phys, Source, S->Size);
+    }
+    if(!Loaded)
+    {
+        delete[] Source;
+        return false;
+    }
 
-    ULONG Phys = Address;
-    if(!EmuIsPhysicalMapAddress(Phys))
-        Phys = EmuPhysicalMapBase + (Phys & EmuPhysicalRamMirrorMask);
-    if(EmuReadPhysicalMapBlock(Phys, S->Data, S->Size))
-        return true;
-
-    delete[] S->Data;
-    S->Data = NULL;
-    return false;
+    S->Pixels = new ULONG[S->Width * S->Height];
+    for(ULONG Y = 0; Y < S->Height; ++Y)
+    {
+        for(ULONG X = 0; X < S->Width; ++X)
+        {
+            ULONG TexelIndex = S->Swizzled
+                                   ? EmuNv2aSwizzleTexelIndex(X, Y, S->LogW, S->LogH)
+                                   : Y * S->Width + X;
+            ULONG ByteOffset = TexelIndex * S->Bpp;
+            ULONG Raw = 0;
+            for(ULONG Byte = 0; Byte < S->Bpp; ++Byte)
+            {
+                Raw |= static_cast<ULONG>(Source[ByteOffset + Byte]) << (Byte * 8);
+            }
+            S->Pixels[Y * S->Width + X] =
+                S->Kind == 5 ? S->Palette[Raw & 0xFF]
+                              : EmuNv2aUnpackTexel(Raw, S->Kind);
+        }
+    }
+    delete[] Source;
+    return true;
 }
 
 static void EmuNv2aFreeSampler(EmuNv2aSampler *S)
 {
-    if(S->Data != NULL)
+    if(S->Pixels != NULL)
     {
-        delete[] S->Data;
-        S->Data = NULL;
+        delete[] S->Pixels;
+        S->Pixels = NULL;
     }
 }
 
@@ -3056,13 +3314,7 @@ static ULONG EmuNv2aFetchTexel(const EmuNv2aSampler *S, int X, int Y)
     if(X < 0) X = 0; if(X >= (int)S->Width)  X = (int)S->Width - 1;
     if(Y < 0) Y = 0; if(Y >= (int)S->Height) Y = (int)S->Height - 1;
 
-    ULONG TexelIndex = S->Swizzled ? EmuNv2aSwizzleTexelIndex(X, Y, S->LogW, S->LogH)
-                                   : ((ULONG)Y * S->Width + (ULONG)X);
-    ULONG ByteOffset = TexelIndex * S->Bpp;
-    ULONG Raw = 0;
-    for(ULONG b = 0; b < S->Bpp && ByteOffset + b < S->Size; b++)
-        Raw |= (ULONG)S->Data[ByteOffset + b] << (b * 8);
-    return EmuNv2aUnpackTexel(Raw, S->Kind);
+    return S->Pixels[static_cast<ULONG>(Y) * S->Width + static_cast<ULONG>(X)];
 }
 
 // Sample at normalized (u,v): nearest, or bilinear (4-texel blend) when the mag
@@ -3144,7 +3396,8 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
         return;
     }
 
-    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaAHandle);
+    ULONG TextureDmaHandle = EmuNv2aTextureDmaHandle(Format);
+    ULONG Base = EmuNv2aResolveDmaBase(TextureDmaHandle);
     ULONG TextureAddress = Base + g_EmuNv2aTexture[Stage].Offset;
     ULONG SourceSize = Width * Height * Bpp;
     BYTE *Source = new BYTE[SourceSize];
@@ -3232,10 +3485,11 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
         fwrite(Pixels, 1, DataSize, f);
         fclose(f);
 
-        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s offset=0x%.08lX first=0x%.08lX distinct>=2:%s -> %s\n",
+        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s format=0x%.08lX dma=0x%.08lX base=0x%.08lX offset=0x%.08lX address=0x%.08lX palette=0x%.08lX first=0x%.08lX distinct>=2:%s -> %s\n",
                GetCurrentThreadId(), Stage, Width, Height, Color,
-               Swizzled ? "swizzled" : "linear", SourceKind,
-               g_EmuNv2aTexture[Stage].Offset, FirstColor,
+               Swizzled ? "swizzled" : "linear", SourceKind, Format,
+               TextureDmaHandle, Base, g_EmuNv2aTexture[Stage].Offset,
+               TextureAddress, g_EmuNv2aTexture[Stage].Palette, FirstColor,
                DistinctSample >= 2 ? "yes" : "no", path);
         fflush(stdout);
         g_EmuNv2aTextureDumpIndex++;
@@ -3402,7 +3656,11 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
     if(Host != 0)
         EmuContiguousBlockBase(Host, &BlockSize);
 
-    ULONG Height = (BlockSize != 0) ? (BlockSize / Pitch) : 480u;
+    ULONG Height = g_EmuNv2aSurfaceClipH;
+    if(Height == 0)
+    {
+        Height = (BlockSize != 0) ? (BlockSize / Pitch) : 480u;
+    }
     if(Height == 0)
         Height = 480u;
     if(Height > 2048)
@@ -3496,6 +3754,34 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
     delete[] Surface;
 }
 
+static void EmuNv2aPresentColorSurface()
+{
+    if(g_EmuNv2aSurfaceColorOffset == 0)
+    {
+        return;
+    }
+
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
+    ULONG Address = Base + g_EmuNv2aSurfaceColorOffset;
+    if(EmuNv2aHostPointer(Address) == 0 && Base != 0)
+    {
+        Address = g_EmuNv2aSurfaceColorOffset;
+    }
+
+    g_EmuNv2aScanoutAddress = Address & 0x0FFFFFFF;
+    EmuNv2aDumpScanout(g_EmuNv2aScanoutAddress);
+
+    static ULONG FlipLogCount = 0;
+    if(FlipLogCount < 8)
+    {
+        printf("Emu (0x%lX): NV2A flip read=%lu write=%lu modulo=%lu color=0x%.08lX.\n",
+               GetCurrentThreadId(), g_EmuNv2aFlipRead, g_EmuNv2aFlipWrite,
+               g_EmuNv2aFlipModulo, g_EmuNv2aScanoutAddress);
+        fflush(stdout);
+        ++FlipLogCount;
+    }
+}
+
 // Read the Phase 0 raster gate once. CXBX_NV2A_RASTER=1 turns on the pixel path;
 // off by default so the HLE-D3D8 titles and the conformance suite are untouched.
 static bool EmuNv2aRasterEnabled()
@@ -3512,6 +3798,145 @@ static bool EmuNv2aRasterEnabled()
         g_bEmuNv2aRasterChecked = true;
     }
     return g_bEmuNv2aRaster;
+}
+
+static void EmuNv2aClearSurface(ULONG Flags)
+{
+    if(!EmuNv2aRasterEnabled())
+    {
+        return;
+    }
+
+    int ColorPitchB = static_cast<int>(g_EmuNv2aSurfacePitchColor);
+    if(ColorPitchB <= 0)
+    {
+        ColorPitchB = 640 * 4;
+    }
+    int Width = static_cast<int>(g_EmuNv2aSurfaceClipW);
+    if(Width <= 0 || Width > ColorPitchB / 4)
+    {
+        Width = ColorPitchB / 4;
+    }
+    int Height = static_cast<int>(g_EmuNv2aSurfaceClipH);
+    if(Height <= 0 || Height > 4096)
+    {
+        Height = 480;
+    }
+
+    int MinX = static_cast<int>(g_EmuNv2aClearRectHorizontal & 0xFFFF);
+    int MaxX = static_cast<int>((g_EmuNv2aClearRectHorizontal >> 16) & 0xFFFF);
+    int MinY = static_cast<int>(g_EmuNv2aClearRectVertical & 0xFFFF);
+    int MaxY = static_cast<int>((g_EmuNv2aClearRectVertical >> 16) & 0xFFFF);
+    if(MinX >= Width || MinY >= Height || MaxX < MinX || MaxY < MinY)
+    {
+        return;
+    }
+    if(MaxX >= Width)
+    {
+        MaxX = Width - 1;
+    }
+    if(MaxY >= Height)
+    {
+        MaxY = Height - 1;
+    }
+
+    ULONG ColorHost = 0;
+    if((Flags & 0xF0) != 0 && g_EmuNv2aSurfaceColorOffset != 0)
+    {
+        ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
+        ColorHost = EmuNv2aHostPointer(Base + g_EmuNv2aSurfaceColorOffset);
+        if(ColorHost == 0 && Base != 0)
+        {
+            ColorHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceColorOffset);
+        }
+    }
+
+    ULONG ZetaHost = 0;
+    if((Flags & 0x03) != 0 && g_EmuNv2aSurfaceZetaOffset != 0 &&
+       g_EmuNv2aSurfaceZetaFormat != 0)
+    {
+        ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaZeta);
+        ZetaHost = EmuNv2aHostPointer(Base + g_EmuNv2aSurfaceZetaOffset);
+        if(ZetaHost == 0 && Base != 0)
+        {
+            ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceZetaOffset);
+        }
+    }
+
+    __try
+    {
+        if(ColorHost != 0)
+        {
+            ULONG Mask = 0;
+            if((Flags & 0x10) != 0) Mask |= 0x00FF0000;
+            if((Flags & 0x20) != 0) Mask |= 0x0000FF00;
+            if((Flags & 0x40) != 0) Mask |= 0x000000FF;
+            if((Flags & 0x80) != 0) Mask |= 0xFF000000;
+            ULONG *Color = reinterpret_cast<ULONG *>(static_cast<uintptr_t>(ColorHost));
+            int Pitch = ColorPitchB / 4;
+            for(int Y = MinY; Y <= MaxY; ++Y)
+            {
+                for(int X = MinX; X <= MaxX; ++X)
+                {
+                    ULONG &Pixel = Color[Y * Pitch + X];
+                    Pixel = (Pixel & ~Mask) | (g_EmuNv2aColorClearValue & Mask);
+                }
+            }
+        }
+
+        if(ZetaHost != 0)
+        {
+            int PitchB = static_cast<int>(g_EmuNv2aSurfacePitchZeta);
+            if(g_EmuNv2aSurfaceZetaFormat == 2)
+            {
+                if(PitchB <= 0) PitchB = Width * 4;
+                ULONG *Zeta = reinterpret_cast<ULONG *>(static_cast<uintptr_t>(ZetaHost));
+                int Pitch = PitchB / 4;
+                ULONG Mask = ((Flags & 0x01) != 0 ? 0xFFFFFF00 : 0) |
+                             ((Flags & 0x02) != 0 ? 0x000000FF : 0);
+                for(int Y = MinY; Y <= MaxY; ++Y)
+                {
+                    for(int X = MinX; X <= MaxX; ++X)
+                    {
+                        ULONG &Pixel = Zeta[Y * Pitch + X];
+                        Pixel = (Pixel & ~Mask) | (g_EmuNv2aZStencilClearValue & Mask);
+                    }
+                }
+            }
+            else if(g_EmuNv2aSurfaceZetaFormat == 1 && (Flags & 0x01) != 0)
+            {
+                if(PitchB <= 0) PitchB = Width * 2;
+                unsigned short *Zeta = reinterpret_cast<unsigned short *>(static_cast<uintptr_t>(ZetaHost));
+                int Pitch = PitchB / 2;
+                unsigned short Value = static_cast<unsigned short>(g_EmuNv2aZStencilClearValue);
+                for(int Y = MinY; Y <= MaxY; ++Y)
+                {
+                    for(int X = MinX; X <= MaxX; ++X)
+                    {
+                        Zeta[Y * Pitch + X] = Value;
+                    }
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        printf("Emu (0x%lX): NV2A clear fault color=0x%.08lX zeta=0x%.08lX.\n",
+               GetCurrentThreadId(), ColorHost, ZetaHost);
+        fflush(stdout);
+    }
+
+    static ULONG ClearLogCount = 0;
+    if(ClearLogCount < 8)
+    {
+        printf("Emu (0x%lX): NV2A clear flags=0x%.02lX rect=(%d,%d)-(%d,%d) color=0x%.08lX@0x%.08lX zeta=0x%.08lX@0x%.08lX fmt=%lu.\n",
+               GetCurrentThreadId(), Flags, MinX, MinY, MaxX, MaxY,
+               g_EmuNv2aColorClearValue, ColorHost,
+               g_EmuNv2aZStencilClearValue, ZetaHost,
+               g_EmuNv2aSurfaceZetaFormat);
+        fflush(stdout);
+        ++ClearLogCount;
+    }
 }
 
 extern "C" void EmuNv2aEnableHleRaster()
@@ -3551,6 +3976,8 @@ struct EmuNv2aRasterTarget
     const EmuNv2aSampler *Sampler; // NULL when no texture this draw
     bool   BlendEnable;
     ULONG  BlendSFactor, BlendDFactor, BlendEquation;
+    bool   AlphaTest;
+    ULONG  AlphaFunc, AlphaRef;
     bool   StencilTest;
     ULONG  StencilFunc, StencilRef, StencilFuncMask, StencilMask;
     ULONG  StencilOpFail, StencilOpZFail, StencilOpZPass;
@@ -3709,6 +4136,43 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
             if(la < -1e-4f || lb < -1e-4f || lc < -1e-4f)
                 continue;
 
+            ULONG Color;
+            if(Uniform)
+            {
+                Color = Ca;
+            }
+            else
+            {
+                ULONG A = EmuNv2aClampByte(la * Aa + lb * Ab + lc * Ac);
+                ULONG R = EmuNv2aClampByte(la * Ra + lb * Rb + lc * Rc);
+                ULONG G = EmuNv2aClampByte(la * Ga + lb * Gb + lc * Gc);
+                ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
+                Color = (A << 24) | (R << 16) | (G << 8) | B;
+            }
+
+            if(UseTex)
+            {
+                // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
+                float iw = la * aiw + lb * biw + lc * ciw;
+                float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
+                float u = (la * au * aiw + lb * bu * biw + lc * cu * ciw) * inv;
+                float v = (la * av * aiw + lb * bv * biw + lc * cv * ciw) * inv;
+                ULONG Tex = EmuNv2aSampleTexel(T->Sampler, u, v);
+                // MODULATE: (texel * diffuse) / 255 per channel.
+                ULONG ca = (Color >> 24) & 0xFF, cr = (Color >> 16) & 0xFF;
+                ULONG cg = (Color >> 8) & 0xFF,  cb = Color & 0xFF;
+                ULONG ta = (Tex >> 24) & 0xFF, tr = (Tex >> 16) & 0xFF;
+                ULONG tg = (Tex >> 8) & 0xFF,  tb = Tex & 0xFF;
+                Color = (((ca * ta) / 255) << 24) | (((cr * tr) / 255) << 16) |
+                        (((cg * tg) / 255) << 8)  |  ((cb * tb) / 255);
+            }
+
+            if(T->AlphaTest &&
+               !EmuNv2aDepthPass(T->AlphaFunc, (Color >> 24) & 0xFF, T->AlphaRef))
+            {
+                continue;
+            }
+
             if(UseDepth)
             {
                 float zf = la * az + lb * bz + lc * cz;
@@ -3754,37 +4218,6 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                 }
             }
 
-            ULONG Color;
-            if(Uniform)
-            {
-                Color = Ca;
-            }
-            else
-            {
-                ULONG A = EmuNv2aClampByte(la * Aa + lb * Ab + lc * Ac);
-                ULONG R = EmuNv2aClampByte(la * Ra + lb * Rb + lc * Rc);
-                ULONG G = EmuNv2aClampByte(la * Ga + lb * Gb + lc * Gc);
-                ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
-                Color = (A << 24) | (R << 16) | (G << 8) | B;
-            }
-
-            if(UseTex)
-            {
-                // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
-                float iw = la * aiw + lb * biw + lc * ciw;
-                float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
-                float u = (la * au * aiw + lb * bu * biw + lc * cu * ciw) * inv;
-                float v = (la * av * aiw + lb * bv * biw + lc * cv * ciw) * inv;
-                ULONG Tex = EmuNv2aSampleTexel(T->Sampler, u, v);
-                // MODULATE: (texel * diffuse) / 255 per channel.
-                ULONG ca = (Color >> 24) & 0xFF, cr = (Color >> 16) & 0xFF;
-                ULONG cg = (Color >> 8) & 0xFF,  cb = Color & 0xFF;
-                ULONG ta = (Tex >> 24) & 0xFF, tr = (Tex >> 16) & 0xFF;
-                ULONG tg = (Tex >> 8) & 0xFF,  tb = Tex & 0xFF;
-                Color = (((ca * ta) / 255) << 24) | (((cr * tr) / 255) << 16) |
-                        (((cg * tg) / 255) << 8)  |  ((cb * tb) / 255);
-            }
-
             if(T->BlendEnable)
                 Color = EmuNv2aBlend(Color, T->Color[Y * T->PitchPx + X],
                                      T->BlendSFactor, T->BlendDFactor, T->BlendEquation);
@@ -3800,8 +4233,109 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
 // z-buffer, or texturing.
 static ULONG g_EmuNv2aRasterLogCount = 0;
 
+static ULONG EmuNv2aVertexComponentSize(ULONG Type)
+{
+    switch(Type)
+    {
+        case 0: // UB_D3D
+        case 4: // UB_OGL
+            return 1;
+        case 1: // S1
+        case 5: // S32K
+            return 2;
+        case 2: // F
+        case 6: // CMP
+            return 4;
+        default:
+            return 0;
+    }
+}
+
+static bool EmuNv2aBuildInlineLayout(ULONG* Offsets, ULONG* VertexSize)
+{
+    ULONG Offset = 0;
+    for(ULONG Attribute = 0; Attribute < EmuNv2aVertexAttrCount; Attribute++)
+    {
+        Offsets[Attribute] = 0xFFFFFFFF;
+        ULONG Format = g_EmuNv2aVertexArray[Attribute].Format;
+        ULONG Type = Format & 0x0F;
+        ULONG Count = (Format >> 4) & 0x0F;
+        if(Count == 0)
+        {
+            continue;
+        }
+
+        ULONG ComponentSize = EmuNv2aVertexComponentSize(Type);
+        if(ComponentSize == 0 || Count > 4 || (Type == 6 && Count != 1))
+        {
+            return false;
+        }
+
+        Offset = (Offset + ComponentSize - 1) & ~(ComponentSize - 1);
+        Offsets[Attribute] = Offset;
+        Offset += ComponentSize * Count;
+        Offset = (Offset + ComponentSize - 1) & ~(ComponentSize - 1);
+    }
+
+    *VertexSize = Offset;
+    return Offset != 0;
+}
+
+static void EmuNv2aRasterizeInlineArray()
+{
+    ULONG Offsets[EmuNv2aVertexAttrCount] = {};
+    ULONG VertexSize = 0;
+    if(g_EmuNv2aInlineOverflow ||
+       !EmuNv2aBuildInlineLayout(Offsets, &VertexSize))
+    {
+        if(g_EmuNv2aRasterLogCount < 16)
+        {
+            printf("Emu (0x%lX): NV2A raster: invalid inline batch words=%lu overflow=%u.\n",
+                   GetCurrentThreadId(), g_EmuNv2aInlineWordCount,
+                   g_EmuNv2aInlineOverflow ? 1u : 0u);
+            fflush(stdout);
+            g_EmuNv2aRasterLogCount++;
+        }
+        return;
+    }
+
+    ULONG ByteCount = g_EmuNv2aInlineWordCount * sizeof(ULONG);
+    ULONG VertexCount = ByteCount / VertexSize;
+    if(VertexCount < 3)
+    {
+        return;
+    }
+
+    if(g_EmuNv2aRasterLogCount < 16)
+    {
+        printf("Emu (0x%lX): NV2A raster: inline words=%lu stride=%lu verts=%lu formats=0x%.08lX/0x%.08lX/0x%.08lX.\n",
+               GetCurrentThreadId(), g_EmuNv2aInlineWordCount, VertexSize, VertexCount,
+               g_EmuNv2aVertexArray[EmuNv2aAttrPosition].Format,
+               g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse].Format,
+               g_EmuNv2aVertexArray[EmuNv2aAttrTexcoord0].Format);
+        for(ULONG Attribute = 0; Attribute < EmuNv2aVertexAttrCount; Attribute++)
+        {
+            if(Offsets[Attribute] != 0xFFFFFFFF)
+            {
+                printf("NV2A| inline attr=%lu fmt=0x%.08lX offset=%lu\n",
+                       Attribute, g_EmuNv2aVertexArray[Attribute].Format,
+                       Offsets[Attribute]);
+            }
+        }
+        fflush(stdout);
+    }
+
+    EmuNv2aRasterizeDrawArrays(
+        0, VertexCount, nullptr,
+        reinterpret_cast<const BYTE*>(g_EmuNv2aInlineWords),
+        VertexSize, Offsets);
+}
+
 static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
-                                       const ULONG* Indices)
+                                       const ULONG* Indices,
+                                       const BYTE* InlineData,
+                                       ULONG InlineStride,
+                                       const ULONG* InlineOffsets)
 {
     if(!EmuNv2aRasterEnabled() || g_EmuNv2aBeginOp == 0 || Count < 3)
         return;
@@ -3846,6 +4380,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     Target.BlendSFactor = g_EmuNv2aBlendSFactor;
     Target.BlendDFactor = g_EmuNv2aBlendDFactor;
     Target.BlendEquation = g_EmuNv2aBlendEquation;
+    Target.AlphaTest = g_EmuNv2aAlphaTest;
+    Target.AlphaFunc = g_EmuNv2aAlphaFunc;
+    Target.AlphaRef = g_EmuNv2aAlphaRef;
 
     // Resolve the depth (zeta) surface when depth OR stencil testing is enabled
     // and a zeta surface is bound (same base-0 raw-pointer fallback as color).
@@ -3881,11 +4418,35 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     EmuNv2aVertexArrayState *Dif = &g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse];
     EmuNv2aVertexArrayState *Tex = &g_EmuNv2aVertexArray[EmuNv2aAttrTexcoord0];
     ULONG VertexBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaVertex);
-    ULONG PosStride = (Pos->Format >> 8) & 0xFF;
+    bool Inline = InlineData != nullptr && InlineStride != 0 && InlineOffsets != nullptr;
+    const auto AttributeHost = [Inline, InlineData, InlineStride, InlineOffsets, VertexBase](
+        ULONG Attribute, ULONG Index) -> ULONG
+    {
+        if(Inline)
+        {
+            if(InlineOffsets[Attribute] == 0xFFFFFFFF)
+            {
+                return 0;
+            }
+            return static_cast<ULONG>(reinterpret_cast<uintptr_t>(
+                InlineData + Index * InlineStride + InlineOffsets[Attribute]));
+        }
+
+        const EmuNv2aVertexArrayState* Array = &g_EmuNv2aVertexArray[Attribute];
+        ULONG Stride = (Array->Format >> 8) & 0xFF;
+        return EmuNv2aHostPointer(VertexBase + Array->Offset + Index * Stride);
+    };
+    ULONG PosStride = Inline && InlineOffsets[EmuNv2aAttrPosition] != 0xFFFFFFFF
+                          ? InlineStride
+                          : ((Pos->Format >> 8) & 0xFF);
     ULONG PosType   = Pos->Format & 0x0F;
-    ULONG DifStride = (Dif->Format >> 8) & 0xFF;
+    ULONG DifStride = Inline && InlineOffsets[EmuNv2aAttrDiffuse] != 0xFFFFFFFF
+                          ? InlineStride
+                          : ((Dif->Format >> 8) & 0xFF);
     ULONG DifType   = Dif->Format & 0x0F;
-    ULONG TexStride = (Tex->Format >> 8) & 0xFF;
+    ULONG TexStride = Inline && InlineOffsets[EmuNv2aAttrTexcoord0] != 0xFFFFFFFF
+                          ? InlineStride
+                          : ((Tex->Format >> 8) & 0xFF);
     // Phase 2: run the loaded vertex program when execution mode is PROGRAM.
     // Otherwise the position/diffuse arrays are consumed directly (Phase 0/1),
     // which needs a float position array.
@@ -3940,14 +4501,20 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                 Input[a * 4 + 0] = 0.0f; Input[a * 4 + 1] = 0.0f;
                 Input[a * 4 + 2] = 0.0f; Input[a * 4 + 3] = 1.0f;
                 EmuNv2aVertexArrayState *Arr = &g_EmuNv2aVertexArray[a];
-                ULONG Stride = (Arr->Format >> 8) & 0xFF;
+                ULONG Stride = Inline && InlineOffsets[a] != 0xFFFFFFFF
+                                   ? InlineStride
+                                   : ((Arr->Format >> 8) & 0xFF);
                 ULONG Size   = (Arr->Format >> 4) & 0x0F;
                 ULONG Type   = Arr->Format & 0x0F;
                 if(Stride == 0 || Size == 0)
+                {
                     continue;
-                ULONG Host = EmuNv2aHostPointer(VertexBase + Arr->Offset + Index * Stride);
+                }
+                ULONG Host = AttributeHost(a, Index);
                 if(Host == 0)
+                {
                     continue;
+                }
                 if(Type == 2 /* TYPE_F */)
                 {
                     for(ULONG c = 0; c < Size && c < 4; c++)
@@ -3977,10 +4544,22 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             ULONG B = EmuNv2aClampByte(OutCol[2] * 255.0f);
             ULONG A = EmuNv2aClampByte(OutCol[3] * 255.0f);
             Color = (A << 24) | (R << 16) | (G << 8) | B;
+            if(SamplerReady && Color == 0xFF000000)
+            {
+                // XDK passthrough programs often leave oD0 unwritten because
+                // their combiner selects the texture directly. This software
+                // path does not model combiners yet, so avoid multiplying a
+                // valid texture by the hardware's default-black oD0 value.
+                Color = 0xFFFFFFFF;
+            }
         }
         else
         {
-            ULONG PosHost = EmuNv2aHostPointer(VertexBase + Pos->Offset + Index * PosStride);
+            ULONG PosHost = AttributeHost(EmuNv2aAttrPosition, Index);
+            if(PosHost == 0)
+            {
+                continue;
+            }
             Xc = EmuNv2aReadHostFloat(PosHost);
             Yc = EmuNv2aReadHostFloat(PosHost + 4);
             Zc = (PosSize >= 3) ? EmuNv2aReadHostFloat(PosHost + 8) : 0.0f;
@@ -3988,7 +4567,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
             if(DifStride != 0)
             {
-                ULONG DifHost = EmuNv2aHostPointer(VertexBase + Dif->Offset + Index * DifStride);
+                ULONG DifHost = AttributeHost(EmuNv2aAttrDiffuse, Index);
                 if(DifHost != 0)
                 {
                     if(DifType == 2 /* TYPE_F, float4 RGBA */)
@@ -4010,7 +4589,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
             if(TexStride != 0)
             {
-                ULONG TexHost = EmuNv2aHostPointer(VertexBase + Tex->Offset + Index * TexStride);
+                ULONG TexHost = AttributeHost(EmuNv2aAttrTexcoord0, Index);
                 if(TexHost != 0)
                 {
                     U = EmuNv2aReadHostFloat(TexHost);
@@ -4032,10 +4611,29 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
         // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
         // w==1 and the identity viewport default this reproduces Phase 0/1.
-        float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
-        VX[i] = (Xc * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
-        VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
-        VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
+        const bool ScreenDepth = Zc < -2.0f || Zc > 2.0f;
+        bool Pretransformed = VpActive &&
+                              ((W > -1e-6f && W < 1e-6f) || ScreenDepth) &&
+                              Xc > -2.0f * Width && Xc < 3.0f * Width &&
+                              Yc > -2.0f * Height && Yc < 3.0f * Height;
+        float InvW = Pretransformed ? 1.0f
+                                    : ((W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f);
+        if(Pretransformed)
+        {
+            // XDK pretransformed paths feed screen coordinates in v0.xy and
+            // either use w=0 or the Xbox 16-bit screen-depth range. Applying
+            // the clip-space viewport a second time sends these quads far
+            // outside the render target.
+            VX[i] = Xc;
+            VY[i] = Yc;
+            VZ[i] = Zc;
+        }
+        else
+        {
+            VX[i] = (Xc * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
+            VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
+            VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
+        }
         VU[i] = U;
         VV[i] = V;
         VIW[i] = InvW;
@@ -4096,22 +4694,46 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         fflush(stdout);
     }
 
-    if(SamplerReady)
-        EmuNv2aFreeSampler(&Sampler);
-
     if(g_EmuNv2aRasterLogCount < 32)
     {
-        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) vp_scale=(%.1f,%.1f) vp_off=(%.1f,%.1f) v0=(%.1f,%.1f) c0=0x%.08lX\n",
+        int SampleX = Count >= 3 ? (int)((VX[0] + VX[1] + VX[2]) / 3.0f) : 0;
+        int SampleY = Count >= 3 ? (int)((VY[0] + VY[1] + VY[2]) / 3.0f) : 0;
+        ULONG Sample = 0;
+        ULONG TextureSample = 0;
+        float V3X = Count > 3 ? VX[3] : 0.0f;
+        float V3Y = Count > 3 ? VY[3] : 0.0f;
+        float V3U = Count > 3 ? VU[3] : 0.0f;
+        float V3V = Count > 3 ? VV[3] : 0.0f;
+        if(SampleX >= 0 && SampleX < Width && SampleY >= 0 && SampleY < Height)
+        {
+            Sample = Target.Color[SampleY * Target.PitchPx + SampleX];
+        }
+        if(SamplerReady)
+        {
+            TextureSample = EmuNv2aSampleTexel(
+                &Sampler, (VU[0] + VU[1] + VU[2]) / 3.0f,
+                (VV[0] + VV[1] + VV[2]) / 3.0f);
+        }
+        printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu@%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) blend=%u(0x%lX,0x%lX) vp_scale=(%.1f,%.1f,%.1f) vp_off=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f) uv=(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f) c0=0x%.08lX texel=0x%.08lX sample[%d,%d]=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
-               VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount,
+               VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount, g_EmuNv2aVpStart,
                Target.Depth ? "on" : "off", g_EmuNv2aSurfaceZetaFormat, g_EmuNv2aDepthFunc,
                SamplerReady ? "on" : "off", SamplerReady ? Sampler.Width : 0, SamplerReady ? Sampler.Height : 0,
-               g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
-               g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
-               VX[0], VY[0], VC[0]);
+               Target.BlendEnable ? 1u : 0u, Target.BlendSFactor, Target.BlendDFactor,
+               g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1], g_EmuNv2aViewportScale[2],
+               g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1], g_EmuNv2aViewportOffset[2],
+               VX[0], VY[0], VZ[0], VX[1], VY[1], VZ[1], VX[2], VY[2], VZ[2],
+               V3X, V3Y, Count > 3 ? VZ[3] : 0.0f,
+               VU[0], VV[0], VU[1], VV[1], VU[2], VV[2], V3U, V3V,
+               VC[0], TextureSample, SampleX, SampleY, Sample);
         fflush(stdout);
         g_EmuNv2aRasterLogCount++;
+    }
+
+    if(SamplerReady)
+    {
+        EmuNv2aFreeSampler(&Sampler);
     }
 }
 
@@ -4376,6 +4998,15 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
     if(!FaultIsPhysicalMap && !MayBePhysicalStoreFault)
         return false;
 
+    // Keep enough samples to identify new decoder paths without turning large
+    // CPU-side resource conversions into a synchronous log workload. Explicit
+    // physical tracing retains the complete access stream.
+    static volatile LONG s_PhysicalAccessCount = 0;
+    static bool s_FullPhysicalAccessTrace = getenv("CXBX_PHYS_TRACE") != NULL;
+    const ULONG AccessCount = (ULONG)InterlockedIncrement(&s_PhysicalAccessCount);
+    const bool LogAccess = s_FullPhysicalAccessTrace || AccessCount <= 64 ||
+                           (AccessCount & (AccessCount - 1)) == 0;
+
     __try
     {
         BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
@@ -4412,9 +5043,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 e->ContextRecord->Edi += TotalSize;
             e->ContextRecord->Eip += 2;
 
-            printf("Emu (0x%lX): Emulated physical rep stos%c 0x%.08lX count 0x%.08lX value 0x%.08lX.\n",
-                   GetCurrentThreadId(), Size == 4 ? 'd' : 'b', FaultAddress, Count, e->ContextRecord->Eax);
-            fflush(stdout);
+            if(LogAccess)
+            {
+                printf("Emu (0x%lX): Emulated physical rep stos%c 0x%.08lX count 0x%.08lX value 0x%.08lX.\n",
+                       GetCurrentThreadId(), Size == 4 ? 'd' : 'b', FaultAddress, Count, e->ContextRecord->Eax);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -4445,9 +5079,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             }
             e->ContextRecord->Eip += 2;
 
-            printf("Emu (0x%lX): Emulated physical rep movs%c 0x%.08lX <- 0x%.08lX count 0x%.08lX.\n",
-                   GetCurrentThreadId(), Size == 4 ? 'd' : 'b', FaultAddress, SourceAddress, Count);
-            fflush(stdout);
+            if(LogAccess)
+            {
+                printf("Emu (0x%lX): Emulated physical rep movs%c 0x%.08lX <- 0x%.08lX count 0x%.08lX.\n",
+                       GetCurrentThreadId(), Size == 4 ? 'd' : 'b', FaultAddress, SourceAddress, Count);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -4535,9 +5172,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             e->ContextRecord->Eax = Value;
             e->ContextRecord->Eip += 5;
 
-            printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
-                   GetCurrentThreadId(), FaultAddress, Value);
-            fflush(stdout);
+            if(LogAccess)
+            {
+                printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -4557,9 +5197,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, Value);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -4580,9 +5223,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 EmuSetContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, (BYTE)Value);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated physical byte read 0x%.08lX = 0x%.02lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical byte read 0x%.08lX = 0x%.02lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -4605,9 +5251,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 EmuSetContextRegister(e->ContextRecord, (Instruction[2] >> 3) & 0x07, Value);
                 e->ContextRecord->Eip += 1 + OperandLength;
 
-                printf("Emu (0x%lX): Emulated physical movzx %s read 0x%.08lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), Size == 1 ? "byte" : "word", FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical movzx %s read 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), Size == 1 ? "byte" : "word", FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -4855,9 +5504,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 EmuSetTestFlags(e->ContextRecord, Left & Right, 0x80000000);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Right);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Right);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5051,9 +5703,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
             e->ContextRecord->Eip += 5;
 
-            printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
-                   GetCurrentThreadId(), FaultAddress, Value);
-            fflush(stdout);
+            if(LogAccess)
+            {
+                printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -5072,9 +5727,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5094,9 +5752,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated physical byte write 0x%.08lX = 0x%.02lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical byte write 0x%.08lX = 0x%.02lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5116,9 +5777,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
                 e->ContextRecord->Eip += OperandLength + 4;
 
-                printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical write 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5139,9 +5803,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
                 e->ContextRecord->Eip += 1 + OperandLength + 2;
 
-                printf("Emu (0x%lX): Emulated physical word write 0x%.08lX = 0x%.04lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical word write 0x%.08lX = 0x%.04lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5161,9 +5828,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
                 e->ContextRecord->Eip += OperandLength + 1;
 
-                printf("Emu (0x%lX): Emulated physical byte write 0x%.08lX = 0x%.02lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical byte write 0x%.08lX = 0x%.02lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5191,8 +5861,11 @@ static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
             case 0xEC:
                 EmuSetContextByteRegister(e->ContextRecord, 0, 0);
                 e->ContextRecord->Eip += 1;
-                printf("Emu (0x%lX): Emulated IN AL, DX port=0x%.04lX.\n", GetCurrentThreadId(), Port);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated IN AL, DX port=0x%.04lX.\n", GetCurrentThreadId(), Port);
+                    fflush(stdout);
+                }
                 return true;
 
             case 0xED:
@@ -5338,8 +6011,11 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 
             if(EmuMmioTraceEnabled())
             {
-                printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                    fflush(stdout);
+                }
             }
 
             return true;
@@ -5387,8 +6063,11 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuSetContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, Value);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5487,8 +6166,11 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuSetContextByteRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07, (BYTE)Value);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO byte read 0x%.08lX.\n", GetCurrentThreadId(), FaultAddress);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5557,9 +6239,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuSetTestFlags(e->ContextRecord, Value & Immediate, 0x80000000);
                 e->ContextRecord->Eip += OperandLength + 4;
 
-                printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Immediate);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Immediate);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5578,9 +6263,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuSetTestFlags(e->ContextRecord, (Value & Immediate) & 0xFF, 0x80);
                 e->ContextRecord->Eip += OperandLength + 1;
 
-                printf("Emu (0x%lX): Emulated MMIO byte test 0x%.08lX & 0x%.02lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Immediate);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO byte test 0x%.08lX & 0x%.02lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Immediate);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5599,9 +6287,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuSetTestFlags(e->ContextRecord, Left & Right, 0x80000000);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Right);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO test 0x%.08lX & 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Right);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5722,9 +6413,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             EmuWriteMmio(FaultAddress, 4, e->ContextRecord->Eax);
             e->ContextRecord->Eip += 2;
 
-            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
-                   GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax);
-            fflush(stdout);
+            if(EmuMmioTraceEnabled())
+            {
+                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, e->ContextRecord->Eax);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -5736,9 +6430,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             EmuWriteMmio(FaultAddress, 4, Value);
             e->ContextRecord->Eip += 6;
 
-            printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
-                   GetCurrentThreadId(), FaultAddress, Value);
-            fflush(stdout);
+            if(EmuMmioTraceEnabled())
+            {
+                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Value);
+                fflush(stdout);
+            }
 
             return true;
         }
@@ -5755,9 +6452,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuWriteMmio(FaultAddress, 4, Value);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5795,9 +6495,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuWriteMmio(FaultAddress, 1, Value);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
-                fflush(stdout);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO byte write 0x%.08lX = 0x%.02lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
 
                 return true;
             }
@@ -5837,8 +6540,60 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
                 EmuWriteMmio(FaultAddress, 4, Value);
                 e->ContextRecord->Eip += OperandLength + 4;
 
-                printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), FaultAddress, Value);
+                if(EmuMmioTraceEnabled())
+                {
+                    printf("Emu (0x%lX): Emulated MMIO write 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
+
+                return true;
+            }
+        }
+
+        // 0x81 /1 = or r/m32, imm32. Network initialization uses this form
+        // for read-modify-write updates to fixed NVNET registers.
+        if(AccessType == 1 && Instruction[0] == 0x81 &&
+           (Instruction[1] & 0x38) == 0x08)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Immediate = *(ULONG*)&Instruction[OperandLength];
+                ULONG Value = EmuReadMmio(FaultAddress, 4) | Immediate;
+                EmuWriteMmio(FaultAddress, 4, Value);
+                EmuSetTestFlags(e->ContextRecord, Value, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 4;
+
+                printf("Emu (0x%lX): Emulated MMIO or 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Immediate);
+                fflush(stdout);
+
+                return true;
+            }
+        }
+
+        // 0x83 /1 = or r/m32, sign-extended imm8.
+        if(AccessType == 1 && Instruction[0] == 0x83 &&
+           (Instruction[1] & 0x38) == 0x08)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Immediate = (ULONG)(LONG)(CHAR)Instruction[OperandLength];
+                ULONG Value = EmuReadMmio(FaultAddress, 4) | Immediate;
+                EmuWriteMmio(FaultAddress, 4, Value);
+                EmuSetTestFlags(e->ContextRecord, Value, 0x80000000);
+                e->ContextRecord->Eip += OperandLength + 1;
+
+                printf("Emu (0x%lX): Emulated MMIO or 0x%.08lX with 0x%.08lX.\n",
+                       GetCurrentThreadId(), FaultAddress, Immediate);
                 fflush(stdout);
 
                 return true;
@@ -5907,7 +6662,10 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 // rel32 (E8) and the call r/m32 forms (FF /2), where the ModR/M reg field == 2.
 static bool EmuLooksLikeReturnAddress(ULONG Address)
 {
-    if(Address < 0x00010000 || Address >= 0x10000000)
+    // The longest recognized encoding reads six bytes before Address.
+    if(Address < 0x00010006 || Address >= 0x10000000)
+        return false;
+    if(IsBadReadPtr((const void*)(Address - 6), 6))
         return false;
 
     __try
@@ -6108,15 +6866,29 @@ static volatile LONG g_VectoredRepeatCount = 0;
 
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
-    // Opt-in firehose (CXBX_EXC_TRACE=1): one line per exception BEFORE any
-    // emulation attempt, so the primary fault that precedes a corrupted SEH
-    // dispatch can be identified even when a later wild jump overwrites the
-    // evidence.
+    // Opt-in pre-dispatch trace. The normal mode omits expected aperture and
+    // port-I/O traps so diagnostics do not materially change title timing;
+    // CXBX_EXC_TRACE_ALL retains the original one-line-per-exception firehose.
     {
         static int s_ExcTrace = -1;
+        static int s_ExcTraceAll = -1;
         if(s_ExcTrace < 0)
             s_ExcTrace = getenv("CXBX_EXC_TRACE") != NULL ? 1 : 0;
+        if(s_ExcTraceAll < 0)
+            s_ExcTraceAll = getenv("CXBX_EXC_TRACE_ALL") != NULL ? 1 : 0;
+
+        bool ExpectedTrap = e->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION;
+        if(e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+           e->ExceptionRecord->NumberParameters >= 2)
+        {
+            const ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
+            ExpectedTrap = EmuIsMmioAddress(FaultAddress) ||
+                           EmuIsStubMmioAddress(FaultAddress) ||
+                           EmuIsPhysicalMapAddress(FaultAddress);
+        }
+
         if(s_ExcTrace &&
+           (s_ExcTraceAll || !ExpectedTrap) &&
            e->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP &&
            e->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
         {
@@ -6625,6 +7397,21 @@ void EmuThreadFaultExit()
 
 static PVOID g_hEmuVectoredExceptionHandler = NULL;
 
+static LONG WINAPI EmuUnhandledExceptionFilter(LPEXCEPTION_POINTERS e)
+{
+    if(e != NULL && e->ExceptionRecord != NULL && e->ContextRecord != NULL)
+    {
+        printf("UNHANDLED| code=0x%08lX eip=0x%08lX addr=0x%08lX esp=0x%08lX\n",
+               e->ExceptionRecord->ExceptionCode, (ULONG)e->ContextRecord->Eip,
+               e->ExceptionRecord->NumberParameters >= 2 ?
+                   (ULONG)e->ExceptionRecord->ExceptionInformation[1] : 0,
+               (ULONG)e->ContextRecord->Esp);
+        fflush(stdout);
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // ******************************************************************
 // * func: DllMain
 // ******************************************************************
@@ -6636,6 +7423,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
         _CrtSetReportMode(_CRT_ASSERT, 0);
 #endif
         EmuConfigureLogFile();
+        SetUnhandledExceptionFilter(EmuUnhandledExceptionFilter);
         printf("--- cxbx runtime attach ---\n");
         EmuShared::Init();
     }
@@ -6812,27 +7600,6 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     }
 
     // ******************************************************************
-    // * Load the necessary pieces of XBEHeader
-    // ******************************************************************
-    {
-        Xbe::Header *MemXbeHeader = (Xbe::Header*)0x00010000;
-
-        uint32 old_protection = 0;
-
-        VirtualProtect(MemXbeHeader, 0x1000, PAGE_READWRITE, &old_protection);
-
-        // we sure hope we aren't corrupting anything necessary for an .exe to survive :]
-        MemXbeHeader->dwSizeofHeaders   = pXbeHeader->dwSizeofHeaders;
-        MemXbeHeader->dwCertificateAddr = pXbeHeader->dwCertificateAddr;
-        MemXbeHeader->dwPeHeapReserve   = pXbeHeader->dwPeHeapReserve;
-        MemXbeHeader->dwPeHeapCommit    = pXbeHeader->dwPeHeapCommit;
-
-        memcpy(&MemXbeHeader->dwInitFlags, &pXbeHeader->dwInitFlags, sizeof(pXbeHeader->dwInitFlags));
-
-        memcpy((void*)pXbeHeader->dwCertificateAddr, &((uint08*)pXbeHeader)[pXbeHeader->dwCertificateAddr - 0x00010000], sizeof(Xbe::Certificate));
-    }
-
-    // ******************************************************************
 	// * Initialize current directory
     // ******************************************************************
 	{
@@ -6922,6 +7689,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
             if(g_hZDrive == INVALID_HANDLE_VALUE)
                 EmuCleanup("Could not map Z:\\\n");
+
+            strcat(szBuffer, "\\CACHE");
+            CreateDirectory(szBuffer, NULL);
         }
     }
 
@@ -7184,6 +7954,65 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     printf("Emu (0x%X): Initial thread starting.\n", GetCurrentThreadId());
 
     g_EmuInitialThreadId = GetCurrentThreadId();
+
+    // The generated PE header overlaps the hardware XBE-header address. Keep
+    // the PE fields needed by the Windows loader intact (in particular its
+    // data-directory count), while exposing the XBE fields used by native XAPI.
+    // Section metadata lives in a relocated shadow because the original XBE
+    // section table overlaps the generated PE section table.
+    {
+        Xbe::Header *MemXbeHeader = (Xbe::Header*)0x00010000;
+        const uint32 HeaderBase = pXbeHeader->dwBaseAddr;
+        const uint32 SectionOffset = pXbeHeader->dwSectionHeadersAddr - HeaderBase;
+        const uint32 SectionBytes = pXbeHeader->dwSections * sizeof(Xbe::SectionHeader);
+        DWORD old_protection = 0;
+
+        if(HeaderBase != 0x00010000 || SectionOffset > dwXbeHeaderSize ||
+           SectionBytes > dwXbeHeaderSize - SectionOffset)
+            EmuCleanup("Invalid XBE section metadata");
+
+        uint08 *HeaderShadow = (uint08*)VirtualAlloc(NULL, dwXbeHeaderSize,
+                                                     MEM_RESERVE | MEM_COMMIT,
+                                                     PAGE_READWRITE);
+        if(HeaderShadow == NULL ||
+           !VirtualProtect(MemXbeHeader, 0x1000, PAGE_READWRITE, &old_protection))
+            EmuCleanup("Could not restore the guest XBE header view");
+
+        memcpy(HeaderShadow, pXbeHeader, dwXbeHeaderSize);
+        Xbe::SectionHeader *ShadowSections =
+            (Xbe::SectionHeader*)(HeaderShadow + SectionOffset);
+
+        for(uint32 i = 0; i < pXbeHeader->dwSections; i++)
+        {
+            uint32 *HeaderPointers[] = {
+                &ShadowSections[i].dwSectionNameAddr,
+                &ShadowSections[i].dwHeadSharedRefCountAddr,
+                &ShadowSections[i].dwTailSharedRefCountAddr,
+            };
+            for(uint32 p = 0; p < sizeof(HeaderPointers) / sizeof(HeaderPointers[0]); p++)
+            {
+                const uint32 Address = *HeaderPointers[p];
+                if(Address >= HeaderBase && Address - HeaderBase < dwXbeHeaderSize)
+                    *HeaderPointers[p] = (uint32)(HeaderShadow + (Address - HeaderBase));
+            }
+        }
+
+        MemXbeHeader->dwSizeofHeaders = pXbeHeader->dwSizeofHeaders;
+        MemXbeHeader->dwCertificateAddr = pXbeHeader->dwCertificateAddr;
+        MemXbeHeader->dwSections = pXbeHeader->dwSections;
+        MemXbeHeader->dwSectionHeadersAddr = (uint32)ShadowSections;
+        MemXbeHeader->dwPeHeapReserve = pXbeHeader->dwPeHeapReserve;
+        MemXbeHeader->dwPeHeapCommit = pXbeHeader->dwPeHeapCommit;
+        memcpy(&MemXbeHeader->dwInitFlags, &pXbeHeader->dwInitFlags,
+               sizeof(pXbeHeader->dwInitFlags));
+
+        const uint32 CertificateOffset = pXbeHeader->dwCertificateAddr - HeaderBase;
+        if(CertificateOffset > dwXbeHeaderSize ||
+           sizeof(Xbe::Certificate) > dwXbeHeaderSize - CertificateOffset)
+            EmuCleanup("Invalid XBE certificate metadata");
+        memcpy((void*)pXbeHeader->dwCertificateAddr,
+               (uint08*)pXbeHeader + CertificateOffset, sizeof(Xbe::Certificate));
+    }
 
     // ******************************************************************
     // * Entry Point
