@@ -2932,18 +2932,18 @@ extern "C" BOOLEAN NTAPI EmuRtlTryEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_S
 
     ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
 
-    if(CriticalSection->RecursionCount == 0)
-    {
-        CriticalSection->LockCount = 0;
-        CriticalSection->RecursionCount = 1;
-        CriticalSection->OwningThread = CurrentThread;
-        return TRUE;
-    }
-
     if(CriticalSection->OwningThread == CurrentThread)
     {
         CriticalSection->LockCount++;
         CriticalSection->RecursionCount++;
+        return TRUE;
+    }
+
+    if(InterlockedCompareExchange((volatile LONG*)&CriticalSection->OwningThread,
+                                  (LONG)CurrentThread, 0) == 0)
+    {
+        CriticalSection->LockCount = 0;
+        CriticalSection->RecursionCount = 1;
         return TRUE;
     }
 
@@ -2964,17 +2964,23 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
 
     ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
 
-    if(CriticalSection->RecursionCount == 0)
+    if(CriticalSection->OwningThread == CurrentThread)
     {
-        CriticalSection->LockCount = 0;
-        CriticalSection->RecursionCount = 1;
-        CriticalSection->OwningThread = CurrentThread;
+        CriticalSection->LockCount++;
+        CriticalSection->RecursionCount++;
         return;
     }
 
-    CriticalSection->LockCount++;
-    CriticalSection->RecursionCount++;
-    CriticalSection->OwningThread = CurrentThread;
+    while(InterlockedCompareExchange((volatile LONG*)&CriticalSection->OwningThread,
+                                     (LONG)CurrentThread, 0) != 0)
+    {
+        EmuSwapFS();
+        Sleep(0);
+        EmuSwapFS();
+    }
+
+    CriticalSection->LockCount = 0;
+    CriticalSection->RecursionCount = 1;
 }
 
 extern "C" VOID NTAPI EmuRtlEnterCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
@@ -3004,14 +3010,17 @@ extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
         return;
     }
 
-    if(CriticalSection->RecursionCount == 0)
+    ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
+    if(CriticalSection->OwningThread != CurrentThread || CriticalSection->RecursionCount == 0)
+    {
         return;
+    }
 
     if(CriticalSection->RecursionCount == 1)
     {
         CriticalSection->LockCount = -1;
         CriticalSection->RecursionCount = 0;
-        CriticalSection->OwningThread = 0;
+        InterlockedExchange((volatile LONG*)&CriticalSection->OwningThread, 0);
         return;
     }
 
