@@ -131,6 +131,70 @@ int main()
     Check("neutral left trigger", guest.analogButtons[6], static_cast<std::uint8_t>(0));
     Check("neutral right trigger", guest.analogButtons[7], static_cast<std::uint8_t>(0));
 
+    HostInput::GamepadState injected{};
+    Check("parse injected state",
+          HostInput::ParseInjectedGamepadState(
+              "0x0010,255,1,2,3,4,5,6,7,-32768,32767,-123,456",
+              injected),
+          true);
+    Check("parsed buttons", injected.buttons, static_cast<std::uint16_t>(0x0010));
+    Check("parsed analog A", injected.analogButtons[0],
+          static_cast<std::uint8_t>(255));
+    Check("parsed analog right trigger", injected.analogButtons[7],
+          static_cast<std::uint8_t>(7));
+    Check("parsed left thumb X", injected.leftThumbX,
+          static_cast<std::int16_t>(-32768));
+    Check("parsed left thumb Y", injected.leftThumbY,
+          static_cast<std::int16_t>(32767));
+    Check("parsed right thumb X", injected.rightThumbX,
+          static_cast<std::int16_t>(-123));
+    Check("parsed right thumb Y", injected.rightThumbY,
+          static_cast<std::int16_t>(456));
+    Check("reject button overflow",
+          HostInput::ParseInjectedGamepadState("0x10000", injected), false);
+    Check("reject analog overflow",
+          HostInput::ParseInjectedGamepadState("0,256", injected), false);
+    Check("reject positive axis overflow",
+          HostInput::ParseInjectedGamepadState(
+              "0,0,0,0,0,0,0,0,0,32768", injected),
+          false);
+    Check("reject negative axis overflow",
+          HostInput::ParseInjectedGamepadState(
+              "0,0,0,0,0,0,0,0,0,-32769", injected),
+          false);
+    Check("reject malformed injected state",
+          HostInput::ParseInjectedGamepadState("0,12x", injected), false);
+
+    HostInput::InjectedGamepadSequence sequence;
+    Check("parse injected sequence",
+          sequence.Parse("100@0x0;200@0x10,255;250@0x0"), true);
+    Check("injected sequence size", sequence.Size(), static_cast<std::size_t>(3));
+    Check("sequence before first frame", sequence.FrameIndexAt(99), sequence.Size());
+    Check("sequence before first buttons", sequence.StateAt(99).buttons,
+          static_cast<std::uint16_t>(0));
+    Check("sequence first frame", sequence.FrameIndexAt(100),
+          static_cast<std::size_t>(0));
+    Check("sequence first frame persists", sequence.FrameIndexAt(199),
+          static_cast<std::size_t>(0));
+    Check("sequence second buttons", sequence.StateAt(200).buttons,
+          static_cast<std::uint16_t>(0x0010));
+    Check("sequence second analog A", sequence.StateAt(249).analogButtons[0],
+          static_cast<std::uint8_t>(255));
+    Check("sequence last frame", sequence.FrameIndexAt(250),
+          static_cast<std::size_t>(2));
+    Check("sequence last frame persists", sequence.FrameIndexAt(999),
+          static_cast<std::size_t>(2));
+    Check("sequence last buttons", sequence.StateAt(999).buttons,
+          static_cast<std::uint16_t>(0));
+    Check("reject equal timestamps", sequence.Parse("100@0;100@1"), false);
+    Check("reject decreasing timestamps", sequence.Parse("100@0;99@1"), false);
+    Check("reject trailing separator", sequence.Parse("100@0;"), false);
+    Check("reject malformed frame", sequence.Parse("100@@0"), false);
+    Check("failed parse preserves sequence", sequence.Size(),
+          static_cast<std::size_t>(3));
+    Check("failed parse preserves state", sequence.StateAt(200).buttons,
+          static_cast<std::uint16_t>(0x0010));
+
     Check("host input initially stopped", HostInput::IsInitialized(), false);
     Check("host input initialize", HostInput::Initialize(), true);
     Check("host input initialized", HostInput::IsInitialized(), true);

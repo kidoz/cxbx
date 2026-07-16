@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <array>
+#include <limits>
 #include <mutex>
 
 namespace
@@ -174,7 +175,237 @@ void DetachWindowUnlocked()
                             sizeof(RAWINPUTDEVICE));
     g_notificationWindow = nullptr;
 }
+
+std::string_view Trim(std::string_view text)
+{
+    while(!text.empty() && (text.front() == ' ' || text.front() == '\t'))
+    {
+        text.remove_prefix(1);
+    }
+    while(!text.empty() && (text.back() == ' ' || text.back() == '\t'))
+    {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+bool ParseUnsigned(std::string_view text, std::uint32_t maximum,
+                   std::uint32_t& value)
+{
+    text = Trim(text);
+    if(text.empty())
+    {
+        return false;
+    }
+
+    std::uint32_t base = 10;
+    if(text.size() > 2 && text[0] == '0' &&
+       (text[1] == 'x' || text[1] == 'X'))
+    {
+        base = 16;
+        text.remove_prefix(2);
+    }
+    if(text.empty())
+    {
+        return false;
+    }
+
+    std::uint32_t result = 0;
+    for(const char character : text)
+    {
+        std::uint32_t digit = 0;
+        if(character >= '0' && character <= '9')
+        {
+            digit = static_cast<std::uint32_t>(character - '0');
+        }
+        else if(character >= 'a' && character <= 'f')
+        {
+            digit = static_cast<std::uint32_t>(character - 'a') + 10u;
+        }
+        else if(character >= 'A' && character <= 'F')
+        {
+            digit = static_cast<std::uint32_t>(character - 'A') + 10u;
+        }
+        else
+        {
+            return false;
+        }
+        if(digit >= base || digit > maximum ||
+           result > (maximum - digit) / base)
+        {
+            return false;
+        }
+        result = result * base + digit;
+    }
+    value = result;
+    return true;
+}
+
+bool ParseSigned16(std::string_view text, std::int16_t& value)
+{
+    text = Trim(text);
+    const bool negative = !text.empty() && text.front() == '-';
+    if(negative)
+    {
+        text.remove_prefix(1);
+    }
+
+    std::uint32_t magnitude = 0;
+    const std::uint32_t maximum = negative ? 32768u : 32767u;
+    if(!ParseUnsigned(text, maximum, magnitude))
+    {
+        return false;
+    }
+    const std::int32_t signedValue = negative
+                                         ? -static_cast<std::int32_t>(magnitude)
+                                         : static_cast<std::int32_t>(magnitude);
+    value = static_cast<std::int16_t>(signedValue);
+    return true;
+}
 } // namespace
+
+bool HostInput::ParseInjectedGamepadState(std::string_view text,
+                                          GamepadState& state)
+{
+    GamepadState parsed{};
+    std::size_t fieldIndex = 0;
+    while(true)
+    {
+        const std::size_t separator = text.find(',');
+        const std::string_view field = text.substr(0, separator);
+        if(fieldIndex == 0)
+        {
+            std::uint32_t buttons = 0;
+            if(!ParseUnsigned(field, 0xFFFFu, buttons))
+            {
+                return false;
+            }
+            parsed.buttons = static_cast<std::uint16_t>(buttons);
+        }
+        else if(fieldIndex <= parsed.analogButtons.size())
+        {
+            std::uint32_t analog = 0;
+            if(!ParseUnsigned(field, 0xFFu, analog))
+            {
+                return false;
+            }
+            parsed.analogButtons[fieldIndex - 1] =
+                static_cast<std::uint8_t>(analog);
+        }
+        else if(fieldIndex <= parsed.analogButtons.size() + 4)
+        {
+            std::int16_t axis = 0;
+            if(!ParseSigned16(field, axis))
+            {
+                return false;
+            }
+            switch(fieldIndex - parsed.analogButtons.size())
+            {
+                case 1: parsed.leftThumbX = axis; break;
+                case 2: parsed.leftThumbY = axis; break;
+                case 3: parsed.rightThumbX = axis; break;
+                case 4: parsed.rightThumbY = axis; break;
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        ++fieldIndex;
+        if(separator == std::string_view::npos)
+        {
+            break;
+        }
+        text.remove_prefix(separator + 1);
+    }
+
+    state = parsed;
+    return true;
+}
+
+bool HostInput::InjectedGamepadSequence::Parse(std::string_view text)
+{
+    std::array<Frame, MaxInjectedGamepadFrames> parsedFrames{};
+    std::size_t parsedSize = 0;
+    while(!text.empty())
+    {
+        if(parsedSize == parsedFrames.size())
+        {
+            return false;
+        }
+
+        const std::size_t frameSeparator = text.find(';');
+        const std::string_view frameText = Trim(text.substr(0, frameSeparator));
+        const std::size_t stateSeparator = frameText.find('@');
+        if(stateSeparator == std::string_view::npos ||
+           frameText.find('@', stateSeparator + 1) != std::string_view::npos)
+        {
+            return false;
+        }
+
+        std::uint32_t elapsedMs = 0;
+        GamepadState state{};
+        if(!ParseUnsigned(frameText.substr(0, stateSeparator),
+                          (std::numeric_limits<std::uint32_t>::max)(), elapsedMs) ||
+           !ParseInjectedGamepadState(frameText.substr(stateSeparator + 1), state) ||
+           (parsedSize != 0 && elapsedMs <= parsedFrames[parsedSize - 1].elapsedMs))
+        {
+            return false;
+        }
+        parsedFrames[parsedSize++] = { elapsedMs, state };
+
+        if(frameSeparator == std::string_view::npos)
+        {
+            break;
+        }
+        text.remove_prefix(frameSeparator + 1);
+        if(text.empty())
+        {
+            return false;
+        }
+    }
+
+    if(parsedSize == 0)
+    {
+        return false;
+    }
+    m_frames = parsedFrames;
+    m_size = parsedSize;
+    return true;
+}
+
+std::size_t HostInput::InjectedGamepadSequence::Size() const
+{
+    return m_size;
+}
+
+std::size_t HostInput::InjectedGamepadSequence::FrameIndexAt(
+    std::uint32_t elapsedMs) const
+{
+    std::size_t first = 0;
+    std::size_t last = m_size;
+    while(first < last)
+    {
+        const std::size_t middle = first + (last - first) / 2;
+        if(m_frames[middle].elapsedMs <= elapsedMs)
+        {
+            first = middle + 1;
+        }
+        else
+        {
+            last = middle;
+        }
+    }
+    return first == 0 ? m_size : first - 1;
+}
+
+HostInput::GamepadState HostInput::InjectedGamepadSequence::StateAt(
+    std::uint32_t elapsedMs) const
+{
+    const std::size_t index = FrameIndexAt(elapsedMs);
+    return index < m_size ? m_frames[index].state : GamepadState{};
+}
 
 void HostInput::ConnectionTracker::Reset()
 {

@@ -40,9 +40,11 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <limits>
 
 #include "Emu.h"
 #include "EmuFS.h"
+#include "HostInput.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -63,7 +65,9 @@ namespace XTL
 static bool EmuXInputInjectionConfigured()
 {
     char buffer[2] = {};
-    return GetEnvironmentVariableA("CXBX_INPUT_STATE", buffer, sizeof(buffer)) != 0;
+    return GetEnvironmentVariableA("CXBX_INPUT_STATE", buffer, sizeof(buffer)) != 0 ||
+           GetEnvironmentVariableA("CXBX_INPUT_STATE_SEQUENCE", buffer,
+                                   sizeof(buffer)) != 0;
 }
 
 struct EmuInputConnectionSnapshot
@@ -839,46 +843,101 @@ DWORD WINAPI XTL::EmuXInputGetCapabilities
 // ******************************************************************
 // * EmuXInputInjectState
 // ******************************************************************
-// Headless input injection: when CXBX_INPUT_STATE is set, XInputGetState
-// returns a synthetic pad state instead of polling host DirectInput -- the
-// hook that lets conformance probes (and eventually scripted menu
-// navigation) run without a physical controller. Format:
+// Headless input injection returns a synthetic pad state instead of polling
+// the host controller. Static format:
 //   CXBX_INPUT_STATE="0x<wButtons>[,A,B,X,Y,Black,White,LT,RT]"
-// (wButtons hex word, then up to 8 decimal analog-button bytes.)
+// Timed format (milliseconds relative to the first XInputGetState call):
+//   CXBX_INPUT_STATE_SEQUENCE="0@0x0;8000@0x10;8200@0x0"
 static bool EmuXInputInjectState(XTL::PXINPUT_STATE pState)
 {
-    static int  nMode = 0; // 0 = unchecked, 1 = off, 2 = injecting
-    static WORD wButtons = 0;
-    static BYTE bAnalog[8] = {0};
-    static DWORD dwPacket = 0;
-
-    if(nMode == 0)
+    enum class InjectionMode
     {
-        char szBuf[128];
-        DWORD dwLen = GetEnvironmentVariableA("CXBX_INPUT_STATE", szBuf, sizeof(szBuf));
-        if(dwLen == 0 || dwLen >= sizeof(szBuf))
-            nMode = 1;
+        Unchecked,
+        Off,
+        Static,
+        Sequence,
+    };
+    static InjectionMode mode = InjectionMode::Unchecked;
+    static HostInput::GamepadState staticState{};
+    static HostInput::InjectedGamepadSequence sequence;
+    static DWORD sequenceStartTick = 0;
+    static DWORD packetNumber = 0;
+    static std::size_t lastFrame = (std::numeric_limits<std::size_t>::max)();
+
+    if(mode == InjectionMode::Unchecked)
+    {
+        char sequenceText[4096] = {};
+        const DWORD sequenceLength = GetEnvironmentVariableA(
+            "CXBX_INPUT_STATE_SEQUENCE", sequenceText, sizeof(sequenceText));
+        if(sequenceLength != 0 && sequenceLength < sizeof(sequenceText))
+        {
+            if(sequence.Parse(sequenceText))
+            {
+                mode = InjectionMode::Sequence;
+                sequenceStartTick = GetTickCount();
+                printf("EmuXapi: timed input injection active (%zu frames)\n",
+                       sequence.Size());
+            }
+            else
+            {
+                mode = InjectionMode::Off;
+                printf("EmuXapi: invalid CXBX_INPUT_STATE_SEQUENCE; input injection disabled\n");
+            }
+        }
         else
         {
-            wButtons = (WORD)strtoul(szBuf, 0, 0);
-            char *p = strchr(szBuf, ',');
-            for(int i=0;i<8 && p != 0;i++)
+            char stateText[256] = {};
+            const DWORD stateLength = GetEnvironmentVariableA(
+                "CXBX_INPUT_STATE", stateText, sizeof(stateText));
+            if(stateLength != 0 && stateLength < sizeof(stateText) &&
+               HostInput::ParseInjectedGamepadState(stateText, staticState))
             {
-                bAnalog[i] = (BYTE)strtoul(p+1, 0, 10);
-                p = strchr(p+1, ',');
+                mode = InjectionMode::Static;
+                printf("EmuXapi: input injection active (wButtons=0x%04X)\n",
+                       staticState.buttons);
             }
-            nMode = 2;
-            printf("EmuXapi: input injection active (wButtons=0x%04X)\n", wButtons);
+            else
+            {
+                mode = InjectionMode::Off;
+            }
         }
+        fflush(stdout);
     }
 
-    if(nMode != 2)
+    if(mode == InjectionMode::Off)
+    {
         return false;
+    }
+
+    HostInput::GamepadState injectedState = staticState;
+    std::size_t frame = 0;
+    if(mode == InjectionMode::Sequence)
+    {
+        const DWORD elapsedMs = GetTickCount() - sequenceStartTick;
+        frame = sequence.FrameIndexAt(elapsedMs);
+        injectedState = sequence.StateAt(elapsedMs);
+        if(frame != lastFrame)
+        {
+            printf("EmuXapi: timed input frame=%zu elapsed=%lu buttons=0x%04X\n",
+                   frame, elapsedMs, injectedState.buttons);
+            fflush(stdout);
+        }
+    }
+    if(frame != lastFrame)
+    {
+        ++packetNumber;
+        lastFrame = frame;
+    }
 
     ZeroMemory(pState, sizeof(*pState));
-    pState->dwPacketNumber = ++dwPacket;
-    pState->Gamepad.wButtons = wButtons;
-    memcpy(pState->Gamepad.bAnalogButtons, bAnalog, sizeof(bAnalog));
+    pState->dwPacketNumber = packetNumber;
+    pState->Gamepad.wButtons = injectedState.buttons;
+    memcpy(pState->Gamepad.bAnalogButtons, injectedState.analogButtons.data(),
+           injectedState.analogButtons.size());
+    pState->Gamepad.sThumbLX = injectedState.leftThumbX;
+    pState->Gamepad.sThumbLY = injectedState.leftThumbY;
+    pState->Gamepad.sThumbRX = injectedState.rightThumbX;
+    pState->Gamepad.sThumbRY = injectedState.rightThumbY;
 
     return true;
 }
