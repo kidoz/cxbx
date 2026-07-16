@@ -11616,6 +11616,130 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_DrawIndexedVerticesUP
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVerticesUP(
+    X_D3DPRIMITIVETYPE PrimitiveType,
+    UINT VertexCount,
+    CONST PVOID pIndexData,
+    CONST PVOID pVertexStreamZeroData,
+    UINT VertexStreamZeroStride)
+{
+    EmuSwapFS(); // Win2k/XP FS
+    D3D_TRACE("DrawIndexedVerticesUP");
+
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
+    {
+        printf("EmuD3D8 (0x%X): EmuIDirect3DDevice8_DrawIndexedVerticesUP\n"
+               "(\n"
+               "   PrimitiveType            : 0x%.08X\n"
+               "   VertexCount              : 0x%.08X\n"
+               "   pIndexData               : 0x%.08X\n"
+               "   pVertexStreamZeroData    : 0x%.08X\n"
+               "   VertexStreamZeroStride   : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), PrimitiveType, VertexCount, pIndexData,
+               pVertexStreamZeroData, VertexStreamZeroStride);
+    }
+#endif
+
+    EmuUpdateDeferredStates();
+
+    if(!EmuVshIsValidPrimitiveType(PrimitiveType))
+    {
+        EmuWarning("DrawIndexedVerticesUP rejected invalid primitive type %lu",
+                   static_cast<unsigned long>(PrimitiveType));
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
+    if(PrimitiveType == 8) // Quad List: indexed quads need index rewriting
+    {
+        static LONG QuadWarnCount = 0;
+        if(InterlockedIncrement(&QuadWarnCount) <= 5)
+        {
+            EmuWarning("DrawIndexedVerticesUP: indexed QUADLIST not implemented, draw skipped");
+        }
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
+    UINT PrimitiveCount = EmuD3DVertex2PrimitiveCount(PrimitiveType, VertexCount);
+    D3DPRIMITIVETYPE PCPrimitiveType = EmuPrimitiveType(PrimitiveType);
+
+    if(!EmuD3DDrawGate("DrawIndexedVerticesUP", PCPrimitiveType, PrimitiveCount))
+    {
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
+    if(g_EmuCurrentCpuVertexShader != nullptr)
+    {
+        static LONG CpuWarnCount = 0;
+        if(InterlockedIncrement(&CpuWarnCount) <= 5)
+        {
+            EmuWarning("DrawIndexedVerticesUP: CPU vertex-shader fallback not implemented, draw skipped");
+        }
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
+    // Host DrawIndexedPrimitiveUP wants the number of vertices spanned by the
+    // index set; the Xbox call does not carry it, so derive it from the
+    // indices (VertexCount is the number of indices).
+    UINT NumVertices = 0;
+    {
+        CONST WORD *pIndices = (CONST WORD*)pIndexData;
+        for(UINT i = 0; i < VertexCount; i++)
+        {
+            if(pIndices[i] >= NumVertices)
+            {
+                NumVertices = pIndices[i] + 1;
+            }
+        }
+    }
+
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = g_pD3DDevice8->DrawIndexedPrimitiveUP(
+            PCPrimitiveType,
+            0,
+            NumVertices,
+            PrimitiveCount,
+            pIndexData,
+            D3DFMT_INDEX16,
+            pVertexStreamZeroData,
+            VertexStreamZeroStride);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
+
+    if(FAILED(hRet))
+    {
+        static LONG WarnCount = 0;
+        if(InterlockedIncrement(&WarnCount) <= 5)
+        {
+            EmuWarning("DrawIndexedVerticesUP failed (0x%.08X) prim=%d primCount=%d stride=%d",
+                       hRet, PCPrimitiveType, PrimitiveCount, VertexStreamZeroStride);
+        }
+    }
+    else
+    {
+        EmuD3DDrawPost();
+    }
+
+    EmuSwapFS(); // XBox FS
+
+    return;
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_DrawIndexedVertices
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(

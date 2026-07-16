@@ -56,6 +56,28 @@ SOOVPA<8> IDirect3DDevice8_GetDisplayFieldStatus_1_0_5659 =
     }
 };
 
+// _D3DDevice_DrawIndexedVerticesUP@20 (from the Arx Fatalis 5659 image at
+// 0x00143610 -- the shipped body differs from the archived d3d8.lib copy, so
+// the pairs were picked from the title and verified unique there and absent
+// from the 4627/5849-era titles). Discriminated from DrawVerticesUP by the
+// esi-based device load at +0x08 and the 5th-argument read at +0x31.
+SOOVPA<10> IDirect3DDevice8_DrawIndexedVerticesUP_1_0_5659 =
+{
+    0, 10, -1, 0,
+    {
+        { 0x00, 0x55 },
+        { 0x06, 0x53 },
+        { 0x08, 0x8B },
+        { 0x09, 0x35 },
+        { 0x0E, 0x57 },
+        { 0x28, 0xC7 },
+        { 0x2A, 0xFC },
+        { 0x2B, 0x17 },
+        { 0x31, 0x8B },
+        { 0x33, 0x14 }
+    }
+};
+
 // _D3DDevice_SetTextureState_BorderColor@8 (d3d8.lib 5659, 61 bytes)
 SOOVPA<8> IDirect3DDevice8_SetTextureState_BorderColor_1_0_5659 =
 {
@@ -799,6 +821,14 @@ OOVPATable D3D8_1_0_5659[] =
         XTL::EmuIDirect3DDevice8_DrawIndexedVertices,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_DrawIndexedVertices"
+        #endif
+    },
+    // IDirect3DDevice8::DrawIndexedVerticesUP
+    {
+        (OOVPA*)&IDirect3DDevice8_DrawIndexedVerticesUP_1_0_5659,
+        XTL::EmuIDirect3DDevice8_DrawIndexedVerticesUP,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_DrawIndexedVerticesUP"
         #endif
     },
     // IDirect3DDevice8::SetMaterial
