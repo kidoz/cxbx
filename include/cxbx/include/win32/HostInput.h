@@ -3,7 +3,9 @@
 #define HOSTINPUT_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace HostInput
 {
@@ -47,6 +49,29 @@ struct GamepadState
     std::int16_t leftThumbY;
     std::int16_t rightThumbX;
     std::int16_t rightThumbY;
+};
+
+constexpr std::size_t MaxInjectedGamepadFrames = 64;
+
+bool ParseInjectedGamepadState(std::string_view text, GamepadState& state);
+
+class InjectedGamepadSequence
+{
+  public:
+    bool Parse(std::string_view text);
+    std::size_t Size() const;
+    std::size_t FrameIndexAt(std::uint32_t elapsedMs) const;
+    GamepadState StateAt(std::uint32_t elapsedMs) const;
+
+  private:
+    struct Frame
+    {
+        std::uint32_t elapsedMs;
+        GamepadState state;
+    };
+
+    std::array<Frame, MaxInjectedGamepadFrames> m_frames{};
+    std::size_t m_size = 0;
 };
 
 struct ConnectionSnapshot
