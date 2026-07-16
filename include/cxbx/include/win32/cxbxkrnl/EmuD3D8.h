@@ -132,9 +132,21 @@ inline D3DBLEND EmuXB2PC_D3DBLEND(X_D3DBLEND Value)
     else if(Value < 0x309)
         return (D3DBLEND)((Value & 0xF) + 3);
 
-    EmuCleanup("Unknown Xbox D3DBLEND Extension (0x%.08X)", Value);
+    // Xbox constant-blend extensions (NV2A blend factors 0x8001..0x8004:
+    // CONSTANTCOLOR/INVCONSTANTCOLOR/CONSTANTALPHA/INVCONSTANTALPHA) have no
+    // D3D8 host equivalent (constant blend factors arrive in D3D9). The
+    // constant is set via D3DRS_BLENDCOLOR, which we also cannot honor, so
+    // approximate: the non-inverted factors act as ONE, the inverted as ZERO
+    // (Arx Fatalis sets CONSTANTALPHA with blend color 0xC0C0C0C0).
+    if(Value >= 0x8001 && Value <= 0x8004)
+    {
+        EmuWarning("EmuXB2PC_D3DBLEND: constant-blend extension (0x%.08X) approximated", Value);
+        return (Value & 1) ? D3DBLEND_ONE : D3DBLEND_ZERO;
+    }
 
-    return (D3DBLEND)Value;
+    EmuWarning("EmuXB2PC_D3DBLEND: Unknown Xbox D3DBLEND (0x%.08X) -> ONE", Value);
+
+    return D3DBLEND_ONE;
 }
 
 // Todo: Fill out this enumeration table for convienance
@@ -1492,6 +1504,18 @@ VOID WINAPI EmuIDirect3DDevice8_DrawVerticesUP
 (
     X_D3DPRIMITIVETYPE  PrimitiveType,
     UINT                VertexCount,
+    CONST PVOID         pVertexStreamZeroData,
+    UINT                VertexStreamZeroStride
+);
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_DrawIndexedVerticesUP
+// ******************************************************************
+VOID WINAPI EmuIDirect3DDevice8_DrawIndexedVerticesUP
+(
+    X_D3DPRIMITIVETYPE  PrimitiveType,
+    UINT                VertexCount,
+    CONST PVOID         pIndexData,
     CONST PVOID         pVertexStreamZeroData,
     UINT                VertexStreamZeroStride
 );

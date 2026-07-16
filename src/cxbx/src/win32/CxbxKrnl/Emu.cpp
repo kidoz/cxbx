@@ -7718,6 +7718,13 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
             if(DeviceGlobal >= Base && DeviceGlobal < End)
             {
                 static uint08 s_CdxFakeD3DDevice[0x4000];
+                // At least one 5659 D3D internal (Arx Fatalis' post-intro menu
+                // setup) fetches a sub-object pointer from device+0x794 and
+                // tests a flag byte through it (`test byte [eax+4], 2`); a
+                // NULL there is fatal. Point the slot at a zeroed leaf so the
+                // flag test reads 0 and the internal takes its early-out path.
+                static uint08 s_CdxFakeD3DDeviceLeaf[0x1000];
+                *(uint32*)(s_CdxFakeD3DDevice + 0x794) = (uint32)(uintptr_t)s_CdxFakeD3DDeviceLeaf;
                 *(uint32*)DeviceGlobal = (uint32)(uintptr_t)s_CdxFakeD3DDevice;
                 DeviceGlobalFound = true;
                 printf("Emu (0x%lX): CDX D3D__pDevice (0x%.08lX) pointed at a scratch device.\n",
@@ -7735,6 +7742,55 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
     if(!DeviceGlobalFound)
         printf("Emu (0x%lX): CDX D3D__pDevice prologue not located in the image.\n",
                GetCurrentThreadId());
+
+    // D3D::LazySetState is the dirty-flag flush dispatcher: it reads
+    // D3D__DirtyFlags, reads D3D__pDevice, and calls per-bit flush handlers
+    // that compose raw NV2A pushbuffer commands against device state only the
+    // guest's own (HLE-replaced) CreateDevice would have initialised. The
+    // title's inlined D3D macros keep setting dirty bits, so the flush runs
+    // raw and faults (Arx Fatalis: the bit-9 viewport flush uses MakeSpace's
+    // return value as a pushbuffer write pointer). Under HLE every real state
+    // change flows through the patched wrappers, so the lazy flush has no
+    // work worth doing: neutralise it to `ret`.
+    //   push ebx / mov ebx,[D3D__DirtyFlags] / test bh,1 / push esi /
+    //   mov esi,[D3D__pDevice] / je +6
+    {
+        const uint08 LazyHead[] = { 0x53, 0x8B, 0x1D };
+        const uint08 LazyMid[]  = { 0xF6, 0xC7, 0x01, 0x56, 0x8B, 0x35 };
+        const uint08 LazyTail[] = { 0x74, 0x06 };
+        uint32 LazyAddr = 0;
+        bool LazyAmbiguous = false;
+
+        for(uint32 Address = Base; Address + 19 <= End; Address++)
+        {
+            if(IsBadReadPtr((void*)Address, 19))
+            {
+                Address += 0xFFF;
+                continue;
+            }
+
+            if(memcmp((void*)Address, LazyHead, sizeof(LazyHead)) == 0 &&
+               memcmp((void*)(Address + 7), LazyMid, sizeof(LazyMid)) == 0 &&
+               memcmp((void*)(Address + 17), LazyTail, sizeof(LazyTail)) == 0)
+            {
+                if(LazyAddr != 0)
+                {
+                    LazyAmbiguous = true;
+                    break;
+                }
+                LazyAddr = Address;
+            }
+        }
+
+        if(LazyAddr != 0 && !LazyAmbiguous)
+        {
+            const uint08 LazyPatch[] = { 0xC3 };   // ret
+            uint32 DirtyFlagsGlobal = *(uint32*)(LazyAddr + 3);
+            EmuWriteBytes(LazyAddr, LazyPatch, sizeof(LazyPatch));
+            printf("Emu (0x%lX): CDX D3D::LazySetState (0x%.08lX, dirty flags 0x%.08lX) neutralised (no raw pushbuffer flush).\n",
+                   GetCurrentThreadId(), LazyAddr, DirtyFlagsGlobal);
+        }
+    }
 
     fflush(stdout);
 }
