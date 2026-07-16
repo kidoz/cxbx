@@ -4620,14 +4620,42 @@ extern "C" VOID __fastcall EmuKfLowerIrql(UCHAR NewIrql);
 
 extern "C" VOID NTAPI EmuKeBugCheck(ULONG BugCheckCode)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    // A title only reaches KeBugCheck when its inline KPCR reads looked
+    // wrong -- and the dominant cause of that is an FS-role desync (a guest
+    // C++ throw unwound through an HLE boundary and skipped the balancing
+    // EmuSwapFS, so guest code ran against the host TEB: the ClientId byte
+    // reads as a raised IRQL and PrcbData.CurrentThread reads as NULL).
+    // Re-anchor by role instead of blindly toggling, like the VEH does.
+    EmuFsSwapEnsureRole(false);   // Win2k/XP FS
+    if(!g_bEmuFSContentSwap)
+    {
+        EmuSwapFS();   // legacy mode: plain toggle
+    }
 
     g_EmuKiBugCheckData[0] = BugCheckCode;
     printf("EmuKrnl (0x%lX): KeBugCheck code=0x%.08lX caller=0x%.08lX.\n",
            GetCurrentThreadId(), BugCheckCode, (ULONG)_ReturnAddress());
-    EmuCleanup("Guest called KeBugCheck(0x%.08lX)", BugCheckCode);
 
-    EmuSwapFS();   // Xbox FS
+    // The kernel HLE models IRQL in g_EmuCurrentIrql, so a nonzero KPCR Irql
+    // byte is emulator contamination, not a real raised-IRQL condition. With
+    // CXBX_SURVIVE_BUGCHECK set, log the event, restore the Xbox role and
+    // heal the Irql byte back to PASSIVE_LEVEL, then let the title continue.
+    if(getenv("CXBX_SURVIVE_BUGCHECK") != NULL)
+    {
+        printf("EmuKrnl (0x%lX): CXBX_SURVIVE_BUGCHECK set; ignoring KeBugCheck and re-anchoring the Xbox FS role.\n",
+               GetCurrentThreadId());
+        fflush(stdout);
+
+        EmuFsSwapEnsureRole(true);   // Xbox FS (heals a desynced chain too)
+        if(!g_bEmuFSContentSwap)
+        {
+            EmuSwapFS();   // legacy mode: plain toggle
+        }
+        __asm mov byte ptr fs:[0x24], 0
+        return;
+    }
+
+    EmuCleanup("Guest called KeBugCheck(0x%.08lX)", BugCheckCode);
 }
 
 extern "C" VOID NTAPI EmuKeBugCheckEx(ULONG BugCheckCode, ULONG Parameter1, ULONG Parameter2, ULONG Parameter3, ULONG Parameter4)
