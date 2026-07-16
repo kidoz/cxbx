@@ -39,6 +39,8 @@
 
 #include <windows.h>
 
+#include <vector>
+
 #include "Emu.h"
 #include "EmuFS.h"
 
@@ -57,6 +59,52 @@ namespace XTL
 {
     #include "EmuXTL.h"
 };
+
+extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE *Data, ULONG Size);
+
+static void EmuXGCopyToGuest(void *Destination, const void *Source, size_t Size)
+{
+    if(Size == 0)
+    {
+        return;
+    }
+
+    if(EmuWritePhysicalMapBytesFromHle((ULONG)(ULONG_PTR)Destination,
+                                       (const BYTE *)Source, (ULONG)Size))
+    {
+        return;
+    }
+
+    memcpy(Destination, Source, Size);
+}
+
+static DWORD EmuXGSwizzleTexelIndex(DWORD X, DWORD Y, DWORD Width, DWORD Height)
+{
+    DWORD Result = 0;
+    DWORD OutputBit = 0;
+
+    for(DWORD InputBit = 1; InputBit < Width || InputBit < Height; InputBit <<= 1)
+    {
+        if(InputBit < Width)
+        {
+            if((X & InputBit) != 0)
+            {
+                Result |= 1u << OutputBit;
+            }
+            OutputBit++;
+        }
+        if(InputBit < Height)
+        {
+            if((Y & InputBit) != 0)
+            {
+                Result |= 1u << OutputBit;
+            }
+            OutputBit++;
+        }
+    }
+
+    return Result;
+}
 
 // ******************************************************************
 // * func: EmuXGIsSwizzledFormat
@@ -122,35 +170,62 @@ VOID WINAPI XTL::EmuXGSwizzleRect
     }
     #endif
 
-    // The host stores "swizzled" Xbox textures linearly, so swizzling degrades
-    // to a linear rect copy: pRect selects the source region (pitch = Pitch),
-    // pPoint the destination origin inside the packed Width x Height dest.
-    if(pRect == NULL && pPoint == NULL && Pitch == 0)
+    const LONG SrcLeft = (pRect != NULL) ? pRect->left : 0;
+    const LONG SrcTop = (pRect != NULL) ? pRect->top : 0;
+    LONG CopyWidth = (pRect != NULL) ? (pRect->right - pRect->left) : (LONG)Width;
+    LONG CopyHeight = (pRect != NULL) ? (pRect->bottom - pRect->top) : (LONG)Height;
+    const LONG DstLeft = (pPoint != NULL) ? pPoint->x : 0;
+    const LONG DstTop = (pPoint != NULL) ? pPoint->y : 0;
+    const DWORD SrcPitch = (Pitch != 0) ? Pitch : (DWORD)CopyWidth * BytesPerPixel;
+
+    if(DstLeft < 0 || DstTop < 0 || CopyWidth <= 0 || CopyHeight <= 0 ||
+       DstLeft >= (LONG)Width || DstTop >= (LONG)Height || BytesPerPixel == 0)
     {
-        memcpy(pDest, pSource, Width*Height*BytesPerPixel);
+        EmuSwapFS();   // Xbox FS
+        return;
+    }
+
+    if(DstLeft + CopyWidth > (LONG)Width)
+    {
+        CopyWidth = (LONG)Width - DstLeft;
+    }
+    if(DstTop + CopyHeight > (LONG)Height)
+    {
+        CopyHeight = (LONG)Height - DstTop;
+    }
+
+    const bool FullTexture = SrcLeft == 0 && SrcTop == 0 && DstLeft == 0 && DstTop == 0 &&
+                             CopyWidth == (LONG)Width && CopyHeight == (LONG)Height;
+    if(FullTexture)
+    {
+        const size_t DestinationSize = (size_t)Width * Height * BytesPerPixel;
+        std::vector<BYTE> Swizzled(DestinationSize);
+        for(DWORD Y = 0; Y < Height; Y++)
+        {
+            for(DWORD X = 0; X < Width; X++)
+            {
+                const DWORD DestinationTexel = EmuXGSwizzleTexelIndex(X, Y, Width, Height);
+                memcpy(Swizzled.data() + (size_t)DestinationTexel * BytesPerPixel,
+                       (const BYTE*)pSource + (size_t)Y * SrcPitch + (size_t)X * BytesPerPixel,
+                       BytesPerPixel);
+            }
+        }
+        EmuXGCopyToGuest(pDest, Swizzled.data(), DestinationSize);
     }
     else
     {
-        LONG SrcLeft = (pRect != NULL) ? pRect->left : 0;
-        LONG SrcTop = (pRect != NULL) ? pRect->top : 0;
-        LONG CopyWidth = (pRect != NULL) ? (pRect->right - pRect->left) : (LONG)Width;
-        LONG CopyHeight = (pRect != NULL) ? (pRect->bottom - pRect->top) : (LONG)Height;
-        LONG DstLeft = (pPoint != NULL) ? pPoint->x : 0;
-        LONG DstTop = (pPoint != NULL) ? pPoint->y : 0;
-        DWORD SrcPitch = (Pitch != 0) ? Pitch : (DWORD)CopyWidth * BytesPerPixel;
-        DWORD DstPitch = Width * BytesPerPixel;   // swizzled dest = packed pow2
-
-        // Clamp to the destination surface so a bogus rect cannot overrun it.
-        if(DstLeft + CopyWidth > (LONG)Width)
-            CopyWidth = (LONG)Width - DstLeft;
-        if(DstTop + CopyHeight > (LONG)Height)
-            CopyHeight = (LONG)Height - DstTop;
-
-        for(LONG y = 0; y < CopyHeight; y++)
+        for(LONG Y = 0; Y < CopyHeight; Y++)
         {
-            memcpy((BYTE*)pDest + (size_t)(DstTop + y) * DstPitch + (size_t)DstLeft * BytesPerPixel,
-                   (const BYTE*)pSource + (size_t)(SrcTop + y) * SrcPitch + (size_t)SrcLeft * BytesPerPixel,
-                   (size_t)CopyWidth * BytesPerPixel);
+            for(LONG X = 0; X < CopyWidth; X++)
+            {
+                const DWORD DestinationTexel = EmuXGSwizzleTexelIndex(
+                    (DWORD)(DstLeft + X), (DWORD)(DstTop + Y), Width, Height);
+                EmuXGCopyToGuest(
+                    (BYTE*)pDest + (size_t)DestinationTexel * BytesPerPixel,
+                    (const BYTE*)pSource + (size_t)(SrcTop + Y) * SrcPitch +
+                        (size_t)(SrcLeft + X) * BytesPerPixel,
+                    BytesPerPixel);
+            }
         }
     }
 

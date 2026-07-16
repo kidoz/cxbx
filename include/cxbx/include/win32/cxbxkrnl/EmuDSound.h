@@ -69,6 +69,14 @@ struct X_CDirectSoundBuffer
     // that stores into later fields must land in memory we own, not in the
     // next heap block.
     BYTE    EmuGuardTail[0x200];
+
+    // Host-only state used when Xbox SetBufferData replaces the storage of a
+    // static buffer. Keep it after the guest-visible guard area so unhooked
+    // guest code cannot overwrite it through a CDirectSoundBuffer offset.
+    DWORD   EmuBufferFlags;
+    DWORD   EmuBufferBytes;
+    DWORD   EmuWaveFormatBytes;
+    BYTE    EmuWaveFormat[64];
 };
 
 // ******************************************************************
@@ -588,6 +596,24 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_Use3DVoiceData
 (
     X_CDirectSoundBuffer   *pThis,
     BOOL                    bUse3DVoiceData
+);
+
+HRESULT WINAPI EmuIDirectSoundStream_Use3DVoiceData
+(
+    X_CDirectSoundStream   *pThis,
+    BOOL                    bUse3DVoiceData
+);
+
+HRESULT WINAPI EmuCDirectSoundVoice_SetPitch
+(
+    PVOID                   pThis,
+    LONG                    lPitch
+);
+
+HRESULT WINAPI EmuCDirectSoundVoice_GetVoiceProperties
+(
+    PVOID                   pThis,
+    PVOID                   pVoiceProperties
 );
 
 // ******************************************************************

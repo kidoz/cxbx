@@ -87,6 +87,7 @@ constexpr DWORD kDsStreamPauseResume = 0;
 constexpr DWORD kDsStreamPausePause = 1;
 constexpr DWORD kDsStreamPauseSynchPlayback = 2;
 constexpr DWORD kDsStreamPauseNoActivate = 3;
+constexpr DWORD kStaticBufferWaveFormatCapacity = 64;
 
 struct StreamPacket
 {
@@ -98,6 +99,27 @@ struct StreamPacket
     uint64_t EndPosition;
 };
 } // namespace
+
+static bool CacheStaticBufferFormat(XTL::X_CDirectSoundBuffer* buffer,
+                                    const WAVEFORMATEX* format)
+{
+    if(buffer == NULL || format == NULL ||
+       IsBadReadPtr(format, sizeof(WAVEFORMATEX)))
+    {
+        return false;
+    }
+
+    const DWORD formatBytes = sizeof(WAVEFORMATEX) + format->cbSize;
+    if(formatBytes > kStaticBufferWaveFormatCapacity ||
+       IsBadReadPtr(format, formatBytes))
+    {
+        return false;
+    }
+
+    std::memcpy(buffer->EmuWaveFormat, format, formatBytes);
+    buffer->EmuWaveFormatBytes = formatBytes;
+    return true;
+}
 
 struct XTL::X_DSoundStreamState
 {
@@ -677,6 +699,9 @@ HRESULT WINAPI XTL::EmuDirectSoundCreateBuffer
 
     // Todo: Garbage Collection
     *ppBuffer = new X_CDirectSoundBuffer();
+    (*ppBuffer)->EmuBufferFlags = DSBufferDesc.dwFlags;
+    (*ppBuffer)->EmuBufferBytes = DSBufferDesc.dwBufferBytes;
+    CacheStaticBufferFormat(*ppBuffer, DSBufferDesc.lpwfxFormat);
 
     HRESULT hRet = g_pDSound8->CreateSoundBuffer(&DSBufferDesc, &((*ppBuffer)->EmuDirectSoundBuffer8), NULL);
 
@@ -2247,7 +2272,50 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
     }
     #endif
 
-    // TODO: HACK: This should dynamically recreate the buffer when necessary (size change)
+    if(dwBufferBytes == 0)
+    {
+        EmuSwapFS();   // XBox FS
+
+        return DS_OK;
+    }
+
+    const DWORD hostBufferBytes = max(dwBufferBytes, static_cast<DWORD>(DSBSIZE_MIN));
+    if(hostBufferBytes != pThis->EmuBufferBytes)
+    {
+        DSBUFFERDESC descriptor = {};
+        descriptor.dwSize = sizeof(descriptor);
+        descriptor.dwFlags = pThis->EmuBufferFlags;
+        descriptor.dwBufferBytes = hostBufferBytes;
+        descriptor.lpwfxFormat = pThis->EmuWaveFormatBytes >= sizeof(WAVEFORMATEX)
+                                     ? reinterpret_cast<WAVEFORMATEX*>(pThis->EmuWaveFormat)
+                                     : NULL;
+        descriptor.guid3DAlgorithm = DS3DALG_DEFAULT;
+
+        if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+        {
+            const WAVEFORMATEX* format = descriptor.lpwfxFormat;
+            printf("AUDIO| static-buffer-resize this=0x%p old=0x%lX new=0x%lX flags=0x%lX format=%u/%u/%lu/%u\n",
+                   pThis, pThis->EmuBufferBytes, hostBufferBytes, descriptor.dwFlags,
+                   format != NULL ? format->wFormatTag : 0,
+                   format != NULL ? format->nChannels : 0,
+                   format != NULL ? format->nSamplesPerSec : 0,
+                   format != NULL ? format->wBitsPerSample : 0);
+        }
+
+        IDirectSoundBuffer* replacement = NULL;
+        HRESULT resizeResult = g_pDSound8->CreateSoundBuffer(&descriptor, &replacement, NULL);
+        if(FAILED(resizeResult))
+        {
+            EmuSwapFS();   // XBox FS
+
+            return resizeResult;
+        }
+
+        pThis->EmuDirectSoundBuffer8->Release();
+        pThis->EmuDirectSoundBuffer8 = replacement;
+        pThis->EmuBufferBytes = hostBufferBytes;
+    }
+
     PVOID pAudioPtr, pAudioPtr2;
     DWORD dwAudioBytes, dwAudioBytes2;
 
@@ -2262,6 +2330,13 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
 
     HRESULT hRet = pThis->EmuDirectSoundBuffer8->Lock(0, dwBufferBytes, &pAudioPtr, &dwAudioBytes, &pAudioPtr2, &dwAudioBytes2, 0);
 
+    if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+    {
+        printf("AUDIO| static-buffer-lock this=0x%p source=0x%p requested=0x%lX result=0x%lX first=0x%p/0x%lX second=0x%p/0x%lX\n",
+               pThis, pvBufferData, dwBufferBytes, hRet,
+               pAudioPtr, dwAudioBytes, pAudioPtr2, dwAudioBytes2);
+    }
+
     if(SUCCEEDED(hRet))
     {
         // Copy the title's PCM data into the host buffer. (These copies were
@@ -2275,7 +2350,13 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
                 memcpy(pAudioPtr2, (PVOID)((DWORD)pvBufferData + dwAudioBytes), dwAudioBytes2);
         }
 
+        if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+            printf("AUDIO| static-buffer-copy-complete this=0x%p\n", pThis);
+
         pThis->EmuDirectSoundBuffer8->Unlock(pAudioPtr, dwAudioBytes, pAudioPtr2, dwAudioBytes2);
+
+        if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+            printf("AUDIO| static-buffer-unlock-complete this=0x%p\n", pThis);
     }
 
     EmuSwapFS();   // XBox FS
@@ -2341,6 +2422,63 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Use3DVoiceData
     return DS_OK;
 }
 
+HRESULT WINAPI XTL::EmuIDirectSoundStream_Use3DVoiceData
+(
+    X_CDirectSoundStream   *pThis,
+    BOOL                    bUse3DVoiceData
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // Xbox voice-data reuse has no host DirectSound equivalent. Stream state
+    // is already owned by the HLE object, so accept the mode change.
+    (void)pThis;
+    (void)bUse3DVoiceData;
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+HRESULT WINAPI XTL::EmuCDirectSoundVoice_SetPitch
+(
+    PVOID                   pThis,
+    LONG                    lPitch
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // Xbox pitch is a relative voice parameter, not a host DirectSound
+    // frequency. Accept it until voice pitch translation is implemented.
+    (void)pThis;
+    (void)lPitch;
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
+HRESULT WINAPI XTL::EmuCDirectSoundVoice_GetVoiceProperties
+(
+    PVOID                   pThis,
+    PVOID                   pVoiceProperties
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    // DSVOICEPROPS is one count, eight DSMIXBINVOLUMEPAIR entries, and six
+    // LONG values in the 5849 SDK. Report a valid, inactive voice state.
+    const size_t voicePropertiesSize = sizeof(DWORD) + 8 * (sizeof(DWORD) + sizeof(LONG)) + 6 * sizeof(LONG);
+    if (pVoiceProperties != NULL) {
+        ZeroMemory(pVoiceProperties, voicePropertiesSize);
+    }
+    (void)pThis;
+
+    EmuSwapFS();   // XBox FS
+
+    return DS_OK;
+}
+
 // ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetFormat
 // ******************************************************************
@@ -2363,8 +2501,11 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetFormat
     }
     #endif
 
-    // Secondary host DirectSound buffers cannot change format in place. Keep
-    // the format selected at creation and accept the Xbox format update.
+    // Secondary host DirectSound buffers cannot change format in place. Cache
+    // the requested format so a later SetBufferData resize can recreate the
+    // buffer with the format selected by the title.
+    CacheStaticBufferFormat(pThis, pWaveFormat);
+
     EmuSwapFS();   // XBox FS
 
     return DS_OK;
