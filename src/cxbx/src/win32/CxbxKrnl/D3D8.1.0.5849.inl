@@ -1018,6 +1018,12 @@ SOOVPA<8> KickOffAndWaitForIdle_1_0_5849 =
     }
 };
 
+// Defined in D3D8.1.0.5659.inl (included after this file): the 177-byte
+// PixelJar::Get2DSurfaceDesc body that later 5849-era titles also ship
+// (Mortal Kombat Deception links it; the 4627-reuse sigs below miss it and
+// the raw body faults on the HLE's zeroed scratch device).
+extern SOOVPA<8> Get2DSurfaceDesc_1_0_5659;
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // D3DDevice::CreatePushBuffer2
@@ -1668,6 +1674,14 @@ OOVPATable D3D8_1_0_5849[] =
     // Get2DSurfaceDescC
     {
         (OOVPA*)&Get2DSurfaceDescC_1_0_4627,
+        XTL::EmuGet2DSurfaceDesc,
+        #ifdef _DEBUG_TRACE
+        "EmuGet2DSurfaceDesc"
+        #endif
+    },
+    // Get2DSurfaceDesc (177-byte 5659.4/5788-alias body; also in 5849 titles)
+    {
+        (OOVPA*)&Get2DSurfaceDesc_1_0_5659,
         XTL::EmuGet2DSurfaceDesc,
         #ifdef _DEBUG_TRACE
         "EmuGet2DSurfaceDesc"
