@@ -3426,6 +3426,44 @@ static bool EmuIsLowXboxRam(PVOID Address)
     return Value >= 0x01000000 && Value < g_EmuXboxRamLimit;
 }
 
+static PVOID EmuResolveContiguousMemoryAllocation(PVOID Address)
+{
+    const ULONG Value = (ULONG)Address;
+
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) /
+                             sizeof(g_EmuContiguousMemoryAllocations[0]);
+        i++)
+    {
+        if((ULONG)g_EmuContiguousMemoryAllocations[i].Address == Value)
+        {
+            return Address;
+        }
+    }
+
+    const ULONG AliasClass = Value & 0xF0000000;
+    if(AliasClass != 0x80000000 && AliasClass != 0xF0000000)
+    {
+        return NULL;
+    }
+
+    const ULONG AliasOffset = Value & 0x0FFFFFFF;
+    for(ULONG i = 0; i < sizeof(g_EmuContiguousMemoryAllocations) /
+                             sizeof(g_EmuContiguousMemoryAllocations[0]);
+        i++)
+    {
+        EmuContiguousMemoryAllocation* Allocation =
+            &g_EmuContiguousMemoryAllocations[i];
+        if((ULONG)Allocation->Address == AliasOffset ||
+           (AliasClass == 0x80000000 &&
+            Allocation->PhysicalAddress == AliasOffset))
+        {
+            return Allocation->Address;
+        }
+    }
+
+    return NULL;
+}
+
 static void EmuUntrackContiguousMemoryAllocation(PVOID Address)
 {
     if(Address == NULL)
@@ -7831,8 +7869,25 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
     }
     #endif
 
-    EmuUntrackContiguousMemoryAllocation(BaseAddress);
-    if(EmuIsLowXboxRam(BaseAddress))
+    PVOID AllocationAddress = EmuResolveContiguousMemoryAllocation(BaseAddress);
+    if(AllocationAddress == NULL)
+    {
+        printf("EmuKrnl (0x%lX): MmFreeContiguousMemory rejected unknown address 0x%.08lX.\n",
+               GetCurrentThreadId(), (ULONG)BaseAddress);
+        fflush(stdout);
+        EmuSwapFS(); // Xbox FS
+        return;
+    }
+
+    if(AllocationAddress != BaseAddress)
+    {
+        printf("EmuKrnl (0x%lX): MmFreeContiguousMemory resolved alias 0x%.08lX to 0x%.08lX.\n",
+               GetCurrentThreadId(), (ULONG)BaseAddress, (ULONG)AllocationAddress);
+        fflush(stdout);
+    }
+
+    EmuUntrackContiguousMemoryAllocation(AllocationAddress);
+    if(EmuIsLowXboxRam(AllocationAddress))
     {
         // Deliberately keep the pages committed. Two reasons:
         // - VirtualFree(Base, 0, MEM_DECOMMIT) decommits from Base to the END
@@ -7847,7 +7902,9 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
         // costs at most that.
     }
     else
-        delete[] (unsigned char *)BaseAddress;
+    {
+        delete[](unsigned char*)AllocationAddress;
+    }
 
     EmuSwapFS();   // Xbox FS
 
