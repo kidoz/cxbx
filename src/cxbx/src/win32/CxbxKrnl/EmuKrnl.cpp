@@ -9689,14 +9689,21 @@ XBSYSAPI EXPORTNUM(219) NTSTATUS NTAPI xboxkrnl::NtReadFile
     {
         xboxkrnl::PIO_STATUS_BLOCK iosb = (xboxkrnl::PIO_STATUS_BLOCK)IoStatusBlock;
         uint32 info = (iosb != NULL && !IsBadReadPtr(iosb, sizeof(*iosb))) ? (uint32)iosb->Information : 0xFFFFFFFF;
+        uint32 ioStatus = (iosb != NULL && !IsBadReadPtr(iosb, sizeof(*iosb))) ? (uint32)iosb->u1.Status : 0xFFFFFFFF;
 
         if(ByteOffset != NULL)
-            printf("FIO| read tid=0x%X handle=0x%X off=0x%.08X%.08X len=0x%X event=0x%X apc=0x%X status=0x%.08X info=0x%X\n",
+        {
+            printf("FIO| read tid=0x%X handle=0x%X off=0x%.08X%.08X len=0x%X event=0x%X apc=0x%X buffer=0x%X iosb=0x%X status=0x%.08X io_status=0x%.08X info=0x%X\n",
                    (uint32)GetCurrentThreadId(), FileHandle, (uint32)ByteOffset->u.HighPart,
-                   (uint32)ByteOffset->u.LowPart, Length, Event, ApcRoutine, (uint32)ret, info);
+                   (uint32)ByteOffset->u.LowPart, Length, Event, ApcRoutine, Buffer,
+                   IoStatusBlock, (uint32)ret, ioStatus, info);
+        }
         else
-            printf("FIO| read tid=0x%X handle=0x%X off=current len=0x%X event=0x%X apc=0x%X status=0x%.08X info=0x%X\n",
-                   (uint32)GetCurrentThreadId(), FileHandle, Length, Event, ApcRoutine, (uint32)ret, info);
+        {
+            printf("FIO| read tid=0x%X handle=0x%X off=current len=0x%X event=0x%X apc=0x%X buffer=0x%X iosb=0x%X status=0x%.08X io_status=0x%.08X info=0x%X\n",
+                   (uint32)GetCurrentThreadId(), FileHandle, Length, Event, ApcRoutine, Buffer,
+                   IoStatusBlock, (uint32)ret, ioStatus, info);
+        }
 
         if(ret == 0x00000103 && EmuFileIoTraceLevel() >= 2 &&
            iosb != NULL && !IsBadReadPtr(iosb, sizeof(*iosb)))
