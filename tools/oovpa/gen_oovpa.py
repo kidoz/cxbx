@@ -298,13 +298,141 @@ def count_xref_matches(img: bytes, pairs: list[tuple[int, int]],
 
 
 # --------------------------------------------------------------------------- #
+# Image-derived signatures (--from-image)
+# --------------------------------------------------------------------------- #
+# gen_oovpa's default path reads a function's bytes from an XDK .lib. That is
+# impossible when the shipped body differs from the archive (LTCG, or a build
+# whose lib we don't have): the machine code exists only in the title's own
+# image. This mode extracts the function straight from the XBE at a given VA,
+# uses a disassembler to skip the link/address-dependent operand bytes (the
+# thing relocations mark in a .lib), and verifies uniqueness across a corpus --
+# folding the hand hexdump + pair-pick + verify loop into one command.
+
+
+def _xbe_vaddr_image(path: Path) -> tuple[bytes, int]:
+    """Lay an XBE out by section virtual address. Returns (image, base)."""
+    d = path.read_bytes()
+    if d[:4] != b"XBEH":
+        sys.exit(f"{path.name}: not an XBE")
+    base, = struct.unpack_from("<I", d, 0x104)
+    size, = struct.unpack_from("<I", d, 0x10C)
+    nsec, = struct.unpack_from("<I", d, 0x11C)
+    psec, = struct.unpack_from("<I", d, 0x120)
+    img = bytearray(size)
+    off = psec - base
+    for i in range(nsec):
+        h = d[off + 0x38 * i: off + 0x38 * (i + 1)]
+        vaddr, _vsize, raw, rawsize = struct.unpack_from("<IIII", h, 4)
+        n = min(rawsize, len(d) - raw)
+        s = vaddr - base
+        if 0 <= s < len(img) and n > 0:
+            img[s:s + min(n, len(img) - s)] = d[raw:raw + min(n, len(img) - s)]
+    return bytes(img), base
+
+
+def _function_bytes(image: bytes, base: int, va: int, max_len: int) -> bytes:
+    """Bytes of the function at `va`, trimmed at the first int3 padding run."""
+    o = va - base
+    if o < 0 or o >= len(image):
+        sys.exit(f"0x{va:08X} is outside the image")
+    limit = min(o + max_len, len(image))
+    i = o
+    while i < limit:
+        if image[i] == 0xCC and i + 1 < limit and image[i + 1] == 0xCC:
+            break
+        i += 1
+    return image[o:i]
+
+
+def _disasm_banned(data: bytes, base: int, image_size: int) -> set:
+    """Byte offsets in `data` that encode a link/address-dependent operand (a
+    branch rel32, or an address-like imm/disp) -- the equivalent of a .lib's
+    relocations, which must not anchor a signature. Uses capstone when present;
+    otherwise falls back to banning every dword that reads as an in-image or
+    kernel pointer (conservative -- over-banning only costs usable offsets)."""
+    try:
+        from capstone import (Cs, CS_ARCH_X86, CS_MODE_32, CS_OP_IMM, CS_OP_MEM,
+                              CS_GRP_JUMP, CS_GRP_CALL)
+    except ImportError:
+        banned = set()
+        for i in range(len(data) - 3):
+            v = int.from_bytes(data[i:i + 4], "little")
+            if base <= v < base + image_size or v >= 0x80000000:
+                banned.update(range(i, i + 4))
+        return banned
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    banned = set()
+    for ins in md.disasm(bytes(data), 0):        # start addr 0 -> address == offset
+        branch = bool({CS_GRP_JUMP, CS_GRP_CALL} & set(ins.groups))
+        for op in ins.operands:
+            if op.type == CS_OP_IMM:
+                val = ((op.imm - (ins.address + ins.size)) if branch else op.imm) & 0xFFFFFFFF
+                addr_like = branch or val >= 0x10000
+            elif op.type == CS_OP_MEM and op.mem.disp:
+                val = op.mem.disp & 0xFFFFFFFF
+                addr_like = val >= 0x10000
+            else:
+                continue
+            if not addr_like:
+                continue
+            idx = bytes(ins.bytes).find(val.to_bytes(4, "little"), 1)   # skip opcode byte
+            if idx >= 0:
+                banned.update(range(ins.address + idx, ins.address + idx + 4))
+    return banned
+
+
+def from_image_mode(args) -> int:
+    if not args.va or not args.name:
+        sys.exit("--from-image requires --va <addr> and --name <SIGNAME>")
+    src = Path(args.from_image)
+    image, base = _xbe_vaddr_image(src)
+    va = int(args.va, 0)
+    data = _function_bytes(image, base, va, max(args.max_offset + 1, 0x40))
+    if len(data) < 8:
+        sys.exit(f"0x{va:08X}: function too short ({len(data)} bytes) to sign")
+    banned = _disasm_banned(data, base, len(image))
+    fn = Function(args.name, data, sorted(banned))
+    pairs = pick_pairs(fn, args.pairs, min(args.max_offset, len(data) - 1))
+
+    n_src = count_matches(image, pairs)
+    corpus = [(Path(p), flat_image(Path(p)))
+              for g in args.verify for p in glob.glob(g, recursive=True)]
+    # Label by the containing game folder -- every file is "default.xbe".
+    collisions = [(p.parent.name or p.name, count_matches(img, pairs)) for p, img in corpus]
+
+    ok = n_src == 1 and all(c <= 1 for _, c in collisions)
+    print(f"{'OK  ' if ok else 'WARN'} {args.name}: from {src.name} @ 0x{va:08X} "
+          f"({len(data)} bytes, {len(banned) // 4}+ address operand(s) skipped); "
+          f"{n_src} match in source"
+          + (("; corpus: " + ", ".join(f"{nm}={c}" for nm, c in collisions)) if collisions else ""))
+    if n_src != 1:
+        print(f"// !! {n_src} matches in the source -- raise --pairs / --max-offset for uniqueness")
+    snippet = (f"// image-derived from {src.name} @ 0x{va:08X} "
+               f"({len(data)} bytes)\n" + render(args.name, pairs))
+    if args.out:
+        Path(args.out).write_text(snippet)
+        print(f"wrote {args.out}")
+    else:
+        print("\n" + snippet)
+    return 0 if ok else 1
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Generate Cxbx OOVPA signatures from an XDK .lib")
-    ap.add_argument("--lib", required=True, help="XDK static library (e.g. d3d8.lib)")
+    ap = argparse.ArgumentParser(
+        description="Generate Cxbx OOVPA signatures from an XDK .lib, or from a "
+                    "shipped title image when the lib body differs (--from-image).")
+    ap.add_argument("--lib", help="XDK static library (e.g. d3d8.lib); omit with --from-image")
+    ap.add_argument("--from-image", metavar="XBE",
+                    help="derive the signature from a title's own bytes at --va "
+                         "(for LTCG / differing-body functions no lib can match)")
+    ap.add_argument("--va", help="with --from-image: the function's virtual address (0x-hex)")
+    ap.add_argument("--name", help="with --from-image: the OOVPA variable name to emit")
     ap.add_argument(
         "--func", action="append", default=[], metavar="SYMBOL=SIGNAME",
         help="decorated symbol and the OOVPA variable name to emit (repeatable)",
@@ -331,6 +459,11 @@ def main() -> int:
                     help="highest offset considered (default 0xFF -> SOOVPA)")
     ap.add_argument("--out", help="write the .inl snippet here (default stdout)")
     args = ap.parse_args()
+
+    if args.from_image:
+        return from_image_mode(args)
+    if not args.lib:
+        sys.exit("need --lib (with --func/--xref-func) or --from-image (with --va/--name)")
 
     lib = Path(args.lib).read_bytes()
     symbols = _first_linker_member(lib)
