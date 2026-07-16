@@ -76,6 +76,7 @@ namespace XTL
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
 #include "DSound.1.0.5849.inl"
+#include "DSound.1.0.5233.inl"
 #include "DSound.1.0.5344.inl"
 #include "DSound.1.0.5558.inl"
 #include "DSound.1.0.5659.inl"
@@ -280,6 +281,13 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         DSound_1_0_4627,
         DSound_1_0_4627_SIZE
+    },
+    // DSound Version 1.0.5233
+    {
+        "DSOUND",
+        1, 0, 5233,
+        DSound_1_0_5233,
+        DSound_1_0_5233_SIZE
     },
     // DSound Version 1.0.3911 (generated from XDK 3911 dsound.lib)
     {
