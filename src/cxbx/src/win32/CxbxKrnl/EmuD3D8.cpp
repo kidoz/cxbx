@@ -11090,6 +11090,25 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         return false;
     }
     output.resize(vertexCount);
+
+    // Indexed draws repeat vertices across adjacent triangles. The CPU fallback
+    // must still emit the original index order for clipping and rasterization,
+    // but decoding and executing the vertex program once per source vertex
+    // avoids multiplying its cost by the triangle count.
+    constexpr UINT EmuVshCpuIndexCacheSize = 16384;
+    static std::array<EmuVshCpuVertex, EmuVshCpuIndexCacheSize> transformedVertices{};
+    static std::array<ULONG, EmuVshCpuIndexCacheSize> transformedVertexGenerations{};
+    static ULONG transformedVertexGeneration = 0;
+    if(indices != nullptr)
+    {
+        ++transformedVertexGeneration;
+        if(transformedVertexGeneration == 0)
+        {
+            transformedVertexGenerations.fill(0);
+            transformedVertexGeneration = 1;
+        }
+    }
+
     std::array<float, 16 * 4> firstInputs{};
     bool capturedFirstInputs = false;
     for(UINT outputIndex = 0; outputIndex < vertexCount; ++outputIndex)
@@ -11100,6 +11119,13 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
             return false;
         }
         const UINT vertexIndex = firstVertex + relativeIndex;
+        if(indices != nullptr && relativeIndex < EmuVshCpuIndexCacheSize &&
+           transformedVertexGenerations[relativeIndex] == transformedVertexGeneration)
+        {
+            output[outputIndex] = transformedVertices[relativeIndex];
+            continue;
+        }
+
         float input[16 * 4] = {};
         if(!XTL::VshDiagnostics::DecodeXboxVertex(g_EmuCurrentCpuVertexShader->declaration.data(), streams,
                                                   streamCount, vertexIndex, input, 16 * 4))
@@ -11138,6 +11164,11 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
             vertex.texCoords[texCoord][1] = texCoords[texCoord * 4 + 1];
         }
         EmuVshProjectCpuVertex(vertex, viewport);
+        if(indices != nullptr && relativeIndex < EmuVshCpuIndexCacheSize)
+        {
+            transformedVertices[relativeIndex] = vertex;
+            transformedVertexGenerations[relativeIndex] = transformedVertexGeneration;
+        }
     }
 
     if(vertexCount >= 3 && capturedFirstInputs &&
