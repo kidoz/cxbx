@@ -35,6 +35,25 @@ inline constexpr std::size_t CompressedTextureMipChainSize(
     return size;
 }
 
+inline constexpr std::size_t HostTextureMipLevelCount(
+    std::size_t width, std::size_t height, std::size_t requestedLevelCount) noexcept
+{
+    if(requestedLevelCount == 0 || width == 0 || height == 0)
+    {
+        return requestedLevelCount;
+    }
+
+    std::size_t maximumLevelCount = 1;
+    while(width > 1 || height > 1)
+    {
+        width = width > 1 ? width / 2 : 1;
+        height = height > 1 ? height / 2 : 1;
+        ++maximumLevelCount;
+    }
+    return requestedLevelCount < maximumLevelCount ? requestedLevelCount
+                                                   : maximumLevelCount;
+}
+
 inline constexpr std::uint32_t XboxPhysicalAddress(std::uintptr_t address) noexcept
 {
     return cxbx::XboxPhysicalAddress(address);
