@@ -338,6 +338,36 @@ int main()
               "stage blue-read hazard bails");
     }
 
+    // 10d. Turok Evolution's in-game material shader (hash 0x16FB263D,
+    // captured via CXBX_PSH_DUMP) names t2 only in a product with literal
+    // zero. t2's texture stage is inactive, so the translation must discard
+    // that dead read rather than fail texture_mode_none.
+    {
+        static const std::uint32_t turok[60] = {
+            0xD4301010, 0xCDB01010, 0xDDDBD93B, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x200C0300, 0x00001180,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x000000D0, 0x00000090, 0x00000D00, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0xC4200000,
+            0xCDA00000, 0xCDCBC92B, 0xC8CD0000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x000000D0, 0x00000090, 0x00000D00, 0x000100C0, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00011104, 0x00008001,
+            0x00000000, 0x00000000, 0xFFFFF00F, 0xFFFFFFFF, 0x000001F7,
+        };
+        XboxPixelShaderDefinition def{};
+        for(unsigned i = 0; i < 60; ++i)
+            def[i] = turok[i];
+        const PixelShaderTranslation t = TranslatePixelShader(def);
+        Check(t.ok(), "turok 0x16FB263D translates");
+        if(!t.ok())
+            std::printf("  reason: %s\n", t.failure);
+        Check(t.textures == 2, "turok material loads live t0 and t3");
+        Check(CountToken(t, 0x12) == 2, "turok material emits RGB and alpha lrp");
+    }
+
     // 10c. A stored product clobbering the other half's inputs before the
     //      sum can read them bails as a portion hazard.
     {
