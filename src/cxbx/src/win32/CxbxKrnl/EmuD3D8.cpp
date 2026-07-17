@@ -6659,26 +6659,29 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 {
                     printf("*Warning* expanding texture width (%d->4)\n", dwWidth);
                     dwWidth = 4;
-                    
-                    dwMipMapLevels = 3;
                 }
 
                 if(dwHeight < 4)
                 {
                     printf("*Warning* expanding texture height (%d->4)\n", dwHeight);
                     dwHeight = 4;
-
-                    dwMipMapLevels = 3;
                 }
+
+                // Xbox DXT resources can encode redundant sub-4x4 mip levels.
+                // Keep their complete source chain for copying, but never ask
+                // the host D3D8 device for levels beyond its legal dimensions.
+                const DWORD dwHostMipMapLevels = static_cast<DWORD>(
+                    cxbx::d3d::HostTextureMipLevelCount(dwWidth, dwHeight,
+                                                         dwMipMapLevels));
 
                 #ifdef _DEBUG_TRACE
                 printf("CreateTexture(%d, %d, %d, 0, %d, D3DPOOL_MANAGED, 0x%.08X)\n", dwWidth, dwHeight,
-                    dwMipMapLevels, Format, &pResource->EmuTexture8);
+                    dwHostMipMapLevels, Format, &pResource->EmuTexture8);
                 #endif
 
                 hRet = g_pD3DDevice8->CreateTexture
                 (
-                    dwWidth, dwHeight, dwMipMapLevels, 0, Format,
+                    dwWidth, dwHeight, dwHostMipMapLevels, 0, Format,
                     D3DPOOL_MANAGED, &pResource->EmuTexture8
                 );
 
@@ -6687,7 +6690,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                     EmuWarning("Resource_Register: CreateTexture(%lu, %lu, %lu, format=0x%.08lX) failed (0x%.08lX); using a blank placeholder",
                                dwWidth,
                                dwHeight,
-                               dwMipMapLevels,
+                               dwHostMipMapLevels,
                                Format,
                                hRet);
 

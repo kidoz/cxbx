@@ -61,9 +61,13 @@ int main()
        cxbx::d3d::CompressedTextureLevelSize(5, 4, 8) != 16 ||
        cxbx::d3d::CompressedTextureLevelSize(4, 5, 16) != 32 ||
        cxbx::d3d::CompressedTextureMipChainSize(8, 4, 8, 4) != 40 ||
-       cxbx::d3d::CompressedTextureMipChainSize(1, 2, 8, 3) != 24)
+       cxbx::d3d::CompressedTextureMipChainSize(1, 2, 8, 3) != 24 ||
+       cxbx::d3d::HostTextureMipLevelCount(4, 4, 5) != 3 ||
+       cxbx::d3d::HostTextureMipLevelCount(4, 2, 6) != 3 ||
+       cxbx::d3d::HostTextureMipLevelCount(32, 2, 6) != 6 ||
+       cxbx::d3d::HostTextureMipLevelCount(4, 4, 0) != 0)
     {
-        std::fputs("compressed texture sizes must round up to complete 4x4 blocks\n", stderr);
+        std::fputs("compressed texture sizes and host mip counts must be valid\n", stderr);
         return 1;
     }
 
