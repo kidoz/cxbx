@@ -107,6 +107,8 @@ int main(void)
         p = pb_push1(p, NV097_SET_TEXTURE_ADDRESS,    0x00030303);
         p = pb_push1(p, NV097_SET_TEXTURE_CONTROL0,   0x4003ffc0);
         p = pb_push1(p, NV097_SET_TEXTURE_FILTER,     0x02022000);
+        p = pb_push1(p, NV097_SET_SHADER_STAGE_PROGRAM,
+                     NV097_SET_SHADER_STAGE_PROGRAM_STAGE0_2D_PROJECTIVE);
 
         // Position + texcoord0 arrays (no diffuse -> defaults to white).
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + ATTR_POSITION * 4, vbAddr);

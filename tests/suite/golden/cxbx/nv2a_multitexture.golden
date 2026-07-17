@@ -1,0 +1,10 @@
+#suite xbox-conformance v1
+#probe nv2a_multitexture
+CHK nv2a_multitexture.pb_init expect=1 got=1 PASS
+CHK nv2a_multitexture.back_buffer expect=1 got=1 PASS
+CHK nv2a_multitexture.texture0_alloc expect=1 got=1 PASS
+CHK nv2a_multitexture.texture1_alloc expect=1 got=1 PASS
+CHK nv2a_multitexture.vbuf_alloc expect=1 got=1 PASS
+CHK nv2a_multitexture.stage0_times_stage1 expect=0xFF00FF00 got=0xFF00FF00 PASS
+CHK nv2a_multitexture.outside_clear expect=0xFF000000 got=0xFF000000 PASS
+#result nv2a_multitexture verdict=PASS checks=7 fail=0

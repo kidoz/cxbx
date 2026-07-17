@@ -1,0 +1,6 @@
+# Raw NV2A two-stage texture and register-combiner coverage.
+tags = ["nv2a"]
+golden = "values"
+
+[env]
+CXBX_NV2A_RASTER = "1"
