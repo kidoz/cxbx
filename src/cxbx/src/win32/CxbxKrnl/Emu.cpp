@@ -6852,7 +6852,8 @@ static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
 // moves EIP to the target offset.
 static bool EmuTryEmulateGdtPatch(LPEXCEPTION_POINTERS e)
 {
-    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
+       e->ContextRecord->Eip >= 0x04000000)
         return false;
 
     __try
@@ -8255,6 +8256,11 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         printf("Emu (0x%lX): Vectored EIP is near-null (0x%.08lX) -- guest called/jumped "
                "through a NULL or uninitialised function pointer.\n",
                GetCurrentThreadId(), e->ContextRecord->Eip);
+    }
+    else if(e->ContextRecord->Eip == 0x7FFFFFFF)
+    {
+        printf("Emu (0x%lX): Vectored bytes unavailable (unresolved XRef sentinel).\n",
+               GetCurrentThreadId());
     }
     else __try
     {
