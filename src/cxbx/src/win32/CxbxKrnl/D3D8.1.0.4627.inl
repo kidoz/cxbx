@@ -976,6 +976,27 @@ SOOVPA<11> IDirect3DDevice8_Swap_1_0_4627 =
     }
 };
 
+// Turok - Evolution ships a 224-byte Swap body that differs from the archived
+// 4627 library implementation. Generated from its retail XBE with
+// tools/oovpa/gen_oovpa.py; all address operands are excluded. It is unique in
+// Turok and does not match the available title/probe corpus.
+SOOVPA<10> IDirect3DDevice8_Swap_1_0_4627_Turok =
+{
+    0, 10, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x18, 0xC0 },
+        { 0x31, 0x08 },
+        { 0x4A, 0x83 },
+        { 0x63, 0x2C },
+        { 0x7B, 0x36 },
+        { 0x94, 0x85 },
+        { 0xA6, 0xE8 },
+        { 0xC6, 0x00 },
+        { 0xDF, 0x90 }
+    }
+};
+
 // ******************************************************************
 // * IDirect3DDevice8_CreateVertexBuffer2
 // ******************************************************************
@@ -2484,6 +2505,16 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_Swap" 
+        #endif
+    },
+    // IDirect3DDevice8::Swap (Turok - Evolution retail body)
+    {
+        (OOVPA*)&IDirect3DDevice8_Swap_1_0_4627_Turok,
+
+        XTL::EmuIDirect3DDevice8_Swap,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_Swap"
         #endif
     },
     // IDirect3DDevice8::EnableOverlay (* unchanged since 4361 *)
