@@ -7770,8 +7770,54 @@ static ULONG g_VectoredLastCode = 0;
 static ULONG g_VectoredLastEip = 0;
 static volatile LONG g_VectoredRepeatCount = 0;
 
+// A stack probe reaches the guard page immediately below StackLimit before
+// Windows updates the TIB. Our first-chance handler must resume that access
+// without entering the general guest-fault path: logging and FS-role swaps use
+// enough stack to turn ordinary growth into a fatal nested exception.
+static bool EmuTryContinueStackGuard(LPEXCEPTION_POINTERS e)
+{
+    static const DWORD StackGuardViolation = 0x80000001UL;
+
+    if(e == NULL || e->ExceptionRecord == NULL || e->ContextRecord == NULL ||
+       e->ExceptionRecord->ExceptionCode != StackGuardViolation ||
+       e->ExceptionRecord->NumberParameters < 2)
+    {
+        return false;
+    }
+
+    NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+    const ULONG OldLimit = (ULONG)Tib->StackLimit;
+    const ULONG FaultAddress =
+        (ULONG)e->ExceptionRecord->ExceptionInformation[1];
+    const ULONG Esp = (ULONG)e->ContextRecord->Esp;
+    SYSTEM_INFO SystemInfo;
+    GetSystemInfo(&SystemInfo);
+    const ULONG PageSize = SystemInfo.dwPageSize;
+
+    if(PageSize == 0 || OldLimit < PageSize || Esp < OldLimit ||
+       FaultAddress < OldLimit - PageSize || FaultAddress >= OldLimit)
+    {
+        return false;
+    }
+
+    MEMORY_BASIC_INFORMATION mbi;
+    if(VirtualQuery((LPCVOID)FaultAddress, &mbi, sizeof(mbi)) != sizeof(mbi) ||
+       mbi.State != MEM_COMMIT || (ULONG)mbi.BaseAddress != OldLimit - PageSize)
+    {
+        return false;
+    }
+
+    Tib->StackLimit = mbi.BaseAddress;
+    return true;
+}
+
 static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 {
+    if(EmuTryContinueStackGuard(e))
+    {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     // Opt-in pre-dispatch trace. The normal mode omits expected aperture and
     // port-I/O traps so diagnostics do not materially change title timing;
     // CXBX_EXC_TRACE_ALL retains the original one-line-per-exception firehose.
