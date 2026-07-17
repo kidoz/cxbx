@@ -1796,13 +1796,62 @@ SOOVPA<8> IDirect3DDevice8_MakeSpace_1_0_4627 =
     }
 };
 
+// _D3DDevice_SetTextureState_ColorKeyColor@8 (archived XDK 4627 d3d8.lib,
+// 64 bytes, three relocations excluded)
+SOOVPA<8> IDirect3DDevice8_SetTextureState_ColorKeyColor_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x09, 0x3B },
+        { 0x13, 0x8B },
+        { 0x1B, 0x0A },
+        { 0x24, 0x89 },
+        { 0x2D, 0xE1 },
+        { 0x36, 0xC2 },
+        { 0x3F, 0x90 }
+    }
+};
+
+// The two cull-control setters are byte-identical after their relocated
+// deferred-state addresses are excluded. Both are host optimization hints with
+// the same accept-and-ignore behavior, so patch every match.
+SOOVPA<8> IDirect3DDevice8_SetRenderState_CullControl_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x10, 0x8B },
+        { 0x1D, 0x15 },
+        { 0x2E, 0x15 },
+        { 0x3F, 0x74 },
+        { 0x4F, 0x01 },
+        { 0x5F, 0xC2 },
+        { 0x6F, 0x90 }
+    }
+};
+
+// The three shorter ROP-Z/uncompressed-cull setters form a second identical
+// family with the same host behavior.
+SOOVPA<8> IDirect3DDevice8_SetRenderState_RopControl_1_0_4627 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x04, 0xA3 },
+        { 0x09, 0xE8 },
+        { 0x0E, 0xC2 },
+        { 0x11, 0x90 },
+        { 0x16, 0x90 },
+        { 0x1A, 0x90 },
+        { 0x1F, 0x90 }
+    }
+};
+
 // ******************************************************************
 // * Xbox-extension SetRenderState signatures (generated from 4627 d3d8.lib).
 // * Each is verified unique across the Turok - Evolution image and 53 other
-// * XBE/probe images via tools/oovpa/gen_oovpa.py. Five siblings
-// * (OcclusionCullEnable, StencilCullEnable, RopZCmpAlwaysRead, RopZRead,
-// * DoNotCullUncompressed) are byte-identical except for one relocated global
-// * address and require XRef signatures, which are deferred.
+// * XBE/probe images via tools/oovpa/gen_oovpa.py.
 // ******************************************************************
 SOOVPA<8> IDirect3DDevice8_SetRenderState_FrontFace_1_0_4627 =
 {
@@ -2431,6 +2480,16 @@ OOVPATable D3D8_1_0_4627[] =
         "EmuIDirect3DDevice8_SetTextureState_BorderColor"
         #endif
     },
+    // IDirect3DDevice8::SetTextureState_ColorKeyColor
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTextureState_ColorKeyColor_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetTextureState_ColorKeyColor,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTextureState_ColorKeyColor"
+        #endif
+    },
     // IDirect3DDevice8::SetTextureState_BumpEnv
     {
         (OOVPA*)&IDirect3DDevice8_SetTextureState_BumpEnv_1_0_4627,
@@ -2760,6 +2819,30 @@ OOVPATable D3D8_1_0_4627[] =
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetRenderState_YuvEnable"
         #endif
+    },
+    // Xbox-extension cull control family (two byte-identical setters)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_CullControl_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_CullControl,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_CullControl",
+        #endif
+
+        OOVPA_FLAG_PATCH_ALL
+    },
+    // Xbox-extension ROP-Z control family (three byte-identical setters)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_RopControl_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetRenderState_CullControl,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetRenderState_RopControl",
+        #endif
+
+        OOVPA_FLAG_PATCH_ALL
     },
     // IDirect3DDevice8::SetRenderState_FrontFace
     {

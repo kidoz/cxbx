@@ -91,6 +91,22 @@ void __cdecl main()
     D3DDevice_SetTextureState_BorderColor(3, 0xFF102030);
     xt_chk("d3d.border_color_survives", 1, 1);
 
+    // These 4627 extension setters are valid native library paths. Five have
+    // byte-identical code after relocations are excluded, so an ordinary OOVPA
+    // cannot safely assign distinct HLE wrappers to them.
+    D3DDevice_SetTextureState_ColorKeyColor(0, 0x00102030);
+    xt_chk("d3d.color_key_color_survives", 1, 1);
+    D3DDevice_SetRenderState_OcclusionCullEnable(FALSE);
+    xt_chk("d3d.occlusion_cull_survives", 1, 1);
+    D3DDevice_SetRenderState_StencilCullEnable(FALSE);
+    xt_chk("d3d.stencil_cull_survives", 1, 1);
+    D3DDevice_SetRenderState_RopZCmpAlwaysRead(FALSE);
+    xt_chk("d3d.rop_z_compare_survives", 1, 1);
+    D3DDevice_SetRenderState_RopZRead(FALSE);
+    xt_chk("d3d.rop_z_read_survives", 1, 1);
+    D3DDevice_SetRenderState_DoNotCullUncompressed(FALSE);
+    xt_chk("d3d.uncompressed_cull_survives", 1, 1);
+
     D3DDevice_BeginVisibilityTest();
     xt_chk("d3d.begin_visibility_survives", 1, 1);
     D3DDevice_EndVisibilityTest(0);

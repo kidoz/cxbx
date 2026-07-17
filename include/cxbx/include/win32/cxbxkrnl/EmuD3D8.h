@@ -862,6 +862,12 @@ HRESULT WINAPI EmuIDirect3DDevice8_SetTextureState_BorderColor
     DWORD           Value
 );
 
+VOID WINAPI EmuIDirect3DDevice8_SetTextureState_ColorKeyColor
+(
+    DWORD           Stage,
+    DWORD           Value
+);
+
 VOID WINAPI EmuIDirect3DDevice8_SetTextureState_BumpEnv
 (
     DWORD           Stage,
@@ -1399,6 +1405,8 @@ VOID WINAPI EmuIDirect3DDevice8_SetRenderState_YuvEnable
 (
     DWORD Value
 );
+
+VOID WINAPI EmuIDirect3DDevice8_SetRenderState_CullControl(DWORD Value);
 
 // Xbox-extension render-state wrappers (no PC D3DRS equivalent -> no-op);
 // MultiSampleMask forwards to the host device; SetRenderStateNotInline is the
