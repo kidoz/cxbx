@@ -6,8 +6,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not $Xdk) {
+    $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")
+    $archive = Join-Path $repo "other\xbox-sdks\extracted"
+    $Xdk = Get-ChildItem -LiteralPath $archive -Directory -Filter "2002-06_-_4627_*" |
+        ForEach-Object {
+            Get-ChildItem -LiteralPath $_.FullName -Recurse -Directory -Filter XDK |
+                Where-Object { Test-Path (Join-Path $_.FullName "xbox\lib\d3d8.lib") }
+        } | Select-Object -First 1 -ExpandProperty FullName
+}
 if (-not $Xdk -or -not (Test-Path (Join-Path $Xdk "xbox\lib\d3d8.lib"))) {
     throw "Set CXBX_XDK or pass -Xdk with an Xbox XDK root containing xbox/bin and xbox/lib."
+}
+
+# The 4627 library exports MakeSpace under its D3D C++ namespace.
+if (-not $PSBoundParameters.ContainsKey("CppMakeSpace")) {
+    $CppMakeSpace = $true
 }
 
 $vc = Join-Path $Xdk "xbox\bin\vc71"

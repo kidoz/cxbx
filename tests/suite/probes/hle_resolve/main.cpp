@@ -219,11 +219,11 @@ static const XFUNC k_dsound[] = {
     XF(DirectSoundDoWork, 1),
     XF(XAudioDownloadEffectsImage, 1),
     XF(DirectSoundUseFullHRTF, 1),
-    XF(IDirectSoundStream_Pause, 0),
+    XF(IDirectSoundStream_Pause, 1),
     XF(IDirectSoundStream_FlushEx, 1),
     XF(IDirectSoundStream_SetEG, 0),
     XF(IDirectSoundStream_SetMixBins, 0),
-    XF(IDirectSoundStream_SetVolume, 0),
+    XF(IDirectSoundStream_SetVolume, 1),
 };
 
 // XAPI input family (Xapi.1.0.5849.inl). These are the functions a title's

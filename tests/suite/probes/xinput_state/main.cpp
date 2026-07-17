@@ -55,11 +55,12 @@ void __cdecl main()
     xt_chk("xi.analog_a_injected", 1,
            state.Gamepad.bAnalogButtons[0] == EXPECT_A);
 
-    // The packet number must advance between polls (titles use it to detect
-    // fresh input).
+    // An unchanged input report keeps its packet number. Titles use a change
+    // in this value to avoid reprocessing identical state.
     DWORD packet1 = state.dwPacketNumber;
     XInputGetState(hPad, &state);
-    xt_chk("xi.packet_advances", 1, state.dwPacketNumber != packet1);
+    xt_chk("xi.packet_stable_without_change", 1,
+           state.dwPacketNumber == packet1);
 
     ins = 0;
     rem = 0;

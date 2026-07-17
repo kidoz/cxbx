@@ -96,7 +96,7 @@ void __cdecl main()
     D3DDevice_EndVisibilityTest(0);
     xt_chk("d3d.end_visibility_survives", 1, 1);
     UINT visibility = 0;
-    ULONGLONG timestamp = ~0ULL;
+    ULONGLONG timestamp = ~(ULONGLONG)0;
     D3DDevice_GetVisibilityTestResult(0, &visibility, &timestamp);
     xt_chk("d3d.get_visibility_visible", 1, visibility != 0 && timestamp == 0);
 
