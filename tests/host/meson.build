@@ -43,6 +43,15 @@ host_nv2a_raster_test = executable(
 
 test('host-nv2a-raster', host_nv2a_raster_test)
 
+host_nvnet_test = executable(
+  'host_nvnet_test',
+  'nvnet.cpp',
+  include_directories : cxbx_inc,
+  install : false,
+)
+
+test('host-nvnet', host_nvnet_test)
+
 host_psh_translate_test = executable(
   'host_psh_translate_test',
   'psh_translate.cpp',

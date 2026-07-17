@@ -47,6 +47,7 @@ namespace xboxkrnl
 #include "EmuNV2ALogging.h"
 #include "core/d3d_push_buffer.h"
 #include "core/nv2a_raster.h"
+#include "core/nvnet.h"
 #include "core/trace.h"
 
 // ******************************************************************
@@ -579,6 +580,8 @@ static const ULONG EmuApuVpPioFree = EmuApuVpBase + 0x00000010;
 static const ULONG EmuApuVpPioFreeQueueEmpty = 0x00000080;
 static const ULONG EmuAciMmioBase = 0xFEC00000;
 static const ULONG EmuAciMmioEnd = EmuAciMmioBase + 0x00000FFF;
+static const ULONG EmuNvnetMmioBase = 0xFEF00000;
+static const ULONG EmuNvnetMmioEnd = EmuNvnetMmioBase + 0x00000FFF;
 static const ULONG EmuAciBusMasterBase = 0x00000100;
 static const ULONG EmuAciGlobCnt = EmuAciBusMasterBase + 0x0000002C;
 static const ULONG EmuAciGlobSta = EmuAciBusMasterBase + 0x00000030;
@@ -613,10 +616,16 @@ static bool EmuAciIsMmioAddress(ULONG Address)
     return Address >= EmuAciMmioBase && Address <= EmuAciMmioEnd;
 }
 
+static bool EmuNvnetIsMmioAddress(ULONG Address)
+{
+    return Address >= EmuNvnetMmioBase && Address <= EmuNvnetMmioEnd;
+}
+
 static bool EmuIsMmioAddress(ULONG Address)
 {
     return EmuNv2aIsMmioAddress(Address) || EmuUsb0IsMmioAddress(Address) ||
-           EmuApuIsMmioAddress(Address) || EmuAciIsMmioAddress(Address);
+           EmuApuIsMmioAddress(Address) || EmuAciIsMmioAddress(Address) ||
+           EmuNvnetIsMmioAddress(Address);
 }
 
 static ULONG EmuNv2aOffset(ULONG Address)
@@ -680,6 +689,28 @@ static ULONG EmuAciCachedRegister(ULONG Address, ULONG DefaultValue)
     ULONG Value = DefaultValue;
     EmuLookupMmioRegister(Address, &Value);
     return Value;
+}
+
+static ULONG EmuNvnetReadRegister32(ULONG Address)
+{
+    ULONG Value = 0;
+    EmuLookupMmioRegister(Address, &Value);
+
+    printf("Emu (0x%lX): NVNET MMIO read 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
+    return Value;
+}
+
+static void EmuNvnetWriteRegister32(ULONG Address, ULONG Value)
+{
+    const ULONG Offset = Address - EmuNvnetMmioBase;
+    EmuStoreMmioRegister(
+        Address, cxbx::nvnet::RegisterValueAfterWrite(Offset, Value));
+
+    printf("Emu (0x%lX): NVNET MMIO write 0x%.08lX = 0x%.08lX.\n",
+           GetCurrentThreadId(), Address, Value);
+    fflush(stdout);
 }
 
 static bool EmuAciIsBusMasterStatus(ULONG Offset)
@@ -2244,6 +2275,8 @@ static ULONG EmuReadMmio(ULONG Address, ULONG Size)
         Value = EmuApuReadRegister32(AlignedAddress);
     else if(EmuAciIsMmioAddress(AlignedAddress))
         Value = EmuAciReadRegister32(AlignedAddress);
+    else if(EmuNvnetIsMmioAddress(AlignedAddress))
+        Value = EmuNvnetReadRegister32(AlignedAddress);
     else if(EmuNv2aIsMmioAddress(AlignedAddress))
         Value = EmuReadMmioRegister32(AlignedAddress);
     else
@@ -2300,6 +2333,12 @@ static void EmuWriteMmio(ULONG Address, ULONG Size, ULONG Value)
     if(EmuApuIsMmioAddress(Address))
     {
         EmuApuWriteRegister32(Address, Value);
+        return;
+    }
+
+    if(EmuNvnetIsMmioAddress(Address))
+    {
+        EmuNvnetWriteRegister32(Address, Value);
         return;
     }
 
