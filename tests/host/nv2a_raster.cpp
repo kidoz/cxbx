@@ -34,6 +34,28 @@ int main()
         return 1;
     }
 
+    if(!cxbx::nv2a::IsFinalCombinerPassthroughR0(
+           0x0000000Cu, 0x00001C80u) ||
+       cxbx::nv2a::IsFinalCombinerPassthroughR0(
+           0x0000000Cu, 0x00001480u))
+    {
+        std::fputs("only an r0 RGB/alpha final combiner may be bypassed\n",
+                   stderr);
+        return 1;
+    }
+
+    if(cxbx::nv2a::BlendSourceAlpha(0x80FF0000u, 0xFF0000FFu) !=
+       0xBF80007Fu ||
+       cxbx::nv2a::BlendSourceAlpha(0x00FFFFFFu, 0x12345678u) !=
+       0x12345678u ||
+       cxbx::nv2a::BlendSourceAlpha(0xFFFFFFFFu, 0x12345678u) !=
+       0xFFFFFFFFu)
+    {
+        std::fputs("source-alpha blend fast path must match ADD blending\n",
+                   stderr);
+        return 1;
+    }
+
     cxbx::nv2a::FinalCombinerRegisters registers = {};
     registers.r0 = 0x7A123456u;
     if(cxbx::nv2a::RunFinalCombiner(0x0000000Cu, 0x00001C80u,

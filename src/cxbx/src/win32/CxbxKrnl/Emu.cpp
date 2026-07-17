@@ -4326,6 +4326,11 @@ static ULONG EmuNv2aBlendChannel(ULONG Eq, float S, float D)
 // Blend a source pixel over the destination per the programmed factors/equation.
 static ULONG EmuNv2aBlend(ULONG Src, ULONG Dst, ULONG Sf, ULONG Df, ULONG Eq)
 {
+    if(Sf == 0x0302 && Df == 0x0303 && Eq == 0x8006)
+    {
+        return cxbx::nv2a::BlendSourceAlpha(Src, Dst);
+    }
+
     float sa = ((Src >> 24) & 0xFF) / 255.0f, sr = ((Src >> 16) & 0xFF) / 255.0f;
     float sg = ((Src >> 8) & 0xFF) / 255.0f,  sb = (Src & 0xFF) / 255.0f;
     float da = ((Dst >> 24) & 0xFF) / 255.0f, dr = ((Dst >> 16) & 0xFF) / 255.0f;
@@ -5058,7 +5063,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     Target.CombinerMode = EmuNv2aClassifyStage0Combiner(&Target);
     Target.FinalCombinerCw0 = g_EmuNv2aFinalCombinerCw0;
     Target.FinalCombinerCw1 = g_EmuNv2aFinalCombinerCw1;
-    Target.FinalCombiner = g_EmuNv2aFinalCombinerMask == 3u;
+    Target.FinalCombiner = g_EmuNv2aFinalCombinerMask == 3u &&
+                           !cxbx::nv2a::IsFinalCombinerPassthroughR0(
+                               Target.FinalCombinerCw0,
+                               Target.FinalCombinerCw1);
 
     // Resolve the depth (zeta) surface when depth OR stencil testing is enabled
     // and a zeta surface is bound (same base-0 raw-pointer fallback as color).

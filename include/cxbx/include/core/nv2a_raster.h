@@ -23,6 +23,32 @@ inline constexpr ProjectedTextureCoordinates ProjectTexture2D(
     return { s / q, t / q, q * inverseW };
 }
 
+inline constexpr bool IsFinalCombinerPassthroughR0(
+    std::uint32_t inputsAbcd, std::uint32_t inputsEfg) noexcept
+{
+    return inputsAbcd == 0x0000000Cu &&
+           ((inputsEfg >> 8) & 0xFFu) == 0x1Cu;
+}
+
+inline constexpr std::uint32_t BlendSourceAlpha(
+    std::uint32_t source, std::uint32_t destination) noexcept
+{
+    const std::uint32_t alpha = source >> 24;
+    const std::uint32_t inverseAlpha = 255u - alpha;
+    std::uint32_t output = 0;
+    for(int shift = 0; shift < 32; shift += 8)
+    {
+        const std::uint32_t sourceChannel = (source >> shift) & 0xFFu;
+        const std::uint32_t destinationChannel =
+            (destination >> shift) & 0xFFu;
+        const std::uint32_t channel =
+            (sourceChannel * alpha + destinationChannel * inverseAlpha + 127u) /
+            255u;
+        output |= channel << shift;
+    }
+    return output;
+}
+
 struct FinalCombinerRegisters
 {
     std::uint32_t constant0 = 0;
