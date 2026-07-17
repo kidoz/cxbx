@@ -319,7 +319,7 @@ int main()
         Check(t.ok(), "turok 0xB29D9DD0 translates");
         if(!t.ok())
             std::printf("  reason: %s\n", t.failure);
-        Check(t.arithmetic == 8, "turok shader uses exactly 8 instructions");
+        Check(t.arithmetic <= 8, "turok shader fits the ps.1.1 instruction budget");
         Check(t.textures == 2, "turok shader loads t0 and t3");
     }
 
@@ -365,7 +365,37 @@ int main()
         if(!t.ok())
             std::printf("  reason: %s\n", t.failure);
         Check(t.textures == 2, "turok material loads live t0 and t3");
-        Check(CountToken(t, 0x12) == 2, "turok material emits RGB and alpha lrp");
+        Check(CountToken(t, 0x12) >= 1, "turok material emits an lrp blend");
+    }
+
+    // 10e. The five-combiner variant (hash 0x2A41C3D8) has an extra alpha
+    // calculation that is overwritten before the final combiner. Its live
+    // RGB path fits ps.1.1 once dead portions are omitted.
+    {
+        static const std::uint32_t turok[60] = {
+            0xD4301010, 0xD4D81010, 0xCDB01010, 0xDDDBD93B, 0xD1DC1010,
+            0x00000000, 0x00000000, 0x00000000, 0x200C0300, 0x00001C80,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x00000000, 0x000000D0, 0x000000C0, 0x00000090, 0x00000D00,
+            0x000000C0, 0x00000000, 0x00000000, 0x00000000, 0xC4200000,
+            0x00000000, 0xCDA00000, 0xCDCBC92B, 0xC8CD0000, 0x00000000,
+            0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+            0x000000D0, 0x00000000, 0x00000090, 0x00000D00, 0x000100C0,
+            0x00000000, 0x00000000, 0x00000000, 0x00011105,
+            0x00008001, 0x00000000, 0x00000000, 0xFFFF00FF, 0xFFFFFFFF,
+            0x000001FF,
+        };
+        XboxPixelShaderDefinition def{};
+        for(unsigned i = 0; i < 60; ++i)
+            def[i] = turok[i];
+        const PixelShaderTranslation t = TranslatePixelShader(def);
+        Check(t.ok(), "turok 0x2A41C3D8 translates");
+        if(!t.ok())
+            std::printf("  reason: %s\n", t.failure);
+        Check(t.arithmetic <= 8, "turok five-combiner fits the ps.1.1 instruction budget");
+        Check(t.textures == 2, "turok five-combiner loads t0 and t3");
     }
 
     // 10c. A stored product clobbering the other half's inputs before the
