@@ -3361,9 +3361,47 @@ static bool EmuNv2aLoadSamplerPalette(ULONG Stage, EmuNv2aSampler* Sampler)
                                     ? g_EmuNv2aContextDmaBHandle
                                     : g_EmuNv2aContextDmaAHandle;
     const ULONG PaletteBase = EmuNv2aResolveDmaBase(PaletteHandle);
-    const ULONG PaletteAddress = PaletteBase + (PaletteState & 0xFFFFFFC0u);
+    ULONG PaletteAddress = PaletteBase + (PaletteState & 0xFFFFFFC0u);
+    const ULONG PaletteLengthIndex = (PaletteState >> 2) & 3u;
+    const ULONG PaletteEntries = 256u >> PaletteLengthIndex;
+    const ULONG PaletteBytes = PaletteEntries * sizeof(Sampler->Palette[0]);
+
+    // HLE titles can submit a tracked host allocation as the DMA offset. The
+    // low control bits obscure which adjacent 16-byte allocation boundary was
+    // submitted, so probe both. Physical DMA offsets retain the NV2A's 64-byte
+    // alignment mask above.
+    if(PaletteBase == 0)
+    {
+        const ULONG AlignedDown = PaletteState & 0xFFFFFFF0u;
+        const ULONG AlignedUp = PaletteState <= 0xFFFFFFF0u
+                                    ? (PaletteState + 0x0Fu) & 0xFFFFFFF0u
+                                    : AlignedDown;
+        const ULONG HostCandidates[2] = {
+            AlignedDown,
+            AlignedUp
+        };
+        for(ULONG CandidateIndex = 0; CandidateIndex < 2; ++CandidateIndex)
+        {
+            const ULONG HostCandidate = HostCandidates[CandidateIndex];
+            if(CandidateIndex != 0 && HostCandidate == HostCandidates[0])
+            {
+                continue;
+            }
+            ULONG BlockSize = 0;
+            const ULONG BlockBase = EmuContiguousBlockBase(
+                HostCandidate, &BlockSize);
+            if(BlockBase != 0 && HostCandidate >= BlockBase &&
+               HostCandidate - BlockBase <= BlockSize &&
+               PaletteBytes <= BlockSize - (HostCandidate - BlockBase))
+            {
+                PaletteAddress = HostCandidate;
+                break;
+            }
+        }
+    }
+
     const ULONG PaletteHost = EmuNv2aHostPointer(PaletteAddress);
-    const ULONG PaletteBytes = sizeof(Sampler->Palette);
+    ZeroMemory(Sampler->Palette, sizeof(Sampler->Palette));
     if(PaletteHost != 0 && EmuTryReadHost(PaletteHost, Sampler->Palette, PaletteBytes))
     {
         return true;
