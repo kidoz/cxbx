@@ -344,6 +344,81 @@ inline PixelShaderTranslation TranslatePixelShader(
     }
     const bool uniqueC0 = (def[CombinerCount] & (0x10u << 8)) != 0;
     const bool uniqueC1 = (def[CombinerCount] & (0x100u << 8)) != 0;
+    const bool hasFinalCombiner =
+        def[FinalInputsABCD] != 0 || (def[FinalInputsEFG] & ~0xFFu) != 0;
+
+    // ---- Backward liveness: combiner portions often calculate alpha or
+    // intermediate values that a later stage overwrites. ps.1.1 has an eight
+    // arithmetic-instruction limit, so retain only outputs that reach r0.
+    constexpr std::uint8_t LiveRgb = 0x1u;
+    constexpr std::uint8_t LiveAlpha = 0x2u;
+    std::array<std::array<bool, 2>, 8> livePortions{};
+    std::array<std::uint8_t, 16> liveChannels{};
+    auto operandChannel = [](const Operand& op) {
+        return op.alphaChannel ? LiveAlpha : LiveRgb;
+    };
+    auto noteLiveOperand = [&](const Operand& op) {
+        if(op.reg != RegZero)
+            liveChannels[op.reg] |= operandChannel(op);
+    };
+    if(!hasFinalCombiner)
+    {
+        // Without an explicit final combiner, retain the translator's prior
+        // conservative behavior: any intermediate can be observable.
+        for(unsigned stage = 0; stage < combinerCount; ++stage)
+            livePortions[stage] = { true, true };
+    }
+    else
+    {
+        for(unsigned slot = 0; slot < 4; ++slot)
+            noteLiveOperand(DecodeOperand(def[FinalInputsABCD], slot));
+        for(unsigned slot = 0; slot < 3; ++slot)
+            noteLiveOperand(DecodeOperand(def[FinalInputsEFG], slot));
+
+        for(unsigned stage = combinerCount; stage-- > 0;)
+        {
+            const Portion portions[2] = {
+                DecodePortion(def[RgbInputs + stage], def[RgbOutputs + stage]),
+                DecodePortion(def[AlphaInputs + stage], def[AlphaOutputs + stage]),
+            };
+            const std::uint8_t masks[2] = { LiveRgb, LiveAlpha };
+
+            for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+            {
+                const Portion& p = portions[portionIndex];
+                const std::uint8_t mask = masks[portionIndex];
+                for(unsigned dest : { p.abDest, p.cdDest, p.sumDest })
+                {
+                    livePortions[stage][portionIndex] =
+                        livePortions[stage][portionIndex] ||
+                        (dest != RegZero && (liveChannels[dest] & mask) != 0);
+                }
+            }
+
+            // Both portions read pre-stage values, so remove every stage write
+            // before adding the sources of its live portions.
+            for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+            {
+                const Portion& p = portions[portionIndex];
+                const std::uint8_t mask = masks[portionIndex];
+                for(unsigned dest : { p.abDest, p.cdDest, p.sumDest })
+                {
+                    if(dest != RegZero)
+                        liveChannels[dest] &= ~mask;
+                }
+            }
+            for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+            {
+                if(!livePortions[stage][portionIndex])
+                    continue;
+                const Portion& p = portions[portionIndex];
+                noteLiveOperand(p.a);
+                noteLiveOperand(p.b);
+                noteLiveOperand(p.c);
+                noteLiveOperand(p.d);
+            }
+        }
+    }
 
     // ---- Pass 1: which registers are read/written, and where scratch fits.
     std::uint32_t readRegs = 0, destRegs = 0, textureLoadRegs = 0;
@@ -390,21 +465,31 @@ inline PixelShaderTranslation TranslatePixelShader(
     };
     for(unsigned stage = 0; stage < combinerCount; ++stage)
     {
-        noteInputs(def[RgbInputs + stage], def[RgbOutputs + stage]);
-        noteInputs(def[AlphaInputs + stage], def[AlphaOutputs + stage]);
-        noteOutputs(def[RgbOutputs + stage]);
-        noteOutputs(def[AlphaOutputs + stage]);
+        if(livePortions[stage][0])
+        {
+            noteInputs(def[RgbInputs + stage], def[RgbOutputs + stage]);
+            noteOutputs(def[RgbOutputs + stage]);
+        }
+        if(livePortions[stage][1])
+        {
+            noteInputs(def[AlphaInputs + stage], def[AlphaOutputs + stage]);
+            noteOutputs(def[AlphaOutputs + stage]);
+        }
         // RGB and alpha portions read the pre-stage register values, then
         // expose their destinations to the following combiner stage.
-        combinerWrittenRegs |= (1u << (def[RgbOutputs + stage] & 0xFu));
-        combinerWrittenRegs |= (1u << ((def[RgbOutputs + stage] >> 4) & 0xFu));
-        combinerWrittenRegs |= (1u << ((def[RgbOutputs + stage] >> 8) & 0xFu));
-        combinerWrittenRegs |= (1u << (def[AlphaOutputs + stage] & 0xFu));
-        combinerWrittenRegs |= (1u << ((def[AlphaOutputs + stage] >> 4) & 0xFu));
-        combinerWrittenRegs |= (1u << ((def[AlphaOutputs + stage] >> 8) & 0xFu));
+        if(livePortions[stage][0])
+        {
+            combinerWrittenRegs |= (1u << (def[RgbOutputs + stage] & 0xFu));
+            combinerWrittenRegs |= (1u << ((def[RgbOutputs + stage] >> 4) & 0xFu));
+            combinerWrittenRegs |= (1u << ((def[RgbOutputs + stage] >> 8) & 0xFu));
+        }
+        if(livePortions[stage][1])
+        {
+            combinerWrittenRegs |= (1u << (def[AlphaOutputs + stage] & 0xFu));
+            combinerWrittenRegs |= (1u << ((def[AlphaOutputs + stage] >> 4) & 0xFu));
+            combinerWrittenRegs |= (1u << ((def[AlphaOutputs + stage] >> 8) & 0xFu));
+        }
     }
-    const bool hasFinalCombiner =
-        def[FinalInputsABCD] != 0 || (def[FinalInputsEFG] & ~0xFFu) != 0;
     if(hasFinalCombiner)
     {
         noteAllInputs(def[FinalInputsABCD]);
@@ -457,6 +542,8 @@ inline PixelShaderTranslation TranslatePixelShader(
 
         for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
         {
+            if(!livePortions[stage][portionIndex])
+                continue;
             const bool alphaPortion = portionIndex == 1;
             const Portion p = alphaPortion
                 ? DecodePortion(def[AlphaInputs + stage], def[AlphaOutputs + stage])
