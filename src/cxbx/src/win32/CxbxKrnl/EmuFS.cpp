@@ -48,6 +48,7 @@ namespace xboxkrnl
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
+#include "EmuStackPrecommit.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -111,6 +112,21 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
 {
     NT_TIB         *OrgNtTib;
     xboxkrnl::KPCR *NewPcr;
+
+    // While this thread runs guest code its TEB stack fields hold KPCR/TLS
+    // content, so the kernel cannot grow the stack on a guard-page fault (the
+    // fault surfaces, the guard burns, and a deeper touch dies 0xC0000005
+    // under the committed floor). Commit the whole reservation now, while the
+    // host TIB is still authoritative, so growth is never needed. See
+    // EmuStackPrecommit.h.
+    {
+        SIZE_T Precommitted = EmuPrecommitThreadStack();
+        if(Precommitted != 0)
+        {
+            printf("EmuFS (0x%X): pre-committed 0x%X stack bytes for guest code\n",
+                   (uint32)GetCurrentThreadId(), (uint32)Precommitted);
+        }
+    }
 
     uint08 *pNewTLS = NULL;
     uint08 *pNewTLSAllocation = NULL;
