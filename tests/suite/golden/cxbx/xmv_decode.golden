@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xmv_decode
+#result xmv_decode verdict=PASS checks=6 fail=0

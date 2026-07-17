@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_vsh_texture
+#result d3d_vsh_texture verdict=PASS checks=10 fail=0
