@@ -87,6 +87,9 @@ int main()
        !cxbx::XboxPhysicalSpanOffset(0x00000100u, 0x03FFF000u, 0x2000u, 0x100u,
                                      physicalOffset) ||
        physicalOffset != 0x1100u ||
+       !cxbx::XboxPhysicalSpanOffset(0x00000120u, 0x04000100u, 0x1000u, 0x20u,
+                                     physicalOffset) ||
+       physicalOffset != 0x20u ||
        cxbx::XboxPhysicalSpanOffset(0x00002000u, 0x00001000u, 0x1000u, 1u,
                                     physicalOffset) ||
        cxbx::XboxPhysicalSpanOffset(0x00001000u, 0x00001000u, 0x1000u, 0u,
