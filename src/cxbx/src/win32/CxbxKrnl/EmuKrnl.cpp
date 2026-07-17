@@ -3563,8 +3563,16 @@ extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress)
         const ULONG Phys = g_EmuContiguousMemoryAllocations[i].PhysicalAddress;
         const ULONG Size = g_EmuContiguousMemoryAllocations[i].Size;
 
-        if(Base != 0 && PhysicalAddress >= Phys && PhysicalAddress < Phys + Size)
-            return Base + (PhysicalAddress - Phys);
+        // Resource headers carry the NV2A's 64 MiB physical alias, while the
+        // allocation tracker is monotonic so it can describe allocations made
+        // after the first aperture. Compare in the Xbox physical address space
+        // rather than treating the alias as a host virtual address.
+        std::size_t Offset = 0;
+        if(Base != 0 &&
+           cxbx::XboxPhysicalSpanOffset(PhysicalAddress, Phys, Size, 1, Offset))
+        {
+            return Base + static_cast<ULONG>(Offset);
+        }
     }
 
     return 0;
