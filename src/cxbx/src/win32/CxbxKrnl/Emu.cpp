@@ -4668,6 +4668,49 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
     *Destination = Color;
 }
 
+static bool EmuNv2aCanUseP8TileFastPath(
+    const EmuNv2aRasterTarget* Target)
+{
+    return Target->Sampler != nullptr && Target->Sampler->Kind == 5 &&
+           !Target->Sampler->Bilinear &&
+           Target->CombinerMode == EmuNv2aCombinerTexture &&
+           !Target->FinalCombiner && !Target->AlphaTest &&
+           Target->BlendEnable && Target->BlendSFactor == 0x0302 &&
+           Target->BlendDFactor == 0x0303 &&
+           Target->BlendEquation == 0x8006 &&
+           Target->Depth != nullptr && Target->DepthFormat == 2 &&
+           Target->DepthTest && Target->DepthWrite &&
+           Target->DepthFunc == 0x0206 && !Target->StencilTest;
+}
+
+static void EmuNv2aShadeP8TilePixel(
+    const EmuNv2aRasterTarget* Target, int X, int Y, float Z, float U, float V)
+{
+    if(Z < 0.0f)
+    {
+        Z = 0.0f;
+    }
+    if(Z > 16777215.0f)
+    {
+        Z = 16777215.0f;
+    }
+
+    const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
+    const int DepthPitchElements = Target->DepthPitchB / 4;
+    ULONG* Depth = static_cast<ULONG*>(Target->Depth) +
+                   Y * DepthPitchElements + X;
+    const ULONG StoredDepth = *Depth;
+    if(SourceDepth < (StoredDepth >> 8))
+    {
+        return;
+    }
+    *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
+
+    const ULONG Source = EmuNv2aSampleTexel(Target->Sampler, U, V);
+    ULONG* Destination = &Target->Color[Y * Target->PitchPx + X];
+    *Destination = cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
+}
+
 // Gouraud-fill one screen-space triangle (vertices i0,i1,i2 in the transformed
 // arrays) into a 32bpp surface with the edge-function (half-plane) test.
 // Barycentric weights (normalized by the signed area, so winding is handled
@@ -4840,6 +4883,7 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                               VC[I0] == VC[BottomRight];
     const bool Affine = cxbx::nv2a::CanUseAffineQuadInterpolation(
         VIW[I0], VIW[TopRight], VIW[BottomRight], VIW[BottomLeft]);
+    const bool P8TileFastPath = EmuNv2aCanUseP8TileFastPath(Target);
     if(Affine)
     {
         const float InverseWidth = 1.0f / (Right - Left);
@@ -4891,8 +4935,16 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                                 EmuNv2aClampByte(Channels[1].value) << 8 |
                                 EmuNv2aClampByte(Channels[0].value);
                     }
-                    EmuNv2aShadePixel(
-                        Target, X, Y, Z.value, Color, U.value, V.value);
+                    if(P8TileFastPath)
+                    {
+                        EmuNv2aShadeP8TilePixel(
+                            Target, X, Y, Z.value, U.value, V.value);
+                    }
+                    else
+                    {
+                        EmuNv2aShadePixel(
+                            Target, X, Y, Z.value, Color, U.value, V.value);
+                    }
                 }
                 U.value += U.step;
                 V.value += V.step;
