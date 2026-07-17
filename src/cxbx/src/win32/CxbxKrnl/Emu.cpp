@@ -1392,6 +1392,8 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_TRANSFORM_PROGRAM_START   0x1EA0u
 #define NV097_SET_TRANSFORM_CONSTANT_LOAD   0x1EA4u
 #define NV097_SET_COMBINER_ALPHA_ICW           0x0260u
+#define NV097_SET_COMBINER_SPECULAR_FOG_CW0    0x0288u
+#define NV097_SET_COMBINER_SPECULAR_FOG_CW1    0x028Cu
 #define NV097_SET_COMBINER_FACTOR0             0x0A60u
 #define NV097_SET_COMBINER_FACTOR1             0x0A80u
 #define NV097_SET_COMBINER_ALPHA_OCW           0x0AA0u
@@ -1524,6 +1526,9 @@ static ULONG g_EmuNv2aCombinerColorOcw[8] = {};
 static ULONG g_EmuNv2aCombinerFactor0[8] = {};
 static ULONG g_EmuNv2aCombinerFactor1[8] = {};
 static ULONG g_EmuNv2aCombinerControl = 0;
+static ULONG g_EmuNv2aFinalCombinerCw0 = 0;
+static ULONG g_EmuNv2aFinalCombinerCw1 = 0;
+static ULONG g_EmuNv2aFinalCombinerMask = 0;
 static ULONG g_EmuNv2aShaderStageProgram = 0;
 
 extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
@@ -1548,6 +1553,14 @@ extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
         case NV097_SET_STENCIL_OP_FAIL:     g_EmuNv2aStencilOpFail = Data; break;
         case NV097_SET_STENCIL_OP_ZFAIL:    g_EmuNv2aStencilOpZFail = Data; break;
         case NV097_SET_STENCIL_OP_ZPASS:    g_EmuNv2aStencilOpZPass = Data; break;
+        case NV097_SET_COMBINER_SPECULAR_FOG_CW0:
+            g_EmuNv2aFinalCombinerCw0 = Data;
+            g_EmuNv2aFinalCombinerMask |= 1u;
+            break;
+        case NV097_SET_COMBINER_SPECULAR_FOG_CW1:
+            g_EmuNv2aFinalCombinerCw1 = Data;
+            g_EmuNv2aFinalCombinerMask |= 2u;
+            break;
         default: break;
     }
 }
@@ -4257,6 +4270,8 @@ struct EmuNv2aRasterTarget
     ULONG CombinerColorOcw, CombinerAlphaOcw;
     ULONG CombinerFactor0, CombinerFactor1;
     ULONG CombinerMode;
+    ULONG FinalCombinerCw0, FinalCombinerCw1;
+    bool FinalCombiner;
     bool   StencilTest;
     ULONG  StencilFunc, StencilRef, StencilFuncMask, StencilMask;
     ULONG  StencilOpFail, StencilOpZFail, StencilOpZPass;
@@ -4551,6 +4566,17 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
         Texture = EmuNv2aSampleTexel(Target->Sampler, U, V);
     }
     ULONG Color = EmuNv2aRunStage0Combiner(Target, Diffuse, Texture);
+    if(Target->FinalCombiner)
+    {
+        cxbx::nv2a::FinalCombinerRegisters Registers = {};
+        Registers.constant0 = Target->CombinerFactor0;
+        Registers.constant1 = Target->CombinerFactor1;
+        Registers.primary = Diffuse;
+        Registers.texture0 = Texture;
+        Registers.r0 = Color;
+        Color = cxbx::nv2a::RunFinalCombiner(
+            Target->FinalCombinerCw0, Target->FinalCombinerCw1, Registers);
+    }
 
     if(Target->AlphaTest &&
        !EmuNv2aDepthPass(Target->AlphaFunc, (Color >> 24) & 0xFFu,
@@ -5030,6 +5056,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     Target.CombinerFactor0 = g_EmuNv2aCombinerFactor0[0];
     Target.CombinerFactor1 = g_EmuNv2aCombinerFactor1[0];
     Target.CombinerMode = EmuNv2aClassifyStage0Combiner(&Target);
+    Target.FinalCombinerCw0 = g_EmuNv2aFinalCombinerCw0;
+    Target.FinalCombinerCw1 = g_EmuNv2aFinalCombinerCw1;
+    Target.FinalCombiner = g_EmuNv2aFinalCombinerMask == 3u;
 
     // Resolve the depth (zeta) surface when depth OR stencil testing is enabled
     // and a zeta surface is bound (same base-0 raw-pointer fallback as color).
