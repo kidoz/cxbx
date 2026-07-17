@@ -1,0 +1,6 @@
+# Real-XDK regression for CPU vertex-shader output feeding multiple textures.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
