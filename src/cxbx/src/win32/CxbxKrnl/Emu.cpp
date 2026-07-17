@@ -5193,6 +5193,7 @@ static void EmuNv2aRasterizeInlineArray()
             }
         }
         fflush(stdout);
+        g_EmuNv2aRasterLogCount++;
     }
 
     EmuNv2aRasterizeDrawArrays(
