@@ -23,6 +23,7 @@ static int xt_fails = 0;
 // from a semantic failure inside a host wrapper. Retail/debug/instrumented D3D
 // libraries contain different code, so each variant must be patched explicitly.
 #define XT_GUEST_TOP 0x04000000UL
+#define XT_XREF_SENTINEL 0x7FFFFFFFUL
 
 static DWORD xt_jump_target(const unsigned char* p)
 {
@@ -32,14 +33,21 @@ static DWORD xt_jump_target(const unsigned char* p)
 static int xt_is_hle_patched(const void* fn)
 {
     const unsigned char* p = (const unsigned char*)fn;
+    if((DWORD)p >= XT_GUEST_TOP || (DWORD)p == XT_XREF_SENTINEL)
+        return 0;
     if(p[0] != 0xE9)
         return 0;
     DWORD target = xt_jump_target(p);
+    if(target == XT_XREF_SENTINEL)
+        return 0;
     if(target >= XT_GUEST_TOP)
         return 1;
     // Some library exports first jump through a guest-local linker thunk.
     p = (const unsigned char*)target;
-    return p[0] == 0xE9 && xt_jump_target(p) >= XT_GUEST_TOP;
+    if(p[0] != 0xE9)
+        return 0;
+    target = xt_jump_target(p);
+    return target != XT_XREF_SENTINEL && target >= XT_GUEST_TOP;
 }
 
 static void xt_emit(const char* line)
