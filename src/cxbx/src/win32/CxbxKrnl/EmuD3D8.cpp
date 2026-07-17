@@ -149,12 +149,18 @@ struct EmuD3DCallStat { const char *Name; DWORD Count; };
 static EmuD3DCallStat g_D3DCallStats[EMU_D3D_CALL_STATS_SLOTS] = {0};
 static int g_D3DCallStatsEnabled = -1;
 
+static bool EmuD3DEnvironmentEnabled(const char *Name)
+{
+    char value[2] = {};
+    return GetEnvironmentVariableA(Name, value, sizeof(value)) != 0;
+}
+
 static void EmuD3DTraceEntry(const char *Name)
 {
     g_LastD3DCall = Name;
 
     if(g_D3DCallStatsEnabled < 0)
-        g_D3DCallStatsEnabled = (getenv("CXBX_D3D_CALL_STATS") != NULL) ? 1 : 0;
+        g_D3DCallStatsEnabled = EmuD3DEnvironmentEnabled("CXBX_D3D_CALL_STATS") ? 1 : 0;
 
     if(!g_D3DCallStatsEnabled)
         return;
@@ -4144,8 +4150,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
     static int s_PshTranslateEnabled = -1;
     if(s_PshTranslateEnabled < 0)
     {
-        const char *value = getenv("CXBX_PSH_TRANSLATE");
-        s_PshTranslateEnabled = (value == NULL || *value != '0') ? 1 : 0;
+        char value[16] = {};
+        const DWORD length = GetEnvironmentVariableA("CXBX_PSH_TRANSLATE", value,
+                                                     sizeof(value));
+        s_PshTranslateEnabled = (length == 0 || value[0] != '0') ? 1 : 0;
     }
 
     const char *failureReason = "translate_disabled";
@@ -4205,7 +4213,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
 
             static int s_PshDumpEnabled = -1;
             if(s_PshDumpEnabled < 0)
-                s_PshDumpEnabled = (getenv("CXBX_PSH_DUMP") != NULL) ? 1 : 0;
+                s_PshDumpEnabled = EmuD3DEnvironmentEnabled("CXBX_PSH_DUMP") ? 1 : 0;
             if(s_PshDumpEnabled == 1)
             {
                 for(std::size_t word = 0;
@@ -4349,6 +4357,27 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderConstant
            ");\n",
            GetCurrentThreadId(), Register, pConstantData, ConstantCount);
     #endif
+
+    static int s_PshTraceEnabled = -1;
+    if(s_PshTraceEnabled < 0)
+        s_PshTraceEnabled = EmuD3DEnvironmentEnabled("CXBX_PSH_TRACE") ? 1 : 0;
+    if(s_PshTraceEnabled == 1)
+    {
+        float first[4] = {};
+        SIZE_T bytesRead = 0;
+        const bool readable = ConstantCount != 0 && pConstantData != nullptr &&
+            ReadProcessMemory(GetCurrentProcess(), pConstantData, first, sizeof(first),
+                              &bytesRead) && bytesRead == sizeof(first);
+        printf("PSH| constant handle=0x%08lX xbox_c=%lu count=%lu",
+               static_cast<unsigned long>(g_EmuCurrentPixelShaderHandle),
+               static_cast<unsigned long>(Register),
+               static_cast<unsigned long>(ConstantCount));
+        if(readable)
+            printf(" first={%.6g,%.6g,%.6g,%.6g}", first[0], first[1], first[2], first[3]);
+        else
+            printf(" first=unreadable");
+        printf("\n");
+    }
 
     HRESULT Result = EmuSetTranslatedPixelShaderConstants(
         g_EmuCurrentPixelShaderHandle, Register, pConstantData, ConstantCount);
@@ -6695,7 +6724,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 
             static int s_TexTraceEnabled = -1;
             if(s_TexTraceEnabled < 0)
-                s_TexTraceEnabled = (getenv("CXBX_TEX_TRACE") != NULL) ? 1 : 0;
+                s_TexTraceEnabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
             if(s_TexTraceEnabled == 1)
             {
                 printf("TEX| register %s=0x%08lX xfmt=0x%02lX host=0x%08lX %lux%lux%lu "
@@ -6886,7 +6915,8 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             // device will sample, after unswizzle/pitch adjustment.
             static int s_TextureDumpEnabled = -1;
             if(s_TextureDumpEnabled < 0)
-                s_TextureDumpEnabled = (getenv("CXBX_D3D_TEXTURE_DUMP") != NULL) ? 1 : 0;
+                s_TextureDumpEnabled =
+                    EmuD3DEnvironmentEnabled("CXBX_D3D_TEXTURE_DUMP") ? 1 : 0;
             if(s_TextureDumpEnabled == 1)
             {
                 static LONG s_TextureDumpsRemaining = 256;
