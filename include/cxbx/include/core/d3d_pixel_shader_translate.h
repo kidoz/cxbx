@@ -30,6 +30,7 @@ namespace cxbx::d3d
 struct PixelShaderConstant
 {
     unsigned index;   // ps.1.1 constant register c<index>
+    unsigned xboxRegister; // SetPixelShaderConstant register, or 16 for literals
     float value[4];   // BGRA-source dword expanded to RGBA floats
 };
 
@@ -60,6 +61,10 @@ inline constexpr unsigned FinalConstant1 = 44;
 inline constexpr unsigned RgbOutputs = 45;           // [8]
 inline constexpr unsigned CombinerCount = 53;
 inline constexpr unsigned TextureModes = 54;
+inline constexpr unsigned C0Mapping = 57;
+inline constexpr unsigned C1Mapping = 58;
+inline constexpr unsigned FinalCombinerConstants = 59;
+inline constexpr unsigned LiteralConstant = 16;
 
 // PS_REGISTER
 inline constexpr unsigned RegZero = 0x0;
@@ -151,11 +156,19 @@ inline bool OperandsAreComplementary(const Operand& identity,
 struct Emitter
 {
     PixelShaderTranslation out;
-    // Which ps.1.1 constant register each distinct constant dword got.
-    std::vector<std::pair<std::uint32_t, unsigned>> constantSlots;
+    struct ConstantSlotEntry
+    {
+        std::uint32_t value;
+        unsigned xboxRegister;
+        unsigned slot;
+    };
+    // Constants may share a value but have different Xbox runtime mappings.
+    std::vector<ConstantSlotEntry> constantSlots;
     bool zeroConstantUsed = false;
     std::uint32_t writtenRegs = 0;   // bit per PS_REGISTER already written
     std::uint32_t scratchReg = 0;    // PS_REGISTER used as scratch (0 = none)
+    unsigned stageC0Register = 0;
+    unsigned stageC1Register = 0;
 
     void Fail(const char* reason)
     {
@@ -163,12 +176,12 @@ struct Emitter
             out.failure = reason;
     }
 
-    unsigned ConstantSlot(std::uint32_t value)
+    unsigned ConstantSlot(std::uint32_t value, unsigned xboxRegister)
     {
         for(const auto& entry : constantSlots)
         {
-            if(entry.first == value)
-                return entry.second;
+            if(entry.value == value && entry.xboxRegister == xboxRegister)
+                return entry.slot;
         }
         // c7 is reserved as literal zero.
         if(constantSlots.size() >= 7)
@@ -177,9 +190,10 @@ struct Emitter
             return 0;
         }
         const unsigned slot = static_cast<unsigned>(constantSlots.size());
-        constantSlots.push_back({ value, slot });
+        constantSlots.push_back({ value, xboxRegister, slot });
         PixelShaderConstant constant{};
         constant.index = slot;
+        constant.xboxRegister = xboxRegister;
         constant.value[0] = ((value >> 16) & 0xFF) / 255.0f; // R
         constant.value[1] = ((value >> 8) & 0xFF) / 255.0f;  // G
         constant.value[2] = (value & 0xFF) / 255.0f;         // B
@@ -188,8 +202,8 @@ struct Emitter
         return slot;
     }
 
-    // Map a PS_REGISTER to a ps.1.1 register. stageC0/stageC1 are the constant
-    // dwords C0/C1 resolve to for the current stage (or final combiner).
+    // Map a PS_REGISTER to a ps.1.1 register. The current stage fields carry
+    // both the initial combiner color and its SetPixelShaderConstant mapping.
     HostReg MapRegister(unsigned reg, std::uint32_t stageC0, std::uint32_t stageC1)
     {
         switch(reg)
@@ -198,9 +212,9 @@ struct Emitter
                 zeroConstantUsed = true;
                 return { RtConst, 7, true };
             case RegC0:
-                return { RtConst, ConstantSlot(stageC0), true };
+                return { RtConst, ConstantSlot(stageC0, stageC0Register), true };
             case RegC1:
-                return { RtConst, ConstantSlot(stageC1), true };
+                return { RtConst, ConstantSlot(stageC1, stageC1Register), true };
             case RegV0:
                 return { RtInput, 0, true };
             case RegV1:
@@ -538,6 +552,8 @@ inline PixelShaderTranslation TranslatePixelShader(
     {
         const std::uint32_t stageC0 = def[Constant0 + (uniqueC0 ? stage : 0)];
         const std::uint32_t stageC1 = def[Constant1 + (uniqueC1 ? stage : 0)];
+        emitter.stageC0Register = (def[C0Mapping] >> (stage * 4)) & 0xFu;
+        emitter.stageC1Register = (def[C1Mapping] >> (stage * 4)) & 0xFu;
         const std::uint32_t writtenBeforeStage = emitter.writtenRegs;
 
         for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
@@ -742,6 +758,8 @@ inline PixelShaderTranslation TranslatePixelShader(
         {
             const std::uint32_t c0 = def[FinalConstant0];
             const std::uint32_t c1 = def[FinalConstant1];
+            emitter.stageC0Register = def[FinalCombinerConstants] & 0xFu;
+            emitter.stageC1Register = (def[FinalCombinerConstants] >> 4) & 0xFu;
             auto src = [&](const Operand& op) {
                 return emitter.SourceToken(op, false, c0, c1);
             };
@@ -830,6 +848,7 @@ inline PixelShaderTranslation TranslatePixelShader(
     {
         PixelShaderConstant zero{};
         zero.index = 7;
+        zero.xboxRegister = LiteralConstant;
         out.constants.push_back(zero);
     }
 

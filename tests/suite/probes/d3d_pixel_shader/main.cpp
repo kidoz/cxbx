@@ -5,10 +5,9 @@
 //   modulate: r0 = t0 * v0          -- the classic textured-modulate; the
 //             fixed-function fallback also computes this, so it pins the
 //             baseline semantics whichever path serves it.
-//   invert:   r0 = (1 - t0) * v0    -- the fixed-function approximation
-//             CANNOT express this (it modulates the un-inverted texture);
-//             only a real translation produces the correct pixels. This is
-//             the discriminating check.
+//   mapped:   r0 = c0 * v0           -- Xbox constant 7 maps to stage C0.
+//             The fixed-function approximation cannot express this, and it
+//             catches direct Xbox-c7 to host-c7 aliasing.
 //
 // Colors are chosen so every product/complement is exact in 8 bits.
 // Readback discipline: all rendering first, one LockRect readback at the
@@ -19,9 +18,8 @@ static const D3DCOLOR COL_CLEAR = 0xFF0000FF; // blue
 static const D3DCOLOR COL_TEX   = 0xFFFF4000; // texture: r=255 g=64 b=0
 static const D3DCOLOR COL_WHITE = 0xFFFFFFFF;
 
-// (1 - t) with t = COL_TEX: r=0x00 g=0xBF b=0xFF
 static const DWORD EXPECT_MODULATE = 0xFF4000;
-static const DWORD EXPECT_INVERT   = 0x00BFFF;
+static const DWORD EXPECT_MAPPED   = 0xFF00FF;
 
 struct VERTEX {
     float x, y, z, rhw;
@@ -62,6 +60,26 @@ static void build_shader(D3DPIXELSHADERDEF *psDef, DWORD textureMapping)
         PS_REGISTER_DISCARD, PS_REGISTER_DISCARD, PS_REGISTER_R0, 0);
     psDef->PSAlphaInputs[0] = PS_COMBINERINPUTS(
         PS_REGISTER_T0 | PS_INPUTMAPPING_UNSIGNED_IDENTITY | PS_CHANNEL_ALPHA,
+        PS_REGISTER_V0 | PS_INPUTMAPPING_UNSIGNED_IDENTITY | PS_CHANNEL_ALPHA,
+        PS_REGISTER_ZERO, PS_REGISTER_ZERO);
+    psDef->PSAlphaOutputs[0] = PS_COMBINEROUTPUTS(
+        PS_REGISTER_DISCARD, PS_REGISTER_DISCARD, PS_REGISTER_R0, 0);
+}
+
+static void build_mapped_constant_shader(D3DPIXELSHADERDEF *psDef)
+{
+    memset(psDef, 0, sizeof(*psDef));
+    psDef->PSCombinerCount = PS_COMBINERCOUNT(1, 0);
+    psDef->PSConstant0[0] = 0xFF000000; // black before the runtime update
+    psDef->PSC0Mapping = PS_CONSTANTMAPPING(7, 0, 0, 0, 0, 0, 0, 0);
+    psDef->PSRGBInputs[0] = PS_COMBINERINPUTS(
+        PS_REGISTER_C0 | PS_INPUTMAPPING_UNSIGNED_IDENTITY | PS_CHANNEL_RGB,
+        PS_REGISTER_V0 | PS_INPUTMAPPING_UNSIGNED_IDENTITY | PS_CHANNEL_RGB,
+        PS_REGISTER_ZERO, PS_REGISTER_ZERO);
+    psDef->PSRGBOutputs[0] = PS_COMBINEROUTPUTS(
+        PS_REGISTER_DISCARD, PS_REGISTER_DISCARD, PS_REGISTER_R0, 0);
+    psDef->PSAlphaInputs[0] = PS_COMBINERINPUTS(
+        PS_REGISTER_C0 | PS_INPUTMAPPING_UNSIGNED_IDENTITY | PS_CHANNEL_ALPHA,
         PS_REGISTER_V0 | PS_INPUTMAPPING_UNSIGNED_IDENTITY | PS_CHANNEL_ALPHA,
         PS_REGISTER_ZERO, PS_REGISTER_ZERO);
     psDef->PSAlphaOutputs[0] = PS_COMBINEROUTPUTS(
@@ -111,16 +129,16 @@ void __cdecl main()
         }
     }
 
-    D3DPIXELSHADERDEF psModulate, psInvert;
+    D3DPIXELSHADERDEF psModulate, psMapped;
     build_shader(&psModulate, PS_INPUTMAPPING_UNSIGNED_IDENTITY);
-    build_shader(&psInvert, PS_INPUTMAPPING_UNSIGNED_INVERT);
+    build_mapped_constant_shader(&psMapped);
 
     // 5849 C API: CreatePixelShader returns void; the handle is the signal.
-    DWORD hModulate = 0, hInvert = 0;
+    DWORD hModulate = 0, hMapped = 0;
     D3DDevice_CreatePixelShader(&psModulate, &hModulate);
-    D3DDevice_CreatePixelShader(&psInvert, &hInvert);
+    D3DDevice_CreatePixelShader(&psMapped, &hMapped);
     xt_chk("ps.create_modulate_ok", 1, hModulate != 0);
-    xt_chk("ps.create_invert_ok", 1, hInvert != 0);
+    xt_chk("ps.create_mapped_ok", 1, hMapped != 0);
 
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);
     D3DDevice_SetRenderState_CullMode(D3DCULL_NONE);
@@ -131,8 +149,10 @@ void __cdecl main()
     D3DDevice_SetPixelShader(hModulate);
     draw_quad(64.0f, 64.0f);
 
-    // Quad 2 at (256,64): invert shader -> complemented texture color.
-    D3DDevice_SetPixelShader(hInvert);
+    // Quad 2 at (256,64): Xbox c7 updates mapped C0; diffuse is white.
+    const float mappedColor[4] = { 1.0f, 0.0f, 1.0f, 1.0f };
+    D3DDevice_SetPixelShader(hMapped);
+    D3DDevice_SetPixelShaderConstant(7, mappedColor, 1);
     draw_quad(256.0f, 64.0f);
 
     D3DDevice_SetPixelShader(0);
@@ -148,7 +168,7 @@ void __cdecl main()
         if (lr.pBits != NULL) {
             xt_chk_u32("ps.px_modulate", EXPECT_MODULATE,
                        read_pixel(lr.pBits, lr.Pitch, 128, 128));
-            xt_chk_u32("ps.px_invert", EXPECT_INVERT,
+            xt_chk_u32("ps.px_mapped", EXPECT_MAPPED,
                        read_pixel(lr.pBits, lr.Pitch, 320, 128));
             xt_chk_u32("ps.px_clear", COL_CLEAR & 0xFFFFFF,
                        read_pixel(lr.pBits, lr.Pitch, 480, 360));

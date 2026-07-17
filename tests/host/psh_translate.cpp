@@ -87,6 +87,11 @@ struct DefBuilder
         def[10 + stage] = value;
         return *this;
     }
+    DefBuilder& Constant0Mapping(unsigned stage, unsigned xboxRegister)
+    {
+        def[57] |= (xboxRegister & 0xFu) << (stage * 4);
+        return *this;
+    }
     DefBuilder& Final(std::uint32_t abcd, std::uint32_t efg)
     {
         def[8] = abcd;
@@ -143,7 +148,14 @@ int main()
         Check(t.ok(), "one-operand shader translates");
         bool sawZeroConstant = false;
         for(const auto& constant : t.constants)
-            sawZeroConstant |= constant.index == 7;
+        {
+            if(constant.index == 7)
+            {
+                sawZeroConstant = true;
+                Check(constant.xboxRegister == 16,
+                      "literal zero is not runtime mapped");
+            }
+        }
         Check(sawZeroConstant, "zero constant reserved for ONE");
     }
 
@@ -186,6 +198,7 @@ int main()
         DefBuilder b;
         b.Combiners(1)
             .StageConstant0(0, 0x80FF4020u) // A=0x80 R=0xFF G=0x40 B=0x20
+            .Constant0Mapping(0, 7)
             .Rgb(0, Inputs(In(C0), In(V0), In(ZERO), In(ZERO)),
                  Outputs(DISCARD, DISCARD, R0))
             .Alpha(0, Inputs(In(C0, CH_ALPHA), In(V0, CH_ALPHA), In(ZERO), In(ZERO)),
@@ -198,6 +211,8 @@ int main()
             if(constant.index == 0)
             {
                 sawConstant = true;
+                Check(constant.xboxRegister == 7,
+                      "stage constant carries Xbox register mapping");
                 Check(constant.value[0] > 0.99f, "constant red expanded");
                 Check(constant.value[2] > 0.12f && constant.value[2] < 0.13f,
                       "constant blue expanded");
@@ -206,6 +221,31 @@ int main()
             }
         }
         Check(sawConstant, "stage constant assigned slot 0");
+    }
+
+    // 4b. Equal initial colors with different runtime mappings stay separate.
+    {
+        DefBuilder b;
+        b.Combiners(2)
+            .StageConstant0(0, 0xFFFFFFFFu)
+            .StageConstant0(1, 0xFFFFFFFFu)
+            .Constant0Mapping(0, 1)
+            .Constant0Mapping(1, 7)
+            .Rgb(0, Inputs(In(C0), In(V0), In(ZERO), In(ZERO)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Rgb(1, Inputs(In(C0), In(R0), In(ZERO), In(ZERO)),
+                 Outputs(DISCARD, DISCARD, R0));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(t.ok(), "separately mapped equal constants translate");
+        bool sawRegister1 = false;
+        bool sawRegister7 = false;
+        for(const auto& constant : t.constants)
+        {
+            sawRegister1 |= constant.xboxRegister == 1;
+            sawRegister7 |= constant.xboxRegister == 7;
+        }
+        Check(sawRegister1 && sawRegister7,
+              "equal colors retain distinct Xbox mappings");
     }
 
     // 5. MUX and output BIAS bail out with stable reasons.
