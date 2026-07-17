@@ -192,6 +192,7 @@ after locking the backbuffer.
 | `d3d_makespace` | XDK D3D8 push cursor | MakeSpace HLE resolution plus non-null, writable eight-DWORD return storage |
 | `d3d_draw`   | D3D8 HLE draw paths  | DrawVerticesUP triangles + immediate-mode Begin/End quad, pixel-exact |
 | `d3d_texture`| D3D8 HLE texture path | CreateTexture2 → LockRect upload → SetTexture → textured draws (both paths), pixel-exact |
+| `d3d_vsh_multitexture` | D3D8 HLE shaders/textures | CPU-fallback vertex shader projected coordinates for stages 0 and 3, translated pixel-shader multiply, pixel-exact |
 | `d3d_state`  | D3D8 HLE state       | Set/GetTransform bit-exact round-trips, SetRenderState_* family survival, GetDisplayMode sanity |
 | `d3d_shader_lifecycle` | XDK 4627 D3D8 shaders | Create/set/delete pixel shader, repeated delete, and zero-handle safety |
 | `d3d_rendertarget` | XDK 4627 D3D8 surfaces | SetRenderTarget HLE interception, NULL-depth handling, and render/depth restoration |
