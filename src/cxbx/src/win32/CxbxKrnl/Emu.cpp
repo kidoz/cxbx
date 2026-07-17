@@ -4838,6 +4838,77 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
     const bool UniformColor = VC[I0] == VC[TopRight] &&
                               VC[I0] == VC[BottomLeft] &&
                               VC[I0] == VC[BottomRight];
+    const bool Affine = cxbx::nv2a::CanUseAffineQuadInterpolation(
+        VIW[I0], VIW[TopRight], VIW[BottomRight], VIW[BottomLeft]);
+    if(Affine)
+    {
+        const float InverseWidth = 1.0f / (Right - Left);
+        const float InverseHeight = 1.0f / (Bottom - Top);
+        const float FirstTx =
+            (static_cast<float>(MinX) + 0.5f - Left) * InverseWidth;
+        for(int Y = MinY; Y < MaxY; ++Y)
+        {
+            const float PixelY = static_cast<float>(Y) + 0.5f;
+            if(PixelY < Top || PixelY > Bottom)
+            {
+                continue;
+            }
+            const float Ty = (PixelY - Top) * InverseHeight;
+            auto U = cxbx::nv2a::BuildAffineQuadSpan(
+                VU[I0], VU[TopRight], VU[BottomRight], VU[BottomLeft],
+                Ty, FirstTx, InverseWidth);
+            auto V = cxbx::nv2a::BuildAffineQuadSpan(
+                VV[I0], VV[TopRight], VV[BottomRight], VV[BottomLeft],
+                Ty, FirstTx, InverseWidth);
+            auto Z = cxbx::nv2a::BuildAffineQuadSpan(
+                VZ[I0], VZ[TopRight], VZ[BottomRight], VZ[BottomLeft],
+                Ty, FirstTx, InverseWidth);
+            cxbx::nv2a::AffineQuadSpan Channels[4] = {};
+            if(!UniformColor)
+            {
+                for(int Channel = 0; Channel < 4; ++Channel)
+                {
+                    const int Shift = Channel * 8;
+                    Channels[Channel] = cxbx::nv2a::BuildAffineQuadSpan(
+                        static_cast<float>((VC[I0] >> Shift) & 0xFFu),
+                        static_cast<float>((VC[TopRight] >> Shift) & 0xFFu),
+                        static_cast<float>((VC[BottomRight] >> Shift) & 0xFFu),
+                        static_cast<float>((VC[BottomLeft] >> Shift) & 0xFFu),
+                        Ty, FirstTx, InverseWidth);
+                }
+            }
+
+            for(int X = MinX; X < MaxX; ++X)
+            {
+                const float PixelX = static_cast<float>(X) + 0.5f;
+                if(PixelX >= Left && PixelX <= Right)
+                {
+                    ULONG Color = VC[I0];
+                    if(!UniformColor)
+                    {
+                        Color = EmuNv2aClampByte(Channels[3].value) << 24 |
+                                EmuNv2aClampByte(Channels[2].value) << 16 |
+                                EmuNv2aClampByte(Channels[1].value) << 8 |
+                                EmuNv2aClampByte(Channels[0].value);
+                    }
+                    EmuNv2aShadePixel(
+                        Target, X, Y, Z.value, Color, U.value, V.value);
+                }
+                U.value += U.step;
+                V.value += V.step;
+                Z.value += Z.step;
+                if(!UniformColor)
+                {
+                    for(auto& Channel : Channels)
+                    {
+                        Channel.value += Channel.step;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     for(int Y = MinY; Y < MaxY; ++Y)
     {
         const float PixelY = static_cast<float>(Y) + 0.5f;
