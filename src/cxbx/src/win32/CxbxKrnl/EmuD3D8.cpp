@@ -4342,6 +4342,27 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor
 }
 
 // ******************************************************************
+// * func: EmuIDirect3DDevice8_SetTextureState_ColorKeyColor
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_ColorKeyColor
+(
+    DWORD Stage,
+    DWORD Value
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetTextureState_ColorKeyColor");
+
+    // Host Direct3D 8 has no texture-stage color-key equivalent. Keep the
+    // call side-effect free; texture conversion paths implement formats that
+    // require explicit alpha rather than relying on this NV2A comparison.
+    (void)Stage;
+    (void)Value;
+
+    EmuSwapFS();   // Xbox FS
+}
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_SetTextureState_BumpEnv
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BumpEnv
@@ -8720,6 +8741,22 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_YuvEnable
     EmuSwapFS();   // XBox FS
 
     return;
+}
+
+// ******************************************************************
+// * func: EmuIDirect3DDevice8_SetRenderState_CullControl
+// ******************************************************************
+VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_CullControl(DWORD Value)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("SetRenderState_CullControl");
+
+    // The five 4627 entry points routed here select NV2A occlusion/stencil
+    // packet-culling and ROP-Z read optimizations. They do not change the
+    // rasterized result, and host Direct3D 8 exposes no matching controls.
+    (void)Value;
+
+    EmuSwapFS();   // Xbox FS
 }
 
 // ******************************************************************

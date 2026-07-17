@@ -96,8 +96,8 @@ def parse_signatures(paths: list[Path]) -> dict[str, dict]:
 
 
 # OOVPATable D3D8_1_0_5849[] = { { (OOVPA*)&Sig, XTL::EmuFn, "EmuFn" }, ... };
-def parse_table(paths: list[Path], table: str) -> list[tuple[str, str]]:
-    """[(signature var, emu function)] in table order."""
+def parse_table(paths: list[Path], table: str) -> list[tuple[str, str, bool]]:
+    """[(signature var, emu function, patch_all)] in table order."""
     for p in paths:
         text = _strip_comments(p.read_text(encoding="utf-8", errors="replace"))
         m = re.search(
@@ -107,11 +107,15 @@ def parse_table(paths: list[Path], table: str) -> list[tuple[str, str]]:
         )
         if not m:
             continue
-        out = []
-        for em in re.finditer(
+        body = m.group(1)
+        matches = list(re.finditer(
             r"\(\s*OOVPA\s*\*\s*\)\s*&\s*(\w+)\s*,\s*([\w:]+)", m.group(1)
-        ):
-            out.append((em.group(1), em.group(2)))
+        ))
+        out = []
+        for index, em in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+            patch_all = "OOVPA_FLAG_PATCH_ALL" in body[em.start():end]
+            out.append((em.group(1), em.group(2), patch_all))
         return out
     sys.exit(f"table not found in the given .inl files: {table}")
 
@@ -189,38 +193,47 @@ def main() -> int:
         img, base = xbe_image(p)
         ok = miss = multi = unparsed = 0
         rows = []
-        for signame, emufn in entries:
+        for signame, emufn, patch_all in entries:
             sig = sigs.get(signame)
             if sig is None:
                 unparsed += 1
                 rows.append(("????", signame, emufn, ""))
                 continue
             hits = find_matches(img, sig["pairs"])
-            if len(hits) == 1:
+            if len(hits) == 1 or (patch_all and hits):
                 ok += 1
-                rows.append(("OK", signame, emufn, f"0x{base + hits[0]:08X}"))
+                status = "ALL" if len(hits) > 1 else "OK"
+                rows.append((status, signame, emufn,
+                             [f"0x{base + hit:08X}" for hit in hits]))
             elif not hits:
                 miss += 1
-                rows.append(("MISS", signame, emufn, ""))
+                rows.append(("MISS", signame, emufn, []))
             else:
                 multi += 1
                 rows.append(("MULTI", signame, emufn,
-                             " ".join(f"0x{base + h:08X}" for h in hits[:4])))
+                             [f"0x{base + h:08X}" for h in hits[:4]]))
 
         total = len(entries)
         print(f"=== {p.name}  ({total} entries)")
         print(f"    OK={ok}  MISS={miss}  MULTI={multi}  unparsed={unparsed}")
         if not args.quiet:
             for status, signame, emufn, where in rows:
-                if status != "OK":
+                if status not in ("OK", "ALL"):
                     print(f"    {status:5s} {emufn:52s} {signame}")
         print()
 
         if args.located_out:
+            located_count = sum(
+                len(addresses)
+                for st, _sig, _emufn, addresses in rows if st in ("OK", "ALL")
+            )
             Path(args.located_out).write_text("".join(
-                f"{where}  {emufn}\n" for st, _sig, emufn, where in rows if st == "OK"
+                f"{address}  {emufn}\n"
+                for st, _sig, emufn, addresses in rows if st in ("OK", "ALL")
+                for address in addresses
             ))
-            print(f"    -> wrote {ok} OK address(es) to {args.located_out}\n")
+            print(f"    -> wrote {located_count} located address(es) to "
+                  f"{args.located_out}\n")
 
         # Machine-readable miss list: the functions an LTCG table must supply.
         misses = [s for st, s, _, _ in rows if st in ("MISS", "MULTI")]
