@@ -4020,6 +4020,7 @@ struct EmuTranslatedPixelShader
 {
     DWORD handle;
     std::vector<cxbx::d3d::PixelShaderConstant> constants;
+    cxbx::d3d::XboxPixelShaderDefinition definition;
 };
 
 static std::vector<EmuTranslatedPixelShader> g_EmuTranslatedPixelShaders;
@@ -4046,6 +4047,19 @@ static void EmuApplyTranslatedPixelShaderConstants(DWORD Handle)
             g_pD3DDevice8->SetPixelShaderConstant(constant.index, constant.value, 1);
         return;
     }
+}
+
+static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindTranslatedPixelShader(
+    DWORD handle)
+{
+    for(const auto& shader : g_EmuTranslatedPixelShaders)
+    {
+        if(shader.handle == handle)
+        {
+            return &shader.definition;
+        }
+    }
+    return nullptr;
 }
 
 // ******************************************************************
@@ -4121,7 +4135,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
                        static_cast<unsigned>(translation.constants.size()));
 
                 g_EmuTranslatedPixelShaders.push_back(
-                    {*pHandle, std::move(translation.constants)});
+                    {*pHandle, std::move(translation.constants), definition});
 
                 EmuSwapFS();   // XBox FS
                 return D3D_OK;
@@ -10424,11 +10438,16 @@ struct EmuVshCpuVertex
     float pointSize;
     DWORD diffuse;
     DWORD specular;
-    float texCoords[4][2];
+    float texCoords[4][4];
     float clipPosition[4];
     float diffuseComponents[4];
     float specularComponents[4];
 };
+
+static constexpr DWORD EmuVshCpuVertexFvf =
+    D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_PSIZE | D3DFVF_TEX4 |
+    D3DFVF_TEXCOORDSIZE4(0) | D3DFVF_TEXCOORDSIZE4(1) |
+    D3DFVF_TEXCOORDSIZE4(2) | D3DFVF_TEXCOORDSIZE4(3);
 
 static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport);
 
@@ -10485,12 +10504,13 @@ static EmuVshCpuVertex EmuVshInterpolateCpuVertex(const EmuVshCpuVertex& begin,
         result.specularComponents[component] = begin.specularComponents[component] +
                                                (end.specularComponents[component] -
                                                 begin.specularComponents[component]) * amount;
-        result.texCoords[component][0] = begin.texCoords[component][0] +
-                                         (end.texCoords[component][0] -
-                                          begin.texCoords[component][0]) * amount;
-        result.texCoords[component][1] = begin.texCoords[component][1] +
-                                         (end.texCoords[component][1] -
-                                          begin.texCoords[component][1]) * amount;
+        for(std::size_t coordinate = 0; coordinate < 4; ++coordinate)
+        {
+            result.texCoords[component][coordinate] =
+                begin.texCoords[component][coordinate] +
+                (end.texCoords[component][coordinate] -
+                 begin.texCoords[component][coordinate]) * amount;
+        }
     }
     return result;
 }
@@ -10855,6 +10875,8 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     const DWORD savedState = EmuCaptureD3DStateBlock();
     DWORD previousShader = 0;
     HRESULT result = D3DERR_INVALIDCALL;
+    std::vector<EmuVshCpuVertex> projectedVertices;
+    const EmuVshCpuVertex* drawVertices = vertices;
     __try
     {
         XTL::IDirect3DBaseTexture8* stage0Texture = nullptr;
@@ -10934,7 +10956,9 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             stage0TextureBound, static_cast<unsigned int>(texCoordIndex),
             texCoordsFinite, texCoordsVary, stage0TextureHasData);
         const cxbx::d3d::CpuFallbackMaterial material =
-            cxbx::d3d::SelectCpuFallbackMaterial(stage0TextureUsable);
+            cxbx::d3d::SelectCpuFallbackMaterial(
+                g_bUsePixelShaderFallback, g_EmuCurrentPixelShaderHandle != 0,
+                stage0TextureUsable);
         if(g_EmuCurrentCpuVertexShader != nullptr &&
            !g_EmuCurrentCpuVertexShader->materialLogged)
         {
@@ -10953,15 +10977,49 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                    stage3TextureHasData ? 1u : 0u,
                    texCoordsFinite ? 1u : 0u, texCoordsVary ? 1u : 0u,
                    stage0TextureHasData ? 1u : 0u,
-                   material == cxbx::d3d::CpuFallbackMaterial::TextureModulate
-                       ? "texture_modulate"
-                       : "diffuse",
+                   material == cxbx::d3d::CpuFallbackMaterial::PreservePixelShader
+                       ? "preserve_pixel_shader"
+                       : material == cxbx::d3d::CpuFallbackMaterial::TextureModulate
+                             ? "texture_modulate"
+                             : "diffuse",
                    cxbx::d3d::PixelShaderFallbackName(EmuCurrentPixelShaderFallback()));
             fflush(stdout);
             g_EmuCurrentCpuVertexShader->materialLogged = true;
         }
 
-        if(material == cxbx::d3d::CpuFallbackMaterial::TextureModulate)
+        if(material == cxbx::d3d::CpuFallbackMaterial::PreservePixelShader)
+        {
+            // A host ps.1.1 `tex` instruction does not implement the Xbox
+            // PROJECT2D/PROJECT3D divide, and D3DTTFF_PROJECTED is ignored while
+            // a programmable pixel shader is bound. Project the CPU output
+            // explicitly before submitting its FVF vertices.
+            const auto* definition =
+                EmuFindTranslatedPixelShader(g_EmuCurrentPixelShaderHandle);
+            const UINT vertexCount =
+                EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
+            if(definition != nullptr && vertices != nullptr && vertexCount != 0)
+            {
+                projectedVertices.assign(vertices, vertices + vertexCount);
+                for(unsigned int stage = 0; stage < 4; ++stage)
+                {
+                    const unsigned int textureMode =
+                        cxbx::d3d::PixelShaderTextureMode(*definition, stage);
+                    if(cxbx::d3d::CpuFallbackTextureNeedsProjection(textureMode))
+                    {
+                        for(auto& vertex : projectedVertices)
+                        {
+                            cxbx::d3d::ProjectCpuFallbackTextureCoordinates(
+                                vertex.texCoords[stage], textureMode);
+                        }
+                    }
+                    g_pD3DDevice8->SetTextureStageState(
+                        stage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS,
+                        XTL::D3DTTFF_DISABLE);
+                }
+                drawVertices = projectedVertices.data();
+            }
+        }
+        else if(material == cxbx::d3d::CpuFallbackMaterial::TextureModulate)
         {
             // Preserve the common NV2A combiner shapes which the D3D8 fixed-function
             // stages can express: texture-only, doubled vertex lighting, a second
@@ -10987,13 +11045,11 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
         result = g_pD3DDevice8->GetVertexShader(&previousShader);
         if(SUCCEEDED(result))
         {
-            result = g_pD3DDevice8->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE |
-                                                    D3DFVF_SPECULAR | D3DFVF_PSIZE |
-                                                    D3DFVF_TEX4);
+            result = g_pD3DDevice8->SetVertexShader(EmuVshCpuVertexFvf);
         }
         if(SUCCEEDED(result))
         {
-            result = g_pD3DDevice8->DrawPrimitiveUP(primitiveType, primitiveCount, vertices,
+            result = g_pD3DDevice8->DrawPrimitiveUP(primitiveType, primitiveCount, drawVertices,
                                                     sizeof(EmuVshCpuVertex));
             if(SUCCEEDED(result))
             {
@@ -11001,7 +11057,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                 // push-buffer recording keeps its own copy for future RunPushBuffer calls;
                 // replaying every CPU fallback draw again at Present would move it after
                 // later UI draws and cover title logos or text.
-                EmuRecordPushBufferDraw(primitiveType, primitiveCount, vertices,
+                EmuRecordPushBufferDraw(primitiveType, primitiveCount, drawVertices,
                                         sizeof(EmuVshCpuVertex));
             }
         }
@@ -11160,8 +11216,8 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
             pointSize, defaultPointSize, g_D3DCaps.MaxPointSize);
         for(std::size_t texCoord = 0; texCoord < 4; ++texCoord)
         {
-            vertex.texCoords[texCoord][0] = texCoords[texCoord * 4];
-            vertex.texCoords[texCoord][1] = texCoords[texCoord * 4 + 1];
+            std::copy(&texCoords[texCoord * 4], &texCoords[texCoord * 4 + 4],
+                      vertex.texCoords[texCoord]);
         }
         EmuVshProjectCpuVertex(vertex, viewport);
         if(indices != nullptr && relativeIndex < EmuVshCpuIndexCacheSize)
