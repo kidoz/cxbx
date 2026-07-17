@@ -89,7 +89,11 @@ int main(void)
         p = pb_push1(p, NV097_SET_TEXTURE_OFFSET,     texAddr);
         p = pb_push1(p, NV097_SET_TEXTURE_FORMAT,     (0x12u << 8) | (0x02u << 4));
         p = pb_push1(p, NV097_SET_TEXTURE_IMAGE_RECT, (TW << 16) | TH);
+        p = pb_push1(p, NV097_SET_TEXTURE_ADDRESS,    0x00030303u);
+        p = pb_push1(p, NV097_SET_TEXTURE_CONTROL0,   0x4003ffc0u);
         p = pb_push1(p, NV097_SET_TEXTURE_FILTER,     (0x2u << 24) | (0x2u << 16));
+        p = pb_push1(p, NV097_SET_SHADER_STAGE_PROGRAM,
+                     NV097_SET_SHADER_STAGE_PROGRAM_STAGE0_2D_PROJECTIVE);
 
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + ATTR_POSITION * 4, vbAddr);
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_FORMAT + ATTR_POSITION * 4,

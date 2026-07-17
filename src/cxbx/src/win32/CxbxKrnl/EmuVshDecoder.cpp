@@ -3337,6 +3337,17 @@ extern "C" bool EmuVshExecuteProgram(const DWORD* Program, int InstrCount, int S
                                      OutTex0 == nullptr ? 0 : 4, nullptr);
 }
 
+extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount, int Start,
+                                            const float* Const, const float* Input,
+                                            float* OutPos, float* OutColors,
+                                            float* OutTexCoords)
+{
+    return VshExecuteProgramInternal(Program, InstrCount, Start, Const, Input, OutPos,
+                                     OutColors, OutColors == nullptr ? 0 : 8,
+                                     OutTexCoords, OutTexCoords == nullptr ? 0 : 16,
+                                     nullptr);
+}
+
 bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, const float* constants,
                                                   const float* inputRegisters, float* outputPosition,
                                                   float* outputColors, std::size_t outputColorFloatCount,

@@ -186,6 +186,7 @@ after locking the backbuffer.
 | `nv2a_intr`  | NV2A interrupts      | `INTR_EN` latch, `PMC_INTR_0` aggregation, write-1-to-clear |
 | `nv2a_pfifo` | NV2A PFIFO / PGRAPH  | DMA object + pushbuffer → pusher → PGRAPH method dispatch   |
 | `nv2a_pvideo`| NV2A PVIDEO (gap)    | documents the video-port overlay/capture gap: registers are cache-backed (round-trip) but not modeled (expectations flip when PVIDEO lands) |
+| `nv2a_multitexture` | NV2A shaders / textures | vertex-program oT0/oT1 outputs, two independent samplers, and a pixel-exact t0*t1 register combiner |
 | `xdk_smoke`  | XDK runtime (HLE)    | XDK-5849-built XBE boots via xapilib, file I/O, clean exit  |
 | `hle_resolve`| OOVPA/HLE database   | per-function: the HLE pass patched this real d3d8/dsound.lib function (expect=0 entries = documented signature debt) |
 | `d3d_clear_present` | D3D8 HLE (host GPU) | CreateDevice → Clear → Swap → pixel-exact backbuffer readback |
@@ -238,12 +239,12 @@ PGRAPH method dispatch, and 1 MiB of RAMIN with RAMHT lookup. The `nv2a_pmc` /
 `nv2a_intr` / `nv2a_pfifo` probes validate exactly that layer and pass on this
 build.
 
-What it is **not** is a rendering GPU: Cxbx still forwards retail Direct3D8 to host
-D3D and does not rasterize the NV2A pipeline, so it produces no scanned-out
-framebuffer for nxdk homebrew — which is why `gfx.fb_nonnull` (via `XVideoGetFB`)
-fails here. Full rendering/framebuffer conformance remains meaningful only on
-GPU-rasterizing targets (xemu, Cxbx-Reloaded) or real hardware. The
-CPU/memory/file/kernel probes are fully headless and target-independent.
+The opt-in `CXBX_NV2A_RASTER=1` path also provides a focused software rasterizer
+for raw-pushbuffer conformance and title debugging. It covers basic geometry,
+vertex programs, fixed transforms, depth/blend, up to four texture descriptors
+and coordinates, and register combiners; it is not yet a complete NV2A GPU.
+Retail Direct3D8 still uses the host-D3D path. The CPU/memory/file/kernel probes
+remain fully headless and target-independent.
 
 ## Current findings (target: cxbx)
 

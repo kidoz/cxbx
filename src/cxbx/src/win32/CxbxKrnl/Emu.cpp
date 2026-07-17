@@ -1460,6 +1460,10 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
                                      const float *Const, const float *Input,
                                      float *OutPos, float *OutCol0, float *OutTex0);
+extern "C" bool EmuVshExecuteProgramRaster(const DWORD *Program, int InstrCount, int Start,
+                                           const float *Const, const float *Input,
+                                           float *OutPos, float *OutColors,
+                                           float *OutTexCoords);
 
 struct EmuNv2aVertexArrayState
 {
@@ -4337,7 +4341,7 @@ struct EmuNv2aRasterTarget
     ULONG  DepthFunc;    // NV097_SET_DEPTH_FUNC value (0x200..0x207)
     bool   DepthTest;
     bool   DepthWrite;
-    const EmuNv2aSampler *Sampler; // NULL when no texture this draw
+    const EmuNv2aSampler *Sampler[EmuNv2aTextureStageCount];
     bool   BlendEnable;
     ULONG  BlendSFactor, BlendDFactor, BlendEquation;
     bool   AlphaTest;
@@ -4352,6 +4356,13 @@ struct EmuNv2aRasterTarget
     bool   StencilTest;
     ULONG  StencilFunc, StencilRef, StencilFuncMask, StencilMask;
     ULONG  StencilOpFail, StencilOpZFail, StencilOpZPass;
+};
+
+struct EmuNv2aTextureCoordinateArrays
+{
+    const float* U[EmuNv2aTextureStageCount];
+    const float* V[EmuNv2aTextureStageCount];
+    const float* InverseW[EmuNv2aTextureStageCount];
 };
 
 enum EmuNv2aCombinerMode : ULONG
@@ -4425,7 +4436,7 @@ static ULONG EmuNv2aBlend(ULONG Src, ULONG Dst, ULONG Sf, ULONG Df, ULONG Eq)
 }
 
 static int EmuNv2aCombinerSource(ULONG Input, int Component, bool Alpha,
-                                 ULONG Diffuse, ULONG Texture,
+                                 ULONG Diffuse, const ULONG* Textures,
                                  ULONG Factor0, ULONG Factor1, ULONG R0)
 {
     const ULONG Register = Input & 0x0Fu;
@@ -4435,7 +4446,10 @@ static int EmuNv2aCombinerSource(ULONG Input, int Component, bool Alpha,
         case 0x01: Value = Factor0; break;
         case 0x02: Value = Factor1; break;
         case 0x04: Value = Diffuse; break;
-        case 0x08: Value = Texture; break;
+        case 0x08:
+        case 0x09:
+        case 0x0A:
+        case 0x0B: Value = Textures[Register - 0x08]; break;
         case 0x0C: Value = R0; break;
         default: break;
     }
@@ -4491,20 +4505,20 @@ static int EmuNv2aCombinerMapOutput(int Value, ULONG Flags)
 }
 
 static int EmuNv2aRunCombinerChannel(ULONG Icw, ULONG Ocw, int Component, bool Alpha,
-                                     ULONG Diffuse, ULONG Texture,
+                                     ULONG Diffuse, const ULONG* Textures,
                                      ULONG Factor0, ULONG Factor1, ULONG R0)
 {
     const ULONG AInput = (Icw >> 24) & 0xFFu;
     const ULONG BInput = (Icw >> 16) & 0xFFu;
     const ULONG CInput = (Icw >> 8) & 0xFFu;
     const ULONG DInput = Icw & 0xFFu;
-    const int A = EmuNv2aCombinerSource(AInput, Component, Alpha, Diffuse, Texture,
+    const int A = EmuNv2aCombinerSource(AInput, Component, Alpha, Diffuse, Textures,
                                         Factor0, Factor1, R0);
-    const int B = EmuNv2aCombinerSource(BInput, Component, Alpha, Diffuse, Texture,
+    const int B = EmuNv2aCombinerSource(BInput, Component, Alpha, Diffuse, Textures,
                                         Factor0, Factor1, R0);
-    const int C = EmuNv2aCombinerSource(CInput, Component, Alpha, Diffuse, Texture,
+    const int C = EmuNv2aCombinerSource(CInput, Component, Alpha, Diffuse, Textures,
                                         Factor0, Factor1, R0);
-    const int D = EmuNv2aCombinerSource(DInput, Component, Alpha, Diffuse, Texture,
+    const int D = EmuNv2aCombinerSource(DInput, Component, Alpha, Diffuse, Textures,
                                         Factor0, Factor1, R0);
     const ULONG Flags = Ocw >> 12;
     const int AB = EmuNv2aCombinerMapOutput((A * B) / 255, Flags);
@@ -4527,8 +4541,9 @@ static int EmuNv2aRunCombinerChannel(ULONG Icw, ULONG Ocw, int Component, bool A
 }
 
 static ULONG EmuNv2aRunStage0Combiner(const EmuNv2aRasterTarget* Target,
-                                      ULONG Diffuse, ULONG Texture)
+                                      ULONG Diffuse, const ULONG* Textures)
 {
+    const ULONG Texture = Textures[0];
     switch(Target->CombinerMode)
     {
         case EmuNv2aCombinerDiffuse:
@@ -4549,7 +4564,7 @@ static ULONG EmuNv2aRunStage0Combiner(const EmuNv2aRasterTarget* Target,
 
     if((Target->CombinerControl & 0xFFu) == 0)
     {
-        if(Target->Sampler == nullptr)
+        if(Target->Sampler[0] == nullptr)
         {
             return Diffuse;
         }
@@ -4560,24 +4575,24 @@ static ULONG EmuNv2aRunStage0Combiner(const EmuNv2aRasterTarget* Target,
         return (A << 24) | (R << 16) | (G << 8) | B;
     }
 
-    ULONG R0 = Target->Sampler != nullptr ? (Texture & 0xFF000000u) : 0xFF000000u;
+    ULONG R0 = Target->Sampler[0] != nullptr ? (Texture & 0xFF000000u) : 0xFF000000u;
     const int R = EmuNv2aRunCombinerChannel(Target->CombinerColorIcw,
                                             Target->CombinerColorOcw, 0, false,
-                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Diffuse, Textures, Target->CombinerFactor0,
                                             Target->CombinerFactor1, R0);
     const int G = EmuNv2aRunCombinerChannel(Target->CombinerColorIcw,
                                             Target->CombinerColorOcw, 1, false,
-                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Diffuse, Textures, Target->CombinerFactor0,
                                             Target->CombinerFactor1, R0);
     const int B = EmuNv2aRunCombinerChannel(Target->CombinerColorIcw,
                                             Target->CombinerColorOcw, 2, false,
-                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Diffuse, Textures, Target->CombinerFactor0,
                                             Target->CombinerFactor1, R0);
     R0 = (R0 & 0xFF000000u) | (static_cast<ULONG>(R) << 16) |
          (static_cast<ULONG>(G) << 8) | static_cast<ULONG>(B);
     const int A = EmuNv2aRunCombinerChannel(Target->CombinerAlphaIcw,
                                             Target->CombinerAlphaOcw, 3, true,
-                                            Diffuse, Texture, Target->CombinerFactor0,
+                                            Diffuse, Textures, Target->CombinerFactor0,
                                             Target->CombinerFactor1, R0);
     return (static_cast<ULONG>(A) << 24) | (R0 & 0x00FFFFFFu);
 }
@@ -4640,21 +4655,29 @@ static ULONG EmuNv2aStencilOp(ULONG Op, ULONG Value, ULONG Ref)
 }
 
 static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
-                              float Z, ULONG Diffuse, float U, float V)
+                              float Z, ULONG Diffuse, const float* U,
+                              const float* V)
 {
-    ULONG Texture = 0;
-    if(Target->Sampler != nullptr)
+    ULONG Textures[EmuNv2aTextureStageCount] = {};
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
-        Texture = EmuNv2aSampleTexel(Target->Sampler, U, V);
+        if(Target->Sampler[Stage] != nullptr)
+        {
+            Textures[Stage] = EmuNv2aSampleTexel(
+                Target->Sampler[Stage], U[Stage], V[Stage]);
+        }
     }
-    ULONG Color = EmuNv2aRunStage0Combiner(Target, Diffuse, Texture);
+    ULONG Color = EmuNv2aRunStage0Combiner(Target, Diffuse, Textures);
     if(Target->FinalCombiner)
     {
         cxbx::nv2a::FinalCombinerRegisters Registers = {};
         Registers.constant0 = Target->CombinerFactor0;
         Registers.constant1 = Target->CombinerFactor1;
         Registers.primary = Diffuse;
-        Registers.texture0 = Texture;
+        Registers.texture0 = Textures[0];
+        Registers.texture1 = Textures[1];
+        Registers.texture2 = Textures[2];
+        Registers.texture3 = Textures[3];
         Registers.r0 = Color;
         Color = cxbx::nv2a::RunFinalCombiner(
             Target->FinalCombinerCw0, Target->FinalCombinerCw1, Registers);
@@ -4748,8 +4771,10 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
 static bool EmuNv2aCanUseP8TileFastPath(
     const EmuNv2aRasterTarget* Target)
 {
-    return Target->Sampler != nullptr && Target->Sampler->Kind == 5 &&
-           !Target->Sampler->Bilinear &&
+    return Target->Sampler[0] != nullptr && Target->Sampler[0]->Kind == 5 &&
+           !Target->Sampler[0]->Bilinear &&
+           Target->Sampler[1] == nullptr && Target->Sampler[2] == nullptr &&
+           Target->Sampler[3] == nullptr &&
            Target->CombinerMode == EmuNv2aCombinerTexture &&
            !Target->FinalCombiner && !Target->AlphaTest &&
            Target->BlendEnable && Target->BlendSFactor == 0x0302 &&
@@ -4783,7 +4808,7 @@ static void EmuNv2aShadeP8TilePixel(
     }
     *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
 
-    const ULONG Source = EmuNv2aSampleTexel(Target->Sampler, U, V);
+    const ULONG Source = EmuNv2aSampleTexel(Target->Sampler[0], U, V);
     ULONG* Destination = &Target->Color[Y * Target->PitchPx + X];
     *Destination = cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
 }
@@ -4798,7 +4823,7 @@ static void EmuNv2aShadeP8TilePixel(
 // 1/w), point-sampled, and modulated with the diffuse. Clipped to the surface.
 static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                                 const float *VX, const float *VY, const float *VZ,
-                                const float *VU, const float *VV, const float *VIW,
+                                const EmuNv2aTextureCoordinateArrays* TexCoords,
                                 const ULONG *VC, ULONG i0, ULONG i1, ULONG i2)
 {
     float ax = VX[i0], ay = VY[i0], az = VZ[i0];
@@ -4845,11 +4870,6 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
     float Ac = (float)((Cc >> 24) & 0xFF), Rc = (float)((Cc >> 16) & 0xFF);
     float Gc = (float)((Cc >>  8) & 0xFF), Bvc = (float)(Cc & 0xFF);
 
-    bool  UseTex = (T->Sampler != NULL);
-    float au = VU[i0], av = VV[i0], aiw = VIW[i0];
-    float bu = VU[i1], bv = VV[i1], biw = VIW[i1];
-    float cu = VU[i2], cv = VV[i2], ciw = VIW[i2];
-
     for(int Y = MinY; Y < MaxY; Y++)
     {
         for(int X = MinX; X < MaxX; X++)
@@ -4878,26 +4898,39 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                 Color = (A << 24) | (R << 16) | (G << 8) | B;
             }
 
-            float u = 0.0f;
-            float v = 0.0f;
-            if(UseTex)
+            float U[EmuNv2aTextureStageCount] = {};
+            float V[EmuNv2aTextureStageCount] = {};
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
             {
+                if(T->Sampler[Stage] == nullptr)
+                {
+                    continue;
+                }
+                const float aiw = TexCoords->InverseW[Stage][i0];
+                const float biw = TexCoords->InverseW[Stage][i1];
+                const float ciw = TexCoords->InverseW[Stage][i2];
                 // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
                 float iw = la * aiw + lb * biw + lc * ciw;
                 float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
-                u = (la * au * aiw + lb * bu * biw + lc * cu * ciw) * inv;
-                v = (la * av * aiw + lb * bv * biw + lc * cv * ciw) * inv;
+                U[Stage] =
+                    (la * TexCoords->U[Stage][i0] * aiw +
+                     lb * TexCoords->U[Stage][i1] * biw +
+                     lc * TexCoords->U[Stage][i2] * ciw) * inv;
+                V[Stage] =
+                    (la * TexCoords->V[Stage][i0] * aiw +
+                     lb * TexCoords->V[Stage][i1] * biw +
+                     lc * TexCoords->V[Stage][i2] * ciw) * inv;
             }
             const float z = la * az + lb * bz + lc * cz;
-            EmuNv2aShadePixel(T, X, Y, z, Color, u, v);
+            EmuNv2aShadePixel(T, X, Y, z, Color, U, V);
         }
     }
 }
 
 static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                                        const float* VX, const float* VY,
-                                       const float* VZ, const float* VU,
-                                       const float* VV, const float* VIW,
+                                       const float* VZ,
+                                       const EmuNv2aTextureCoordinateArrays* TexCoords,
                                        const ULONG* VC, ULONG Base)
 {
     const auto NearlyEqual = [](float A, float B)
@@ -4958,8 +4991,20 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
     const bool UniformColor = VC[I0] == VC[TopRight] &&
                               VC[I0] == VC[BottomLeft] &&
                               VC[I0] == VC[BottomRight];
-    const bool Affine = cxbx::nv2a::CanUseAffineQuadInterpolation(
-        VIW[I0], VIW[TopRight], VIW[BottomRight], VIW[BottomLeft]);
+    bool Affine = true;
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        if(Target->Sampler[Stage] != nullptr &&
+           !cxbx::nv2a::CanUseAffineQuadInterpolation(
+               TexCoords->InverseW[Stage][I0],
+               TexCoords->InverseW[Stage][TopRight],
+               TexCoords->InverseW[Stage][BottomRight],
+               TexCoords->InverseW[Stage][BottomLeft]))
+        {
+            Affine = false;
+            break;
+        }
+    }
     const bool P8TileFastPath = EmuNv2aCanUseP8TileFastPath(Target);
     if(Affine)
     {
@@ -4975,12 +5020,25 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                 continue;
             }
             const float Ty = (PixelY - Top) * InverseHeight;
-            auto U = cxbx::nv2a::BuildAffineQuadSpan(
-                VU[I0], VU[TopRight], VU[BottomRight], VU[BottomLeft],
-                Ty, FirstTx, InverseWidth);
-            auto V = cxbx::nv2a::BuildAffineQuadSpan(
-                VV[I0], VV[TopRight], VV[BottomRight], VV[BottomLeft],
-                Ty, FirstTx, InverseWidth);
+            cxbx::nv2a::AffineQuadSpan U[EmuNv2aTextureStageCount] = {};
+            cxbx::nv2a::AffineQuadSpan V[EmuNv2aTextureStageCount] = {};
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+            {
+                if(Target->Sampler[Stage] == nullptr)
+                {
+                    continue;
+                }
+                U[Stage] = cxbx::nv2a::BuildAffineQuadSpan(
+                    TexCoords->U[Stage][I0], TexCoords->U[Stage][TopRight],
+                    TexCoords->U[Stage][BottomRight],
+                    TexCoords->U[Stage][BottomLeft], Ty, FirstTx,
+                    InverseWidth);
+                V[Stage] = cxbx::nv2a::BuildAffineQuadSpan(
+                    TexCoords->V[Stage][I0], TexCoords->V[Stage][TopRight],
+                    TexCoords->V[Stage][BottomRight],
+                    TexCoords->V[Stage][BottomLeft], Ty, FirstTx,
+                    InverseWidth);
+            }
             auto Z = cxbx::nv2a::BuildAffineQuadSpan(
                 VZ[I0], VZ[TopRight], VZ[BottomRight], VZ[BottomLeft],
                 Ty, FirstTx, InverseWidth);
@@ -5015,16 +5073,27 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                     if(P8TileFastPath)
                     {
                         EmuNv2aShadeP8TilePixel(
-                            Target, X, Y, Z.value, U.value, V.value);
+                            Target, X, Y, Z.value, U[0].value, V[0].value);
                     }
                     else
                     {
-                        EmuNv2aShadePixel(
-                            Target, X, Y, Z.value, Color, U.value, V.value);
+                        float PixelU[EmuNv2aTextureStageCount] = {};
+                        float PixelV[EmuNv2aTextureStageCount] = {};
+                        for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount;
+                            ++Stage)
+                        {
+                            PixelU[Stage] = U[Stage].value;
+                            PixelV[Stage] = V[Stage].value;
+                        }
+                        EmuNv2aShadePixel(Target, X, Y, Z.value, Color,
+                                          PixelU, PixelV);
                     }
                 }
-                U.value += U.step;
-                V.value += V.step;
+                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+                {
+                    U[Stage].value += U[Stage].step;
+                    V[Stage].value += V[Stage].step;
+                }
                 Z.value += Z.step;
                 if(!UniformColor)
                 {
@@ -5074,21 +5143,35 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                         (Channel(8) << 8) | Channel(0);
             }
 
-            const float InvW = W0 * VIW[I0] + W1 * VIW[TopRight] +
-                               W2 * VIW[BottomRight] + W3 * VIW[BottomLeft];
-            const float ReciprocalW = InvW > 1e-9f || InvW < -1e-9f
-                                          ? 1.0f / InvW
-                                          : 0.0f;
-            const float U = (W0 * VU[I0] * VIW[I0] +
-                             W1 * VU[TopRight] * VIW[TopRight] +
-                             W2 * VU[BottomRight] * VIW[BottomRight] +
-                             W3 * VU[BottomLeft] * VIW[BottomLeft]) *
-                            ReciprocalW;
-            const float V = (W0 * VV[I0] * VIW[I0] +
-                             W1 * VV[TopRight] * VIW[TopRight] +
-                             W2 * VV[BottomRight] * VIW[BottomRight] +
-                             W3 * VV[BottomLeft] * VIW[BottomLeft]) *
-                            ReciprocalW;
+            float U[EmuNv2aTextureStageCount] = {};
+            float V[EmuNv2aTextureStageCount] = {};
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+            {
+                if(Target->Sampler[Stage] == nullptr)
+                {
+                    continue;
+                }
+                const float InvW =
+                    W0 * TexCoords->InverseW[Stage][I0] +
+                    W1 * TexCoords->InverseW[Stage][TopRight] +
+                    W2 * TexCoords->InverseW[Stage][BottomRight] +
+                    W3 * TexCoords->InverseW[Stage][BottomLeft];
+                const float ReciprocalW = InvW > 1e-9f || InvW < -1e-9f
+                                              ? 1.0f / InvW
+                                              : 0.0f;
+                U[Stage] =
+                    (W0 * TexCoords->U[Stage][I0] * TexCoords->InverseW[Stage][I0] +
+                     W1 * TexCoords->U[Stage][TopRight] * TexCoords->InverseW[Stage][TopRight] +
+                     W2 * TexCoords->U[Stage][BottomRight] * TexCoords->InverseW[Stage][BottomRight] +
+                     W3 * TexCoords->U[Stage][BottomLeft] * TexCoords->InverseW[Stage][BottomLeft]) *
+                    ReciprocalW;
+                V[Stage] =
+                    (W0 * TexCoords->V[Stage][I0] * TexCoords->InverseW[Stage][I0] +
+                     W1 * TexCoords->V[Stage][TopRight] * TexCoords->InverseW[Stage][TopRight] +
+                     W2 * TexCoords->V[Stage][BottomRight] * TexCoords->InverseW[Stage][BottomRight] +
+                     W3 * TexCoords->V[Stage][BottomLeft] * TexCoords->InverseW[Stage][BottomLeft]) *
+                    ReciprocalW;
+            }
             const float Z = W0 * VZ[I0] + W1 * VZ[TopRight] +
                             W2 * VZ[BottomRight] + W3 * VZ[BottomLeft];
             EmuNv2aShadePixel(Target, X, Y, Z, Color, U, V);
@@ -5301,7 +5384,6 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
     EmuNv2aVertexArrayState *Pos = &g_EmuNv2aVertexArray[EmuNv2aAttrPosition];
     EmuNv2aVertexArrayState *Dif = &g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse];
-    EmuNv2aVertexArrayState *Tex = &g_EmuNv2aVertexArray[EmuNv2aAttrTexcoord0];
     ULONG VertexBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaVertex);
     bool Inline = InlineData != nullptr && InlineStride != 0 && InlineOffsets != nullptr;
     const auto AttributeHost = [Inline, InlineData, InlineStride, InlineOffsets, VertexBase](
@@ -5329,9 +5411,14 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                           ? InlineStride
                           : ((Dif->Format >> 8) & 0xFF);
     ULONG DifType   = Dif->Format & 0x0F;
-    ULONG TexStride = Inline && InlineOffsets[EmuNv2aAttrTexcoord0] != 0xFFFFFFFF
-                          ? InlineStride
-                          : ((Tex->Format >> 8) & 0xFF);
+    ULONG TexStride[EmuNv2aTextureStageCount] = {};
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        const ULONG Attribute = EmuNv2aAttrTexcoord0 + Stage;
+        TexStride[Stage] = Inline && InlineOffsets[Attribute] != 0xFFFFFFFF
+                               ? InlineStride
+                               : ((g_EmuNv2aVertexArray[Attribute].Format >> 8) & 0xFF);
+    }
     // Phase 2: run the loaded vertex program when execution mode is PROGRAM.
     // Otherwise the position/diffuse arrays are consumed directly (Phase 0/1),
     // which needs a float position array.
@@ -5350,30 +5437,30 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
     ULONG PosSize = (Pos->Format >> 4) & 0x0F;
 
-    // Texture stage 0: sample when a texture is bound and a texcoord source is
-    // available (the attr-9 array, or the vertex program's oT0).
-    const EmuNv2aSampler* Sampler = nullptr;
-    bool SamplerReady = false;
-    const ULONG TextureMode0 = g_EmuNv2aShaderStageProgram & 0x1Fu;
-    bool TexBound = g_EmuNv2aTexture[0].Format != 0 &&
-                    (g_EmuNv2aTexture[0].Control0 & 0x40000000u) != 0 &&
-                    TextureMode0 != 0;
-    if(TexBound && (VpActive || TexStride != 0))
+    ULONG TextureMode[EmuNv2aTextureStageCount] = {};
+    bool SamplerReady[EmuNv2aTextureStageCount] = {};
+    bool AnySamplerReady = false;
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
-        Sampler = EmuNv2aGetSampler(0);
-        SamplerReady = Sampler != nullptr;
-    }
-    if(SamplerReady)
-    {
-        Target.Sampler = Sampler;
+        TextureMode[Stage] =
+            (g_EmuNv2aShaderStageProgram >> (Stage * 5)) & 0x1Fu;
+        const bool TextureBound = g_EmuNv2aTexture[Stage].Format != 0 &&
+                                  (g_EmuNv2aTexture[Stage].Control0 & 0x40000000u) != 0 &&
+                                  TextureMode[Stage] != 0;
+        if(TextureBound && (VpActive || TexStride[Stage] != 0))
+        {
+            Target.Sampler[Stage] = EmuNv2aGetSampler(Stage);
+            SamplerReady[Stage] = Target.Sampler[Stage] != nullptr;
+            AnySamplerReady = AnySamplerReady || SamplerReady[Stage];
+        }
     }
 
     static float VX[4096];
     static float VY[4096];
     static float VZ[4096];
-    static float VU[4096];
-    static float VV[4096];
-    static float VIW[4096];
+    static float VU[EmuNv2aTextureStageCount][4096];
+    static float VV[EmuNv2aTextureStageCount][4096];
+    static float VIW[EmuNv2aTextureStageCount][4096];
     static ULONG VC[4096];
     if(Count > 4096) Count = 4096;
 
@@ -5381,8 +5468,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     {
         ULONG Index = Indices == nullptr ? Start + i : Indices[i];
         float Xc, Yc, Zc = 0.0f, W;
-        float U = 0.0f, V = 0.0f;
-        float Q = 1.0f;
+        float U[EmuNv2aTextureStageCount] = {};
+        float V[EmuNv2aTextureStageCount] = {};
+        float Q[EmuNv2aTextureStageCount] = {1.0f, 1.0f, 1.0f, 1.0f};
         ULONG Color = 0xFFFFFFFF;
 
         if(VpActive)
@@ -5426,24 +5514,31 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             }
 
             float OutPos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-            float OutCol[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-            float OutTex[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-            EmuVshExecuteProgram(g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
-                                 (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
-                                 Input, OutPos, OutCol, OutTex);
+            float OutColors[8] = {
+                1.0f, 1.0f, 1.0f, 1.0f,
+                0.0f, 0.0f, 0.0f, 1.0f
+            };
+            float OutTexCoords[16] = {};
+            EmuVshExecuteProgramRaster(
+                g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
+                (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
+                Input, OutPos, OutColors, OutTexCoords);
             Xc = OutPos[0]; Yc = OutPos[1]; Zc = OutPos[2]; W = OutPos[3];
-            U = OutTex[0]; V = OutTex[1]; Q = OutTex[3];
-            ULONG R = EmuNv2aClampByte(OutCol[0] * 255.0f);
-            ULONG G = EmuNv2aClampByte(OutCol[1] * 255.0f);
-            ULONG B = EmuNv2aClampByte(OutCol[2] * 255.0f);
-            ULONG A = EmuNv2aClampByte(OutCol[3] * 255.0f);
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+            {
+                U[Stage] = OutTexCoords[Stage * 4];
+                V[Stage] = OutTexCoords[Stage * 4 + 1];
+                Q[Stage] = OutTexCoords[Stage * 4 + 3];
+            }
+            ULONG R = EmuNv2aClampByte(OutColors[0] * 255.0f);
+            ULONG G = EmuNv2aClampByte(OutColors[1] * 255.0f);
+            ULONG B = EmuNv2aClampByte(OutColors[2] * 255.0f);
+            ULONG A = EmuNv2aClampByte(OutColors[3] * 255.0f);
             Color = (A << 24) | (R << 16) | (G << 8) | B;
-            if(SamplerReady && Color == 0xFF000000)
+            if(AnySamplerReady && Color == 0xFF000000)
             {
                 // XDK passthrough programs often leave oD0 unwritten because
-                // their combiner selects the texture directly. This software
-                // path does not model combiners yet, so avoid multiplying a
-                // valid texture by the hardware's default-black oD0 value.
+                // their combiner selects texture registers directly.
                 Color = 0xFFFFFFFF;
             }
         }
@@ -5481,13 +5576,23 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                 }
             }
 
-            if(TexStride != 0)
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
             {
-                ULONG TexHost = AttributeHost(EmuNv2aAttrTexcoord0, Index);
+                if(TexStride[Stage] == 0)
+                {
+                    continue;
+                }
+                ULONG TexHost = AttributeHost(EmuNv2aAttrTexcoord0 + Stage, Index);
                 if(TexHost != 0)
                 {
-                    U = EmuNv2aReadHostFloat(TexHost);
-                    V = EmuNv2aReadHostFloat(TexHost + 4);
+                    U[Stage] = EmuNv2aReadHostFloat(TexHost);
+                    V[Stage] = EmuNv2aReadHostFloat(TexHost + 4);
+                    const ULONG TextureSize =
+                        (g_EmuNv2aVertexArray[EmuNv2aAttrTexcoord0 + Stage].Format >> 4) & 0x0Fu;
+                    if(TextureSize >= 4)
+                    {
+                        Q[Stage] = EmuNv2aReadHostFloat(TexHost + 12);
+                    }
                 }
             }
 
@@ -5528,21 +5633,33 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
             VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
         }
-        if(TextureMode0 == 1u)
+        for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
         {
-            const cxbx::nv2a::ProjectedTextureCoordinates Projected =
-                cxbx::nv2a::ProjectTexture2D(U, V, Q, InvW);
-            VU[i] = Projected.u;
-            VV[i] = Projected.v;
-            VIW[i] = Projected.interpolationWeight;
-        }
-        else
-        {
-            VU[i] = U;
-            VV[i] = V;
-            VIW[i] = InvW;
+            if(TextureMode[Stage] == 1u)
+            {
+                const cxbx::nv2a::ProjectedTextureCoordinates Projected =
+                    cxbx::nv2a::ProjectTexture2D(
+                        U[Stage], V[Stage], Q[Stage], InvW);
+                VU[Stage][i] = Projected.u;
+                VV[Stage][i] = Projected.v;
+                VIW[Stage][i] = Projected.interpolationWeight;
+            }
+            else
+            {
+                VU[Stage][i] = U[Stage];
+                VV[Stage][i] = V[Stage];
+                VIW[Stage][i] = InvW;
+            }
         }
         VC[i] = Color;
+    }
+
+    EmuNv2aTextureCoordinateArrays TextureCoordinates = {};
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        TextureCoordinates.U[Stage] = VU[Stage];
+        TextureCoordinates.V[Stage] = VV[Stage];
+        TextureCoordinates.InverseW[Stage] = VIW[Stage];
     }
 
     ULONG Triangles = 0;
@@ -5553,14 +5670,16 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 5: // TRIANGLES
                 for(ULONG i = 0; i + 2 < Count; i += 3)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+2);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                        &TextureCoordinates, VC, i, i+1, i+2);
                     Triangles++;
                 }
                 break;
             case 6: // TRIANGLE_STRIP
                 for(ULONG i = 0; i + 2 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+2);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                        &TextureCoordinates, VC, i, i+1, i+2);
                     Triangles++;
                 }
                 break;
@@ -5568,20 +5687,23 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 10: // POLYGON
                 for(ULONG i = 1; i + 1 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, 0, i, i+1);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                        &TextureCoordinates, VC, 0, i, i+1);
                     Triangles++;
                 }
                 break;
             case 8: // QUADS
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
-                    if(!EmuNv2aFillAxisAlignedQuad(&Target, VX, VY, VZ, VU, VV,
-                                                   VIW, VC, i))
+                    if(!EmuNv2aFillAxisAlignedQuad(
+                           &Target, VX, VY, VZ, &TextureCoordinates, VC, i))
                     {
-                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW,
-                                            VC, i, i + 1, i + 2);
-                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW,
-                                            VC, i, i + 2, i + 3);
+                        EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                            &TextureCoordinates, VC,
+                                            i, i + 1, i + 2);
+                        EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                            &TextureCoordinates, VC,
+                                            i, i + 2, i + 3);
                     }
                     Triangles += 2;
                 }
@@ -5589,8 +5711,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 9: // QUAD_STRIP
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+1, i+3);
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VU, VV, VIW, VC, i, i+3, i+2);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                        &TextureCoordinates, VC, i, i+1, i+3);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                                        &TextureCoordinates, VC, i, i+3, i+2);
                     Triangles += 2;
                 }
                 break;
@@ -5613,30 +5737,33 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         ULONG TextureSample = 0;
         float V3X = Count > 3 ? VX[3] : 0.0f;
         float V3Y = Count > 3 ? VY[3] : 0.0f;
-        float V3U = Count > 3 ? VU[3] : 0.0f;
-        float V3V = Count > 3 ? VV[3] : 0.0f;
+        float V3U = Count > 3 ? VU[0][3] : 0.0f;
+        float V3V = Count > 3 ? VV[0][3] : 0.0f;
         if(SampleX >= 0 && SampleX < Width && SampleY >= 0 && SampleY < Height)
         {
             Sample = Target.Color[SampleY * Target.PitchPx + SampleX];
         }
-        if(SamplerReady)
+        if(SamplerReady[0])
         {
             TextureSample = EmuNv2aSampleTexel(
-                Sampler, (VU[0] + VU[1] + VU[2]) / 3.0f,
-                (VV[0] + VV[1] + VV[2]) / 3.0f);
+                Target.Sampler[0], (VU[0][0] + VU[0][1] + VU[0][2]) / 3.0f,
+                (VV[0][0] + VV[0][1] + VV[0][2]) / 3.0f);
         }
         printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu@%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) blend=%u(0x%lX,0x%lX) vp_scale=(%.1f,%.1f,%.1f) vp_off=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f) uv=(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f) c0=0x%.08lX texel=0x%.08lX sample[%d,%d]=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
                VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount, g_EmuNv2aVpStart,
                Target.Depth ? "on" : "off", g_EmuNv2aSurfaceZetaFormat, g_EmuNv2aDepthFunc,
-               SamplerReady ? "on" : "off", SamplerReady ? Sampler->Width : 0, SamplerReady ? Sampler->Height : 0,
+               SamplerReady[0] ? "on" : "off",
+               SamplerReady[0] ? Target.Sampler[0]->Width : 0,
+               SamplerReady[0] ? Target.Sampler[0]->Height : 0,
                Target.BlendEnable ? 1u : 0u, Target.BlendSFactor, Target.BlendDFactor,
                g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1], g_EmuNv2aViewportScale[2],
                g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1], g_EmuNv2aViewportOffset[2],
                VX[0], VY[0], VZ[0], VX[1], VY[1], VZ[1], VX[2], VY[2], VZ[2],
                V3X, V3Y, Count > 3 ? VZ[3] : 0.0f,
-               VU[0], VV[0], VU[1], VV[1], VU[2], VV[2], V3U, V3V,
+               VU[0][0], VV[0][0], VU[0][1], VV[0][1],
+               VU[0][2], VV[0][2], V3U, V3V,
                VC[0], TextureSample, SampleX, SampleY, Sample);
         fflush(stdout);
         g_EmuNv2aRasterLogCount++;
