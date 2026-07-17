@@ -130,18 +130,39 @@ int main()
         return 1;
     }
 
+    float projected2d[4] = {0.75f, 1.5f, 6.0f, 3.0f};
+    float projected3d[4] = {0.75f, 1.5f, 6.0f, 3.0f};
+    float zeroQ[4] = {0.75f, 1.5f, 6.0f, 0.0f};
     if(cxbx::d3d::CpuFallbackTextureUsable(false, 0, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 4, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 0, false, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 0, true, false, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 0, true, true, false) ||
        !cxbx::d3d::CpuFallbackTextureUsable(true, 3, true, true, true) ||
-       cxbx::d3d::SelectCpuFallbackMaterial(false) !=
+       cxbx::d3d::SelectCpuFallbackMaterial(false, true, false) !=
+           cxbx::d3d::CpuFallbackMaterial::PreservePixelShader ||
+       cxbx::d3d::SelectCpuFallbackMaterial(false, true, true) !=
+           cxbx::d3d::CpuFallbackMaterial::PreservePixelShader ||
+       cxbx::d3d::SelectCpuFallbackMaterial(true, true, false) !=
            cxbx::d3d::CpuFallbackMaterial::Diffuse ||
-       cxbx::d3d::SelectCpuFallbackMaterial(true) !=
-           cxbx::d3d::CpuFallbackMaterial::TextureModulate)
+       cxbx::d3d::SelectCpuFallbackMaterial(true, true, true) !=
+           cxbx::d3d::CpuFallbackMaterial::TextureModulate ||
+       cxbx::d3d::SelectCpuFallbackMaterial(false, false, true) !=
+           cxbx::d3d::CpuFallbackMaterial::TextureModulate ||
+       cxbx::d3d::CpuFallbackTextureNeedsProjection(0) ||
+       !cxbx::d3d::CpuFallbackTextureNeedsProjection(1) ||
+       !cxbx::d3d::CpuFallbackTextureNeedsProjection(2) ||
+       cxbx::d3d::CpuFallbackTextureNeedsProjection(3) ||
+       !cxbx::d3d::ProjectCpuFallbackTextureCoordinates(projected2d, 1) ||
+       projected2d[0] != 0.25f || projected2d[1] != 0.5f ||
+       projected2d[2] != 6.0f || projected2d[3] != 1.0f ||
+       !cxbx::d3d::ProjectCpuFallbackTextureCoordinates(projected3d, 2) ||
+       projected3d[2] != 2.0f ||
+       cxbx::d3d::ProjectCpuFallbackTextureCoordinates(zeroQ, 1) ||
+       zeroQ[0] != 0.75f || zeroQ[3] != 0.0f)
     {
-        std::fputs("CPU fallback must reject unusable stage-0 texture coordinates\n", stderr);
+        std::fputs("CPU fallback must preserve translated pixel shaders and only approximate fallbacks\n",
+                   stderr);
         return 1;
     }
 
