@@ -138,6 +138,16 @@ inline bool OperandIsOne(const Operand& op) noexcept
     return op.reg == RegZero && op.mapping == MapUnsignedInvert;
 }
 
+inline bool OperandsAreComplementary(const Operand& identity,
+                                    const Operand& inverted) noexcept
+{
+    return identity.reg == inverted.reg &&
+           identity.alphaChannel == inverted.alphaChannel &&
+           (identity.mapping == MapUnsignedIdentity ||
+            identity.mapping == MapSignedIdentity) &&
+           inverted.mapping == MapUnsignedInvert;
+}
+
 struct Emitter
 {
     PixelShaderTranslation out;
@@ -336,10 +346,42 @@ inline PixelShaderTranslation TranslatePixelShader(
     const bool uniqueC1 = (def[CombinerCount] & (0x100u << 8)) != 0;
 
     // ---- Pass 1: which registers are read/written, and where scratch fits.
-    std::uint32_t readRegs = 0, destRegs = 0;
-    auto noteInputs = [&](std::uint32_t inputs) {
+    std::uint32_t readRegs = 0, destRegs = 0, textureLoadRegs = 0;
+    std::uint32_t combinerWrittenRegs = 0;
+    auto noteInputs = [&](std::uint32_t inputs, std::uint32_t output) {
+        const Portion p = DecodePortion(inputs, output);
+        auto noteOperand = [&](const Operand& op) {
+            readRegs |= 1u << op.reg;
+            if(op.reg >= RegT0 && op.reg <= RegT3 &&
+               (combinerWrittenRegs & (1u << op.reg)) == 0)
+            {
+                textureLoadRegs |= 1u << op.reg;
+            }
+        };
+        auto noteProduct = [&](const Operand& x, const Operand& y, bool needed) {
+            // A zero product can still write a destination, but it does not
+            // read either source register. This matters for inactive texture
+            // stages whose value only appears in a discarded zero product.
+            if(!needed || OperandIsZero(x) || OperandIsZero(y))
+                return;
+            noteOperand(x);
+            noteOperand(y);
+        };
+
+        noteProduct(p.a, p.b, p.abDest != RegZero || p.sumDest != RegZero);
+        noteProduct(p.c, p.d, p.cdDest != RegZero || p.sumDest != RegZero);
+    };
+    auto noteAllInputs = [&](std::uint32_t inputs) {
         for(unsigned slot = 0; slot < 4; ++slot)
-            readRegs |= 1u << DecodeOperand(inputs, slot).reg;
+        {
+            const Operand op = DecodeOperand(inputs, slot);
+            readRegs |= 1u << op.reg;
+            if(op.reg >= RegT0 && op.reg <= RegT3 &&
+               (combinerWrittenRegs & (1u << op.reg)) == 0)
+            {
+                textureLoadRegs |= 1u << op.reg;
+            }
+        }
     };
     auto noteOutputs = [&](std::uint32_t output) {
         destRegs |= 1u << (output & 0xFu);
@@ -348,18 +390,34 @@ inline PixelShaderTranslation TranslatePixelShader(
     };
     for(unsigned stage = 0; stage < combinerCount; ++stage)
     {
-        noteInputs(def[RgbInputs + stage]);
-        noteInputs(def[AlphaInputs + stage]);
+        noteInputs(def[RgbInputs + stage], def[RgbOutputs + stage]);
+        noteInputs(def[AlphaInputs + stage], def[AlphaOutputs + stage]);
         noteOutputs(def[RgbOutputs + stage]);
         noteOutputs(def[AlphaOutputs + stage]);
+        // RGB and alpha portions read the pre-stage register values, then
+        // expose their destinations to the following combiner stage.
+        combinerWrittenRegs |= (1u << (def[RgbOutputs + stage] & 0xFu));
+        combinerWrittenRegs |= (1u << ((def[RgbOutputs + stage] >> 4) & 0xFu));
+        combinerWrittenRegs |= (1u << ((def[RgbOutputs + stage] >> 8) & 0xFu));
+        combinerWrittenRegs |= (1u << (def[AlphaOutputs + stage] & 0xFu));
+        combinerWrittenRegs |= (1u << ((def[AlphaOutputs + stage] >> 4) & 0xFu));
+        combinerWrittenRegs |= (1u << ((def[AlphaOutputs + stage] >> 8) & 0xFu));
     }
     const bool hasFinalCombiner =
         def[FinalInputsABCD] != 0 || (def[FinalInputsEFG] & ~0xFFu) != 0;
     if(hasFinalCombiner)
     {
-        noteInputs(def[FinalInputsABCD]);
+        noteAllInputs(def[FinalInputsABCD]);
         for(unsigned slot = 0; slot < 3; ++slot)
-            readRegs |= 1u << DecodeOperand(def[FinalInputsEFG], slot).reg;
+        {
+            const Operand op = DecodeOperand(def[FinalInputsEFG], slot);
+            readRegs |= 1u << op.reg;
+            if(op.reg >= RegT0 && op.reg <= RegT3 &&
+               (combinerWrittenRegs & (1u << op.reg)) == 0)
+            {
+                textureLoadRegs |= 1u << op.reg;
+            }
+        }
     }
     destRegs &= ~(1u << RegZero); // DISCARD
 
@@ -369,13 +427,14 @@ inline PixelShaderTranslation TranslatePixelShader(
     if((readRegs & (1u << RegR1)) == 0 && (destRegs & (1u << RegR1)) == 0)
         emitter.scratchReg = RegR1;
 
-    // ---- Texture loads: every t# that is read before a combiner writes it
-    // needs a `tex`, and its stage mode must be a plain lookup.
+    // ---- Texture loads: every t# read before a combiner writes it needs a
+    // `tex`, and its stage mode must be a plain lookup. Later combiner stages
+    // may use a t# register as an intermediate written by an earlier stage.
     out.bytecode.push_back(TokVersionPs11);
     for(unsigned stage = 0; stage < 4; ++stage)
     {
         const unsigned reg = RegT0 + stage;
-        if((readRegs & (1u << reg)) == 0)
+        if((textureLoadRegs & (1u << reg)) == 0)
             continue;
         const std::uint32_t mode = PixelShaderTextureMode(def, stage);
         if(mode < 1 || mode > 3) // PROJECT2D / PROJECT3D / CUBEMAP
@@ -450,6 +509,15 @@ inline PixelShaderTranslation TranslatePixelShader(
             };
             auto product = [&](unsigned destReg, const Operand& x, const Operand& y,
                                bool dot) {
+                if(OperandIsZero(x) || OperandIsZero(y))
+                {
+                    emitter.Arithmetic(OpMov, dst(destReg),
+                                       { emitter.SourceToken({ RegZero, false,
+                                                              MapUnsignedIdentity },
+                                                             alphaPortion, stageC0,
+                                                             stageC1) });
+                    return;
+                }
                 emitter.Arithmetic(dot ? OpDp3 : OpMul, dst(destReg),
                                    { src(x), src(y) });
             };
@@ -528,6 +596,16 @@ inline PixelShaderTranslation TranslatePixelShader(
             else if(OperandIsOne(p.a) && !p.abDot && !p.cdDot)
                 emitter.Arithmetic(OpMad, dst(p.sumDest),
                                    { src(p.c), src(p.d), src(p.b) });
+            else if(!p.abDot && !p.cdDot &&
+                    OperandsAreComplementary(p.b, p.d))
+            {
+                // A*B + C*(1-B) is exactly lrp(B, A, C). This covers
+                // register-combiner blends that target one of their own
+                // inputs, where neither r1 nor the destination is free to
+                // stage the second product.
+                emitter.Arithmetic(OpLrp, dst(p.sumDest),
+                                   { src(p.b), src(p.a), src(p.c) });
+            }
             else if(emitter.scratchReg != 0 && !p.abDot)
             {
                 emitter.Arithmetic(p.cdDot ? OpDp3 : OpMul,
