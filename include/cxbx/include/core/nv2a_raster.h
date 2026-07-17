@@ -34,6 +34,14 @@ inline constexpr std::uint32_t BlendSourceAlpha(
     std::uint32_t source, std::uint32_t destination) noexcept
 {
     const std::uint32_t alpha = source >> 24;
+    if(alpha == 0)
+    {
+        return destination;
+    }
+    if(alpha == 255)
+    {
+        return source;
+    }
     const std::uint32_t inverseAlpha = 255u - alpha;
     std::uint32_t output = 0;
     for(int shift = 0; shift < 32; shift += 8)
