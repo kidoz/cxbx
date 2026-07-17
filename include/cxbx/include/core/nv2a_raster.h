@@ -49,6 +49,35 @@ inline constexpr std::uint32_t BlendSourceAlpha(
     return output;
 }
 
+struct AffineQuadSpan
+{
+    float value;
+    float step;
+};
+
+inline constexpr bool CanUseAffineQuadInterpolation(
+    float topLeft, float topRight, float bottomRight, float bottomLeft) noexcept
+{
+    const auto sameWeight = [](float a, float b)
+    {
+        const float difference = a - b;
+        return difference > -1.0e-6f && difference < 1.0e-6f;
+    };
+    return (topLeft > 1.0e-9f || topLeft < -1.0e-9f) &&
+           sameWeight(topLeft, topRight) &&
+           sameWeight(topLeft, bottomRight) &&
+           sameWeight(topLeft, bottomLeft);
+}
+
+inline constexpr AffineQuadSpan BuildAffineQuadSpan(
+    float topLeft, float topRight, float bottomRight, float bottomLeft,
+    float y, float firstX, float xStep) noexcept
+{
+    const float left = topLeft + (bottomLeft - topLeft) * y;
+    const float right = topRight + (bottomRight - topRight) * y;
+    return { left + (right - left) * firstX, (right - left) * xStep };
+}
+
 struct FinalCombinerRegisters
 {
     std::uint32_t constant0 = 0;

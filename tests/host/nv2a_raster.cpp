@@ -56,6 +56,21 @@ int main()
         return 1;
     }
 
+    constexpr auto affineSpan = cxbx::nv2a::BuildAffineQuadSpan(
+        0.0f, 10.0f, 30.0f, 20.0f, 0.25f, 0.2f, 0.2f);
+    if(!Near(affineSpan.value, 7.0f) || !Near(affineSpan.step, 2.0f) ||
+       !cxbx::nv2a::CanUseAffineQuadInterpolation(
+           0.5f, 0.5f, 0.5f, 0.5f) ||
+       cxbx::nv2a::CanUseAffineQuadInterpolation(
+           0.5f, 0.5f, 0.4f, 0.5f) ||
+       cxbx::nv2a::CanUseAffineQuadInterpolation(
+           0.0f, 0.0f, 0.0f, 0.0f))
+    {
+        std::fputs("affine quad interpolation must require constant nonzero weights\n",
+                   stderr);
+        return 1;
+    }
+
     cxbx::nv2a::FinalCombinerRegisters registers = {};
     registers.r0 = 0x7A123456u;
     if(cxbx::nv2a::RunFinalCombiner(0x0000000Cu, 0x00001C80u,
