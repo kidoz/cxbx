@@ -4049,6 +4049,41 @@ static void EmuApplyTranslatedPixelShaderConstants(DWORD Handle)
     }
 }
 
+static HRESULT EmuSetTranslatedPixelShaderConstants(DWORD Handle, DWORD Register,
+                                                     CONST PVOID pConstantData,
+                                                     DWORD ConstantCount)
+{
+    if(ConstantCount != 0 && pConstantData == nullptr)
+        return D3DERR_INVALIDCALL;
+
+    for(const auto& shader : g_EmuTranslatedPixelShaders)
+    {
+        if(shader.handle != Handle)
+            continue;
+
+        HRESULT result = D3D_OK;
+        const float *source = static_cast<const float *>(pConstantData);
+        for(const auto& constant : shader.constants)
+        {
+            if(constant.xboxRegister < Register ||
+               constant.xboxRegister - Register >= ConstantCount)
+            {
+                continue;
+            }
+
+            const DWORD sourceIndex = constant.xboxRegister - Register;
+            const HRESULT setResult = g_pD3DDevice8->SetPixelShaderConstant(
+                constant.index, source + sourceIndex * 4, 1);
+            if(FAILED(setResult))
+                result = setResult;
+        }
+        return result;
+    }
+
+    // Fallback shaders run through fixed function and have no host constants.
+    return D3D_OK;
+}
+
 static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindTranslatedPixelShader(
     DWORD handle)
 {
@@ -4315,7 +4350,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderConstant
            GetCurrentThreadId(), Register, pConstantData, ConstantCount);
     #endif
 
-    HRESULT Result = g_pD3DDevice8->SetPixelShaderConstant(Register, pConstantData, ConstantCount);
+    HRESULT Result = EmuSetTranslatedPixelShaderConstants(
+        g_EmuCurrentPixelShaderHandle, Register, pConstantData, ConstantCount);
 
     EmuSwapFS();   // Xbox FS
 
