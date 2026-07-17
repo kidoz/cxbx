@@ -132,3 +132,12 @@ test(
   args : [files('trace_durability.py'), host_trace_durability_helper],
   timeout : 30,
 )
+
+host_stack_precommit_test = executable(
+  'host_stack_precommit_test',
+  'stack_precommit.cpp',
+  include_directories : cxbx_inc,
+  install : false,
+)
+
+test('host-stack-precommit', host_stack_precommit_test)
