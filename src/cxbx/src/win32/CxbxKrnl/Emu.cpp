@@ -8778,7 +8778,11 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                         uint32 lower = pXbeHeader->dwBaseAddr;
                         uint32 upper = pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage;
 
-				        void *pFunc = EmuLocateFunction((OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4134, lower, upper);
+			        void *pFunc = EmuLocateFunction(
+                            BuildVersion == 4627
+                                ? (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4627
+                                : (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4134,
+                            lower, upper);
 
                         // ******************************************************************
 				        // * Locate D3DDeferredRenderState
@@ -8790,7 +8794,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                             else if(BuildVersion == 4361)
 						        XTL::EmuD3DDeferredRenderState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x200 + 82*4);
                             else if(BuildVersion == 4627)
-						        XTL::EmuD3DDeferredRenderState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x24C + 92*4);
+						        XTL::EmuD3DDeferredRenderState =
+                                    (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x27C);
 
                             for(int v=0;v<146;v++)
                                 XTL::EmuD3DDeferredRenderState[v] = X_D3DRS_UNK;

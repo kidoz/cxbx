@@ -2092,6 +2092,30 @@ SOOVPA<8> D3DDevice_EndPushBuffer_1_0_4627 =
     }
 };
 
+// _D3DDevice_SetRenderState_CullMode@4 (archived XDK 4627 d3d8.lib,
+// 112 bytes, five relocations excluded)
+SOOVPA<15> IDirect3DDevice8_SetRenderState_CullMode_1_0_4627 =
+{
+    0, 15, -1, 0,
+    {
+        { 0x07, 0x8B },
+        { 0x0E, 0xE8 },
+        { 0x16, 0x08 },
+        { 0x1D, 0x04 },
+        { 0x25, 0xC0 },
+        { 0x2A, 0x0D },
+        { 0x33, 0xC7 },
+        { 0x3B, 0x8B },
+        { 0x42, 0xD2 },
+        { 0x4A, 0x08 },
+        { 0x51, 0x10 },
+        { 0x58, 0x00 },
+        { 0x5F, 0x0D },
+        { 0x67, 0x00 },
+        { 0x6F, 0x90 }
+    }
+};
+
 // ******************************************************************
 OOVPATable D3D8_1_0_4627[] =
 {
@@ -2587,9 +2611,9 @@ OOVPATable D3D8_1_0_4627[] =
         "EmuIDirect3DDevice8_SetTextureState_TexCoordIndex" 
         #endif
     },
-    // IDirect3DDevice8::SetRenderState_CullMode (* unchanged since 4134 *)
+    // IDirect3DDevice8::SetRenderState_CullMode (archived 4627 library)
     {
-        (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4134,
+        (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4627,
 
         XTL::EmuIDirect3DDevice8_SetRenderState_CullMode,
 
