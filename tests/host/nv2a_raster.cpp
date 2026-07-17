@@ -34,5 +34,38 @@ int main()
         return 1;
     }
 
+    cxbx::nv2a::FinalCombinerRegisters registers = {};
+    registers.r0 = 0x7A123456u;
+    if(cxbx::nv2a::RunFinalCombiner(0x0000000Cu, 0x00001C80u,
+                                    registers) != registers.r0)
+    {
+        std::fputs("Samurai final combiner must preserve r0\n", stderr);
+        return 1;
+    }
+
+    registers = {};
+    registers.primary = 0x80FFFFFFu;
+    registers.constant0 = 0x00010101u;
+    registers.constant1 = 0x000000FFu;
+    registers.texture0 = 0x00FF0000u;
+    registers.r0 = 0x44000000u;
+    if(cxbx::nv2a::RunFinalCombiner(0x14080201u, 0x00001C00u,
+                                    registers) != 0x44810180u)
+    {
+        std::fputs("final combiner must evaluate A*B+(1-A)*C+D\n", stderr);
+        return 1;
+    }
+
+    registers = {};
+    registers.primary = 0xFF804020u;
+    registers.texture0 = 0xFF4080FFu;
+    registers.r0 = 0x55000000u;
+    if(cxbx::nv2a::RunFinalCombiner(0x200F0000u, 0x04081C00u,
+                                    registers) != 0x55202020u)
+    {
+        std::fputs("final combiner must expose the E*F product\n", stderr);
+        return 1;
+    }
+
     return 0;
 }
