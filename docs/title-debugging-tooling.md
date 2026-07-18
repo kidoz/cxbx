@@ -57,13 +57,17 @@ Compare two `summary.json` files by aligned frame CRC, draw count, faults, and
 representative-image metrics. This should become the title-level CI verdict and
 the predicate for automated `git bisect run`.
 
-### 2. Pushbuffer capture and replay
+### 2. Pushbuffer capture and replay (implemented for PFIFO)
 
-Capture one frame's pushbuffer packets plus referenced DMA ranges, initial
-PGRAPH state, and expected scanout CRC. Replaying that bundle in a small host
-harness would turn a 20-60 second title boot into a sub-second deterministic GPU
-test. The bundle must include resource snapshots; command words alone are not
-self-contained.
+`--capture-pushbuffer FRAME` now records a bounded versioned bundle containing
+PFIFO run state, fetched words/addresses, method dispatches, RAMIN, exact memory
+reads, and the normalized scanout/CRC. `tools/nv2a_capture.py` replays packet
+control flow and verifies every captured payload. See
+`docs/nv2a-pushbuffer-capture.md`.
+
+Independent PGRAPH raster replay remains the next extraction: move the mutable
+raster state out of `Emu.cpp` behind a reusable state object, then feed the
+captured method and memory records into it.
 
 ### 3. State diffs at the first divergent draw
 

@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "EmuFS.h"
 #include "EmuNV2ALogging.h"
 #include "core/d3d_push_buffer.h"
+#include "core/nv2a_capture.h"
 #include "core/nv2a_raster.h"
 #include "core/nvnet.h"
 #include "core/trace.h"
@@ -60,6 +61,7 @@ namespace XTL
 
 #include <clocale>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -1449,6 +1451,84 @@ static ULONG g_EmuNv2aScanoutDumpIndex = 0;
 // draw or clear and resets at the frame boundary.
 static ULONG g_EmuNv2aDebugFrame = 0;
 static ULONG g_EmuNv2aDebugDrawIndex = 0;
+static cxbx::nv2a::PushbufferCaptureWriter g_EmuNv2aCapture;
+static bool g_EmuNv2aCaptureConfigured = false;
+static ULONG g_EmuNv2aCaptureOutputCrc = 0;
+
+static void EmuNv2aConfigureCapture()
+{
+    if(g_EmuNv2aCaptureConfigured)
+    {
+        return;
+    }
+    g_EmuNv2aCaptureConfigured = true;
+
+    char Path[1024] = {};
+    if(GetEnvironmentVariableA("CXBX_NV2A_CAPTURE", Path, sizeof(Path)) == 0)
+    {
+        return;
+    }
+
+    char FrameValue[32] = {};
+    GetEnvironmentVariableA("CXBX_NV2A_CAPTURE_FRAME", FrameValue,
+                            sizeof(FrameValue));
+    const ULONG TargetFrame = FrameValue[0] != '\0'
+                                  ? strtoul(FrameValue, nullptr, 0)
+                                  : 0;
+
+    char LimitValue[32] = {};
+    GetEnvironmentVariableA("CXBX_NV2A_CAPTURE_LIMIT_MB", LimitValue,
+                            sizeof(LimitValue));
+    ULONG LimitMb = LimitValue[0] != '\0' ? strtoul(LimitValue, nullptr, 0) : 256;
+    if(LimitMb < 64)
+    {
+        LimitMb = 64;
+    }
+    if(LimitMb > 1024)
+    {
+        LimitMb = 1024;
+    }
+
+    if(!g_EmuNv2aCapture.Open(
+           Path, TargetFrame, static_cast<std::uint64_t>(LimitMb) * 1024u * 1024u))
+    {
+        printf("NVCAP| open-failed path=%s\n", Path);
+        fflush(stdout);
+        return;
+    }
+
+    g_EmuNv2aCapture.RecordRamin(g_EmuNv2aRamin, sizeof(g_EmuNv2aRamin));
+    printf("NVCAP| opened frame=%lu limit_mb=%lu path=%s\n",
+           TargetFrame, LimitMb, Path);
+    fflush(stdout);
+}
+
+static cxbx::nv2a::PushbufferCaptureWriter* EmuNv2aCaptureForFrame(ULONG Frame)
+{
+    return g_EmuNv2aCapture.CapturesFrame(Frame) ? &g_EmuNv2aCapture : nullptr;
+}
+
+static void EmuNv2aCaptureMemory(ULONG Address, const void* Data, ULONG Size)
+{
+    cxbx::nv2a::PushbufferCaptureWriter* Capture =
+        EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
+    if(Capture != nullptr)
+    {
+        Capture->RecordMemory(Address, Data, Size);
+    }
+}
+
+static void EmuNv2aFinishCaptureFrame(ULONG Frame)
+{
+    if(g_EmuNv2aCapture.IsActive() &&
+       Frame == g_EmuNv2aCapture.TargetFrame())
+    {
+        g_EmuNv2aCapture.Finish(Frame, g_EmuNv2aCaptureOutputCrc);
+        printf("NVCAP| complete frame=%lu crc=0x%.08lX\n",
+               Frame, g_EmuNv2aCaptureOutputCrc);
+        fflush(stdout);
+    }
+}
 // Last physical address the guest programmed into the CRTC scanout base
 // (NV_PCRTC_START). Used as the render-target fallback for raw-NV2A titles whose
 // color-surface DMA object this HLE does not model (the kernel-created
@@ -1932,7 +2012,9 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         }
         else if(Method == NV097_FLIP_STALL)
         {
+            const ULONG PresentedFrame = g_EmuNv2aDebugFrame;
             EmuNv2aPresentColorSurface();
+            EmuNv2aFinishCaptureFrame(PresentedFrame);
             EmuNv2aInvalidateFrameSamplers();
         }
         else if(Method >= NV097_SET_TEXTURE_OFFSET_0 &&
@@ -3310,6 +3392,7 @@ static bool EmuTryReadHost(ULONG Address, void *Dst, ULONG Size)
     __try
     {
         memcpy(Dst, (const void *)Address, Size);
+        EmuNv2aCaptureMemory(Address, Dst, Size);
         return true;
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
@@ -3351,6 +3434,7 @@ static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
     if(Host != NULL)
     {
         memcpy(Dst, Host, Size);
+        EmuNv2aCaptureMemory(Address, Dst, Size);
         return true;
     }
 
@@ -3372,6 +3456,7 @@ static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
         Copied += Chunk;
     }
 
+    EmuNv2aCaptureMemory(Address, Dst, Size);
     return true;
 }
 
@@ -4717,8 +4802,13 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
     bool WantWindow = EmuNv2aWindowEnabled();
     bool WantBmp = (g_EmuNv2aScanoutDumpIndex < 16);
     bool WantCrc = EmuNv2aCrcEnabled();
-    if(PhysicalAddress == 0 || (!WantBmp && !WantWindow && !WantCrc))
+    cxbx::nv2a::PushbufferCaptureWriter* Capture =
+        EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
+    if(PhysicalAddress == 0 ||
+       (!WantBmp && !WantWindow && !WantCrc && Capture == nullptr))
+    {
         return;
+    }
 
     // Geometry: pitch from the video HAL (else a 640-wide default); height from
     // the contiguous surface's tracked size (a scanout buffer is width*height*4).
@@ -4791,12 +4881,22 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 
     // Per-present CRC of the normalized pixels: the frame-level regression
     // signature (compare with Python zlib.crc32 over the BMP pixel data).
+    ULONG Crc = 0;
+    if(WantCrc || Capture != nullptr)
+    {
+        Crc = EmuNv2aCrc32(Pixels, Width * Height * 4);
+    }
     if(WantCrc)
     {
-        ULONG Crc = EmuNv2aCrc32(Pixels, Width * Height * 4);
         printf("NVCRC| frame=%lu addr=0x%.08lX w=%lu h=%lu crc=0x%.08lX\n",
                g_EmuNv2aDebugFrame, PhysicalAddress, Width, Height, Crc);
         fflush(stdout);
+    }
+    if(Capture != nullptr)
+    {
+        g_EmuNv2aCaptureOutputCrc = Capture->RecordScanout(
+            g_EmuNv2aDebugFrame, PhysicalAddress, Width, Height, Pixels,
+            Width * Height * 4);
     }
 
     // Live window (every present, uncapped) then the BMP dump (first 16 only).
@@ -6903,9 +7003,20 @@ static void EmuNv2aRunPusher()
     ULONG GuardLimit = HostMode ? 0x100000 : 4096;
     ULONG State = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_STATE, 0);
     ULONG Dcount = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_DCOUNT, 0);
+    EmuNv2aConfigureCapture();
+    cxbx::nv2a::PushbufferCaptureWriter* Capture =
+        EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
+    if(Capture != nullptr)
+    {
+        Capture->RecordPushRun(
+            g_EmuNv2aDebugFrame, HostMode,
+            HostMode ? BlockBase : BaseAddress, Get, Put, State, Dcount,
+            EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0), Limit);
+    }
     for(ULONG Guard = 0; Guard < GuardLimit && Get != Put; Guard++)
     {
         ULONG Word = 0;
+        const ULONG FetchAddress = Get;
 
         if(!EmuNv2aDmaWordInRange(Get, Limit) ||
            !EmuNv2aFetchPushWord(HostMode, BaseAddress, Get, &Word))
@@ -6915,6 +7026,10 @@ static void EmuNv2aRunPusher()
         }
 
         Get += 4;
+        if(Capture != nullptr)
+        {
+            Capture->RecordPushWord(g_EmuNv2aDebugFrame, FetchAddress, Word);
+        }
         NV2A_TRACE_PB(Word);
         cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
 
@@ -6923,6 +7038,11 @@ static void EmuNv2aRunPusher()
         {
             ULONG Method = State & EmuNv2aPfifoDmaStateMethod;
             ULONG Subchannel = (State & EmuNv2aPfifoDmaStateSubchannel) >> 13;
+            if(Capture != nullptr)
+            {
+                Capture->RecordMethod(
+                    g_EmuNv2aDebugFrame, Subchannel, Method, Word);
+            }
             EmuNv2aHandlePgraphMethod(Subchannel, Method, Word);
 
             if((State & EmuNv2aPfifoDmaStateMethodType) == 0)

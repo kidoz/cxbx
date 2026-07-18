@@ -32,6 +32,7 @@ cxbx_launcher_src = files(
 )
 
 cxbx_runtime_src = files(
+  'src/core/nv2a_capture.cpp',
   'src/core/PcmConverter.cpp',
   'src/core/XboxAdpcmDecoder.cpp',
   'src/core/Yuy2Converter.cpp',

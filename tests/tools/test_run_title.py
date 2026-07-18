@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 
+import struct
 import sys
 import tempfile
 import unittest
@@ -39,6 +40,14 @@ class CaptureResultTests(unittest.TestCase):
         self.assertEqual(
             run_title.select_representative_shot(shots)["path"], "scene.png"
         )
+
+    def test_capture_completion_requires_finish_footer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "frame.nv2acap"
+            path.write_bytes(b"header" + struct.pack("<II5I", 6, 20, 0, 0, 0, 0, 0))
+            self.assertTrue(run_title.nv2a_capture_complete(path))
+            path.write_bytes(b"incomplete")
+            self.assertFalse(run_title.nv2a_capture_complete(path))
 
 
 class LogSummaryTests(unittest.TestCase):
