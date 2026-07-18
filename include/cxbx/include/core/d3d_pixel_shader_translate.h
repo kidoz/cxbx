@@ -13,8 +13,8 @@
 // alpha/blue channel selects, output shifts x2/x4/d2, plain 2D/3D/cube
 // texture lookups, per-stage or shared constants (up to 7 distinct values),
 // and A*B+(1-A)*C+D final combiners over ordinary registers.
-// Unsupported (fails): MUX, output BIAS, blue-to-alpha, dependent/bump
-// texture modes, FOG/V1R0_SUM/EF_PROD reads, register reads before any
+// Unsupported (fails): MUX, output BIAS, blue-to-alpha, dependent texture
+// modes other than BUMPENVMAP, FOG/V1R0_SUM/EF_PROD reads, register reads before any
 // write (r0/r1), more constants or instructions than ps.1.1 holds.
 
 #include <array>
@@ -95,7 +95,7 @@ inline constexpr std::uint32_t TokVersionPs11 = 0xFFFF0101u;
 inline constexpr std::uint32_t TokEnd = 0x0000FFFFu;
 inline constexpr std::uint32_t OpMov = 0x01, OpAdd = 0x02, OpMad = 0x04,
                                OpMul = 0x05, OpDp3 = 0x08, OpLrp = 0x12,
-                               OpTex = 0x42;
+                               OpTex = 0x42, OpTexBem = 0x43;
 inline constexpr std::uint32_t RtTemp = 0, RtInput = 1, RtConst = 2, RtTexture = 3;
 inline constexpr std::uint32_t MaskRgb = 0x7u << 16, MaskA = 0x8u << 16,
                                MaskAll = 0xFu << 16;
@@ -375,62 +375,88 @@ inline PixelShaderTranslation TranslatePixelShader(
         if(op.reg != RegZero)
             liveChannels[op.reg] |= operandChannel(op);
     };
-    if(!hasFinalCombiner)
+    if(hasFinalCombiner)
     {
-        // Without an explicit final combiner, retain the translator's prior
-        // conservative behavior: any intermediate can be observable.
-        for(unsigned stage = 0; stage < combinerCount; ++stage)
-            livePortions[stage] = { true, true };
+        const Operand a = DecodeOperand(def[FinalInputsABCD], 0);
+        const Operand b = DecodeOperand(def[FinalInputsABCD], 1);
+        const Operand c = DecodeOperand(def[FinalInputsABCD], 2);
+        const Operand d = DecodeOperand(def[FinalInputsABCD], 3);
+        if(OperandIsOne(a))
+        {
+            // A=ONE collapses A*B+(1-A)*C+D to B+D, so C cannot make a
+            // scratch register live merely by occupying its dead slot.
+            noteLiveOperand(b);
+            noteLiveOperand(d);
+        }
+        else if(OperandIsZero(a))
+        {
+            noteLiveOperand(c);
+            noteLiveOperand(d);
+        }
+        else
+        {
+            noteLiveOperand(a);
+            noteLiveOperand(b);
+            noteLiveOperand(c);
+            noteLiveOperand(d);
+        }
+        for(unsigned slot = 0; slot < 3; ++slot)
+        {
+            noteLiveOperand(DecodeOperand(def[FinalInputsEFG], slot));
+        }
     }
     else
     {
-        for(unsigned slot = 0; slot < 4; ++slot)
-            noteLiveOperand(DecodeOperand(def[FinalInputsABCD], slot));
-        for(unsigned slot = 0; slot < 3; ++slot)
-            noteLiveOperand(DecodeOperand(def[FinalInputsEFG], slot));
+        // Without a final combiner, the final r0 values are the pixel result.
+        // Earlier overwritten portions are not independently observable.
+        liveChannels[RegR0] = LiveRgb | LiveAlpha;
+    }
 
-        for(unsigned stage = combinerCount; stage-- > 0;)
+    for(unsigned stage = combinerCount; stage-- > 0;)
+    {
+        const Portion portions[2] = {
+            DecodePortion(def[RgbInputs + stage], def[RgbOutputs + stage]),
+            DecodePortion(def[AlphaInputs + stage], def[AlphaOutputs + stage]),
+        };
+        const std::uint8_t masks[2] = { LiveRgb, LiveAlpha };
+
+        for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
         {
-            const Portion portions[2] = {
-                DecodePortion(def[RgbInputs + stage], def[RgbOutputs + stage]),
-                DecodePortion(def[AlphaInputs + stage], def[AlphaOutputs + stage]),
-            };
-            const std::uint8_t masks[2] = { LiveRgb, LiveAlpha };
-
-            for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+            const Portion& p = portions[portionIndex];
+            const std::uint8_t mask = masks[portionIndex];
+            for(unsigned dest : { p.abDest, p.cdDest, p.sumDest })
             {
-                const Portion& p = portions[portionIndex];
-                const std::uint8_t mask = masks[portionIndex];
-                for(unsigned dest : { p.abDest, p.cdDest, p.sumDest })
+                livePortions[stage][portionIndex] =
+                    livePortions[stage][portionIndex] ||
+                    (dest != RegZero && (liveChannels[dest] & mask) != 0);
+            }
+        }
+
+        // Both portions read pre-stage values, so remove every stage write
+        // before adding the sources of its live portions.
+        for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+        {
+            const Portion& p = portions[portionIndex];
+            const std::uint8_t mask = masks[portionIndex];
+            for(unsigned dest : { p.abDest, p.cdDest, p.sumDest })
+            {
+                if(dest != RegZero)
                 {
-                    livePortions[stage][portionIndex] =
-                        livePortions[stage][portionIndex] ||
-                        (dest != RegZero && (liveChannels[dest] & mask) != 0);
+                    liveChannels[dest] &= ~mask;
                 }
             }
-
-            // Both portions read pre-stage values, so remove every stage write
-            // before adding the sources of its live portions.
-            for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+        }
+        for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
+        {
+            if(!livePortions[stage][portionIndex])
             {
-                const Portion& p = portions[portionIndex];
-                const std::uint8_t mask = masks[portionIndex];
-                for(unsigned dest : { p.abDest, p.cdDest, p.sumDest })
-                {
-                    if(dest != RegZero)
-                        liveChannels[dest] &= ~mask;
-                }
+                continue;
             }
-            for(unsigned portionIndex = 0; portionIndex < 2; ++portionIndex)
-            {
-                if(!livePortions[stage][portionIndex])
-                    continue;
-                const Portion& p = portions[portionIndex];
-                noteLiveOperand(p.a);
-                noteLiveOperand(p.b);
-                noteLiveOperand(p.c);
-                noteLiveOperand(p.d);
-            }
+            const Portion& p = portions[portionIndex];
+            noteLiveOperand(p.a);
+            noteLiveOperand(p.b);
+            noteLiveOperand(p.c);
+            noteLiveOperand(p.d);
         }
     }
 
@@ -459,18 +485,6 @@ inline PixelShaderTranslation TranslatePixelShader(
 
         noteProduct(p.a, p.b, p.abDest != RegZero || p.sumDest != RegZero);
         noteProduct(p.c, p.d, p.cdDest != RegZero || p.sumDest != RegZero);
-    };
-    auto noteAllInputs = [&](std::uint32_t inputs) {
-        for(unsigned slot = 0; slot < 4; ++slot)
-        {
-            const Operand op = DecodeOperand(inputs, slot);
-            readRegs |= 1u << op.reg;
-            if(op.reg >= RegT0 && op.reg <= RegT3 &&
-               (combinerWrittenRegs & (1u << op.reg)) == 0)
-            {
-                textureLoadRegs |= 1u << op.reg;
-            }
-        }
     };
     auto noteOutputs = [&](std::uint32_t output) {
         destRegs |= 1u << (output & 0xFu);
@@ -506,7 +520,35 @@ inline PixelShaderTranslation TranslatePixelShader(
     }
     if(hasFinalCombiner)
     {
-        noteAllInputs(def[FinalInputsABCD]);
+        const Operand a = DecodeOperand(def[FinalInputsABCD], 0);
+        const Operand b = DecodeOperand(def[FinalInputsABCD], 1);
+        const Operand c = DecodeOperand(def[FinalInputsABCD], 2);
+        const Operand d = DecodeOperand(def[FinalInputsABCD], 3);
+        auto noteFinalOperand = [&](const Operand& op) {
+            readRegs |= 1u << op.reg;
+            if(op.reg >= RegT0 && op.reg <= RegT3 &&
+               (combinerWrittenRegs & (1u << op.reg)) == 0)
+            {
+                textureLoadRegs |= 1u << op.reg;
+            }
+        };
+        if(OperandIsOne(a))
+        {
+            noteFinalOperand(b);
+            noteFinalOperand(d);
+        }
+        else if(OperandIsZero(a))
+        {
+            noteFinalOperand(c);
+            noteFinalOperand(d);
+        }
+        else
+        {
+            noteFinalOperand(a);
+            noteFinalOperand(b);
+            noteFinalOperand(c);
+            noteFinalOperand(d);
+        }
         for(unsigned slot = 0; slot < 3; ++slot)
         {
             const Operand op = DecodeOperand(def[FinalInputsEFG], slot);
@@ -527,8 +569,25 @@ inline PixelShaderTranslation TranslatePixelShader(
         emitter.scratchReg = RegR1;
 
     // ---- Texture loads: every t# read before a combiner writes it needs a
-    // `tex`, and its stage mode must be a plain lookup. Later combiner stages
-    // may use a t# register as an intermediate written by an earlier stage.
+    // `tex`; BUMPENVMAP additionally reads an earlier texture register. Later
+    // combiner stages may use a t# register as an intermediate written by an
+    // earlier stage.
+    for(unsigned stage = 1; stage < 4; ++stage)
+    {
+        const unsigned reg = RegT0 + stage;
+        if((textureLoadRegs & (1u << reg)) == 0 ||
+           PixelShaderTextureMode(def, stage) != 6)
+        {
+            continue;
+        }
+        const unsigned sourceStage = PixelShaderInputTexture(def, stage);
+        if(sourceStage >= stage)
+        {
+            emitter.Fail("texture_mode_complex");
+            return out;
+        }
+        textureLoadRegs |= 1u << (RegT0 + sourceStage);
+    }
     out.bytecode.push_back(TokVersionPs11);
     for(unsigned stage = 0; stage < 4; ++stage)
     {
@@ -536,13 +595,24 @@ inline PixelShaderTranslation TranslatePixelShader(
         if((textureLoadRegs & (1u << reg)) == 0)
             continue;
         const std::uint32_t mode = PixelShaderTextureMode(def, stage);
-        if(mode < 1 || mode > 3) // PROJECT2D / PROJECT3D / CUBEMAP
+        if((mode < 1 || mode > 3) && mode != 6) // BUMPENVMAP is texbem.
         {
             emitter.Fail(mode == 0 ? "texture_mode_none" : "texture_mode_complex");
             return out;
         }
-        out.bytecode.push_back(OpTex);
-        out.bytecode.push_back(0x80000000u | (RtTexture << 28) | MaskAll | stage);
+        if(mode == 6)
+        {
+            const unsigned sourceStage = PixelShaderInputTexture(def, stage);
+            out.bytecode.push_back(OpTexBem);
+            out.bytecode.push_back(0x80000000u | (RtTexture << 28) | MaskAll | stage);
+            out.bytecode.push_back(0x80000000u | (RtTexture << 28) | SwizNone |
+                                   sourceStage);
+        }
+        else
+        {
+            out.bytecode.push_back(OpTex);
+            out.bytecode.push_back(0x80000000u | (RtTexture << 28) | MaskAll | stage);
+        }
         out.textures++;
         emitter.writtenRegs |= 1u << reg;
     }

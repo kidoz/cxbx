@@ -1,0 +1,7 @@
+# XDK 4627 regression for the three bounded register-combiner cases that
+# previously selected CXBX's fixed-function fallback.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

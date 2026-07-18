@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe d3d_pixel_shader_fallbacks
+#result d3d_pixel_shader_fallbacks verdict=PASS checks=13 fail=0
