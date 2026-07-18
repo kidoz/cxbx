@@ -97,6 +97,41 @@ inline void StretchSurfaceRowsNearest(
     }
 }
 
+struct RasterBounds
+{
+    int minX;
+    int minY;
+    int maxX;
+    int maxY;
+
+    [[nodiscard]] constexpr bool Empty() const noexcept
+    {
+        return minX >= maxX || minY >= maxY;
+    }
+};
+
+inline constexpr RasterBounds IntersectRasterBounds(
+    RasterBounds bounds, RasterBounds clip) noexcept
+{
+    if(bounds.minX < clip.minX)
+    {
+        bounds.minX = clip.minX;
+    }
+    if(bounds.minY < clip.minY)
+    {
+        bounds.minY = clip.minY;
+    }
+    if(bounds.maxX > clip.maxX)
+    {
+        bounds.maxX = clip.maxX;
+    }
+    if(bounds.maxY > clip.maxY)
+    {
+        bounds.maxY = clip.maxY;
+    }
+    return bounds;
+}
+
 struct AffineQuadSpan
 {
     float value;
