@@ -286,6 +286,17 @@ PVOID WINAPI EmuRtlAllocateHeap
 );
 
 // ******************************************************************
+// * func: EmuRtlReAllocateHeap
+// ******************************************************************
+PVOID WINAPI EmuRtlReAllocateHeap
+(
+    IN HANDLE hHeap,
+    IN DWORD  dwFlags,
+    IN PVOID  lpMem,
+    IN SIZE_T dwBytes
+);
+
+// ******************************************************************
 // * func: EmuRtlFreeHeap
 // ******************************************************************
 BOOL WINAPI EmuRtlFreeHeap
