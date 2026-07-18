@@ -33,6 +33,8 @@ NV097_SET_SURFACE_FORMAT = 0x0208
 NV097_SET_SURFACE_PITCH = 0x020C
 NV097_SET_SURFACE_COLOR_OFFSET = 0x0210
 NV097_SET_SURFACE_ZETA_OFFSET = 0x0214
+NV097_SET_CONTEXT_DMA_COLOR = 0x0194
+NV097_SET_CONTEXT_DMA_ZETA = 0x0198
 NV097_SET_BEGIN_END = 0x17FC
 NV097_ARRAY_ELEMENT16 = 0x1800
 NV097_ARRAY_ELEMENT32 = 0x1808
@@ -49,7 +51,11 @@ NV097_SET_TRANSFORM_PROGRAM_LOAD = 0x1E9C
 NV097_SET_TRANSFORM_PROGRAM_START = 0x1EA0
 NV097_SET_TRANSFORM_CONSTANT_LOAD = 0x1EA4
 NV097_SET_SHADER_STAGE_PROGRAM = 0x1E70
+NV097_SET_ZSTENCIL_CLEAR_VALUE = 0x1D8C
+NV097_SET_COLOR_CLEAR_VALUE = 0x1D90
 NV097_CLEAR_SURFACE = 0x1D94
+NV097_SET_CLEAR_RECT_HORIZONTAL = 0x1D98
+NV097_SET_CLEAR_RECT_VERTICAL = 0x1D9C
 
 PGRAPH_REGISTER_COUNT = 0x2000 // 4
 PGRAPH_VERTEX_ATTRIBUTE_COUNT = 16
@@ -346,6 +352,321 @@ class PgraphReplayState:
             self.begin_op = 0
             return result
         return None
+
+
+@dataclass
+class PixelMemoryRegion:
+    address: int
+    data: bytearray
+    known: bytearray
+    observation_cursor: int = 0
+
+    @property
+    def end(self) -> int:
+        return self.address + len(self.data)
+
+    def overlay_unknown(self, address: int, data: bytes, minimum_address: int | None = None) -> int:
+        begin = max(self.address, address)
+        if minimum_address is not None:
+            begin = max(begin, minimum_address)
+        end = min(self.end, address + len(data))
+        conflicts = 0
+        for absolute in range(begin, end):
+            target = absolute - self.address
+            source = absolute - address
+            if self.known[target]:
+                conflicts += self.data[target] != data[source]
+            else:
+                self.data[target] = data[source]
+                self.known[target] = 1
+        return conflicts
+
+
+@dataclass
+class CapturedPixelMemory:
+    observations: list[tuple[int, bytes]] = field(default_factory=list)
+    regions: dict[int, PixelMemoryRegion] = field(default_factory=dict)
+    observation_conflicts: int = 0
+
+    def observe(self, address: int, data: bytes) -> None:
+        self.observations.append((address, data))
+        for region in self.regions.values():
+            self.observation_conflicts += region.overlay_unknown(address, data)
+            region.observation_cursor = len(self.observations)
+
+    def ensure(self, address: int, size: int) -> PixelMemoryRegion:
+        region = self.regions.get(address)
+        if region is None:
+            region = PixelMemoryRegion(address, bytearray(size), bytearray(size))
+            self.regions[address] = region
+            for observed_address, observed_data in self.observations:
+                self.observation_conflicts += region.overlay_unknown(
+                    observed_address, observed_data
+                )
+            region.observation_cursor = len(self.observations)
+        elif len(region.data) < size:
+            old_end = region.end
+            growth = size - len(region.data)
+            region.data.extend(bytes(growth))
+            region.known.extend(bytes(growth))
+            for observed_address, observed_data in self.observations[: region.observation_cursor]:
+                self.observation_conflicts += region.overlay_unknown(
+                    observed_address, observed_data, old_end
+                )
+        for observed_address, observed_data in self.observations[region.observation_cursor :]:
+            self.observation_conflicts += region.overlay_unknown(observed_address, observed_data)
+        region.observation_cursor = len(self.observations)
+        return region
+
+    def find(self, address: int, size: int) -> PixelMemoryRegion | None:
+        for region in self.regions.values():
+            if region.address <= address and address + size <= region.end:
+                return region
+        return None
+
+    def clear_masked(
+        self,
+        address: int,
+        pitch: int,
+        height: int,
+        min_x: int,
+        max_x: int,
+        min_y: int,
+        max_y: int,
+        bytes_per_pixel: int,
+        mask: int,
+        value: int,
+    ) -> None:
+        region = self.ensure(address, pitch * height)
+        pixel_count = max_x - min_x + 1
+        for y in range(min_y, max_y + 1):
+            row = y * pitch + min_x * bytes_per_pixel
+            for component in range(bytes_per_pixel):
+                component_mask = 0xFF << (component * 8)
+                if mask & component_mask:
+                    begin = row + component
+                    end = begin + pixel_count * bytes_per_pixel
+                    byte = (value >> (component * 8)) & 0xFF
+                    region.data[begin:end:bytes_per_pixel] = bytes([byte]) * pixel_count
+                    region.known[begin:end:bytes_per_pixel] = bytes([1]) * pixel_count
+
+    def zero(self, address: int, size: int) -> PixelMemoryRegion:
+        region = self.ensure(address, size)
+        region.data[:size] = bytes(size)
+        region.known[:size] = bytes([1]) * size
+        return region
+
+    def copy_rows(
+        self,
+        source_address: int,
+        source_pitch: int,
+        destination_address: int,
+        destination_pitch: int,
+        width_bytes: int,
+        height: int,
+    ) -> None:
+        source = self.find(source_address, source_pitch * height)
+        destination = self.ensure(destination_address, destination_pitch * height)
+        if source is None:
+            return
+        for y in range(height):
+            source_begin = source_address - source.address + y * source_pitch
+            destination_begin = destination_address - destination.address + y * destination_pitch
+            destination.data[destination_begin : destination_begin + width_bytes] = source.data[
+                source_begin : source_begin + width_bytes
+            ]
+            destination.known[destination_begin : destination_begin + width_bytes] = source.known[
+                source_begin : source_begin + width_bytes
+            ]
+
+
+def resolve_dma_base(
+    handle_or_instance: int,
+    ramin: bytes,
+    objects: dict[int, tuple[int, int]],
+) -> int:
+    if handle_or_instance == 0:
+        return 0
+    instance = objects.get(handle_or_instance, (handle_or_instance, 0))[0]
+    if instance + 12 > len(ramin):
+        return 0
+    flags, _limit, frame = struct.unpack_from("<III", ramin, instance)
+    object_class = flags & 0xFFF
+    if object_class not in (2, 3, 0x3D):
+        return 0
+    return (frame & 0xFFFFF000) + ((flags >> 20) & 0xFFF)
+
+
+@dataclass
+class AaColorSurface:
+    address: int
+    pitch: int
+    width: int
+    height: int
+    frame: int
+
+
+@dataclass
+class OfflinePixelReplay:
+    ramin: bytes
+    objects: dict[int, tuple[int, int]]
+    display_pitches: dict[int, int]
+    memory: CapturedPixelMemory = field(default_factory=CapturedPixelMemory)
+    aa_surface: AaColorSurface | None = None
+    clears_executed: int = 0
+    presents_executed: int = 0
+    unsupported: dict[str, int] = field(default_factory=dict)
+    pending_present: tuple[int, int] | None = None
+
+    def surface_address(self, state: PgraphReplayState, color: bool) -> int:
+        context_method = NV097_SET_CONTEXT_DMA_COLOR if color else NV097_SET_CONTEXT_DMA_ZETA
+        offset_method = NV097_SET_SURFACE_COLOR_OFFSET if color else NV097_SET_SURFACE_ZETA_OFFSET
+        base = resolve_dma_base(state.registers[context_method // 4], self.ramin, self.objects)
+        return (base + state.registers[offset_method // 4]) & 0xFFFFFFFF
+
+    def execute_clear(self, state: PgraphReplayState, frame: int, flags: int) -> None:
+        color_pitch = state.registers[NV097_SET_SURFACE_PITCH // 4] & 0xFFFF
+        if color_pitch == 0:
+            color_pitch = 640 * 4
+        clip_horizontal = state.registers[NV097_SET_SURFACE_CLIP_HORIZONTAL // 4]
+        clip_vertical = state.registers[NV097_SET_SURFACE_CLIP_VERTICAL // 4]
+        width = (clip_horizontal & 0xFFFF) + (clip_horizontal >> 16)
+        if width <= 0 or width > color_pitch // 4:
+            width = color_pitch // 4
+        height = (clip_vertical & 0xFFFF) + (clip_vertical >> 16)
+        if height <= 0 or height > 4096:
+            height = 480
+
+        horizontal = state.registers[NV097_SET_CLEAR_RECT_HORIZONTAL // 4]
+        vertical = state.registers[NV097_SET_CLEAR_RECT_VERTICAL // 4]
+        min_x, max_x = horizontal & 0xFFFF, horizontal >> 16
+        min_y, max_y = vertical & 0xFFFF, vertical >> 16
+        if min_x >= width or min_y >= height or max_x < min_x or max_y < min_y:
+            return
+        max_x = min(max_x, width - 1)
+        max_y = min(max_y, height - 1)
+
+        color_address = 0
+        if flags & 0xF0 and state.registers[NV097_SET_SURFACE_COLOR_OFFSET // 4]:
+            color_address = self.surface_address(state, True)
+            mask = 0
+            if flags & 0x10:
+                mask |= 0x00FF0000
+            if flags & 0x20:
+                mask |= 0x0000FF00
+            if flags & 0x40:
+                mask |= 0x000000FF
+            if flags & 0x80:
+                mask |= 0xFF000000
+            self.memory.clear_masked(
+                color_address,
+                color_pitch,
+                height,
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+                4,
+                mask,
+                state.registers[NV097_SET_COLOR_CLEAR_VALUE // 4],
+            )
+
+        surface_format = state.registers[NV097_SET_SURFACE_FORMAT // 4]
+        zeta_format = (surface_format >> 4) & 0xF
+        if flags & 0x03 and state.registers[NV097_SET_SURFACE_ZETA_OFFSET // 4] and zeta_format:
+            zeta_address = self.surface_address(state, False)
+            zeta_pitch = state.registers[NV097_SET_SURFACE_PITCH // 4] >> 16
+            clear_value = state.registers[NV097_SET_ZSTENCIL_CLEAR_VALUE // 4]
+            if zeta_format == 2:
+                if zeta_pitch == 0:
+                    zeta_pitch = width * 4
+                mask = (0xFFFFFF00 if flags & 1 else 0) | (0x000000FF if flags & 2 else 0)
+                self.memory.clear_masked(
+                    zeta_address,
+                    zeta_pitch,
+                    height,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                    4,
+                    mask,
+                    clear_value,
+                )
+            elif zeta_format == 1 and flags & 1:
+                if zeta_pitch == 0:
+                    zeta_pitch = width * 2
+                self.memory.clear_masked(
+                    zeta_address,
+                    zeta_pitch,
+                    height,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                    2,
+                    0xFFFF,
+                    clear_value,
+                )
+
+        if color_address and ((surface_format >> 12) & 0xF):
+            self.aa_surface = AaColorSurface(color_address, color_pitch, width, height, frame)
+        self.clears_executed += 1
+
+    def execute_present(self, state: PgraphReplayState, frame: int) -> None:
+        destination_address = self.surface_address(state, True) & 0x0FFFFFFF
+        source = self.aa_surface
+        display_pitch = self.display_pitches.get(frame, 640 * 4)
+        if source is not None and source.frame == frame and source.address != destination_address:
+            width = min(source.width, display_pitch // 4)
+            height = min(source.height, 480)
+            self.memory.zero(destination_address, display_pitch * 480)
+            self.memory.copy_rows(
+                source.address,
+                source.pitch,
+                destination_address,
+                display_pitch,
+                width * 4,
+                height,
+            )
+        self.pending_present = (frame, destination_address)
+        self.presents_executed += 1
+
+    def note_unsupported(self, kind: str) -> None:
+        self.unsupported[kind] = self.unsupported.get(kind, 0) + 1
+
+    def validate_scanout(self, payload: bytes) -> dict[str, object]:
+        frame, address, width, height, expected_crc, size = unpack_fields(payload, 6, "scanout")
+        expected = payload[24:]
+        region = self.memory.find(address, width * height * 4)
+        actual = bytearray(size)
+        known_rgb_bytes = 0
+        if region is not None:
+            offset = address - region.address
+            for pixel in range(width * height):
+                source = offset + pixel * 4
+                target = pixel * 4
+                actual[target : target + 3] = region.data[source : source + 3]
+                actual[target + 3] = 0xFF
+                known_rgb_bytes += sum(region.known[source : source + 3])
+        else:
+            actual[3::4] = bytes([0xFF]) * (width * height)
+        actual_crc = zlib.crc32(actual) & 0xFFFFFFFF
+        complete = known_rgb_bytes == width * height * 3
+        present_matches = self.pending_present == (frame, address)
+        return {
+            "frame": frame,
+            "address": address,
+            "width": width,
+            "height": height,
+            "expected_crc32": expected_crc,
+            "actual_crc32": actual_crc,
+            "complete": complete,
+            "match": complete and present_matches and actual == expected,
+            "present_matches": present_matches,
+            "known_rgb_bytes": known_rgb_bytes,
+            "total_rgb_bytes": width * height * 3,
+        }
 
 
 def unpack_fields(payload: bytes, count: int, name: str) -> tuple[int, ...]:
@@ -672,6 +993,135 @@ def replay_pgraph(path: Path) -> dict[str, object]:
         "final_state_crc32": state.state_crc32(),
         "checkpoints": [checkpoint_json(checkpoint) for checkpoint in checkpoints],
     }
+
+
+def scanout_memory_records(path: Path) -> tuple[set[int], dict[int, int]]:
+    excluded: set[int] = set()
+    display_pitches: dict[int, int] = {}
+    previous_memory: tuple[int, int] | None = None
+    with path.open("rb") as stream:
+        stream.seek(HEADER.size)
+        record_index = 0
+        while raw_header := stream.read(RECORD_HEADER.size):
+            record_type, payload_size = RECORD_HEADER.unpack(raw_header)
+            payload = stream.read(payload_size)
+            if record_type == SCANOUT:
+                frame, _address, width, _height, _crc, size = unpack_fields(payload, 6, "scanout")
+                display_pitches[frame] = width * 4
+                if previous_memory is not None and previous_memory[1] == size:
+                    excluded.add(previous_memory[0])
+            previous_memory = None
+            if record_type == MEMORY:
+                _address, size, _crc = unpack_fields(payload, 3, "memory")
+                previous_memory = (record_index, size)
+            record_index += 1
+    return excluded, display_pitches
+
+
+def replay_pixels(path: Path) -> dict[str, object]:
+    analysis = analyze_capture(path)
+    excluded_memory, display_pitches = scanout_memory_records(path)
+    state = PgraphReplayState()
+    backend = OfflinePixelReplay(b"", {}, display_pitches)
+    scanouts: list[dict[str, object]] = []
+    input_memory_records = 0
+    input_memory_bytes = 0
+    method_index = 0
+
+    with path.open("rb") as stream:
+        stream.seek(HEADER.size)
+        record_index = 0
+        while raw_header := stream.read(RECORD_HEADER.size):
+            record_type, payload_size = RECORD_HEADER.unpack(raw_header)
+            payload = stream.read(payload_size)
+            if record_type == RAMIN:
+                size, _crc = unpack_fields(payload, 2, "RAMIN")
+                backend.ramin = payload[8 : 8 + size]
+                backend.objects = discover_ramin_objects(backend.ramin)
+            elif record_type == MEMORY and record_index not in excluded_memory:
+                address, size, _crc = unpack_fields(payload, 3, "memory")
+                backend.memory.observe(address, payload[12 : 12 + size])
+                input_memory_records += 1
+                input_memory_bytes += size
+            elif record_type == METHOD:
+                frame, subchannel, method, data = unpack_fields(payload, 4, "method")
+                checkpoint = state.apply_method(
+                    frame,
+                    subchannel,
+                    method,
+                    data,
+                    record_index,
+                    method_index,
+                    backend.objects,
+                )
+                method_index += 1
+                if checkpoint is not None:
+                    if checkpoint.kind == "clear":
+                        backend.execute_clear(state, frame, checkpoint.data)
+                    elif checkpoint.kind == "present":
+                        backend.execute_present(state, frame)
+                    else:
+                        backend.note_unsupported(checkpoint.kind)
+            elif record_type == SCANOUT:
+                scanouts.append(backend.validate_scanout(payload))
+            record_index += 1
+
+    complete = bool(scanouts) and all(scanout["complete"] for scanout in scanouts)
+    matches = complete and all(scanout["match"] for scanout in scanouts)
+    supported = not backend.unsupported and backend.memory.observation_conflicts == 0
+    status = "pass" if matches and supported else "partial"
+    return {
+        "schema_version": 1,
+        "capture": str(path.resolve()),
+        "target_frame": analysis["target_frame"],
+        "status": status,
+        "methods": method_index,
+        "clears_executed": backend.clears_executed,
+        "presents_executed": backend.presents_executed,
+        "unsupported_checkpoints": backend.unsupported,
+        "input_memory_records": input_memory_records,
+        "input_memory_bytes": input_memory_bytes,
+        "excluded_scanout_reads": len(excluded_memory),
+        "observation_conflicts": backend.memory.observation_conflicts,
+        "conflict_free": backend.memory.observation_conflicts == 0,
+        "complete": complete,
+        "match": matches and supported,
+        "scanouts": scanouts,
+    }
+
+
+def pixel_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="nv2a_capture pixels",
+        description="Replay captured clear/present pixel operations offline.",
+    )
+    parser.add_argument("capture", type=Path)
+    parser.add_argument("--json", action="store_true", help="emit JSON pixel report")
+    args = parser.parse_args(argv)
+    try:
+        result = replay_pixels(args.capture)
+    except (OSError, CaptureError) as error:
+        print(f"nv2a_capture pixels: INVALID: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"nv2a_capture pixels: {result['status'].upper()} "
+            f"clears={result['clears_executed']} "
+            f"presents={result['presents_executed']} "
+            f"scanouts={len(result['scanouts'])} "
+            f"unsupported={sum(result['unsupported_checkpoints'].values())} "
+            f"conflicts={result['observation_conflicts']}"
+        )
+        for scanout in result["scanouts"]:
+            print(
+                f"  frame={scanout['frame']} complete={scanout['complete']} "
+                f"match={scanout['match']} actual=0x{scanout['actual_crc32']:08X} "
+                f"expected=0x{scanout['expected_crc32']:08X}"
+            )
+    return 0 if result["match"] else 1
 
 
 def pgraph_checkpoint_signature(checkpoint: dict[str, object]) -> tuple[object, ...]:
@@ -1085,6 +1535,8 @@ def main(argv: list[str] | None = None) -> int:
         return compare_main(effective_argv[1:])
     if effective_argv and effective_argv[0] == "pgraph":
         return pgraph_main(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "pixels":
+        return pixel_main(effective_argv[1:])
 
     parser = argparse.ArgumentParser(
         description="Validate a CXBX NV2A capture and replay its PFIFO command stream."
