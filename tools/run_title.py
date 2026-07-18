@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -36,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nv2a_capture
 import tool_config
 
 GUEST_IMAGE = "default.exe"
@@ -203,6 +205,17 @@ def capture_is_visible(capture, minimum_colors):
             capture.get("nonblack_fraction", 0.0) >= 0.01)
 
 
+def nv2a_capture_complete(path):
+    if path is None or not path.is_file() or path.stat().st_size < 28:
+        return False
+    try:
+        with path.open("rb") as stream:
+            stream.seek(-28, os.SEEK_END)
+            return struct.unpack("<II", stream.read(8)) == (6, 20)
+    except (OSError, struct.error):
+        return False
+
+
 def select_representative_shot(shots):
     saved = [shot for shot in shots if shot.get("saved", False)]
     if not saved:
@@ -287,6 +300,8 @@ def main(argv=None):
     ap.add_argument("--env", action="append", default=[], metavar="K=V", help="extra env var (repeatable)")
     ap.add_argument("--dump-frames", action="store_true",
                     help="enable the emulator's backbuffer BMP dumps and collect them (ground truth)")
+    ap.add_argument("--capture-pushbuffer", type=int, default=None, metavar="FRAME",
+                    help="capture PFIFO commands/resources through FRAME to a replay bundle")
     ap.add_argument("--out", default=None, help="base output dir (default: tools/run)")
     ap.add_argument("--exe", default=None, help="cxbx.exe path (default: from tools/config.toml)")
     ap.add_argument("--keep-temp", action="store_true", help="don't pre-clean %%TEMP%%\\default.exe")
@@ -331,6 +346,13 @@ def main(argv=None):
     if args.dump_frames:
         env.setdefault("CXBX_D3D_DUMP_DRAWS", "0:1")
         env.setdefault("CXBX_D3D_DUMP_FRAMES", "1:100000")
+    capture_path = None
+    if args.capture_pushbuffer is not None:
+        if args.capture_pushbuffer < 0:
+            die("--capture-pushbuffer expects a non-negative frame index")
+        capture_path = outdir / f"frame{args.capture_pushbuffer:05d}.nv2acap"
+        env["CXBX_NV2A_CAPTURE"] = str(capture_path.resolve())
+        env["CXBX_NV2A_CAPTURE_FRAME"] = str(args.capture_pushbuffer)
 
     if not args.keep_temp:
         clear_temp_exe()
@@ -394,6 +416,9 @@ def main(argv=None):
                 detail = capture["status"]
             print(f"  [{time.time()-started:4.0f}s] shot -> {png.name}  ({detail})")
             if args.until_visible and capture_is_visible(capture, args.visible_colors):
+                if capture_path is not None and not nv2a_capture_complete(capture_path):
+                    print(f"  [{time.time()-started:4.0f}s] visible frame; waiting for capture.")
+                    continue
                 stopped_on_visible = True
                 print(f"  [{time.time()-started:4.0f}s] visible-frame threshold reached.")
                 break
@@ -407,6 +432,29 @@ def main(argv=None):
     n_frames = collect_dumps(frames_dir) if args.dump_frames else 0
     log_summary = summarize_log(logpath)
     representative = select_representative_shot(shots)
+    capture_summary = None
+    if capture_path is not None:
+        capture_summary = {
+            "path": str(capture_path.relative_to(outdir)),
+            "saved": capture_path.is_file(),
+            "complete": nv2a_capture_complete(capture_path),
+            "bytes": capture_path.stat().st_size if capture_path.is_file() else 0,
+            "target_frame": args.capture_pushbuffer,
+        }
+        if capture_summary["complete"]:
+            try:
+                replay = nv2a_capture.analyze_capture(capture_path)
+                capture_summary.update({
+                    "replay": replay["replay"],
+                    "push_runs": replay["push_runs"],
+                    "push_words": replay["push_words"],
+                    "methods": replay["methods"],
+                    "memory_bytes": replay["memory_bytes"],
+                    "output_crc32": replay["output_crc32"],
+                })
+            except (OSError, nv2a_capture.CaptureError) as error:
+                capture_summary["replay"] = "fail"
+                capture_summary["replay_error"] = str(error)
 
     if guest is None:
         outcome = "guest never started (temp-exe contention or launch error)"
@@ -434,6 +482,7 @@ def main(argv=None):
         "representative_shot": representative["path"] if representative else None,
         "log": log_summary,
         "collected_frames": n_frames,
+        "pushbuffer_capture": capture_summary,
     }
     summary_path = outdir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -446,6 +495,13 @@ def main(argv=None):
         print(f"  best shot: {representative['path']}  "
               f"colors={representative['sampled_colors']} "
               f"nonblack={representative['nonblack_fraction']:.3f}")
+    if capture_summary is not None:
+        status = "incomplete"
+        if capture_summary["complete"]:
+            status = f"complete, replay-{capture_summary.get('replay', 'not-run')}"
+        print(f"  capture  : {capture_path}  ({status}, {capture_summary['bytes']} bytes)")
+        if capture_summary["complete"]:
+            print(f"             replay: python tools/nv2a_capture.py \"{capture_path}\"")
     if log_summary["exception_lines"] or log_summary["fatal_lines"]:
         print(f"  faults   : {log_summary['exception_lines']} exception line(s), "
               f"{log_summary['fatal_lines']} fatal/terminate marker(s)")
