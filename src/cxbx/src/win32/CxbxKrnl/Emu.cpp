@@ -6835,6 +6835,33 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         TextureCoordinates.InverseW[Stage] = VIW[Stage];
     }
 
+    if(VertexTraceEnabled == 1 && Count != 0)
+    {
+        float MinX = VX[0];
+        float MaxX = VX[0];
+        float MinY = VY[0];
+        float MaxY = VY[0];
+        float MinZ = VZ[0];
+        float MaxZ = VZ[0];
+        for(ULONG i = 1; i < Count; ++i)
+        {
+            MinX = VX[i] < MinX ? VX[i] : MinX;
+            MaxX = VX[i] > MaxX ? VX[i] : MaxX;
+            MinY = VY[i] < MinY ? VY[i] : MinY;
+            MaxY = VY[i] > MaxY ? VY[i] : MaxY;
+            MinZ = VZ[i] < MinZ ? VZ[i] : MinZ;
+            MaxZ = VZ[i] > MaxZ ? VZ[i] : MaxZ;
+        }
+        const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
+                                    ? g_EmuNv2aDebugDrawIndex - 1
+                                    : 0;
+        printf("NVVERT| frame=%lu draw=%lu kind=%s bounds="
+               "(%g,%g)-(%g,%g) depth=(%g,%g) vertices=%lu\n",
+               g_EmuNv2aDebugFrame, DrawIndex, DrawKind,
+               MinX, MinY, MaxX, MaxY, MinZ, MaxZ, Count);
+        fflush(stdout);
+    }
+
     ULONG Triangles = 0;
     __try
     {
