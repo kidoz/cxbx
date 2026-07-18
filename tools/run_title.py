@@ -54,7 +54,13 @@ PROFILES = {
 }
 # Backbuffer/scanout dumps the emulator writes to %TEMP% (ground truth for
 # "what did it render", unlike PrintWindow which can come back black).
-DUMP_GLOBS = ["cxbx_draw", "cxbx_frame*.bmp", "cxbx_fb*.bmp", "cxbx_tex"]
+DUMP_GLOBS = [
+    "cxbx_draw",
+    "cxbx_nv2a_draw",
+    "cxbx_frame*.bmp",
+    "cxbx_fb*.bmp",
+    "cxbx_tex",
+]
 CAPTURE_RE = re.compile(
     r"^SAVED width=(?P<width>\d+) height=(?P<height>\d+) "
     r"source=(?P<source>\w+) client=(?P<client_width>\d+)x(?P<client_height>\d+) "
@@ -234,9 +240,17 @@ def collect_dumps(dest):
         for m in sorted(t.glob(g)):
             try:
                 if m.is_dir():
-                    for f in m.glob("*.bmp"):
-                        shutil.copy2(f, dest / f"{m.name}_{f.name}")
-                        n += 1
+                    if m.name == "cxbx_nv2a_draw":
+                        draw_dest = dest / m.name
+                        draw_dest.mkdir(exist_ok=True)
+                        for f in m.iterdir():
+                            if f.is_file() and f.suffix.lower() in {".bmp", ".txt"}:
+                                shutil.copy2(f, draw_dest / f.name)
+                                n += f.suffix.lower() == ".bmp"
+                    else:
+                        for f in m.glob("*.bmp"):
+                            shutil.copy2(f, dest / f"{m.name}_{f.name}")
+                            n += 1
                 elif m.suffix.lower() == ".bmp":
                     shutil.copy2(m, dest / m.name)
                     n += 1
