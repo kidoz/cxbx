@@ -59,6 +59,7 @@ namespace XTL
 };
 
 #include <clocale>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -1362,6 +1363,11 @@ static ULONG g_EmuNv2aFlipModulo = 1;
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
 static ULONG g_EmuNv2aTextureMethodLogCount = 0;
 static ULONG g_EmuNv2aScanoutDumpIndex = 0;
+// Draw-level debug counters (see the NV2A draw-debug aids below): the frame
+// index advances at each FLIP_STALL present, the draw index at each rasterized
+// draw or clear and resets at the frame boundary.
+static ULONG g_EmuNv2aDebugFrame = 0;
+static ULONG g_EmuNv2aDebugDrawIndex = 0;
 // Last physical address the guest programmed into the CRTC scanout base
 // (NV_PCRTC_START). Used as the render-target fallback for raw-NV2A titles whose
 // color-surface DMA object this HLE does not model (the kernel-created
@@ -1438,6 +1444,10 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_ARRAY_ELEMENT32                0x1808u
 #define NV097_DRAW_ARRAYS                   0x1810u
 #define NV097_INLINE_ARRAY                  0x1818u
+#define NV097_SET_VERTEX4F                   0x1518u
+#define NV097_SET_VERTEX_DATA2F_M            0x1880u
+#define NV097_SET_VERTEX_DATA4UB             0x1940u
+#define NV097_SET_VERTEX_DATA4F_M            0x1A00u
 #define NV097_SET_CONTEXT_DMA_SEMAPHORE     0x01A4u
 #define NV097_SET_SEMAPHORE_OFFSET          0x1D6Cu
 #define NV097_BACK_END_WRITE_SEMAPHORE_RELEASE 0x1D70u
@@ -1478,6 +1488,9 @@ static ULONG g_EmuNv2aContextDmaSemaphore = 0;
 static ULONG g_EmuNv2aSemaphoreOffset = 0;
 static ULONG g_EmuNv2aSurfaceColorOffset = 0;
 static ULONG g_EmuNv2aSurfacePitchColor = 0;
+static ULONG g_EmuNv2aSurfaceFormat = 0;
+static ULONG g_EmuNv2aSurfaceClipX = 0;
+static ULONG g_EmuNv2aSurfaceClipY = 0;
 static ULONG g_EmuNv2aSurfaceClipW = 0;
 static ULONG g_EmuNv2aSurfaceClipH = 0;
 static ULONG g_EmuNv2aBeginOp = 0;
@@ -1486,6 +1499,24 @@ static ULONG g_EmuNv2aElementIndexCount = 0;
 static ULONG g_EmuNv2aInlineWords[EmuNv2aInlineWordCapacity] = {};
 static ULONG g_EmuNv2aInlineWordCount = 0;
 static bool  g_EmuNv2aInlineOverflow = false;
+static ULONG g_EmuNv2aImmediateWords[EmuNv2aInlineWordCapacity] = {};
+static ULONG g_EmuNv2aImmediateWordCount = 0;
+static bool  g_EmuNv2aImmediateOverflow = false;
+static ULONG g_EmuNv2aImmediateAttribute[EmuNv2aVertexAttrCount][4] = {};
+static ULONG g_EmuNv2aImmediateFormat[EmuNv2aVertexAttrCount] = {};
+static bool  g_EmuNv2aRasterizingImmediate = false;
+struct EmuNv2aAaColorSurface
+{
+    ULONG Address;
+    ULONG Host;
+    ULONG Pitch;
+    ULONG Width;
+    ULONG Height;
+    ULONG Frame;
+    bool Valid;
+};
+static EmuNv2aAaColorSurface g_EmuNv2aAaColorSurface = {};
+static std::atomic<ULONG> g_EmuNv2aResolvedFrameAddress{0};
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
 static bool  g_bEmuNv2aHleRaster = false;
@@ -1608,9 +1639,13 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                                        ULONG InlineStride = 0,
                                        const ULONG* InlineOffsets = nullptr);
 static void EmuNv2aRasterizeInlineArray();
+static void EmuNv2aRasterizeImmediateVertices();
 static void EmuNv2aWriteBackendSemaphore(ULONG Data);
 static void EmuNv2aClearSurface(ULONG Flags);
 static void EmuNv2aPresentColorSurface();
+static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
+                                      ULONG Width, ULONG Height);
+static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress);
 static void EmuNv2aInvalidateSampler(ULONG Stage);
 static void EmuNv2aInvalidateFrameSamplers();
 
@@ -1903,9 +1938,18 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_BACK_END_WRITE_SEMAPHORE_RELEASE:
                 EmuNv2aWriteBackendSemaphore(Data);
                 break;
-            case NV097_SET_SURFACE_CLIP_HORIZONTAL: g_EmuNv2aSurfaceClipW = (Data >> 16) & 0xFFFF; break;
-            case NV097_SET_SURFACE_CLIP_VERTICAL:   g_EmuNv2aSurfaceClipH = (Data >> 16) & 0xFFFF; break;
-            case NV097_SET_SURFACE_FORMAT:       g_EmuNv2aSurfaceZetaFormat = (Data >> 4) & 0xF; break;
+            case NV097_SET_SURFACE_CLIP_HORIZONTAL:
+                g_EmuNv2aSurfaceClipX = Data & 0xFFFF;
+                g_EmuNv2aSurfaceClipW = (Data >> 16) & 0xFFFF;
+                break;
+            case NV097_SET_SURFACE_CLIP_VERTICAL:
+                g_EmuNv2aSurfaceClipY = Data & 0xFFFF;
+                g_EmuNv2aSurfaceClipH = (Data >> 16) & 0xFFFF;
+                break;
+            case NV097_SET_SURFACE_FORMAT:
+                g_EmuNv2aSurfaceFormat = Data;
+                g_EmuNv2aSurfaceZetaFormat = (Data >> 4) & 0xF;
+                break;
             case NV097_SET_SURFACE_PITCH:
                 g_EmuNv2aSurfacePitchColor = Data & 0xFFFF;
                 g_EmuNv2aSurfacePitchZeta = (Data >> 16) & 0xFFFF;
@@ -1920,7 +1964,11 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_BEGIN_END:
                 if(Data == 0)
                 {
-                    if(g_EmuNv2aInlineWordCount != 0)
+                    if(g_EmuNv2aImmediateWordCount != 0)
+                    {
+                        EmuNv2aRasterizeImmediateVertices();
+                    }
+                    else if(g_EmuNv2aInlineWordCount != 0)
                     {
                         EmuNv2aRasterizeInlineArray();
                     }
@@ -1933,12 +1981,16 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                     g_EmuNv2aElementIndexCount = 0;
                     g_EmuNv2aInlineWordCount = 0;
                     g_EmuNv2aInlineOverflow = false;
+                    g_EmuNv2aImmediateWordCount = 0;
+                    g_EmuNv2aImmediateOverflow = false;
                 }
                 else
                 {
                     g_EmuNv2aElementIndexCount = 0;
                     g_EmuNv2aInlineWordCount = 0;
                     g_EmuNv2aInlineOverflow = false;
+                    g_EmuNv2aImmediateWordCount = 0;
+                    g_EmuNv2aImmediateOverflow = false;
                 }
                 g_EmuNv2aBeginOp = Data;
                 break;
@@ -2037,7 +2089,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 else if(Method >= NV097_SET_VERTEX_DATA_ARRAY_OFFSET &&
                    Method < NV097_SET_VERTEX_DATA_ARRAY_OFFSET + EmuNv2aVertexAttrCount * 4)
                 {
-                    g_EmuNv2aVertexArray[(Method - NV097_SET_VERTEX_DATA_ARRAY_OFFSET) / 4].Offset = Data;
+                    g_EmuNv2aVertexArray[
+                        (Method - NV097_SET_VERTEX_DATA_ARRAY_OFFSET) / 4].Offset = Data;
                 }
                 else if(Method >= NV097_SET_VERTEX_DATA_ARRAY_FORMAT &&
                         Method < NV097_SET_VERTEX_DATA_ARRAY_FORMAT + EmuNv2aVertexAttrCount * 4)
@@ -2051,6 +2104,53 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 else if(Method >= NV097_SET_VIEWPORT_SCALE && Method < NV097_SET_VIEWPORT_SCALE + 16)
                 {
                     memcpy(&g_EmuNv2aViewportScale[(Method - NV097_SET_VIEWPORT_SCALE) / 4], &Data, 4);
+                }
+                else if(Method >= NV097_SET_VERTEX_DATA2F_M &&
+                        Method < NV097_SET_VERTEX_DATA2F_M + EmuNv2aVertexAttrCount * 8)
+                {
+                    const ULONG Relative = Method - NV097_SET_VERTEX_DATA2F_M;
+                    const ULONG Attribute = Relative / 8;
+                    const ULONG Component = (Relative & 7) / 4;
+                    g_EmuNv2aImmediateAttribute[Attribute][Component] = Data;
+                    g_EmuNv2aImmediateFormat[Attribute] = 0x22;
+                }
+                else if(Method >= NV097_SET_VERTEX_DATA4UB &&
+                        Method < NV097_SET_VERTEX_DATA4UB + EmuNv2aVertexAttrCount * 4)
+                {
+                    const ULONG Attribute = (Method - NV097_SET_VERTEX_DATA4UB) / 4;
+                    g_EmuNv2aImmediateAttribute[Attribute][0] = Data;
+                    g_EmuNv2aImmediateFormat[Attribute] = 0x40;
+                }
+                else if(Method >= NV097_SET_VERTEX_DATA4F_M &&
+                        Method < NV097_SET_VERTEX_DATA4F_M + EmuNv2aVertexAttrCount * 16)
+                {
+                    const ULONG Relative = Method - NV097_SET_VERTEX_DATA4F_M;
+                    const ULONG Attribute = Relative / 16;
+                    const ULONG Component = (Relative & 15) / 4;
+                    g_EmuNv2aImmediateAttribute[Attribute][Component] = Data;
+                    g_EmuNv2aImmediateFormat[Attribute] = 0x42;
+                }
+                else if(Method >= NV097_SET_VERTEX4F && Method < NV097_SET_VERTEX4F + 16)
+                {
+                    const ULONG Component = (Method - NV097_SET_VERTEX4F) / 4;
+                    g_EmuNv2aImmediateAttribute[EmuNv2aAttrPosition][Component] = Data;
+                    g_EmuNv2aImmediateFormat[EmuNv2aAttrPosition] = 0x42;
+                    if(Component == 3)
+                    {
+                        const ULONG WordsPerVertex = EmuNv2aVertexAttrCount * 4;
+                        if(g_EmuNv2aImmediateWordCount <=
+                           std::size(g_EmuNv2aImmediateWords) - WordsPerVertex)
+                        {
+                            memcpy(&g_EmuNv2aImmediateWords[g_EmuNv2aImmediateWordCount],
+                                   g_EmuNv2aImmediateAttribute,
+                                   WordsPerVertex * sizeof(ULONG));
+                            g_EmuNv2aImmediateWordCount += WordsPerVertex;
+                        }
+                        else
+                        {
+                            g_EmuNv2aImmediateOverflow = true;
+                        }
+                    }
                 }
                 break;
         }
@@ -3190,17 +3290,29 @@ static ULONG EmuNv2aResolveDmaBase(ULONG Handle)
     if(Handle == 0)
         return 0;
 
-    ULONG Instance = 0;
+    ULONG Instance = Handle;
     ULONG Class = 0;
+    // Context-DMA methods are relocated from a RAMHT handle to their RAMIN
+    // instance by EmuNv2aHandlePgraphMethod before render state sees them.
+    // Callers outside that path can still supply the original handle, so
+    // support both forms here.
     if(!EmuNv2aRamhtLookup(Handle, &Instance, &Class))
-        return 0;
+    {
+        if(Instance + 12 > EmuNv2aRaminSize)
+            return 0;
+
+        const ULONG ObjectClass =
+            EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance) & 0x00000FFF;
+        if(ObjectClass != 2 && ObjectClass != 3 && ObjectClass != 0x3D)
+            return 0;
+    }
 
     if(Instance + 12 > EmuNv2aRaminSize)
         return 0;
 
     ULONG Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance);
     ULONG Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 8);
-    return (Frame & 0x07FFFFFF) | (Flags & 0x00000FFF);
+    return (Frame & 0xFFFFF000) + ((Flags >> 20) & 0x00000FFF);
 }
 
 static ULONG EmuNv2aTextureDmaHandle(ULONG Format)
@@ -3874,6 +3986,7 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
 // it on each present -- the same on-screen path the D3D8 titles get. Off by
 // default, so the conformance suite (which never sets it) is untouched.
 static HWND g_hEmuNv2aWindow = NULL;
+static HWND g_hEmuNv2aOverlayWindow = NULL;
 static volatile LONG g_EmuNv2aWindowChecked = 0;
 static bool g_bEmuNv2aWindow = false;
 
@@ -3928,18 +4041,18 @@ static DWORD WINAPI EmuNv2aWindowThread(LPVOID Param)
     return 0;
 }
 
-static void EmuBlitPixelsToWindow(HWND Window, const ULONG* Pixels,
-                                  ULONG Width, ULONG Height)
+static int EmuBlitPixelsToWindow(HWND Window, const ULONG* Pixels,
+                                 ULONG Width, ULONG Height)
 {
     if(Window == NULL || Pixels == NULL || Width == 0 || Height == 0)
     {
-        return;
+        return 0;
     }
 
     HDC Hdc = GetDC(Window);
     if(Hdc == NULL)
     {
-        return;
+        return 0;
     }
 
     BITMAPINFO Bmi = {};
@@ -3952,12 +4065,79 @@ static void EmuBlitPixelsToWindow(HWND Window, const ULONG* Pixels,
 
     RECT Rc;
     GetClientRect(Window, &Rc);
+    int Result = 0;
     if(Rc.right > 0 && Rc.bottom > 0)
     {
-        StretchDIBits(Hdc, 0, 0, Rc.right, Rc.bottom, 0, 0, (int)Width, (int)Height,
-                      Pixels, &Bmi, DIB_RGB_COLORS, SRCCOPY);
+        Result = StretchDIBits(Hdc, 0, 0, Rc.right, Rc.bottom,
+                               0, 0, (int)Width, (int)Height,
+                               Pixels, &Bmi, DIB_RGB_COLORS, SRCCOPY);
     }
     ReleaseDC(Window, Hdc);
+    return Result;
+}
+
+static LRESULT CALLBACK EmuNv2aOverlayWndProc(HWND Hwnd, UINT Msg, WPARAM W, LPARAM L)
+{
+    switch(Msg)
+    {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;
+        case WM_PAINT:
+        {
+            PAINTSTRUCT Paint = {};
+            BeginPaint(Hwnd, &Paint);
+            EndPaint(Hwnd, &Paint);
+            return 0;
+        }
+        case WM_DESTROY:
+            if(Hwnd == g_hEmuNv2aOverlayWindow)
+            {
+                g_hEmuNv2aOverlayWindow = NULL;
+            }
+            return 0;
+    }
+    return DefWindowProcA(Hwnd, Msg, W, L);
+}
+
+static HWND EmuNv2aEnsureOverlayWindow(HWND Parent)
+{
+    if(Parent == NULL)
+    {
+        return NULL;
+    }
+
+    DWORD WindowThread = GetWindowThreadProcessId(Parent, NULL);
+    if(WindowThread != GetCurrentThreadId())
+    {
+        return NULL;
+    }
+
+    if(g_hEmuNv2aOverlayWindow == NULL ||
+       GetParent(g_hEmuNv2aOverlayWindow) != Parent)
+    {
+        WNDCLASSA Wc = {};
+        Wc.lpfnWndProc = EmuNv2aOverlayWndProc;
+        Wc.hInstance = GetModuleHandle(NULL);
+        Wc.lpszClassName = "CxbxNv2aOverlay";
+        Wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        RegisterClassA(&Wc);
+
+        g_hEmuNv2aOverlayWindow = CreateWindowExA(
+            0, Wc.lpszClassName, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            0, 0, 1, 1, Parent, NULL, Wc.hInstance, NULL);
+    }
+
+    if(g_hEmuNv2aOverlayWindow != NULL)
+    {
+        RECT Client = {};
+        GetClientRect(Parent, &Client);
+        SetWindowPos(g_hEmuNv2aOverlayWindow, HWND_TOP, 0, 0,
+                     Client.right, Client.bottom,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+    return g_hEmuNv2aOverlayWindow;
 }
 
 // Blit a top-down BGRA framebuffer to the live window, creating it (on its own
@@ -3995,6 +4175,442 @@ extern "C" void EmuHostBlitToWindow(const void* Pixels, unsigned Width, unsigned
     }
 }
 
+extern "C" void EmuNv2aBlitResolvedFrame()
+{
+    const ULONG Address =
+        g_EmuNv2aResolvedFrameAddress.load(std::memory_order_acquire);
+    static ULONG BlitLogCount = 0;
+    if(Address == 0 || XTL::g_hEmuWindow == NULL)
+    {
+        return;
+    }
+
+    const ULONG Host = EmuNv2aHostPointer(Address);
+    const ULONG Pitch = g_EmuDisplayPitch != 0
+                            ? g_EmuDisplayPitch
+                            : 640 * sizeof(ULONG);
+    if(Host != 0 && Pitch >= sizeof(ULONG))
+    {
+        if(BlitLogCount < 4)
+        {
+            printf("Emu (0x%lX): NV2A window blit addr=0x%.08lX host=0x%.08lX "
+                   "hwnd=0x%p pitch=%lu.\n",
+                   GetCurrentThreadId(), Address, Host, XTL::g_hEmuWindow, Pitch);
+            fflush(stdout);
+            ++BlitLogCount;
+        }
+        HWND Overlay = EmuNv2aEnsureOverlayWindow(XTL::g_hEmuWindow);
+        if(Overlay != NULL)
+        {
+            const ULONG* Pixels = reinterpret_cast<const ULONG*>(
+                static_cast<uintptr_t>(Host));
+            const int Result = EmuBlitPixelsToWindow(
+                Overlay, Pixels, Pitch / sizeof(ULONG), 480);
+            static bool LoggedVisibleFrame = false;
+            if(!LoggedVisibleFrame)
+            {
+                ULONG FirstVisible = 0;
+                for(ULONG Index = 0; Index < 640 * 480; ++Index)
+                {
+                    if((Pixels[Index] & 0x00FFFFFF) != 0)
+                    {
+                        FirstVisible = Pixels[Index];
+                        break;
+                    }
+                }
+                if(FirstVisible != 0)
+                {
+                    printf("Emu (0x%lX): NV2A overlay received visible pixels "
+                           "(first=0x%.08lX, StretchDIBits=%d).\n",
+                           GetCurrentThreadId(), FirstVisible, Result);
+                    fflush(stdout);
+                    LoggedVisibleFrame = true;
+                }
+            }
+        }
+    }
+}
+
+// ******************************************************************
+// * NV2A draw-level debugging aids (all opt-in via environment variables)
+// ******************************************************************
+// The raw-pushbuffer rasterizer mirrors the D3D8 HLE draw-debug set in
+// EmuD3D8.cpp: per-draw trace, bisection skip, and post-draw surface dumps,
+// keyed by the per-frame draw index. Clears count as draws so a
+// composited-then-cleared frame can be bisected too. A frame boundary is the
+// FLIP_STALL present.
+// CXBX_NV2A_DRAW_TRACE=1      one NVDRAW| line per rasterized draw or clear
+// CXBX_NV2A_SKIP_DRAWS=i[:j]  skip draws/clears with per-frame index in [i,j)
+// CXBX_NV2A_DUMP_DRAWS=i[:j]  after each draw/clear with per-frame index in
+//                             [i,j), dump the color surface to
+//                             %TEMP%\cxbx_nv2a_draw\f<frame>_d<draw>.bmp plus
+//                             the decoded pipeline state beside it (.txt);
+//                             capped at 64 dumps
+// CXBX_NV2A_DUMP_FRAMES=i[:j] limit draw dumps to frames in [i,j)
+// CXBX_NV2A_CRC=1             one NVCRC| line per present: zlib-compatible
+//                             CRC32 of the normalized scanout pixels
+
+static bool EmuNv2aParseDrawRange(const char *Value, ULONG *Begin, ULONG *End)
+{
+    if(Value == NULL || *Value == '\0')
+    {
+        return false;
+    }
+
+    char *Cursor = NULL;
+    *Begin = strtoul(Value, &Cursor, 0);
+    if(Cursor != NULL && (*Cursor == ':' || *Cursor == '-'))
+    {
+        *End = strtoul(Cursor + 1, NULL, 0);
+    }
+    else
+    {
+        *End = *Begin + 1;
+    }
+    return *End > *Begin;
+}
+
+// Build "%TEMP%\cxbx_nv2a_draw\<fileName>" and make sure the directory exists.
+static void EmuNv2aDebugDumpPath(char *Buffer, size_t Size, const char *FileName)
+{
+    char TempPath[MAX_PATH] = {0};
+    DWORD Length = GetTempPathA(MAX_PATH, TempPath);
+    if(Length == 0 || Length >= MAX_PATH)
+    {
+        TempPath[0] = '\0';
+    }
+
+    char Directory[MAX_PATH];
+    _snprintf(Directory, sizeof(Directory), "%scxbx_nv2a_draw", TempPath);
+    Directory[sizeof(Directory) - 1] = '\0';
+    CreateDirectoryA(Directory, NULL);
+    _snprintf(Buffer, Size, "%s\\%s", Directory, FileName);
+    Buffer[Size - 1] = '\0';
+}
+
+// zlib-compatible CRC32 (poly 0xEDB88320, init/final 0xFFFFFFFF) so host tools
+// can recompute the same value with Python's zlib.crc32.
+static ULONG EmuNv2aCrc32(const void *Data, ULONG Size)
+{
+    static ULONG Table[256];
+    static bool Built = false;
+    if(!Built)
+    {
+        for(ULONG i = 0; i < 256; i++)
+        {
+            ULONG c = i;
+            for(int Bit = 0; Bit < 8; Bit++)
+            {
+                c = (c & 1) != 0 ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            }
+            Table[i] = c;
+        }
+        Built = true;
+    }
+
+    ULONG Crc = 0xFFFFFFFFu;
+    const unsigned char *Bytes = (const unsigned char *)Data;
+    for(ULONG i = 0; i < Size; i++)
+    {
+        Crc = (Crc >> 8) ^ Table[(Crc ^ Bytes[i]) & 0xFF];
+    }
+    return Crc ^ 0xFFFFFFFFu;
+}
+
+// Read one environment variable via the Win32 API: msvcrt getenv() does not
+// reliably see the process environment inside the generated guest executable,
+// so the NV2A gates all query the live environment (compare
+// EmuNv2aRasterEnabled / EmuNv2aTextureDumpEnabled).
+static bool EmuNv2aGetEnv(const char *Name, char *Buffer, DWORD Size)
+{
+    DWORD Length = GetEnvironmentVariableA(Name, Buffer, Size);
+    return Length > 0 && Length < Size;
+}
+
+static bool EmuNv2aCrcEnabled()
+{
+    static int Enabled = -1;
+    if(Enabled < 0)
+    {
+        char Value[8];
+        Enabled = EmuNv2aGetEnv("CXBX_NV2A_CRC", Value, sizeof(Value)) ? 1 : 0;
+    }
+    return Enabled == 1;
+}
+
+// Called at the top of every rasterized draw/clear. Assigns the operation its
+// per-frame index, traces it, and returns false when it falls inside the
+// CXBX_NV2A_SKIP_DRAWS bisection range (the caller must skip it).
+static bool EmuNv2aDrawGate(const char *What, ULONG Count)
+{
+    static int s_SkipEnabled = -1;
+    static ULONG s_SkipBegin = 0, s_SkipEnd = 0;
+    static int s_TraceEnabled = -1;
+
+    ULONG Index = g_EmuNv2aDebugDrawIndex++;
+
+    if(s_SkipEnabled < 0)
+    {
+        char Value[32];
+        s_SkipEnabled = EmuNv2aGetEnv("CXBX_NV2A_SKIP_DRAWS", Value, sizeof(Value)) &&
+                                EmuNv2aParseDrawRange(Value, &s_SkipBegin, &s_SkipEnd)
+                            ? 1
+                            : 0;
+    }
+    if(s_TraceEnabled < 0)
+    {
+        char Value[8];
+        s_TraceEnabled = EmuNv2aGetEnv("CXBX_NV2A_DRAW_TRACE", Value, sizeof(Value)) ? 1 : 0;
+    }
+
+    bool Skipped = s_SkipEnabled == 1 && Index >= s_SkipBegin && Index < s_SkipEnd;
+
+    if(s_TraceEnabled == 1)
+    {
+        printf("NVDRAW| frame=%lu draw=%lu %s op=0x%lX count=%lu vp=%lu/%lu "
+               "tex0=0x%.08lX ssp=0x%.08lX blend=%u depth=%u alpha=%u stencil=%u%s\n",
+               g_EmuNv2aDebugFrame, Index, What, g_EmuNv2aBeginOp, Count,
+               g_EmuNv2aVpExecMode, g_EmuNv2aVpInstrCount,
+               g_EmuNv2aTexture[0].Format, g_EmuNv2aShaderStageProgram,
+               g_EmuNv2aBlendEnable ? 1u : 0u, g_EmuNv2aDepthTest ? 1u : 0u,
+               g_EmuNv2aAlphaTest ? 1u : 0u, g_EmuNv2aStencilTest ? 1u : 0u,
+               Skipped ? " SKIPPED" : "");
+        fflush(stdout);
+    }
+
+    return !Skipped;
+}
+
+// Write the complete decoded rasterizer state as key=value text. This is the
+// sidecar the host decoders (tools/nv2a: vp_disasm, combiner, drawreport)
+// consume, so keep field names stable.
+static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG Count)
+{
+    FILE *f = fopen(Path, "w");
+    if(f == NULL)
+    {
+        return;
+    }
+
+    fprintf(f, "# CXBX NV2A draw state\n");
+    fprintf(f, "frame=%lu draw=%lu what=%s count=%lu begin_op=0x%lX\n",
+            g_EmuNv2aDebugFrame,
+            g_EmuNv2aDebugDrawIndex != 0 ? g_EmuNv2aDebugDrawIndex - 1 : 0,
+            What, Count, g_EmuNv2aBeginOp);
+    fprintf(f, "surface color_dma=0x%.08lX color_offset=0x%.08lX pitch_color=%lu "
+               "format=0x%.08lX clip_x=%lu clip_y=%lu clip_w=%lu clip_h=%lu "
+               "scanout=0x%.08lX\n",
+            g_EmuNv2aContextDmaColor, g_EmuNv2aSurfaceColorOffset,
+            g_EmuNv2aSurfacePitchColor, g_EmuNv2aSurfaceFormat,
+            g_EmuNv2aSurfaceClipX, g_EmuNv2aSurfaceClipY,
+            g_EmuNv2aSurfaceClipW, g_EmuNv2aSurfaceClipH,
+            g_EmuNv2aScanoutAddress);
+    fprintf(f, "zeta dma=0x%.08lX offset=0x%.08lX pitch=%lu format=%lu\n",
+            g_EmuNv2aContextDmaZeta, g_EmuNv2aSurfaceZetaOffset,
+            g_EmuNv2aSurfacePitchZeta, g_EmuNv2aSurfaceZetaFormat);
+    fprintf(f, "depth test=%u write=%u func=0x%lX\n",
+            g_EmuNv2aDepthTest ? 1u : 0u, g_EmuNv2aDepthWrite ? 1u : 0u,
+            g_EmuNv2aDepthFunc);
+    fprintf(f, "alpha test=%u func=0x%lX ref=0x%lX\n",
+            g_EmuNv2aAlphaTest ? 1u : 0u, g_EmuNv2aAlphaFunc, g_EmuNv2aAlphaRef);
+    fprintf(f, "blend enable=%u sfactor=0x%lX dfactor=0x%lX equation=0x%lX\n",
+            g_EmuNv2aBlendEnable ? 1u : 0u, g_EmuNv2aBlendSFactor,
+            g_EmuNv2aBlendDFactor, g_EmuNv2aBlendEquation);
+    fprintf(f, "stencil test=%u func=0x%lX ref=0x%lX func_mask=0x%lX mask=0x%lX "
+               "op_fail=0x%lX op_zfail=0x%lX op_zpass=0x%lX\n",
+            g_EmuNv2aStencilTest ? 1u : 0u, g_EmuNv2aStencilFunc,
+            g_EmuNv2aStencilRef, g_EmuNv2aStencilFuncMask, g_EmuNv2aStencilMask,
+            g_EmuNv2aStencilOpFail, g_EmuNv2aStencilOpZFail,
+            g_EmuNv2aStencilOpZPass);
+    fprintf(f, "combiner control=0x%.08lX shader_stage_program=0x%.08lX "
+               "final_cw0=0x%.08lX final_cw1=0x%.08lX final_mask=0x%lX\n",
+            g_EmuNv2aCombinerControl, g_EmuNv2aShaderStageProgram,
+            g_EmuNv2aFinalCombinerCw0, g_EmuNv2aFinalCombinerCw1,
+            g_EmuNv2aFinalCombinerMask);
+    for(ULONG i = 0; i < 8; i++)
+    {
+        fprintf(f, "combiner[%lu] rgb_icw=0x%.08lX rgb_ocw=0x%.08lX "
+                   "alpha_icw=0x%.08lX alpha_ocw=0x%.08lX factor0=0x%.08lX "
+                   "factor1=0x%.08lX\n",
+                i, g_EmuNv2aCombinerColorIcw[i], g_EmuNv2aCombinerColorOcw[i],
+                g_EmuNv2aCombinerAlphaIcw[i], g_EmuNv2aCombinerAlphaOcw[i],
+                g_EmuNv2aCombinerFactor0[i], g_EmuNv2aCombinerFactor1[i]);
+    }
+    for(ULONG i = 0; i < EmuNv2aTextureStageCount; i++)
+    {
+        fprintf(f, "texture[%lu] offset=0x%.08lX format=0x%.08lX address=0x%.08lX "
+                   "control0=0x%.08lX control1=0x%.08lX image_rect=0x%.08lX "
+                   "filter=0x%.08lX palette=0x%.08lX\n",
+                i, g_EmuNv2aTexture[i].Offset, g_EmuNv2aTexture[i].Format,
+                g_EmuNv2aTexture[i].Address, g_EmuNv2aTexture[i].Control0,
+                g_EmuNv2aTexture[i].Control1, g_EmuNv2aTexture[i].ImageRect,
+                g_EmuNv2aTexture[i].Filter, g_EmuNv2aTexture[i].Palette);
+    }
+    for(ULONG i = 0; i < EmuNv2aVertexAttrCount; i++)
+    {
+        if(g_EmuNv2aVertexArray[i].Offset != 0 || g_EmuNv2aVertexArray[i].Format != 0)
+        {
+            fprintf(f, "vertex_array[%lu] offset=0x%.08lX format=0x%.08lX\n",
+                    i, g_EmuNv2aVertexArray[i].Offset, g_EmuNv2aVertexArray[i].Format);
+        }
+    }
+    fprintf(f, "viewport offset=(%g,%g,%g,%g) scale=(%g,%g,%g,%g)\n",
+            g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
+            g_EmuNv2aViewportOffset[2], g_EmuNv2aViewportOffset[3],
+            g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
+            g_EmuNv2aViewportScale[2], g_EmuNv2aViewportScale[3]);
+    for(ULONG Row = 0; Row < 4; Row++)
+    {
+        fprintf(f, "composite_matrix[%lu] %g %g %g %g\n", Row,
+                g_EmuNv2aCompositeMatrix[Row * 4 + 0],
+                g_EmuNv2aCompositeMatrix[Row * 4 + 1],
+                g_EmuNv2aCompositeMatrix[Row * 4 + 2],
+                g_EmuNv2aCompositeMatrix[Row * 4 + 3]);
+    }
+    fprintf(f, "vp exec_mode=%lu start=%lu instr_count=%lu\n",
+            g_EmuNv2aVpExecMode, g_EmuNv2aVpStart, g_EmuNv2aVpInstrCount);
+    for(ULONG i = 0; i < g_EmuNv2aVpInstrCount && i < EmuNv2aVpMaxInstr; i++)
+    {
+        fprintf(f, "vp[%lu] %.08lX %.08lX %.08lX %.08lX\n", i,
+                (ULONG)g_EmuNv2aVpProgram[i * 4 + 0],
+                (ULONG)g_EmuNv2aVpProgram[i * 4 + 1],
+                (ULONG)g_EmuNv2aVpProgram[i * 4 + 2],
+                (ULONG)g_EmuNv2aVpProgram[i * 4 + 3]);
+    }
+    for(ULONG i = 0; i < 192; i++)
+    {
+        const float *C = &g_EmuNv2aTransformConstant[i * 4];
+        if(C[0] != 0.0f || C[1] != 0.0f || C[2] != 0.0f || C[3] != 0.0f)
+        {
+            fprintf(f, "const[%lu] %g %g %g %g\n", i, C[0], C[1], C[2], C[3]);
+        }
+    }
+
+    fclose(f);
+}
+
+// Called after a rasterized draw/clear wrote the color surface; dumps the
+// surface (plus the state sidecar) when the operation falls inside the
+// CXBX_NV2A_DUMP_DRAWS range.
+static void EmuNv2aDrawPost(const char *What, ULONG Count, ULONG SurfaceHost,
+                            int PitchB, int Width, int Height)
+{
+    static int s_DumpEnabled = -1;
+    static ULONG s_DumpBegin = 0, s_DumpEnd = 0;
+    static int s_FrameRangeParsed = 0;
+    static bool s_FrameRangeEnabled = false;
+    static ULONG s_FrameBegin = 0, s_FrameEnd = 0;
+    static LONG s_DumpsRemaining = 64;
+
+    if(s_DumpEnabled < 0)
+    {
+        char Value[32];
+        s_DumpEnabled = EmuNv2aGetEnv("CXBX_NV2A_DUMP_DRAWS", Value, sizeof(Value)) &&
+                                EmuNv2aParseDrawRange(Value, &s_DumpBegin, &s_DumpEnd)
+                            ? 1
+                            : 0;
+    }
+    if(s_DumpEnabled != 1)
+    {
+        return;
+    }
+
+    if(s_FrameRangeParsed == 0)
+    {
+        char Value[32];
+        s_FrameRangeEnabled = EmuNv2aGetEnv("CXBX_NV2A_DUMP_FRAMES", Value, sizeof(Value)) &&
+                              EmuNv2aParseDrawRange(Value, &s_FrameBegin, &s_FrameEnd);
+        s_FrameRangeParsed = 1;
+    }
+    if(s_FrameRangeEnabled &&
+       (g_EmuNv2aDebugFrame < s_FrameBegin || g_EmuNv2aDebugFrame >= s_FrameEnd))
+    {
+        return;
+    }
+
+    ULONG Index = g_EmuNv2aDebugDrawIndex != 0 ? g_EmuNv2aDebugDrawIndex - 1 : 0;
+    if(Index < s_DumpBegin || Index >= s_DumpEnd || s_DumpsRemaining <= 0)
+    {
+        return;
+    }
+    if(SurfaceHost == 0 || Width <= 0 || Height <= 0 || PitchB <= 0)
+    {
+        return;
+    }
+
+    s_DumpsRemaining--;
+
+    char FileName[64];
+    _snprintf(FileName, sizeof(FileName), "f%05lu_d%04lu.txt",
+              g_EmuNv2aDebugFrame, Index);
+    FileName[sizeof(FileName) - 1] = '\0';
+    char StatePath[MAX_PATH * 2];
+    EmuNv2aDebugDumpPath(StatePath, sizeof(StatePath), FileName);
+    EmuNv2aWriteDrawStateFile(StatePath, What, Count);
+
+    _snprintf(FileName, sizeof(FileName), "f%05lu_d%04lu.bmp",
+              g_EmuNv2aDebugFrame, Index);
+    FileName[sizeof(FileName) - 1] = '\0';
+    char BmpPath[MAX_PATH * 2];
+    EmuNv2aDebugDumpPath(BmpPath, sizeof(BmpPath), FileName);
+
+    FILE *f = fopen(BmpPath, "wb");
+    if(f == NULL)
+    {
+        printf("NVDRAW| dump open failed (%s)\n", BmpPath);
+        fflush(stdout);
+        return;
+    }
+
+    ULONG DataSize = (ULONG)Width * (ULONG)Height * 4;
+    unsigned char fh[14] = {0}, ih[40] = {0};
+    ULONG FileSize = 54 + DataSize;
+    fh[0] = 'B'; fh[1] = 'M';
+    fh[2] = (unsigned char)FileSize;         fh[3] = (unsigned char)(FileSize >> 8);
+    fh[4] = (unsigned char)(FileSize >> 16); fh[5] = (unsigned char)(FileSize >> 24);
+    fh[10] = 54;
+    ih[0] = 40;
+    ih[4] = (unsigned char)Width; ih[5] = (unsigned char)(Width >> 8);
+    ih[6] = (unsigned char)(Width >> 16); ih[7] = (unsigned char)(Width >> 24);
+    LONG nh = -(LONG)Height; // negative height => top-down
+    ih[8]  = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
+    ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+    ih[12] = 1;
+    ih[14] = 32;
+    fwrite(fh, 1, 14, f);
+    fwrite(ih, 1, 40, f);
+
+    // Copy row by row through the guarded reader (the surface pointer came from
+    // guest state) and force opaque alpha so the BMP renders solid.
+    ULONG *Row = new ULONG[Width];
+    bool Ok = true;
+    for(int Y = 0; Y < Height && Ok; Y++)
+    {
+        Ok = EmuTryReadHost(SurfaceHost + (ULONG)Y * (ULONG)PitchB, Row,
+                            (ULONG)Width * 4);
+        if(Ok)
+        {
+            for(int X = 0; X < Width; X++)
+            {
+                Row[X] |= 0xFF000000;
+            }
+            fwrite(Row, 1, (size_t)Width * 4, f);
+        }
+    }
+    delete[] Row;
+    fclose(f);
+
+    if(Ok)
+    {
+        printf("NVDRAW| dumped %s\n", BmpPath);
+    }
+    else
+    {
+        printf("NVDRAW| surface read failed (%s)\n", BmpPath);
+    }
+    fflush(stdout);
+}
+
 // Capture the displayed framebuffer ("path 2"). The CRTC scanout base register
 // (NV_PCRTC_START) is programmed with the physical address of the surface to put
 // on screen -- exactly what a title flips to at frame end (nxdk pbkit's
@@ -4006,7 +4622,8 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 {
     bool WantWindow = EmuNv2aWindowEnabled();
     bool WantBmp = (g_EmuNv2aScanoutDumpIndex < 16);
-    if(PhysicalAddress == 0 || (!WantBmp && !WantWindow))
+    bool WantCrc = EmuNv2aCrcEnabled();
+    if(PhysicalAddress == 0 || (!WantBmp && !WantWindow && !WantCrc))
         return;
 
     // Geometry: pitch from the video HAL (else a 640-wide default); height from
@@ -4078,6 +4695,16 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
         }
     }
 
+    // Per-present CRC of the normalized pixels: the frame-level regression
+    // signature (compare with Python zlib.crc32 over the BMP pixel data).
+    if(WantCrc)
+    {
+        ULONG Crc = EmuNv2aCrc32(Pixels, Width * Height * 4);
+        printf("NVCRC| frame=%lu addr=0x%.08lX w=%lu h=%lu crc=0x%.08lX\n",
+               g_EmuNv2aDebugFrame, PhysicalAddress, Width, Height, Crc);
+        fflush(stdout);
+    }
+
     // Live window (every present, uncapped) then the BMP dump (first 16 only).
     if(WantWindow)
         EmuNv2aBlitToWindow(Pixels, Width, Height);
@@ -4137,7 +4764,12 @@ static void EmuNv2aPresentColorSurface()
     }
 
     g_EmuNv2aScanoutAddress = Address & 0x0FFFFFFF;
+    EmuNv2aResolveAaColorSurface(g_EmuNv2aScanoutAddress);
     EmuNv2aDumpScanout(g_EmuNv2aScanoutAddress);
+
+    // Frame boundary for the draw-debug aids: next frame, draw indices restart.
+    g_EmuNv2aDebugFrame++;
+    g_EmuNv2aDebugDrawIndex = 0;
 
     static ULONG FlipLogCount = 0;
     if(FlipLogCount < 8)
@@ -4147,6 +4779,97 @@ static void EmuNv2aPresentColorSurface()
                g_EmuNv2aFlipModulo, g_EmuNv2aScanoutAddress);
         fflush(stdout);
         ++FlipLogCount;
+    }
+}
+
+static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
+                                      ULONG Width, ULONG Height)
+{
+    const ULONG AaMode = (g_EmuNv2aSurfaceFormat >> 12) & 0x0F;
+    if(AaMode == 0 || Host == 0 || Pitch == 0 || Width == 0 || Height == 0)
+    {
+        return;
+    }
+
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
+    ULONG Address = Base + g_EmuNv2aSurfaceColorOffset;
+    if(EmuNv2aHostPointer(Address) == 0 && Base != 0)
+    {
+        Address = g_EmuNv2aSurfaceColorOffset;
+    }
+
+    g_EmuNv2aAaColorSurface.Address = Address;
+    g_EmuNv2aAaColorSurface.Host = Host;
+    g_EmuNv2aAaColorSurface.Pitch = Pitch;
+    g_EmuNv2aAaColorSurface.Width = Width;
+    g_EmuNv2aAaColorSurface.Height = Height;
+    g_EmuNv2aAaColorSurface.Frame = g_EmuNv2aDebugFrame;
+    g_EmuNv2aAaColorSurface.Valid = true;
+}
+
+static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress)
+{
+    const EmuNv2aAaColorSurface& Source = g_EmuNv2aAaColorSurface;
+    if(!Source.Valid || Source.Frame != g_EmuNv2aDebugFrame ||
+       Source.Address == DestinationAddress)
+    {
+        return;
+    }
+
+    const ULONG DestinationHost = EmuNv2aHostPointer(DestinationAddress);
+    ULONG DestinationPitch = g_EmuDisplayPitch;
+    if(DestinationPitch == 0)
+    {
+        DestinationPitch = 640 * sizeof(ULONG);
+    }
+    const ULONG Width = min(Source.Width, DestinationPitch / sizeof(ULONG));
+    const ULONG Height = min(Source.Height, 480ul);
+    if(DestinationHost == 0 || Width == 0 || Height == 0)
+    {
+        return;
+    }
+
+    ULONG SourceBlockSize = 0;
+    ULONG DestinationBlockSize = 0;
+    const ULONG SourceBlock = EmuContiguousBlockBase(Source.Host, &SourceBlockSize);
+    const ULONG DestinationBlock =
+        EmuContiguousBlockBase(DestinationHost, &DestinationBlockSize);
+    const ULONGLONG SourceEnd = static_cast<ULONGLONG>(Source.Host) +
+                                static_cast<ULONGLONG>(Source.Pitch) * Height;
+    const ULONGLONG DestinationEnd =
+        static_cast<ULONGLONG>(DestinationHost) +
+        static_cast<ULONGLONG>(DestinationPitch) * 480;
+    if(SourceBlock == 0 || DestinationBlock == 0 ||
+       SourceEnd > static_cast<ULONGLONG>(SourceBlock) + SourceBlockSize ||
+       DestinationEnd > static_cast<ULONGLONG>(DestinationBlock) +
+                            DestinationBlockSize)
+    {
+        return;
+    }
+
+    BYTE* Destination = reinterpret_cast<BYTE*>(
+        static_cast<uintptr_t>(DestinationHost));
+    const BYTE* SourcePixels = reinterpret_cast<const BYTE*>(
+        static_cast<uintptr_t>(Source.Host));
+    memset(Destination, 0, DestinationPitch * 480);
+    for(ULONG Y = 0; Y < Height; ++Y)
+    {
+        memcpy(Destination + Y * DestinationPitch,
+               SourcePixels + Y * Source.Pitch,
+               Width * sizeof(ULONG));
+    }
+    g_EmuNv2aResolvedFrameAddress.store(
+        DestinationAddress, std::memory_order_release);
+
+    static ULONG ResolveLogCount = 0;
+    if(ResolveLogCount < 8)
+    {
+        printf("Emu (0x%lX): NV2A resolved AA color 0x%.08lX (%lux%lu pitch=%lu) "
+               "to scanout 0x%.08lX (pitch=%lu).\n",
+               GetCurrentThreadId(), Source.Address, Width, Height, Source.Pitch,
+               DestinationAddress, DestinationPitch);
+        fflush(stdout);
+        ++ResolveLogCount;
     }
 }
 
@@ -4175,17 +4898,24 @@ static void EmuNv2aClearSurface(ULONG Flags)
         return;
     }
 
+    if(!EmuNv2aDrawGate("clear", 0))
+    {
+        return;
+    }
+
     int ColorPitchB = static_cast<int>(g_EmuNv2aSurfacePitchColor);
     if(ColorPitchB <= 0)
     {
         ColorPitchB = 640 * 4;
     }
-    int Width = static_cast<int>(g_EmuNv2aSurfaceClipW);
+    int Width = static_cast<int>(g_EmuNv2aSurfaceClipX +
+                                 g_EmuNv2aSurfaceClipW);
     if(Width <= 0 || Width > ColorPitchB / 4)
     {
         Width = ColorPitchB / 4;
     }
-    int Height = static_cast<int>(g_EmuNv2aSurfaceClipH);
+    int Height = static_cast<int>(g_EmuNv2aSurfaceClipY +
+                                  g_EmuNv2aSurfaceClipH);
     if(Height <= 0 || Height > 4096)
     {
         Height = 480;
@@ -4293,6 +5023,9 @@ static void EmuNv2aClearSurface(ULONG Flags)
                GetCurrentThreadId(), ColorHost, ZetaHost);
         fflush(stdout);
     }
+
+    EmuNv2aTrackAaColorSurface(ColorHost, ColorPitchB, Width, Height);
+    EmuNv2aDrawPost("clear", 0, ColorHost, ColorPitchB, Width, Height);
 
     static ULONG ClearLogCount = 0;
     if(ClearLogCount < 8)
@@ -4823,13 +5556,27 @@ static void EmuNv2aShadeP8TilePixel(
 // 1/w), point-sampled, and modulated with the diffuse. Clipped to the surface.
 static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                                 const float *VX, const float *VY, const float *VZ,
+                                const float *VW,
                                 const EmuNv2aTextureCoordinateArrays* TexCoords,
                                 const ULONG *VC, ULONG i0, ULONG i1, ULONG i2)
 {
+    if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+           VW[i0], VW[i1], VW[i2]))
+    {
+        return;
+    }
+
     float ax = VX[i0], ay = VY[i0], az = VZ[i0];
     float bx = VX[i1], by = VY[i1], bz = VZ[i1];
     float cx = VX[i2], cy = VY[i2], cz = VZ[i2];
     ULONG Ca = VC[i0], Cb = VC[i1], Cc = VC[i2];
+
+    if(!std::isfinite(ax) || !std::isfinite(ay) || !std::isfinite(az) ||
+       !std::isfinite(bx) || !std::isfinite(by) || !std::isfinite(bz) ||
+       !std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(cz))
+    {
+        return;
+    }
 
     float Area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
     if(Area > -1e-3f && Area < 1e-3f)
@@ -4843,24 +5590,20 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
     float LoYf = ay < by ? (ay < cy ? ay : cy) : (by < cy ? by : cy);
     float HiYf = ay > by ? (ay > cy ? ay : cy) : (by > cy ? by : cy);
 
+    if(HiXf < 0.0f || HiYf < 0.0f || LoXf >= static_cast<float>(T->Width) ||
+       LoYf >= static_cast<float>(T->Height))
+    {
+        return;
+    }
+    if(LoXf < 0.0f) LoXf = 0.0f;
+    if(LoYf < 0.0f) LoYf = 0.0f;
+    if(HiXf >= static_cast<float>(T->Width))
+        HiXf = static_cast<float>(T->Width - 1);
+    if(HiYf >= static_cast<float>(T->Height))
+        HiYf = static_cast<float>(T->Height - 1);
+
     int MinX = (int)LoXf;       int MinY = (int)LoYf;
     int MaxX = (int)HiXf + 1;   int MaxY = (int)HiYf + 1;
-    if(MinX < 0)
-    {
-        MinX = 0;
-    }
-    if(MinY < 0)
-    {
-        MinY = 0;
-    }
-    if(MaxX > T->Width)
-    {
-        MaxX = T->Width;
-    }
-    if(MaxY > T->Height)
-    {
-        MaxY = T->Height;
-    }
 
     bool Uniform = (Ca == Cb && Cb == Cc);
     float Aa = (float)((Ca >> 24) & 0xFF), Ra = (float)((Ca >> 16) & 0xFF);
@@ -4929,10 +5672,18 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
 
 static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
                                        const float* VX, const float* VY,
-                                       const float* VZ,
+                                       const float* VZ, const float* VW,
                                        const EmuNv2aTextureCoordinateArrays* TexCoords,
                                        const ULONG* VC, ULONG Base)
 {
+    if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+           VW[Base], VW[Base + 1], VW[Base + 2]) ||
+       !cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+           VW[Base], VW[Base + 2], VW[Base + 3]))
+    {
+        return false;
+    }
+
     const auto NearlyEqual = [](float A, float B)
     {
         const float Difference = A - B;
@@ -4959,31 +5710,38 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
     const float Top = VY[I0];
     const float Right = VerticalFirst ? VX[I2] : VX[I1];
     const float Bottom = VerticalFirst ? VY[I1] : VY[I2];
+    if(!std::isfinite(Left) || !std::isfinite(Top) ||
+       !std::isfinite(Right) || !std::isfinite(Bottom))
+    {
+        return false;
+    }
     if(Right - Left < 0.01f || Bottom - Top < 0.01f)
     {
         return false;
     }
 
-    int MinX = static_cast<int>(Left);
-    int MinY = static_cast<int>(Top);
-    int MaxX = static_cast<int>(Right) + 1;
-    int MaxY = static_cast<int>(Bottom) + 1;
-    if(MinX < 0)
+    if(Right < 0.0f || Bottom < 0.0f ||
+       Left >= static_cast<float>(Target->Width) ||
+       Top >= static_cast<float>(Target->Height))
     {
-        MinX = 0;
+        return true;
     }
-    if(MinY < 0)
-    {
-        MinY = 0;
-    }
-    if(MaxX > Target->Width)
-    {
-        MaxX = Target->Width;
-    }
-    if(MaxY > Target->Height)
-    {
-        MaxY = Target->Height;
-    }
+
+    const float ClippedLeft = Left < 0.0f ? 0.0f : Left;
+    const float ClippedTop = Top < 0.0f ? 0.0f : Top;
+    const float ClippedRight =
+        Right >= static_cast<float>(Target->Width)
+            ? static_cast<float>(Target->Width - 1)
+            : Right;
+    const float ClippedBottom =
+        Bottom >= static_cast<float>(Target->Height)
+            ? static_cast<float>(Target->Height - 1)
+            : Bottom;
+
+    int MinX = static_cast<int>(ClippedLeft);
+    int MinY = static_cast<int>(ClippedTop);
+    int MaxX = static_cast<int>(ClippedRight) + 1;
+    int MaxY = static_cast<int>(ClippedBottom) + 1;
 
     const ULONG TopRight = VerticalFirst ? I3 : I1;
     const ULONG BottomLeft = VerticalFirst ? I1 : I3;
@@ -5285,6 +6043,52 @@ static void EmuNv2aRasterizeInlineArray()
         VertexSize, Offsets);
 }
 
+static void EmuNv2aRasterizeImmediateVertices()
+{
+    const ULONG WordsPerVertex = EmuNv2aVertexAttrCount * 4;
+    if(g_EmuNv2aImmediateOverflow ||
+       g_EmuNv2aImmediateWordCount % WordsPerVertex != 0)
+    {
+        return;
+    }
+
+    const ULONG VertexCount = g_EmuNv2aImmediateWordCount / WordsPerVertex;
+    if(VertexCount < 3)
+    {
+        return;
+    }
+
+    ULONG Offsets[EmuNv2aVertexAttrCount];
+    ULONG SavedFormats[EmuNv2aVertexAttrCount];
+    for(ULONG Attribute = 0; Attribute < EmuNv2aVertexAttrCount; ++Attribute)
+    {
+        SavedFormats[Attribute] = g_EmuNv2aVertexArray[Attribute].Format;
+        if(g_EmuNv2aImmediateFormat[Attribute] != 0)
+        {
+            Offsets[Attribute] = Attribute * 4 * sizeof(ULONG);
+            g_EmuNv2aVertexArray[Attribute].Format =
+                g_EmuNv2aImmediateFormat[Attribute];
+        }
+        else
+        {
+            Offsets[Attribute] = 0xFFFFFFFF;
+            g_EmuNv2aVertexArray[Attribute].Format = 0;
+        }
+    }
+
+    g_EmuNv2aRasterizingImmediate = true;
+    EmuNv2aRasterizeDrawArrays(
+        0, VertexCount, nullptr,
+        reinterpret_cast<const BYTE*>(g_EmuNv2aImmediateWords),
+        WordsPerVertex * sizeof(ULONG), Offsets);
+    g_EmuNv2aRasterizingImmediate = false;
+
+    for(ULONG Attribute = 0; Attribute < EmuNv2aVertexAttrCount; ++Attribute)
+    {
+        g_EmuNv2aVertexArray[Attribute].Format = SavedFormats[Attribute];
+    }
+}
+
 static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                                        const ULONG* Indices,
                                        const BYTE* InlineData,
@@ -5293,6 +6097,14 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 {
     if(!EmuNv2aRasterEnabled() || g_EmuNv2aBeginOp == 0 || Count < 3)
         return;
+
+    const char *DrawKind = g_EmuNv2aRasterizingImmediate ? "immediate"
+                           : (InlineData != nullptr ? "inline"
+                           : (Indices != nullptr ? "elements" : "draw_arrays"));
+    if(!EmuNv2aDrawGate(DrawKind, Count))
+    {
+        return;
+    }
 
     ULONG SurfaceBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
     ULONG SurfaceHost = EmuNv2aHostPointer(SurfaceBase + g_EmuNv2aSurfaceColorOffset);
@@ -5320,10 +6132,33 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     int PitchB = (int)g_EmuNv2aSurfacePitchColor;
     if(PitchB <= 0) PitchB = 640 * 4;
     int PitchPx = PitchB / 4;
-    int Width = (int)g_EmuNv2aSurfaceClipW;
+    int Width = (int)(g_EmuNv2aSurfaceClipX + g_EmuNv2aSurfaceClipW);
     if(Width <= 0 || Width > PitchPx) Width = PitchPx;
-    int Height = (int)g_EmuNv2aSurfaceClipH;
+    int Height = (int)(g_EmuNv2aSurfaceClipY + g_EmuNv2aSurfaceClipH);
     if(Height <= 0 || Height > 4096) Height = 480;
+
+    ULONG SurfaceBlockSize = 0;
+    const ULONG SurfaceBlockBase =
+        EmuContiguousBlockBase(SurfaceHost, &SurfaceBlockSize);
+    const ULONGLONG SurfaceEnd =
+        static_cast<ULONGLONG>(SurfaceHost) +
+        static_cast<ULONGLONG>(PitchB) * static_cast<ULONGLONG>(Height);
+    if(SurfaceBlockBase == 0 || SurfaceEnd >
+                                    static_cast<ULONGLONG>(SurfaceBlockBase) +
+                                        SurfaceBlockSize)
+    {
+        static ULONG SurfaceBoundsLogCount = 0;
+        if(SurfaceBoundsLogCount < 16)
+        {
+            printf("Emu (0x%lX): NV2A raster: color span rejected host=0x%.08lX bytes=0x%llX block=0x%.08lX+0x%.08lX.\n",
+                   GetCurrentThreadId(), SurfaceHost,
+                   static_cast<unsigned long long>(SurfaceEnd - SurfaceHost),
+                   SurfaceBlockBase, SurfaceBlockSize);
+            fflush(stdout);
+            ++SurfaceBoundsLogCount;
+        }
+        return;
+    }
 
     EmuNv2aRasterTarget Target = {};
     Target.Color = (ULONG *)(uintptr_t)SurfaceHost;
@@ -5363,22 +6198,34 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceZetaOffset);
         if(ZetaHost != 0)
         {
-            Target.Depth = (void *)(uintptr_t)ZetaHost;
-            Target.DepthFormat = g_EmuNv2aSurfaceZetaFormat;
-            Target.DepthFunc = g_EmuNv2aDepthFunc;
-            Target.DepthTest = g_EmuNv2aDepthTest;
-            Target.DepthWrite = g_EmuNv2aDepthWrite;
-            Target.DepthPitchB = (int)g_EmuNv2aSurfacePitchZeta;
-            if(Target.DepthPitchB <= 0)
-                Target.DepthPitchB = Width * (g_EmuNv2aSurfaceZetaFormat == 2 ? 4 : 2);
-            Target.StencilTest = g_EmuNv2aStencilTest && (g_EmuNv2aSurfaceZetaFormat == 2);
-            Target.StencilFunc = g_EmuNv2aStencilFunc;
-            Target.StencilRef = g_EmuNv2aStencilRef;
-            Target.StencilFuncMask = g_EmuNv2aStencilFuncMask;
-            Target.StencilMask = g_EmuNv2aStencilMask;
-            Target.StencilOpFail = g_EmuNv2aStencilOpFail;
-            Target.StencilOpZFail = g_EmuNv2aStencilOpZFail;
-            Target.StencilOpZPass = g_EmuNv2aStencilOpZPass;
+            int DepthPitchB = (int)g_EmuNv2aSurfacePitchZeta;
+            if(DepthPitchB <= 0)
+                DepthPitchB = Width * (g_EmuNv2aSurfaceZetaFormat == 2 ? 4 : 2);
+            ULONG DepthBlockSize = 0;
+            const ULONG DepthBlockBase =
+                EmuContiguousBlockBase(ZetaHost, &DepthBlockSize);
+            const ULONGLONG DepthEnd =
+                static_cast<ULONGLONG>(ZetaHost) +
+                static_cast<ULONGLONG>(DepthPitchB) *
+                    static_cast<ULONGLONG>(Height);
+            if(DepthBlockBase != 0 &&
+               DepthEnd <= static_cast<ULONGLONG>(DepthBlockBase) + DepthBlockSize)
+            {
+                Target.Depth = (void *)(uintptr_t)ZetaHost;
+                Target.DepthFormat = g_EmuNv2aSurfaceZetaFormat;
+                Target.DepthFunc = g_EmuNv2aDepthFunc;
+                Target.DepthTest = g_EmuNv2aDepthTest;
+                Target.DepthWrite = g_EmuNv2aDepthWrite;
+                Target.DepthPitchB = DepthPitchB;
+                Target.StencilTest = g_EmuNv2aStencilTest && (g_EmuNv2aSurfaceZetaFormat == 2);
+                Target.StencilFunc = g_EmuNv2aStencilFunc;
+                Target.StencilRef = g_EmuNv2aStencilRef;
+                Target.StencilFuncMask = g_EmuNv2aStencilFuncMask;
+                Target.StencilMask = g_EmuNv2aStencilMask;
+                Target.StencilOpFail = g_EmuNv2aStencilOpFail;
+                Target.StencilOpZFail = g_EmuNv2aStencilOpZFail;
+                Target.StencilOpZPass = g_EmuNv2aStencilOpZPass;
+            }
         }
     }
 
@@ -5386,7 +6233,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     EmuNv2aVertexArrayState *Dif = &g_EmuNv2aVertexArray[EmuNv2aAttrDiffuse];
     ULONG VertexBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaVertex);
     bool Inline = InlineData != nullptr && InlineStride != 0 && InlineOffsets != nullptr;
-    const auto AttributeHost = [Inline, InlineData, InlineStride, InlineOffsets, VertexBase](
+    BYTE AttributeScratch[EmuNv2aVertexAttrCount][16] = {};
+    const auto AttributeHost = [Inline, InlineData, InlineStride, InlineOffsets, VertexBase,
+                                &AttributeScratch](
         ULONG Attribute, ULONG Index) -> ULONG
     {
         if(Inline)
@@ -5401,7 +6250,25 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
         const EmuNv2aVertexArrayState* Array = &g_EmuNv2aVertexArray[Attribute];
         ULONG Stride = (Array->Format >> 8) & 0xFF;
-        return EmuNv2aHostPointer(VertexBase + Array->Offset + Index * Stride);
+        const ULONG Address = VertexBase + Array->Offset + Index * Stride;
+        const ULONG Host = EmuNv2aHostPointer(Address);
+        if(Host != 0)
+        {
+            return Host;
+        }
+
+        const ULONG PhysicalAddress = EmuIsPhysicalMapAddress(Address)
+                                          ? Address
+                                          : EmuPhysicalMapBase +
+                                                (Address & EmuPhysicalRamMirrorMask);
+        if(EmuReadPhysicalMapBlock(
+               PhysicalAddress, AttributeScratch[Attribute],
+               sizeof(AttributeScratch[Attribute])))
+        {
+            return static_cast<ULONG>(reinterpret_cast<uintptr_t>(
+                AttributeScratch[Attribute]));
+        }
+        return 0;
     };
     ULONG PosStride = Inline && InlineOffsets[EmuNv2aAttrPosition] != 0xFFFFFFFF
                           ? InlineStride
@@ -5458,16 +6325,26 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     static float VX[4096];
     static float VY[4096];
     static float VZ[4096];
+    static float VW[4096];
     static float VU[EmuNv2aTextureStageCount][4096];
     static float VV[EmuNv2aTextureStageCount][4096];
     static float VIW[EmuNv2aTextureStageCount][4096];
     static ULONG VC[4096];
     if(Count > 4096) Count = 4096;
 
+    static int VertexTraceEnabled = -1;
+    if(VertexTraceEnabled < 0)
+    {
+        char Value[8];
+        VertexTraceEnabled = EmuNv2aGetEnv(
+            "CXBX_NV2A_VERTEX_TRACE", Value, sizeof(Value)) ? 1 : 0;
+    }
+
     for(ULONG i = 0; i < Count; i++)
     {
         ULONG Index = Indices == nullptr ? Start + i : Indices[i];
         float Xc, Yc, Zc = 0.0f, W;
+        float RawPosition[4] = {};
         float U[EmuNv2aTextureStageCount] = {};
         float V[EmuNv2aTextureStageCount] = {};
         float Q[EmuNv2aTextureStageCount] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -5523,6 +6400,32 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                 g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
                 (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
                 Input, OutPos, OutColors, OutTexCoords);
+            if(Inline)
+            {
+                static int TraceEnabled = -1;
+                if(TraceEnabled < 0)
+                {
+                    char Value[8];
+                    TraceEnabled = EmuNv2aGetEnv(
+                        "CXBX_NV2A_IMMEDIATE_TRACE", Value, sizeof(Value)) ? 1 : 0;
+                }
+                if(TraceEnabled == 1)
+                {
+                    printf("NVVERT| frame=%lu kind=%s vertex=%lu "
+                           "v0=(%g,%g,%g,%g) v3=(%g,%g,%g,%g) "
+                           "v9=(%g,%g,%g,%g) opos=(%g,%g,%g,%g) "
+                           "od0=(%g,%g,%g,%g) ot0=(%g,%g,%g,%g)\n",
+                           g_EmuNv2aDebugFrame, DrawKind, i,
+                           Input[0], Input[1], Input[2], Input[3],
+                           Input[12], Input[13], Input[14], Input[15],
+                           Input[36], Input[37], Input[38], Input[39],
+                           OutPos[0], OutPos[1], OutPos[2], OutPos[3],
+                           OutColors[0], OutColors[1], OutColors[2], OutColors[3],
+                           OutTexCoords[0], OutTexCoords[1],
+                           OutTexCoords[2], OutTexCoords[3]);
+                    fflush(stdout);
+                }
+            }
             Xc = OutPos[0]; Yc = OutPos[1]; Zc = OutPos[2]; W = OutPos[3];
             for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
             {
@@ -5553,6 +6456,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             Yc = EmuNv2aReadHostFloat(PosHost + 4);
             Zc = (PosSize >= 3) ? EmuNv2aReadHostFloat(PosHost + 8) : 0.0f;
             W  = (PosSize >= 4) ? EmuNv2aReadHostFloat(PosHost + 12) : 1.0f;
+            RawPosition[0] = Xc;
+            RawPosition[1] = Yc;
+            RawPosition[2] = Zc;
+            RawPosition[3] = W;
 
             if(DifStride != 0)
             {
@@ -5597,41 +6504,48 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             }
 
             // Fixed-function transform: object position * composite matrix ->
-            // clip. Identity by default, so a title that supplies clip/screen
-            // coordinates directly is unaffected; a title that programs the
-            // matrix (fixed-function pipeline) gets its object geometry mapped.
+            // screen homogeneous coordinates. The four uploaded NV2A constant
+            // vectors are matrix columns, matching mat4(c0,c1,c2,c3) and the
+            // hardware's row-vector multiplication.
             const float *M = g_EmuNv2aCompositeMatrix;
             float ox = Xc, oy = Yc, oz = Zc, ow = W;
-            Xc = ox * M[0] + oy * M[4] + oz * M[8]  + ow * M[12];
-            Yc = ox * M[1] + oy * M[5] + oz * M[9]  + ow * M[13];
-            Zc = ox * M[2] + oy * M[6] + oz * M[10] + ow * M[14];
-            W  = ox * M[3] + oy * M[7] + oz * M[11] + ow * M[15];
+            Xc = ox * M[0]  + oy * M[1]  + oz * M[2]  + ow * M[3];
+            Yc = ox * M[4]  + oy * M[5]  + oz * M[6]  + ow * M[7];
+            Zc = ox * M[8]  + oy * M[9]  + oz * M[10] + ow * M[11];
+            W  = ox * M[12] + oy * M[13] + oz * M[14] + ow * M[15];
         }
 
-        // Homogeneous clip -> NDC (perspective divide) -> screen (viewport). With
-        // w==1 and the identity viewport default this reproduces Phase 0/1.
-        const bool ScreenDepth = Zc < -2.0f || Zc > 2.0f;
-        bool Pretransformed = VpActive &&
-                              ((W > -1e-6f && W < 1e-6f) || ScreenDepth) &&
-                              Xc > -2.0f * Width && Xc < 3.0f * Width &&
-                              Yc > -2.0f * Height && Yc < 3.0f * Height;
-        float InvW = Pretransformed ? 1.0f
-                                    : ((W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f);
-        if(Pretransformed)
+        const float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
+        VW[i] = W;
+        if(VpActive)
         {
-            // XDK pretransformed paths feed screen coordinates in v0.xy and
-            // either use w=0 or the Xbox 16-bit screen-depth range. Applying
-            // the clip-space viewport a second time sends these quads far
-            // outside the render target.
+            // NV2A vertex programs produce screen-space oPos directly. Host
+            // renderers convert it back to clip space only for their API; the
+            // software rasterizer consumes the native result as-is.
             VX[i] = Xc;
             VY[i] = Yc;
             VZ[i] = Zc;
         }
         else
         {
-            VX[i] = (Xc * InvW) * g_EmuNv2aViewportScale[0] + g_EmuNv2aViewportOffset[0];
-            VY[i] = (Yc * InvW) * g_EmuNv2aViewportScale[1] + g_EmuNv2aViewportOffset[1];
-            VZ[i] = (Zc * InvW) * g_EmuNv2aViewportScale[2] + g_EmuNv2aViewportOffset[2];
+            // The fixed-function composite matrix already contains viewport
+            // scale. Hardware divides by w and adds only the viewport offset.
+            VX[i] = Xc * InvW + g_EmuNv2aViewportOffset[0];
+            VY[i] = Yc * InvW + g_EmuNv2aViewportOffset[1];
+            VZ[i] = Zc * InvW;
+            if(VertexTraceEnabled == 1 && i < 4)
+            {
+                const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
+                                            ? g_EmuNv2aDebugDrawIndex - 1
+                                            : 0;
+                printf("NVVERT| frame=%lu draw=%lu kind=%s vertex=%lu index=%lu "
+                       "in=(%g,%g,%g,%g) hom=(%g,%g,%g,%g) "
+                       "screen=(%g,%g,%g)\n",
+                       g_EmuNv2aDebugFrame, DrawIndex, DrawKind, i, Index,
+                       RawPosition[0], RawPosition[1], RawPosition[2], RawPosition[3],
+                       Xc, Yc, Zc, W, VX[i], VY[i], VZ[i]);
+                fflush(stdout);
+            }
         }
         for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
         {
@@ -5670,7 +6584,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 5: // TRIANGLES
                 for(ULONG i = 0; i + 2 < Count; i += 3)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                         &TextureCoordinates, VC, i, i+1, i+2);
                     Triangles++;
                 }
@@ -5678,7 +6592,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 6: // TRIANGLE_STRIP
                 for(ULONG i = 0; i + 2 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                         &TextureCoordinates, VC, i, i+1, i+2);
                     Triangles++;
                 }
@@ -5687,7 +6601,7 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 10: // POLYGON
                 for(ULONG i = 1; i + 1 < Count; i++)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                         &TextureCoordinates, VC, 0, i, i+1);
                     Triangles++;
                 }
@@ -5696,12 +6610,12 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
                     if(!EmuNv2aFillAxisAlignedQuad(
-                           &Target, VX, VY, VZ, &TextureCoordinates, VC, i))
+                           &Target, VX, VY, VZ, VW, &TextureCoordinates, VC, i))
                     {
-                        EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                             &TextureCoordinates, VC,
                                             i, i + 1, i + 2);
-                        EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                             &TextureCoordinates, VC,
                                             i, i + 2, i + 3);
                     }
@@ -5711,9 +6625,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
             case 9: // QUAD_STRIP
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                         &TextureCoordinates, VC, i, i+1, i+3);
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ,
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
                                         &TextureCoordinates, VC, i, i+3, i+2);
                     Triangles += 2;
                 }
@@ -5768,6 +6682,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         fflush(stdout);
         g_EmuNv2aRasterLogCount++;
     }
+
+    EmuNv2aTrackAaColorSurface(SurfaceHost, PitchB, Width, Height);
+    EmuNv2aDrawPost(DrawKind, Count, SurfaceHost, PitchB, Width, Height);
 }
 
 static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)

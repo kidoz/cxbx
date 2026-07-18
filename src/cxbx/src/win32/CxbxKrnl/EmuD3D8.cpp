@@ -410,6 +410,7 @@ static void EmuRunHostControlProbe()
 
 static void EmuCapturePresentMirror();
 static void EmuBlitPresentMirror();
+extern "C" void EmuNv2aBlitResolvedFrame();
 
 static HRESULT EmuPresentHostDevice(const RECT* sourceRect, const RECT* destinationRect,
                                     HWND destinationWindow, const RGNDATA* dirtyRegion,
@@ -441,6 +442,7 @@ static HRESULT EmuPresentHostDevice(const RECT* sourceRect, const RECT* destinat
                 break;
             case cxbx::d3d::PresentSceneStep::BlitMirror:
                 EmuBlitPresentMirror();
+                EmuNv2aBlitResolvedFrame();
                 break;
             case cxbx::d3d::PresentSceneStep::BeginScene:
                 beginSceneResult = EmuHostBeginScene();
@@ -1280,8 +1282,15 @@ static DWORD WINAPI EmuRenderWindow(LPVOID)
         ZeroMemory(&msg, sizeof(msg));
         g_bRenderWindowActive.store(true, std::memory_order_release);
 
+        DWORD NextResolvedBlit = 0;
         while(msg.message != WM_QUIT)
         {
+            const DWORD Now = GetTickCount();
+            if(static_cast<LONG>(Now - NextResolvedBlit) >= 0)
+            {
+                EmuNv2aBlitResolvedFrame();
+                NextResolvedBlit = Now + 16;
+            }
             if(PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
             {
                 TranslateMessage(&msg);

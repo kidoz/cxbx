@@ -1,9 +1,22 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 namespace cxbx::nv2a
 {
+
+inline constexpr bool IsUsableHomogeneousW(float w) noexcept
+{
+    return w > 1.0e-5f && w < (std::numeric_limits<float>::max)();
+}
+
+inline constexpr bool CanRasterizeHomogeneousTriangle(
+    float w0, float w1, float w2) noexcept
+{
+    return IsUsableHomogeneousW(w0) && IsUsableHomogeneousW(w1) &&
+           IsUsableHomogeneousW(w2);
+}
 
 struct ProjectedTextureCoordinates
 {
