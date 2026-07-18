@@ -67,7 +67,168 @@ def build_capture(
     path.write_bytes(header + b"".join(records))
 
 
+def build_pgraph_capture(path: Path, blend_enable: int = 0) -> None:
+    pixels = struct.pack("<4I", *([0xFF000000] * 4))
+    crc = zlib.crc32(pixels) & 0xFFFFFFFF
+    methods = [
+        (0x0200, (2 << 16) | 0),
+        (0x0204, (2 << 16) | 0),
+        (0x020C, 8),
+        (0x0304, blend_enable),
+        (0x1D90, 0xFF000000),
+        (0x1D94, 0x00000003),
+        (0x17FC, 0x00000005),
+        (0x1810, 0x02000000),
+        (0x17FC, 0),
+        (0x0130, 0),
+    ]
+    base = 0x10000000
+    command_words = len(methods) * 2
+    records = [
+        record(
+            nv2a_capture.RAMIN,
+            struct.pack("<II", 4, zlib.crc32(b"RAM!") & 0xFFFFFFFF) + b"RAM!",
+        ),
+        record(
+            nv2a_capture.PUSH_RUN,
+            struct.pack(
+                "<9I",
+                0,
+                1,
+                base,
+                base,
+                base + command_words * 4,
+                0,
+                0,
+                0,
+                0xFFFFFFFF,
+            ),
+        ),
+    ]
+    address = base
+    for method, data in methods:
+        packet = 0x40000000 | (1 << 18) | method
+        records.append(record(nv2a_capture.PUSH_WORD, struct.pack("<3I", 0, address, packet)))
+        address += 4
+        records.append(record(nv2a_capture.PUSH_WORD, struct.pack("<3I", 0, address, data)))
+        records.append(record(nv2a_capture.METHOD, struct.pack("<4I", 0, 0, method, data)))
+        address += 4
+    records.append(
+        record(
+            nv2a_capture.SCANOUT,
+            struct.pack("<6I", 0, 0x00200000, 2, 2, crc, len(pixels)) + pixels,
+        )
+    )
+    records.append(record(nv2a_capture.FINISH, struct.pack("<5I", 0, 0, len(records), 0, crc)))
+    header = nv2a_capture.HEADER.pack(
+        nv2a_capture.MAGIC,
+        nv2a_capture.VERSION,
+        nv2a_capture.ENDIAN_MARKER,
+        nv2a_capture.HEADER.size,
+        0,
+        64 * 1024 * 1024,
+    )
+    path.write_bytes(header + b"".join(records))
+
+
 class Nv2aCaptureTests(unittest.TestCase):
+    def test_pusher_allows_monotonic_frame_transition_inside_run(self) -> None:
+        replay = nv2a_capture.PusherReplay()
+        replay.begin_run((0, 1, 0, 0, 8, 0, 0, 0, 0xFFFFFFFF))
+        replay.push_word(0, 0, (1 << 18) | 0x0100)
+        replay.push_word(1, 4, 0x11223344)
+        self.assertEqual(replay.methods, [(1, 0, 0x0100, 0x11223344)])
+        self.assertEqual(replay.packet_errors, [])
+
+        backwards = nv2a_capture.PusherReplay()
+        backwards.begin_run((1, 1, 0, 0, 4, 0, 0, 0, 0xFFFFFFFF))
+        backwards.push_word(0, 0, 0)
+        self.assertEqual(
+            backwards.packet_errors,
+            ["push word frame moved backwards from 1 to 0"],
+        )
+
+    def test_pgraph_state_keeps_immediate_vertex_history(self) -> None:
+        def replay(first_x: int) -> nv2a_capture.PgraphCheckpoint:
+            state = nv2a_capture.PgraphReplayState()
+            state.apply_method(0, 0, 0x17FC, 5, 0, 0, {})
+            method_index = 1
+            for vertex_x in (first_x, 0x40000000):
+                for component, value in enumerate((vertex_x, 0x3F800000, 0x00000000, 0x3F800000)):
+                    state.apply_method(
+                        0,
+                        0,
+                        0x1518 + component * 4,
+                        value,
+                        method_index,
+                        method_index,
+                        {},
+                    )
+                    method_index += 1
+            checkpoint = state.apply_method(0, 0, 0x17FC, 0, method_index, method_index, {})
+            assert checkpoint is not None
+            return checkpoint
+
+        baseline = replay(0x3F800000)
+        candidate = replay(0x40400000)
+        self.assertEqual(baseline.kind, "immediate_batch")
+        self.assertEqual(baseline.count, 2)
+        self.assertNotEqual(baseline.state_crc32, candidate.state_crc32)
+        self.assertEqual(nv2a_capture.PgraphReplayState().registers[0x0354 // 4], 0x0201)
+
+    def test_pgraph_state_matches_live_batch_capacities(self) -> None:
+        state = nv2a_capture.PgraphReplayState()
+        state.inline_words = [0] * nv2a_capture.PGRAPH_INLINE_WORD_CAPACITY
+        state.apply_method(0, 0, 0x1818, 0xDEADBEEF, 0, 0, {})
+        self.assertEqual(len(state.inline_words), nv2a_capture.PGRAPH_INLINE_WORD_CAPACITY)
+        self.assertTrue(state.inline_overflow)
+
+        state.element_indices = [0] * nv2a_capture.PGRAPH_ELEMENT_INDEX_CAPACITY
+        state.apply_method(0, 0, 0x1808, 7, 1, 1, {})
+        self.assertEqual(len(state.element_indices), nv2a_capture.PGRAPH_ELEMENT_INDEX_CAPACITY)
+
+    def test_discovers_ramin_object_class(self) -> None:
+        ramin = bytearray(0x200)
+        struct.pack_into("<II", ramin, 0x40, 13, 0x80000010)
+        struct.pack_into("<I", ramin, 0x100, 0x00000097)
+        self.assertEqual(
+            nv2a_capture.discover_ramin_objects(bytes(ramin)),
+            {13: (0x100, nv2a_capture.NV_CLASS_KELVIN)},
+        )
+
+    def test_replays_pgraph_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pgraph.nv2acap"
+            build_pgraph_capture(path)
+            result = nv2a_capture.replay_pgraph(path)
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = nv2a_capture.pgraph_main([str(path)])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["methods"], 10)
+        self.assertEqual(result["checkpoint_count"], 3)
+        self.assertEqual(
+            [checkpoint["kind"] for checkpoint in result["checkpoints"]],
+            ["clear", "draw_arrays", "present"],
+        )
+        self.assertEqual(result["checkpoints"][1]["primitive"], 5)
+        self.assertEqual(result["checkpoints"][1]["count"], 3)
+
+    def test_pgraph_comparison_reports_state_divergence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / "baseline.nv2acap"
+            candidate = Path(directory) / "candidate.nv2acap"
+            build_pgraph_capture(baseline)
+            build_pgraph_capture(candidate, blend_enable=1)
+            result = nv2a_capture.compare_pgraph_replays(baseline, candidate)
+            with contextlib.redirect_stdout(io.StringIO()):
+                different_exit = nv2a_capture.pgraph_main([str(baseline), str(candidate)])
+                match_exit = nv2a_capture.pgraph_main([str(baseline), str(baseline)])
+        self.assertFalse(result["equal"])
+        self.assertEqual(result["first_divergence"]["index"], 0)
+        self.assertEqual(result["first_divergence"]["candidate"]["pipeline"]["blend"], 1)
+        self.assertEqual(different_exit, 1)
+        self.assertEqual(match_exit, 0)
+
     def test_normalizes_host_control_targets_only(self) -> None:
         base = 0x10000000
         self.assertEqual(

@@ -94,6 +94,30 @@ Keep the baseline outside build/run output that the wrapper replaces. Treat
 exit code `2` explicitly in the wrapper if an unbuildable commit should be
 reported to Git as `125` (skip) instead of bad.
 
+## Replay PGRAPH state
+
+```powershell
+python tools/nv2a_capture.py pgraph frame00005.nv2acap
+python tools/nv2a_capture.py pgraph frame00005.nv2acap --json
+python tools/nv2a_capture.py pgraph baseline.nv2acap candidate.nv2acap
+```
+
+PGRAPH replay resolves subchannel object bindings from the captured RAMIN image,
+filters non-Kelvin methods, and applies the Kelvin state stream without starting
+the emulator. It emits deterministic checkpoints for clears, `DRAW_ARRAYS`,
+indexed batches, inline batches, immediate-mode batches, and presents.
+
+Each checkpoint records its source record/method index, frame, primitive and
+vertex/word count, surface bindings, important pipeline fields, and a canonical
+state CRC. The CRC covers method registers, reset defaults, object bindings,
+transform program and constants, viewport and composite transforms, index and
+inline data, and complete immediate-vertex history. Comparing two replays
+reports the first checkpoint whose command or pixel-relevant state differs.
+
+The PGRAPH command uses the same automation exit codes as capture comparison:
+`0` for a valid replay or match, `1` for a valid replay difference, and `2` for
+an invalid capture.
+
 ## Version 1 binary format
 
 All integers are unsigned little-endian values. The 32-byte header is:
@@ -115,10 +139,11 @@ without invalidating version 1 parsers.
 
 ## Current boundary
 
-The host tool replays and verifies the PFIFO command processor. It does not yet
-rerun the software PGRAPH rasterizer independently: that implementation still
-lives in `Emu.cpp` and depends on emulator-owned mutable state. The bundle
-already contains the method stream, RAMIN, memory observations, and expected
-scanout needed for that next extraction. Until then, scanout CRC validation
-proves capture integrity, while title/probe execution remains the rendering
-oracle.
+The host tool independently replays the PFIFO command processor and the
+pixel-relevant PGRAPH state machine through draw checkpoints. It does not yet
+execute the software pixel backend: triangle setup, texture sampling, depth and
+stencil access, combiners, and surface writes still live in `Emu.cpp` and use
+emulator-owned memory services. The bundle contains the ordered memory
+observations and expected scanouts needed for that extraction. Until then,
+checkpoint CRCs isolate command/state divergence and scanout CRC validation
+proves capture integrity, while title/probe execution remains the pixel oracle.
