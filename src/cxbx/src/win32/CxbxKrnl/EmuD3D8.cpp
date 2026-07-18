@@ -149,10 +149,23 @@ struct EmuD3DCallStat { const char *Name; DWORD Count; };
 static EmuD3DCallStat g_D3DCallStats[EMU_D3D_CALL_STATS_SLOTS] = {0};
 static int g_D3DCallStatsEnabled = -1;
 
+static bool EmuD3DReadEnvironment(const char *Name, char *Value,
+                                  DWORD ValueCapacity)
+{
+    if(Value == NULL || ValueCapacity == 0)
+    {
+        return false;
+    }
+
+    Value[0] = '\0';
+    const DWORD Length = GetEnvironmentVariableA(Name, Value, ValueCapacity);
+    return Length != 0 && Length < ValueCapacity;
+}
+
 static bool EmuD3DEnvironmentEnabled(const char *Name)
 {
-    char value[2] = {};
-    return GetEnvironmentVariableA(Name, value, sizeof(value)) != 0;
+    char Value[2] = {};
+    return EmuD3DReadEnvironment(Name, Value, sizeof(Value));
 }
 
 static void EmuD3DTraceEntry(const char *Name)
@@ -3970,12 +3983,18 @@ static bool EmuD3DDrawGate(const char* what, DWORD pcPrimitiveType,
     const DWORD index = g_D3DDebugDrawIndex++;
 
     if(s_SkipEnabled < 0)
-        s_SkipEnabled = EmuD3DParseDrawRange(getenv("CXBX_D3D_SKIP_DRAWS"),
-                                             s_SkipBegin, s_SkipEnd)
-                            ? 1
-                            : 0;
+    {
+        char Value[64] = {};
+        s_SkipEnabled =
+            EmuD3DReadEnvironment("CXBX_D3D_SKIP_DRAWS", Value, sizeof(Value)) &&
+                    EmuD3DParseDrawRange(Value, s_SkipBegin, s_SkipEnd)
+                ? 1
+                : 0;
+    }
     if(s_TraceEnabled < 0)
-        s_TraceEnabled = (getenv("CXBX_D3D_DRAW_TRACE") != NULL) ? 1 : 0;
+    {
+        s_TraceEnabled = EmuD3DEnvironmentEnabled("CXBX_D3D_DRAW_TRACE") ? 1 : 0;
+    }
 
     const bool skipped =
         s_SkipEnabled == 1 && index >= s_SkipBegin && index < s_SkipEnd;
@@ -4021,26 +4040,38 @@ static void EmuD3DDrawPost(void)
     static LONG s_DumpsRemaining = 64;
 
     if(s_DumpEnabled < 0)
-        s_DumpEnabled = EmuD3DParseDrawRange(getenv("CXBX_D3D_DUMP_DRAWS"),
-                                             s_DumpBegin, s_DumpEnd)
-                            ? 1
-                            : 0;
+    {
+        char Value[64] = {};
+        s_DumpEnabled =
+            EmuD3DReadEnvironment("CXBX_D3D_DUMP_DRAWS", Value, sizeof(Value)) &&
+                    EmuD3DParseDrawRange(Value, s_DumpBegin, s_DumpEnd)
+                ? 1
+                : 0;
+    }
     if(s_DumpEnabled != 1)
+    {
         return;
+    }
 
     if(!s_FrameRangeParsed)
     {
-        s_FrameRangeEnabled = EmuD3DParseDrawRange(
-            getenv("CXBX_D3D_DUMP_FRAMES"), s_FrameBegin, s_FrameEnd);
+        char Value[64] = {};
+        s_FrameRangeEnabled =
+            EmuD3DReadEnvironment("CXBX_D3D_DUMP_FRAMES", Value, sizeof(Value)) &&
+            EmuD3DParseDrawRange(Value, s_FrameBegin, s_FrameEnd);
         s_FrameRangeParsed = true;
     }
     if(s_FrameRangeEnabled &&
        (g_D3DDebugFrame < s_FrameBegin || g_D3DDebugFrame >= s_FrameEnd))
+    {
         return;
+    }
 
     const DWORD index = g_D3DDebugDrawIndex != 0 ? g_D3DDebugDrawIndex - 1 : 0;
     if(index < s_DumpBegin || index >= s_DumpEnd || s_DumpsRemaining <= 0)
+    {
         return;
+    }
 
     s_DumpsRemaining--;
 
