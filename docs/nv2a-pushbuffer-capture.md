@@ -118,7 +118,7 @@ The PGRAPH command uses the same automation exit codes as capture comparison:
 `0` for a valid replay or match, `1` for a valid replay difference, and `2` for
 an invalid capture.
 
-## Replay clear and present pixels
+## Replay deterministic pixels
 
 ```powershell
 python tools/nv2a_capture.py pixels frame00000.nv2acap
@@ -126,11 +126,18 @@ python tools/nv2a_capture.py pixels frame00000.nv2acap --json
 ```
 
 Pixel replay reconstructs sparse surfaces from ordered captured-memory
-observations, resolves color and zeta DMA objects through RAMIN, executes color,
-depth, and stencil clear masks, and resolves multisampled color targets into the
-presented scanout surface. Scanout-source memory reads are explicitly excluded
-from replay inputs, so the expected framebuffer cannot make an unimplemented
-pixel path pass accidentally.
+observations and resolves color, zeta, and vertex DMA objects through RAMIN. It
+executes color/depth/stencil clear masks; fixed-function `DRAW_ARRAYS` and
+indexed batches with float positions plus optional packed or float diffuse
+color; triangle, strip, fan, quad, quad-strip, and polygon assembly; Gouraud
+color interpolation; Z16/Z24 depth tests and writes; and multisampled color
+resolve into the presented scanout surface.
+
+Draw execution is deferred until the memory records caused by the submission
+have been consumed. Indexed checkpoints retain the submitted indices, and
+physical-memory mirror addresses are normalized when fetching captured vertex
+bytes. Scanout-source reads are explicitly excluded from replay inputs, so the
+expected framebuffer cannot make an unimplemented pixel path pass accidentally.
 
 Every scanout reports known-byte coverage plus actual and expected CRC32 values.
 The command reports `PASS` and exits `0` only when every output byte was produced
@@ -161,9 +168,11 @@ without invalidating version 1 parsers.
 ## Current boundary
 
 The host tool independently replays PFIFO, pixel-relevant PGRAPH state, DMA
-surface resolution, clears, and multisample presents. Triangle setup, vertex and
-texture reads, depth/stencil tests during draws, combiners, blending, and draw
-surface writes still live in `Emu.cpp`. The bundle contains the ordered memory
-observations and expected scanouts needed for those extractions. Checkpoint CRCs
-isolate command/state divergence; known-byte coverage prevents partial pixel
-replay from being mistaken for a complete rendering result.
+surface resolution, clears, fixed-function untextured vertex-array draws,
+triangle rasterization, depth, draw-surface writes, and multisample presents.
+Vertex programs, textures, non-diffuse register combiners, non-passthrough final
+combiners, alpha/stencil tests during draws, blending, and inline/immediate
+vertex layouts remain explicit unsupported checkpoints. The bundle contains the
+ordered memory observations and expected scanouts needed for those extractions.
+Checkpoint CRCs isolate command/state divergence; known-byte coverage prevents
+partial pixel replay from being mistaken for a complete rendering result.
