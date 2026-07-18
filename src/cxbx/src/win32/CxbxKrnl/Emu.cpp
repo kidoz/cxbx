@@ -313,6 +313,87 @@ static bool EmuReadContextXmmRegister(const CONTEXT *ContextRecord, ULONG Regist
 #endif
 }
 
+static void EmuFloat32ToExtended(ULONG Value, BYTE Extended[10], WORD *Tag)
+{
+    const ULONGLONG Sign = (ULONGLONG)(Value >> 31) << 15;
+    const ULONG Exponent = (Value >> 23) & 0xFF;
+    const ULONG Fraction = Value & 0x7FFFFF;
+    ULONGLONG Significand = 0;
+    WORD ExtendedExponent = 0;
+
+    if(Exponent == 0)
+    {
+        if(Fraction == 0)
+        {
+            *Tag = 1; // zero
+        }
+        else
+        {
+            ULONG HighestBit = 22;
+            while((Fraction & (1UL << HighestBit)) == 0)
+                HighestBit--;
+
+            ExtendedExponent = (WORD)(16383 - 149 + HighestBit);
+            Significand = (ULONGLONG)Fraction << (63 - HighestBit);
+            *Tag = 0; // valid
+        }
+    }
+    else if(Exponent == 0xFF)
+    {
+        ExtendedExponent = 0x7FFF;
+        Significand = 0x8000000000000000ULL | ((ULONGLONG)Fraction << 40);
+        if(Fraction != 0)
+            Significand |= 0x4000000000000000ULL;
+        *Tag = 2; // special
+    }
+    else
+    {
+        ExtendedExponent = (WORD)(Exponent - 127 + 16383);
+        Significand = 0x8000000000000000ULL | ((ULONGLONG)Fraction << 40);
+        *Tag = 0; // valid
+    }
+
+    CopyMemory(Extended, &Significand, sizeof(Significand));
+    const WORD SignAndExponent = (WORD)(Sign | ExtendedExponent);
+    CopyMemory(Extended + sizeof(Significand), &SignAndExponent, sizeof(SignAndExponent));
+}
+
+static bool EmuPushContextFloat32(CONTEXT *ContextRecord, ULONG Value)
+{
+    if(ContextRecord == NULL)
+        return false;
+
+    BYTE Extended[10];
+    WORD Tag = 0;
+    EmuFloat32ToExtended(Value, Extended, &Tag);
+
+    WORD StatusWord = (WORD)ContextRecord->FloatSave.StatusWord;
+    const WORD Top = (WORD)(((StatusWord >> 11) - 1) & 0x07);
+    StatusWord = (WORD)((StatusWord & ~(0x07 << 11)) | (Top << 11));
+    ContextRecord->FloatSave.StatusWord = StatusWord;
+
+    WORD TagWord = (WORD)ContextRecord->FloatSave.TagWord;
+    TagWord = (WORD)((TagWord & ~(0x03 << (Top * 2))) | (Tag << (Top * 2)));
+    ContextRecord->FloatSave.TagWord = TagWord;
+    MoveMemory(ContextRecord->FloatSave.RegisterArea + 10,
+               ContextRecord->FloatSave.RegisterArea, 70);
+    CopyMemory(ContextRecord->FloatSave.RegisterArea, Extended, sizeof(Extended));
+
+#if defined(_X86_) || defined(_M_IX86) || defined(__i386__)
+    if((ContextRecord->ContextFlags & CONTEXT_EXTENDED_REGISTERS) != 0)
+    {
+        BYTE *FxSave = ContextRecord->ExtendedRegisters;
+        CopyMemory(FxSave + 2, &StatusWord, sizeof(StatusWord));
+        FxSave[4] |= (BYTE)(1 << Top);
+        MoveMemory(FxSave + 48, FxSave + 32, 7 * 16);
+        ZeroMemory(FxSave + 32, 16);
+        CopyMemory(FxSave + 32, Extended, sizeof(Extended));
+    }
+#endif
+
+    return true;
+}
+
 static bool EmuHasEvenParity(BYTE Value)
 {
     bool Even = true;
@@ -2621,18 +2702,31 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
     if(s_Disabled)
         return NULL;
 
-    if(Size == 0)
+    if(Size == 0 || Address + Size - 1 < Address)
         return NULL;
 
     ULONG BlockSize = 0;
-    if(Address >= EmuPhysicalShadowBase && Address <= EmuPhysicalShadowEnd)
+    if(Address >= EmuPhysicalShadowBase)
     {
         // Xbox D3D obtains a CPU-visible AGP pointer by ORing a contiguous
         // address with 0xF0000000. Heap fallback allocations preserve their
-        // host low 28 bits, so recover and validate that pointer first.
-        ULONG HostAlias = Address & 0x0FFFFFFF;
+        // host low 28 bits, so recover and validate that pointer first. This
+        // also covers aliases above the nominal shadow aperture, but only when
+        // they resolve to real host backing; MMIO stays on its normal path.
+        const ULONG HostAlias = Address & 0x0FFFFFFF;
         ULONG Base = EmuContiguousBlockBase(HostAlias, &BlockSize);
         if(Base != 0 && HostAlias + Size >= HostAlias && HostAlias + Size <= Base + BlockSize)
+            return (BYTE *)(uintptr_t)HostAlias;
+
+        const ULONG GuestImageBase = g_pXbeHeader != NULL ? g_pXbeHeader->dwBaseAddr : 0;
+        const ULONG GuestImageEnd = g_pXbeHeader != NULL &&
+                                            g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage >=
+                                                g_pXbeHeader->dwBaseAddr
+                                        ? g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage
+                                        : 0;
+        const bool InGuestImage = GuestImageEnd > GuestImageBase &&
+                                  HostAlias >= GuestImageBase && HostAlias < GuestImageEnd;
+        if(!InGuestImage && EmuIsWritableHostRange(HostAlias, Size))
             return (BYTE *)(uintptr_t)HostAlias;
     }
 
@@ -2677,11 +2771,8 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
 static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
 {
     ULONG End = Address + Size - 1;
-    if(Size == 0 || Value == NULL || End < Address || !EmuIsPhysicalMapAddress(Address) ||
-       !EmuIsPhysicalMapAddress(End))
-    {
+    if(Size == 0 || Value == NULL || End < Address)
         return false;
-    }
 
     BYTE *Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
@@ -2692,6 +2783,9 @@ static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
         *Value = Result;
         return true;
     }
+
+    if(!EmuIsPhysicalMapAddress(Address) || !EmuIsPhysicalMapAddress(End))
+        return false;
 
     ULONG Result = 0;
     for(ULONG i = 0; i < Size; i++)
@@ -2711,11 +2805,8 @@ static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
 static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
 {
     ULONG End = Address + Size - 1;
-    if(Size == 0 || End < Address || !EmuIsPhysicalMapAddress(Address) ||
-       !EmuIsPhysicalMapAddress(End))
-    {
+    if(Size == 0 || End < Address)
         return false;
-    }
 
     BYTE* Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
@@ -2724,6 +2815,9 @@ static bool EmuWritePhysicalMap(ULONG Address, ULONG Size, ULONG Value)
             Host[i] = (BYTE)(Value >> (i * 8));
         return true;
     }
+
+    if(!EmuIsPhysicalMapAddress(Address) || !EmuIsPhysicalMapAddress(End))
+        return false;
 
     for(ULONG i = 0; i < Size; i++)
     {
@@ -3039,11 +3133,8 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
 static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size)
 {
     ULONG End = Address + Size - 1;
-    if(Size == 0 || Data == NULL || End < Address || !EmuIsPhysicalMapAddress(Address) ||
-       !EmuIsPhysicalMapAddress(End))
-    {
+    if(Size == 0 || Data == NULL || End < Address)
         return false;
-    }
 
     BYTE *Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
@@ -3051,6 +3142,9 @@ static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size
         memcpy(Host, Data, Size);
         return true;
     }
+
+    if(!EmuIsPhysicalMapAddress(Address) || !EmuIsPhysicalMapAddress(End))
+        return false;
 
     for(ULONG i = 0; i < Size; i++)
     {
@@ -6943,9 +7037,26 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
     ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
     ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
     bool FaultIsPhysicalMap = EmuIsPhysicalMapAddress(FaultAddress);
+    bool IsBulkStore = false;
+    __try
+    {
+        const BYTE *FaultInstruction = (const BYTE *)e->ContextRecord->Eip;
+        IsBulkStore = AccessType == 1 &&
+                      ((FaultInstruction[0] == 0x0F &&
+                        (FaultInstruction[1] == 0x2B || FaultInstruction[1] == 0x7F)) ||
+                       (FaultInstruction[0] == 0x66 && FaultInstruction[1] == 0x89) ||
+                       (FaultInstruction[0] == 0xF3 &&
+                        (FaultInstruction[1] == 0xAB || FaultInstruction[1] == 0xAA ||
+                         FaultInstruction[1] == 0xA5 || FaultInstruction[1] == 0xA4)));
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    bool FaultIsBackedAlias = IsBulkStore && FaultAddress >= EmuPhysicalShadowBase &&
+                              EmuPhysicalHostSpan(FaultAddress, 1) != NULL;
     bool MayBePhysicalStoreFault = AccessType == 0 && FaultAddress == 0xFFFFFFFF;
 
-    if(!FaultIsPhysicalMap && !MayBePhysicalStoreFault)
+    if(!FaultIsPhysicalMap && !FaultIsBackedAlias && !MayBePhysicalStoreFault)
         return false;
 
     // Keep enough samples to identify new decoder paths without turning large
@@ -7045,15 +7156,26 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             ULONG OperandLength = 0;
 
             if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
-               ((FaultIsPhysicalMap && Address == FaultAddress) ||
-                (MayBePhysicalStoreFault && EmuIsPhysicalMapAddress(Address))))
+               (((FaultIsPhysicalMap || FaultIsBackedAlias) && Address == FaultAddress) ||
+                (MayBePhysicalStoreFault &&
+                 (EmuIsPhysicalMapAddress(Address) || EmuPhysicalHostSpan(Address, 16) != NULL))))
             {
                 BYTE Value[16];
                 ULONG RegisterIndex = (Instruction[2] >> 3) & 0x07;
 
-                if(!EmuReadContextXmmRegister(e->ContextRecord, RegisterIndex, Value) ||
-                   !EmuWritePhysicalMapBytes(Address, Value, sizeof(Value)))
+                if(!EmuReadContextXmmRegister(e->ContextRecord, RegisterIndex, Value))
                 {
+                    printf("Emu (0x%lX): physical movntps could not read xmm%lu context flags=0x%.08lX.\n",
+                           GetCurrentThreadId(), RegisterIndex, e->ContextRecord->ContextFlags);
+                    fflush(stdout);
+                    return false;
+                }
+                if(!EmuWritePhysicalMapBytes(Address, Value, sizeof(Value)))
+                {
+                    printf("Emu (0x%lX): physical movntps write failed address=0x%.08lX edi=0x%.08lX eax=0x%.08lX.\n",
+                           GetCurrentThreadId(), Address,
+                           e->ContextRecord->Edi, e->ContextRecord->Eax);
+                    fflush(stdout);
                     return false;
                 }
 
@@ -7089,8 +7211,9 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             ULONG OperandLength = 0;
 
             if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
-               ((FaultIsPhysicalMap && Address == FaultAddress) ||
-                (MayBePhysicalStoreFault && EmuIsPhysicalMapAddress(Address))))
+               (((FaultIsPhysicalMap || FaultIsBackedAlias) && Address == FaultAddress) ||
+                (MayBePhysicalStoreFault &&
+                 (EmuIsPhysicalMapAddress(Address) || EmuPhysicalHostSpan(Address, 8) != NULL))))
             {
                 ULONG RegisterIndex = (Instruction[2] >> 3) & 0x07;
                 const BYTE *Mm = (const BYTE *)&e->ContextRecord->FloatSave.RegisterArea[RegisterIndex * 10];
@@ -7150,6 +7273,38 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 if(LogAccess)
                 {
                     printf("Emu (0x%lX): Emulated physical read 0x%.08lX = 0x%.08lX.\n",
+                           GetCurrentThreadId(), FaultAddress, Value);
+                    fflush(stdout);
+                }
+
+                return true;
+            }
+        }
+
+        // D9 /0 = fld m32real. Some titles keep CPU-side working arrays in the
+        // Xbox physical alias and compare their values directly with x87 code.
+        if(AccessType == 0 && Instruction[0] == 0xD9 &&
+           (Instruction[1] & 0x38) == 0)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction,
+                                     &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                ULONG Value = 0;
+                if(!EmuReadPhysicalMap(FaultAddress, sizeof(Value), &Value) ||
+                   !EmuPushContextFloat32(e->ContextRecord, Value))
+                {
+                    return false;
+                }
+
+                e->ContextRecord->Eip += OperandLength;
+
+                if(LogAccess)
+                {
+                    printf("Emu (0x%lX): Emulated physical fld dword 0x%.08lX = 0x%.08lX.\n",
                            GetCurrentThreadId(), FaultAddress, Value);
                     fflush(stdout);
                 }
@@ -7709,6 +7864,27 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                     fflush(stdout);
                 }
 
+                return true;
+            }
+        }
+
+        // 0x66 0x89 /r = mov r/m16, r16. XGSwizzleRect uses this for the
+        // two-byte tail after its MMX copy loop, including resource aliases
+        // whose high nibble overlaps a device aperture.
+        if(AccessType == 1 && Instruction[0] == 0x66 && Instruction[1] == 0x89)
+        {
+            ULONG Address = 0;
+            ULONG OperandLength = 0;
+
+            if(EmuDecodeModRmAddress(e->ContextRecord, Instruction + 1, &Address, &OperandLength) &&
+               Address == FaultAddress)
+            {
+                const ULONG Value = EmuContextWordRegister(
+                    e->ContextRecord, (Instruction[2] >> 3) & 0x07);
+                if(!EmuWritePhysicalMap(FaultAddress, 2, Value))
+                    return false;
+
+                e->ContextRecord->Eip += 1 + OperandLength;
                 return true;
             }
         }
@@ -9151,6 +9327,10 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
            GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
     printf("Emu (0x%lX): Vectored ESP=0x%.08lX EBP=0x%.08lX\n",
            GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
+    printf("Emu (0x%lX): Vectored EAX=0x%.08lX EBX=0x%.08lX ECX=0x%.08lX EDX=0x%.08lX ESI=0x%.08lX EDI=0x%.08lX\n",
+           GetCurrentThreadId(), e->ContextRecord->Eax, e->ContextRecord->Ebx,
+           e->ContextRecord->Ecx, e->ContextRecord->Edx,
+           e->ContextRecord->Esi, e->ContextRecord->Edi);
     cxbx::trace::RecordFlight(cxbx::trace::Event::Exception,
                               static_cast<std::uint32_t>(e->ExceptionRecord->ExceptionCode));
     cxbx::trace::DumpFlightEmergency();
