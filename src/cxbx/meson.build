@@ -33,6 +33,7 @@ cxbx_launcher_src = files(
 
 cxbx_runtime_src = files(
   'src/core/PcmConverter.cpp',
+  'src/core/XboxAdpcmDecoder.cpp',
   'src/core/Yuy2Converter.cpp',
   'src/win32/EmuShared.cpp',
   'src/win32/HostInput.cpp',

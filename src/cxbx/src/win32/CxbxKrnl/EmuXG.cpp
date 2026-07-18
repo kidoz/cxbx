@@ -198,6 +198,7 @@ VOID WINAPI XTL::EmuXGSwizzleRect
                              CopyWidth == (LONG)Width && CopyHeight == (LONG)Height;
     if(FullTexture)
     {
+        const size_t TexelCount = (size_t)Width * Height;
         const size_t DestinationSize = (size_t)Width * Height * BytesPerPixel;
         std::vector<BYTE> Swizzled(DestinationSize);
         for(DWORD Y = 0; Y < Height; Y++)
@@ -205,6 +206,13 @@ VOID WINAPI XTL::EmuXGSwizzleRect
             for(DWORD X = 0; X < Width; X++)
             {
                 const DWORD DestinationTexel = EmuXGSwizzleTexelIndex(X, Y, Width, Height);
+                if(DestinationTexel >= TexelCount)
+                {
+                    EmuWarning("XGSwizzleRect: swizzled texel %lu exceeds %lu x %lu destination",
+                               DestinationTexel, Width, Height);
+                    EmuSwapFS();   // Xbox FS
+                    return;
+                }
                 memcpy(Swizzled.data() + (size_t)DestinationTexel * BytesPerPixel,
                        (const BYTE*)pSource + (size_t)Y * SrcPitch + (size_t)X * BytesPerPixel,
                        BytesPerPixel);
@@ -220,6 +228,13 @@ VOID WINAPI XTL::EmuXGSwizzleRect
             {
                 const DWORD DestinationTexel = EmuXGSwizzleTexelIndex(
                     (DWORD)(DstLeft + X), (DWORD)(DstTop + Y), Width, Height);
+                if(DestinationTexel >= (size_t)Width * Height)
+                {
+                    EmuWarning("XGSwizzleRect: swizzled texel %lu exceeds %lu x %lu destination",
+                               DestinationTexel, Width, Height);
+                    EmuSwapFS();   // Xbox FS
+                    return;
+                }
                 EmuXGCopyToGuest(
                     (BYTE*)pDest + (size_t)DestinationTexel * BytesPerPixel,
                     (const BYTE*)pSource + (size_t)(SrcTop + Y) * SrcPitch +

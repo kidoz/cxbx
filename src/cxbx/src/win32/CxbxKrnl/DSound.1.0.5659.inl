@@ -328,6 +328,51 @@ SOOVPA<13> IDirectSound_GetOutputLevels_1_0_5659 =
     }
 };
 
+// ?SetNotificationPositions@CDirectSoundBuffer@DirectSound@@QAGJKPBU_DSBPOSITIONNOTIFY@@@Z
+// (dsound.lib 5659, 101 bytes)
+SOOVPA<13> CDirectSoundBuffer_SetNotificationPositions_1_0_5659 =
+{
+    0, 13, XREF_DS5659_BUFFER_SETNOTIFICATIONPOSITIONS, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x07, 0x3D },
+        { 0x10, 0x74 },
+        { 0x1B, 0xFF },
+        { 0x21, 0xB8 },
+        { 0x29, 0x8B },
+        { 0x32, 0x74 },
+        { 0x39, 0xE8 },
+        { 0x42, 0x7C },
+        { 0x4C, 0x8B },
+        { 0x52, 0x68 },
+        { 0x5D, 0x8B },
+        { 0x64, 0x00 }
+    }
+};
+
+// _IDirectSoundBuffer_SetNotificationPositions@12 (dsound.lib 5659,
+// 32 bytes; call@0x19 -> CDirectSoundBuffer::SetNotificationPositions)
+SOOVPA<14> IDirectSoundBuffer_SetNotificationPositions_1_0_5659 =
+{
+    0, 14, -1, 1,
+    {
+        { 0x19, XREF_DS5659_BUFFER_SETNOTIFICATIONPOSITIONS },
+        { 0x00, 0x8B },
+        { 0x02, 0x24 },
+        { 0x05, 0x74 },
+        { 0x07, 0x0C },
+        { 0x0A, 0xFF },
+        { 0x0C, 0x24 },
+        { 0x0F, 0xC0 },
+        { 0x12, 0xD9 },
+        { 0x14, 0xC9 },
+        { 0x17, 0x51 },
+        { 0x18, 0xE8 },
+        { 0x1D, 0xC2 },
+        { 0x1F, 0x00 }
+    }
+};
+
 // ?SetOutputBuffer@CDirectSoundVoice@DirectSound@@QAGJPAUIDirectSoundBuffer@@@Z
 // (dsound.lib 5659, 84 bytes)
 SOOVPA<12> CDirectSoundBuffer_SetOutputBufferT_1_0_5659 =
@@ -1147,6 +1192,21 @@ OOVPATable DSound_1_0_5659[] =
         XTL::EmuDirectSoundUseFullHRTF,
         #ifdef _DEBUG_TRACE
         "EmuDirectSoundUseFullHRTF"
+        #endif
+    },
+    // CDirectSoundBuffer::SetNotificationPositions (XREF save)
+    {
+        (OOVPA*)&CDirectSoundBuffer_SetNotificationPositions_1_0_5659, 0,
+        #ifdef _DEBUG_TRACE
+        "CDirectSoundBuffer::SetNotificationPositions (XREF)"
+        #endif
+    },
+    // IDirectSoundBuffer::SetNotificationPositions
+    {
+        (OOVPA*)&IDirectSoundBuffer_SetNotificationPositions_1_0_5659,
+        XTL::EmuIDirectSoundBuffer8_SetNotificationPositions,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirectSoundBuffer8_SetNotificationPositions"
         #endif
     },
     // Setter twin-family sweeps (patch-all FALLBACK; must stay the LAST
