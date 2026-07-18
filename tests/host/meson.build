@@ -70,6 +70,15 @@ host_pcm_test = executable(
 
 test('host-pcm-conversion', host_pcm_test)
 
+host_xbox_adpcm_test = executable(
+  'host_xbox_adpcm_test',
+  'xbox_adpcm.cpp',
+  '../../src/cxbx/src/core/XboxAdpcmDecoder.cpp',
+  include_directories : cxbx_inc,
+)
+
+test('host-xbox-adpcm', host_xbox_adpcm_test)
+
 host_vsh_recompiler_test = executable(
   'host_vsh_recompiler_test',
   'vsh_recompiler.cpp',

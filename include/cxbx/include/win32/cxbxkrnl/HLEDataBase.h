@@ -218,6 +218,7 @@ enum XRefDataBaseOffset
     XREF_DS5659_BUFFER_SETFORMAT,
     XREF_DS5659_BUFFER_STOPEX,
     XREF_DS5659_GETOUTPUTLEVELS,
+    XREF_DS5659_BUFFER_SETNOTIFICATIONPOSITIONS,
     // XDK 5849 XAPI input: XID_fCloseDevice internal (the 12-byte
     // XInputClose thin wrapper is matched by its call target).
     XREF_XAPI5849_XINPUTCLOSE,

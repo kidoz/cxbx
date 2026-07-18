@@ -580,6 +580,13 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_SetBufferData
     DWORD                   dwBufferBytes
 );
 
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetNotificationPositions
+(
+    X_CDirectSoundBuffer       *pThis,
+    DWORD                       dwNotifyCount,
+    const DSBPOSITIONNOTIFY    *paNotifies
+);
+
 // ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetOutputBuffer
 // ******************************************************************

@@ -44,12 +44,14 @@ namespace xboxkrnl
 
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <new>
 
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
 #include "core/PcmConverter.h"
+#include "core/XboxAdpcmDecoder.h"
 #include "core/trace.h"
 
 // ******************************************************************
@@ -88,6 +90,7 @@ constexpr DWORD kDsStreamPausePause = 1;
 constexpr DWORD kDsStreamPauseSynchPlayback = 2;
 constexpr DWORD kDsStreamPauseNoActivate = 3;
 constexpr DWORD kStaticBufferWaveFormatCapacity = 64;
+constexpr WORD kWaveFormatXboxAdpcm = 0x0069;
 
 struct StreamPacket
 {
@@ -118,6 +121,28 @@ static bool CacheStaticBufferFormat(XTL::X_CDirectSoundBuffer* buffer,
 
     std::memcpy(buffer->EmuWaveFormat, format, formatBytes);
     buffer->EmuWaveFormatBytes = formatBytes;
+    return true;
+}
+
+static bool ConfigureStaticHostFormat(const WAVEFORMATEX* guestFormat,
+                                      WAVEFORMATEX& hostFormat)
+{
+    if(guestFormat == NULL || guestFormat->wFormatTag != kWaveFormatXboxAdpcm)
+        return false;
+
+    if(guestFormat->nChannels == 0 || guestFormat->nChannels > 2 ||
+       guestFormat->nBlockAlign != guestFormat->nChannels * 36)
+    {
+        return false;
+    }
+
+    hostFormat = {};
+    hostFormat.wFormatTag = WAVE_FORMAT_PCM;
+    hostFormat.nChannels = guestFormat->nChannels;
+    hostFormat.nSamplesPerSec = guestFormat->nSamplesPerSec;
+    hostFormat.wBitsPerSample = 16;
+    hostFormat.nBlockAlign = hostFormat.nChannels * static_cast<WORD>(sizeof(std::int16_t));
+    hostFormat.nAvgBytesPerSec = hostFormat.nSamplesPerSec * hostFormat.nBlockAlign;
     return true;
 }
 
@@ -674,6 +699,7 @@ HRESULT WINAPI XTL::EmuDirectSoundCreateBuffer
     #endif
 
     DSBUFFERDESC DSBufferDesc;
+    WAVEFORMATEX hostFormat = {};
 
     // ******************************************************************
     // * Convert from Xbox to PC DSound
@@ -693,7 +719,21 @@ HRESULT WINAPI XTL::EmuDirectSoundCreateBuffer
             DSBufferDesc.dwBufferBytes = pdsbd->dwBufferBytes;
 
         DSBufferDesc.dwReserved = 0;
-        DSBufferDesc.lpwfxFormat = pdsbd->lpwfxFormat;              // TODO: Make sure this is the same as PC
+        DSBufferDesc.lpwfxFormat = pdsbd->lpwfxFormat;
+        if(pdsbd->lpwfxFormat != NULL && pdsbd->lpwfxFormat->wFormatTag == kWaveFormatXboxAdpcm)
+        {
+            if(!ConfigureStaticHostFormat(pdsbd->lpwfxFormat, hostFormat))
+            {
+                EmuSwapFS();   // XBox FS
+                return DSERR_BADFORMAT;
+            }
+
+            DSBufferDesc.lpwfxFormat = &hostFormat;
+            const std::size_t decodedBytes = cxbx::audio::XboxAdpcmDecodedBytes(
+                pdsbd->dwBufferBytes, pdsbd->lpwfxFormat->nChannels);
+            if(decodedBytes >= DSBSIZE_MIN && decodedBytes <= MAXDWORD)
+                DSBufferDesc.dwBufferBytes = static_cast<DWORD>(decodedBytes);
+        }
         DSBufferDesc.guid3DAlgorithm = DS3DALG_DEFAULT;
     }
 
@@ -701,7 +741,7 @@ HRESULT WINAPI XTL::EmuDirectSoundCreateBuffer
     *ppBuffer = new X_CDirectSoundBuffer();
     (*ppBuffer)->EmuBufferFlags = DSBufferDesc.dwFlags;
     (*ppBuffer)->EmuBufferBytes = DSBufferDesc.dwBufferBytes;
-    CacheStaticBufferFormat(*ppBuffer, DSBufferDesc.lpwfxFormat);
+    CacheStaticBufferFormat(*ppBuffer, pdsbd->lpwfxFormat);
 
     HRESULT hRet = g_pDSound8->CreateSoundBuffer(&DSBufferDesc, &((*ppBuffer)->EmuDirectSoundBuffer8), NULL);
 
@@ -2272,6 +2312,13 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
     }
     #endif
 
+    if(pThis == NULL)
+    {
+        EmuSwapFS();   // XBox FS
+
+        return DSERR_INVALIDPARAM;
+    }
+
     if(dwBufferBytes == 0)
     {
         EmuSwapFS();   // XBox FS
@@ -2279,16 +2326,55 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
         return DS_OK;
     }
 
-    const DWORD hostBufferBytes = max(dwBufferBytes, static_cast<DWORD>(DSBSIZE_MIN));
-    if(hostBufferBytes != pThis->EmuBufferBytes)
+    const WAVEFORMATEX* guestFormat = pThis->EmuWaveFormatBytes >= sizeof(WAVEFORMATEX)
+                                         ? reinterpret_cast<const WAVEFORMATEX*>(pThis->EmuWaveFormat)
+                                         : NULL;
+    WAVEFORMATEX hostFormat = {};
+    const WAVEFORMATEX* replacementFormat = guestFormat;
+    const void* hostData = pvBufferData;
+    DWORD hostDataBytes = dwBufferBytes;
+    std::unique_ptr<std::uint8_t[]> decodedData;
+
+    if(guestFormat != NULL && guestFormat->wFormatTag == kWaveFormatXboxAdpcm)
+    {
+        const std::size_t decodedBytes = cxbx::audio::XboxAdpcmDecodedBytes(
+            dwBufferBytes, guestFormat->nChannels);
+        if(!ConfigureStaticHostFormat(guestFormat, hostFormat) || decodedBytes == 0 ||
+           decodedBytes > MAXDWORD || pvBufferData == NULL ||
+           IsBadReadPtr(pvBufferData, dwBufferBytes))
+        {
+            EmuSwapFS();   // XBox FS
+            return DSERR_BADFORMAT;
+        }
+
+        decodedData.reset(new(std::nothrow) std::uint8_t[decodedBytes]);
+        if(decodedData == NULL)
+        {
+            EmuSwapFS();   // XBox FS
+            return E_OUTOFMEMORY;
+        }
+
+        if(!cxbx::audio::DecodeXboxAdpcm(
+               static_cast<const std::uint8_t*>(pvBufferData), dwBufferBytes,
+               guestFormat->nChannels, decodedData.get(), decodedBytes))
+        {
+            EmuSwapFS();   // XBox FS
+            return DSERR_BADFORMAT;
+        }
+
+        replacementFormat = &hostFormat;
+        hostData = decodedData.get();
+        hostDataBytes = static_cast<DWORD>(decodedBytes);
+    }
+
+    const DWORD hostBufferBytes = max(hostDataBytes, static_cast<DWORD>(DSBSIZE_MIN));
+    if(hostBufferBytes != pThis->EmuBufferBytes || pThis->EmuDirectSoundBuffer8 == NULL)
     {
         DSBUFFERDESC descriptor = {};
         descriptor.dwSize = sizeof(descriptor);
         descriptor.dwFlags = pThis->EmuBufferFlags;
         descriptor.dwBufferBytes = hostBufferBytes;
-        descriptor.lpwfxFormat = pThis->EmuWaveFormatBytes >= sizeof(WAVEFORMATEX)
-                                     ? reinterpret_cast<WAVEFORMATEX*>(pThis->EmuWaveFormat)
-                                     : NULL;
+        descriptor.lpwfxFormat = const_cast<WAVEFORMATEX*>(replacementFormat);
         descriptor.guid3DAlgorithm = DS3DALG_DEFAULT;
 
         if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
@@ -2319,35 +2405,32 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
     PVOID pAudioPtr, pAudioPtr2;
     DWORD dwAudioBytes, dwAudioBytes2;
 
-    // No host buffer (creation failed on an Xbox-only wave format): the
-    // voice stays silent, but the title keeps running.
-    if(pThis == NULL || pThis->EmuDirectSoundBuffer8 == NULL)
+    if(pThis->EmuDirectSoundBuffer8 == NULL)
     {
         EmuSwapFS();   // XBox FS
 
-        return DS_OK;
+        return DSERR_GENERIC;
     }
 
-    HRESULT hRet = pThis->EmuDirectSoundBuffer8->Lock(0, dwBufferBytes, &pAudioPtr, &dwAudioBytes, &pAudioPtr2, &dwAudioBytes2, 0);
+    HRESULT hRet = pThis->EmuDirectSoundBuffer8->Lock(0, hostDataBytes, &pAudioPtr, &dwAudioBytes, &pAudioPtr2, &dwAudioBytes2, 0);
 
     if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
     {
         printf("AUDIO| static-buffer-lock this=0x%p source=0x%p requested=0x%lX result=0x%lX first=0x%p/0x%lX second=0x%p/0x%lX\n",
-               pThis, pvBufferData, dwBufferBytes, hRet,
+               pThis, pvBufferData, hostDataBytes, hRet,
                pAudioPtr, dwAudioBytes, pAudioPtr2, dwAudioBytes2);
     }
 
     if(SUCCEEDED(hRet))
     {
-        // Copy the title's PCM data into the host buffer. (These copies were
-        // historically commented out, which left every HLE'd static buffer
-        // playing uninitialized host memory instead of the title's audio.)
-        if(pvBufferData != 0 && !IsBadReadPtr(pvBufferData, dwBufferBytes))
+        if(hostData != NULL && !IsBadReadPtr(hostData, hostDataBytes))
         {
             if(pAudioPtr != 0 && dwAudioBytes != 0)
-                memcpy(pAudioPtr, pvBufferData, dwAudioBytes);
+                memcpy(pAudioPtr, hostData, dwAudioBytes);
             if(pAudioPtr2 != 0 && dwAudioBytes2 != 0)
-                memcpy(pAudioPtr2, (PVOID)((DWORD)pvBufferData + dwAudioBytes), dwAudioBytes2);
+                memcpy(pAudioPtr2,
+                       static_cast<const std::uint8_t*>(hostData) + dwAudioBytes,
+                       dwAudioBytes2);
         }
 
         if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
@@ -2357,6 +2440,39 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetBufferData
 
         if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
             printf("AUDIO| static-buffer-unlock-complete this=0x%p\n", pThis);
+    }
+
+    EmuSwapFS();   // XBox FS
+
+    return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetNotificationPositions
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetNotificationPositions
+(
+    X_CDirectSoundBuffer       *pThis,
+    DWORD                       dwNotifyCount,
+    const DSBPOSITIONNOTIFY    *paNotifies
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(pThis == NULL || pThis->EmuDirectSoundBuffer8 == NULL ||
+       (dwNotifyCount != 0 && paNotifies == NULL))
+    {
+        EmuSwapFS();   // XBox FS
+        return DSERR_INVALIDPARAM;
+    }
+
+    IDirectSoundNotify* notify = NULL;
+    HRESULT hRet = pThis->EmuDirectSoundBuffer8->QueryInterface(
+        IID_IDirectSoundNotify, reinterpret_cast<void**>(&notify));
+    if(SUCCEEDED(hRet))
+    {
+        hRet = notify->SetNotificationPositions(dwNotifyCount, paNotifies);
+        notify->Release();
     }
 
     EmuSwapFS();   // XBox FS

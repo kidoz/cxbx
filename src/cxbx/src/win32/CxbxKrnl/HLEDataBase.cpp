@@ -84,6 +84,7 @@ namespace XTL
 #include "DSound.1.0.3911.inl"
 #include "XG.1.0.4361.inl"
 #include "XG.1.0.4627.inl"
+#include "XG.1.0.5659.inl"
 #include "XG.1.0.5849.inl"
 #include "XNet.1.0.3911.inl"
 #include "XOnline.1.0.4361.inl"
@@ -357,6 +358,13 @@ HLEData HLEDataBase[] =
         XG_1_0_4627,
         XG_1_0_4627_SIZE
     },
+    // XG Version 1.0.5659
+    {
+        "XGRAPHC",
+        1, 0, 5659,
+        XG_1_0_5659,
+        XG_1_0_5659_SIZE
+    },
     // XG Version 1.0.5849 (generated from XDK 5849 xgraphics.lib)
     {
         "XGRAPHC",
@@ -520,6 +528,7 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5659_BUFFER_SETFORMAT
     -1, // XREF_DS5659_BUFFER_STOPEX
     -1, // XREF_DS5659_GETOUTPUTLEVELS
+    -1, // XREF_DS5659_BUFFER_SETNOTIFICATIONPOSITIONS
     -1, // XREF_XAPI5849_XINPUTCLOSE
     -1, // XREF_D3D5558_MAKESPACE
     -1, // XREF_DS4627_GETCAPS
