@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 import sys
 import zlib
@@ -35,6 +36,7 @@ NV097_SET_SURFACE_COLOR_OFFSET = 0x0210
 NV097_SET_SURFACE_ZETA_OFFSET = 0x0214
 NV097_SET_CONTEXT_DMA_COLOR = 0x0194
 NV097_SET_CONTEXT_DMA_ZETA = 0x0198
+NV097_SET_CONTEXT_DMA_VERTEX = 0x019C
 NV097_SET_BEGIN_END = 0x17FC
 NV097_ARRAY_ELEMENT16 = 0x1800
 NV097_ARRAY_ELEMENT32 = 0x1808
@@ -44,6 +46,8 @@ NV097_SET_VERTEX4F = 0x1518
 NV097_SET_VERTEX_DATA2F_M = 0x1880
 NV097_SET_VERTEX_DATA4UB = 0x1940
 NV097_SET_VERTEX_DATA4F_M = 0x1A00
+NV097_SET_VERTEX_DATA_ARRAY_OFFSET = 0x1720
+NV097_SET_VERTEX_DATA_ARRAY_FORMAT = 0x1760
 NV097_SET_TRANSFORM_PROGRAM = 0x0B00
 NV097_SET_TRANSFORM_CONSTANT = 0x0B80
 NV097_SET_TRANSFORM_EXECUTION_MODE = 0x1E94
@@ -111,6 +115,7 @@ class PgraphCheckpoint:
     state_crc32: int
     surface: dict[str, int]
     pipeline: dict[str, int]
+    indices: tuple[int, ...] = ()
 
 
 @dataclass
@@ -193,6 +198,7 @@ class PgraphReplayState:
         method: int,
         data: int,
         count: int,
+        indices: tuple[int, ...] = (),
     ) -> PgraphCheckpoint:
         surface = {
             "clip_horizontal": self.registers[NV097_SET_SURFACE_CLIP_HORIZONTAL // 4],
@@ -226,6 +232,7 @@ class PgraphReplayState:
             state_crc32=self.state_crc32(),
             surface=surface,
             pipeline=pipeline,
+            indices=indices,
         )
         self.checkpoint_count += 1
         return result
@@ -347,7 +354,16 @@ class PgraphReplayState:
             else:
                 self.begin_op = 0
                 return None
-            result = self.checkpoint(record_index, method_index, frame, kind, method, data, count)
+            result = self.checkpoint(
+                record_index,
+                method_index,
+                frame,
+                kind,
+                method,
+                data,
+                count,
+                tuple(self.element_indices) if kind == "indexed_batch" else (),
+            )
             self.reset_batch()
             self.begin_op = 0
             return result
@@ -385,11 +401,16 @@ class PixelMemoryRegion:
 @dataclass
 class CapturedPixelMemory:
     observations: list[tuple[int, bytes]] = field(default_factory=list)
+    observation_pages: dict[int, list[int]] = field(default_factory=dict)
     regions: dict[int, PixelMemoryRegion] = field(default_factory=dict)
     observation_conflicts: int = 0
 
     def observe(self, address: int, data: bytes) -> None:
+        observation_index = len(self.observations)
         self.observations.append((address, data))
+        if data:
+            for page in range(address >> 12, ((address + len(data) - 1) >> 12) + 1):
+                self.observation_pages.setdefault(page, []).append(observation_index)
         for region in self.regions.values():
             self.observation_conflicts += region.overlay_unknown(address, data)
             region.observation_cursor = len(self.observations)
@@ -422,6 +443,30 @@ class CapturedPixelMemory:
         for region in self.regions.values():
             if region.address <= address and address + size <= region.end:
                 return region
+        return None
+
+    def read_observed(self, address: int, size: int) -> bytes | None:
+        """Read the newest captured bytes without treating guest input as replay output."""
+        result = bytearray(size)
+        known = bytearray(size)
+        aliases = (address, 0x80000000 | (address & 0x07FFFFFF))
+        candidates: set[int] = set()
+        for candidate in aliases:
+            if size:
+                for page in range(candidate >> 12, ((candidate + size - 1) >> 12) + 1):
+                    candidates.update(self.observation_pages.get(page, ()))
+        for observation_index in sorted(candidates, reverse=True):
+            observed_address, observed_data = self.observations[observation_index]
+            for candidate in aliases:
+                begin = max(candidate, observed_address)
+                end = min(candidate + size, observed_address + len(observed_data))
+                for absolute in range(begin, end):
+                    target = absolute - candidate
+                    if not known[target]:
+                        result[target] = observed_data[absolute - observed_address]
+                        known[target] = 1
+            if all(known):
+                return bytes(result)
         return None
 
     def clear_masked(
@@ -506,6 +551,15 @@ class AaColorSurface:
     frame: int
 
 
+@dataclass(frozen=True)
+class OfflineVertex:
+    x: float
+    y: float
+    z: float
+    w: float
+    color: int
+
+
 @dataclass
 class OfflinePixelReplay:
     ramin: bytes
@@ -514,6 +568,8 @@ class OfflinePixelReplay:
     memory: CapturedPixelMemory = field(default_factory=CapturedPixelMemory)
     aa_surface: AaColorSurface | None = None
     clears_executed: int = 0
+    draws_executed: int = 0
+    triangles_executed: int = 0
     presents_executed: int = 0
     unsupported: dict[str, int] = field(default_factory=dict)
     pending_present: tuple[int, int] | None = None
@@ -524,18 +580,373 @@ class OfflinePixelReplay:
         base = resolve_dma_base(state.registers[context_method // 4], self.ramin, self.objects)
         return (base + state.registers[offset_method // 4]) & 0xFFFFFFFF
 
-    def execute_clear(self, state: PgraphReplayState, frame: int, flags: int) -> None:
-        color_pitch = state.registers[NV097_SET_SURFACE_PITCH // 4] & 0xFFFF
-        if color_pitch == 0:
-            color_pitch = 640 * 4
-        clip_horizontal = state.registers[NV097_SET_SURFACE_CLIP_HORIZONTAL // 4]
-        clip_vertical = state.registers[NV097_SET_SURFACE_CLIP_VERTICAL // 4]
-        width = (clip_horizontal & 0xFFFF) + (clip_horizontal >> 16)
-        if width <= 0 or width > color_pitch // 4:
-            width = color_pitch // 4
-        height = (clip_vertical & 0xFFFF) + (clip_vertical >> 16)
+    @staticmethod
+    def surface_geometry(state: PgraphReplayState) -> tuple[int, int, int]:
+        pitch = state.registers[NV097_SET_SURFACE_PITCH // 4] & 0xFFFF
+        if pitch == 0:
+            pitch = 640 * 4
+        horizontal = state.registers[NV097_SET_SURFACE_CLIP_HORIZONTAL // 4]
+        vertical = state.registers[NV097_SET_SURFACE_CLIP_VERTICAL // 4]
+        width = (horizontal & 0xFFFF) + (horizontal >> 16)
+        if width <= 0 or width > pitch // 4:
+            width = pitch // 4
+        height = (vertical & 0xFFFF) + (vertical >> 16)
         if height <= 0 or height > 4096:
             height = 480
+        return pitch, width, height
+
+    def vertex_address(self, state: PgraphReplayState, attribute: int, index: int) -> int:
+        context = state.registers[NV097_SET_CONTEXT_DMA_VERTEX // 4]
+        base = resolve_dma_base(context, self.ramin, self.objects)
+        offset = state.registers[(NV097_SET_VERTEX_DATA_ARRAY_OFFSET + attribute * 4) // 4]
+        vertex_format = state.registers[(NV097_SET_VERTEX_DATA_ARRAY_FORMAT + attribute * 4) // 4]
+        stride = (vertex_format >> 8) & 0xFF
+        return (base + offset + index * stride) & 0xFFFFFFFF
+
+    def read_vertex(self, state: PgraphReplayState, index: int) -> OfflineVertex | None:
+        position_format = state.registers[NV097_SET_VERTEX_DATA_ARRAY_FORMAT // 4]
+        position_type = position_format & 0xF
+        position_count = (position_format >> 4) & 0xF
+        position_stride = (position_format >> 8) & 0xFF
+        if position_type != 2 or position_count not in (2, 3, 4) or position_stride == 0:
+            return None
+        raw_position = self.memory.read_observed(
+            self.vertex_address(state, 0, index), position_count * 4
+        )
+        if raw_position is None:
+            return None
+        position = list(struct.unpack(f"<{position_count}f", raw_position))
+        if position_count == 2:
+            position.extend((0.0, 1.0))
+        elif position_count == 3:
+            position.append(1.0)
+
+        color = 0xFFFFFFFF
+        diffuse_format = state.registers[(NV097_SET_VERTEX_DATA_ARRAY_FORMAT + 3 * 4) // 4]
+        diffuse_stride = (diffuse_format >> 8) & 0xFF
+        if diffuse_stride:
+            diffuse_type = diffuse_format & 0xF
+            diffuse_count = (diffuse_format >> 4) & 0xF
+            diffuse_size = 16 if diffuse_type == 2 else 4
+            raw_diffuse = self.memory.read_observed(
+                self.vertex_address(state, 3, index), diffuse_size
+            )
+            if raw_diffuse is None:
+                return None
+            if diffuse_type == 0 and diffuse_count == 4:
+                color = struct.unpack("<I", raw_diffuse)[0]
+            elif diffuse_type == 2 and diffuse_count == 4:
+                channels = struct.unpack("<4f", raw_diffuse)
+                packed = [max(0, min(255, int(value * 255.0 + 0.5))) for value in channels]
+                color = (packed[3] << 24) | (packed[0] << 16) | (packed[1] << 8) | packed[2]
+            else:
+                return None
+
+        matrix = [
+            struct.unpack("<f", struct.pack("<I", word))[0] for word in state.composite_matrix
+        ]
+        x, y, z, w = position
+        transformed = (
+            x * matrix[0] + y * matrix[1] + z * matrix[2] + w * matrix[3],
+            x * matrix[4] + y * matrix[5] + z * matrix[6] + w * matrix[7],
+            x * matrix[8] + y * matrix[9] + z * matrix[10] + w * matrix[11],
+            x * matrix[12] + y * matrix[13] + z * matrix[14] + w * matrix[15],
+        )
+        if not all(math.isfinite(value) for value in transformed) or transformed[3] <= 1.0e-5:
+            return None
+        viewport = [
+            struct.unpack("<f", struct.pack("<I", word))[0] for word in state.viewport_offset
+        ]
+        inverse_w = 1.0 / transformed[3]
+        return OfflineVertex(
+            transformed[0] * inverse_w + viewport[0],
+            transformed[1] * inverse_w + viewport[1],
+            transformed[2] * inverse_w,
+            transformed[3],
+            color,
+        )
+
+    @staticmethod
+    def triangle_indices(primitive: int, count: int) -> list[tuple[int, int, int]] | None:
+        if primitive == 5:
+            return [(index, index + 1, index + 2) for index in range(0, count - 2, 3)]
+        if primitive == 6:
+            return [(index, index + 1, index + 2) for index in range(count - 2)]
+        if primitive in (7, 10):
+            return [(0, index, index + 1) for index in range(1, count - 1)]
+        if primitive == 8:
+            return [
+                triangle
+                for index in range(0, count - 3, 4)
+                for triangle in ((index, index + 1, index + 2), (index, index + 2, index + 3))
+            ]
+        if primitive == 9:
+            return [
+                triangle
+                for index in range(0, count - 3, 2)
+                for triangle in ((index, index + 1, index + 3), (index, index + 3, index + 2))
+            ]
+        return None
+
+    @staticmethod
+    def depth_pass(function: int, source: int, destination: int) -> bool:
+        return {
+            0x200: False,
+            0x201: source < destination,
+            0x202: source == destination,
+            0x203: source <= destination,
+            0x204: source > destination,
+            0x205: source != destination,
+            0x206: source >= destination,
+        }.get(function, True)
+
+    @staticmethod
+    def depth_surface_known(
+        region: PixelMemoryRegion, pitch: int, width: int, height: int, zeta_format: int
+    ) -> bool:
+        for y in range(height):
+            row = y * pitch
+            if zeta_format == 2:
+                row_end = row + width * 4
+                if any(
+                    not all(region.known[row + component : row_end : 4]) for component in (1, 2, 3)
+                ):
+                    return False
+            elif not all(region.known[row : row + width * 2]):
+                return False
+        return True
+
+    def draw_unsupported_reason(
+        self, state: PgraphReplayState, checkpoint: PgraphCheckpoint
+    ) -> str | None:
+        prefix = checkpoint.kind
+        if checkpoint.kind not in ("draw_arrays", "indexed_batch"):
+            return checkpoint.kind
+        if state.vp_execution_mode == 2 and state.vp_instruction_count:
+            return f"{prefix}_vertex_program"
+        if state.registers[0x0300 // 4]:
+            return f"{prefix}_alpha_test"
+        if state.registers[0x0304 // 4]:
+            return f"{prefix}_blend"
+        if state.registers[0x032C // 4]:
+            return f"{prefix}_stencil"
+        for stage in range(4):
+            stage_base = 0x1B00 + stage * 0x40
+            texture_format = state.registers[(stage_base + 4) // 4]
+            texture_control = state.registers[(stage_base + 12) // 4]
+            texture_mode = (
+                state.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4] >> (stage * 5)
+            ) & 0x1F
+            if texture_format and texture_control & 0x40000000 and texture_mode:
+                return f"{prefix}_texture"
+        combiner_control = state.registers[0x1E60 // 4]
+        diffuse_combiner = (
+            (combiner_control & 0xFF) == 1
+            and state.registers[0x0AC0 // 4] == 0x00002004
+            and state.registers[0x0260 // 4] == 0x00002014
+            and state.registers[0x1E40 // 4] == 0x00000C00
+            and state.registers[0x0AA0 // 4] == 0x00000C00
+        )
+        final_cw0 = state.registers[0x0288 // 4]
+        final_cw1 = state.registers[0x028C // 4]
+        final_passthrough = final_cw0 == 0x0000000C and ((final_cw1 >> 8) & 0xFF) == 0x1C
+        if (combiner_control and not diffuse_combiner) or (
+            (final_cw0 or final_cw1) and not final_passthrough
+        ):
+            return f"{prefix}_combiner"
+        if checkpoint.count < 3:
+            return f"{prefix}_vertex_count"
+        if self.triangle_indices(checkpoint.primitive, checkpoint.count) is None:
+            return f"{prefix}_primitive"
+        return None
+
+    def write_fragment(
+        self,
+        state: PgraphReplayState,
+        color_region: PixelMemoryRegion,
+        depth_region: PixelMemoryRegion | None,
+        color_pitch: int,
+        depth_pitch: int,
+        x: int,
+        y: int,
+        z: float,
+        color: int,
+        zeta_format: int,
+    ) -> None:
+        if state.registers[0x030C // 4] and depth_region is not None:
+            depth_bytes = 4 if zeta_format == 2 else 2
+            depth_max = 0xFFFFFF if zeta_format == 2 else 0xFFFF
+            source_depth = int(max(0.0, min(float(depth_max), z)) + 0.5)
+            depth_offset = y * depth_pitch + x * depth_bytes
+            if zeta_format == 2:
+                stored = struct.unpack_from("<I", depth_region.data, depth_offset)[0]
+                destination_depth = stored >> 8
+            else:
+                stored = struct.unpack_from("<H", depth_region.data, depth_offset)[0]
+                destination_depth = stored
+            if not self.depth_pass(state.registers[0x0354 // 4], source_depth, destination_depth):
+                return
+            if state.registers[0x035C // 4]:
+                if zeta_format == 2:
+                    struct.pack_into(
+                        "<I",
+                        depth_region.data,
+                        depth_offset,
+                        (source_depth << 8) | (stored & 0xFF),
+                    )
+                else:
+                    struct.pack_into("<H", depth_region.data, depth_offset, source_depth)
+                depth_region.known[depth_offset : depth_offset + depth_bytes] = (
+                    bytes([1]) * depth_bytes
+                )
+
+        color_offset = y * color_pitch + x * 4
+        struct.pack_into("<I", color_region.data, color_offset, color)
+        color_region.known[color_offset : color_offset + 4] = b"\x01\x01\x01\x01"
+
+    def fill_triangle(
+        self,
+        state: PgraphReplayState,
+        vertices: list[OfflineVertex],
+        triangle: tuple[int, int, int],
+        color_region: PixelMemoryRegion,
+        depth_region: PixelMemoryRegion | None,
+        color_pitch: int,
+        depth_pitch: int,
+        width: int,
+        height: int,
+        zeta_format: int,
+    ) -> None:
+        a, b, c = (vertices[index] for index in triangle)
+        if min(a.w, b.w, c.w) <= 1.0e-5:
+            return
+        area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+        if -1.0e-3 < area < 1.0e-3:
+            return
+        low_x = min(a.x, b.x, c.x)
+        high_x = max(a.x, b.x, c.x)
+        low_y = min(a.y, b.y, c.y)
+        high_y = max(a.y, b.y, c.y)
+        if high_x < 0.0 or high_y < 0.0 or low_x >= width or low_y >= height:
+            return
+        low_x = max(0.0, low_x)
+        low_y = max(0.0, low_y)
+        high_x = min(float(width - 1), high_x)
+        high_y = min(float(height - 1), high_y)
+        inverse_area = 1.0 / area
+        channels = [
+            ((vertex.color >> shift) & 0xFF) for vertex in (a, b, c) for shift in (24, 16, 8, 0)
+        ]
+        uniform = a.color == b.color == c.color
+        for y in range(int(low_y), int(high_y) + 1):
+            for x in range(int(low_x), int(high_x) + 1):
+                pixel_x = x + 0.5
+                pixel_y = y + 0.5
+                weight_a = (
+                    (c.x - b.x) * (pixel_y - b.y) - (c.y - b.y) * (pixel_x - b.x)
+                ) * inverse_area
+                weight_b = (
+                    (a.x - c.x) * (pixel_y - c.y) - (a.y - c.y) * (pixel_x - c.x)
+                ) * inverse_area
+                weight_c = (
+                    (b.x - a.x) * (pixel_y - a.y) - (b.y - a.y) * (pixel_x - a.x)
+                ) * inverse_area
+                if weight_a < -1.0e-4 or weight_b < -1.0e-4 or weight_c < -1.0e-4:
+                    continue
+                if uniform:
+                    color = a.color
+                else:
+                    output = []
+                    for component in range(4):
+                        value = (
+                            weight_a * channels[component]
+                            + weight_b * channels[4 + component]
+                            + weight_c * channels[8 + component]
+                        )
+                        output.append(max(0, min(255, int(value + 0.5))))
+                    color = (output[0] << 24) | (output[1] << 16) | (output[2] << 8) | output[3]
+                z = weight_a * a.z + weight_b * b.z + weight_c * c.z
+                self.write_fragment(
+                    state,
+                    color_region,
+                    depth_region,
+                    color_pitch,
+                    depth_pitch,
+                    x,
+                    y,
+                    z,
+                    color,
+                    zeta_format,
+                )
+
+    def execute_draw(self, state: PgraphReplayState, checkpoint: PgraphCheckpoint) -> None:
+        reason = self.draw_unsupported_reason(state, checkpoint)
+        if reason is not None:
+            self.note_unsupported(reason)
+            return
+        source_indices = (
+            checkpoint.indices
+            if checkpoint.kind == "indexed_batch"
+            else tuple(
+                range(checkpoint.data & 0xFFFFFF, (checkpoint.data & 0xFFFFFF) + checkpoint.count)
+            )
+        )
+        vertices: list[OfflineVertex] = []
+        for index in source_indices:
+            vertex = self.read_vertex(state, index)
+            if vertex is None:
+                self.note_unsupported(f"{checkpoint.kind}_vertex_input")
+                return
+            vertices.append(vertex)
+
+        color_pitch, width, height = self.surface_geometry(state)
+        color_address = self.surface_address(state, True)
+        if not state.registers[NV097_SET_SURFACE_COLOR_OFFSET // 4]:
+            self.note_unsupported(f"{checkpoint.kind}_color_surface")
+            return
+        color_region = self.memory.ensure(color_address, color_pitch * height)
+
+        depth_region = None
+        depth_pitch = 0
+        zeta_format = (state.registers[NV097_SET_SURFACE_FORMAT // 4] >> 4) & 0xF
+        if state.registers[0x030C // 4]:
+            if zeta_format not in (1, 2) or not state.registers[NV097_SET_SURFACE_ZETA_OFFSET // 4]:
+                self.note_unsupported(f"{checkpoint.kind}_depth_surface")
+                return
+            depth_pitch = state.registers[NV097_SET_SURFACE_PITCH // 4] >> 16
+            if depth_pitch == 0:
+                depth_pitch = width * (4 if zeta_format == 2 else 2)
+            depth_region = self.memory.ensure(
+                self.surface_address(state, False), depth_pitch * height
+            )
+            if not self.depth_surface_known(depth_region, depth_pitch, width, height, zeta_format):
+                self.note_unsupported(f"{checkpoint.kind}_depth_input")
+                return
+
+        triangles = self.triangle_indices(checkpoint.primitive, len(vertices))
+        assert triangles is not None
+        for triangle in triangles:
+            self.fill_triangle(
+                state,
+                vertices,
+                triangle,
+                color_region,
+                depth_region,
+                color_pitch,
+                depth_pitch,
+                width,
+                height,
+                zeta_format,
+            )
+        if (state.registers[NV097_SET_SURFACE_FORMAT // 4] >> 12) & 0xF:
+            self.aa_surface = AaColorSurface(
+                color_address, color_pitch, width, height, checkpoint.frame
+            )
+        self.draws_executed += 1
+        self.triangles_executed += len(triangles)
+
+    def execute_clear(self, state: PgraphReplayState, frame: int, flags: int) -> None:
+        color_pitch, width, height = self.surface_geometry(state)
 
         horizontal = state.registers[NV097_SET_CLEAR_RECT_HORIZONTAL // 4]
         vertical = state.registers[NV097_SET_CLEAR_RECT_VERTICAL // 4]
@@ -929,6 +1340,7 @@ def checkpoint_json(checkpoint: PgraphCheckpoint | None) -> dict[str, object] | 
         "data": checkpoint.data,
         "primitive": checkpoint.primitive,
         "count": checkpoint.count,
+        "index_count": len(checkpoint.indices),
         "state_crc32": checkpoint.state_crc32,
         "surface": checkpoint.surface,
         "pipeline": checkpoint.pipeline,
@@ -1027,6 +1439,7 @@ def replay_pixels(path: Path) -> dict[str, object]:
     input_memory_records = 0
     input_memory_bytes = 0
     method_index = 0
+    pending_draw: PgraphCheckpoint | None = None
 
     with path.open("rb") as stream:
         stream.seek(HEADER.size)
@@ -1034,6 +1447,9 @@ def replay_pixels(path: Path) -> dict[str, object]:
         while raw_header := stream.read(RECORD_HEADER.size):
             record_type, payload_size = RECORD_HEADER.unpack(raw_header)
             payload = stream.read(payload_size)
+            if pending_draw is not None and record_type != MEMORY:
+                backend.execute_draw(state, pending_draw)
+                pending_draw = None
             if record_type == RAMIN:
                 size, _crc = unpack_fields(payload, 2, "RAMIN")
                 backend.ramin = payload[8 : 8 + size]
@@ -1060,11 +1476,16 @@ def replay_pixels(path: Path) -> dict[str, object]:
                         backend.execute_clear(state, frame, checkpoint.data)
                     elif checkpoint.kind == "present":
                         backend.execute_present(state, frame)
+                    elif checkpoint.kind in ("draw_arrays", "indexed_batch"):
+                        pending_draw = checkpoint
                     else:
                         backend.note_unsupported(checkpoint.kind)
             elif record_type == SCANOUT:
                 scanouts.append(backend.validate_scanout(payload))
             record_index += 1
+
+    if pending_draw is not None:
+        backend.execute_draw(state, pending_draw)
 
     complete = bool(scanouts) and all(scanout["complete"] for scanout in scanouts)
     matches = complete and all(scanout["match"] for scanout in scanouts)
@@ -1077,6 +1498,8 @@ def replay_pixels(path: Path) -> dict[str, object]:
         "status": status,
         "methods": method_index,
         "clears_executed": backend.clears_executed,
+        "draws_executed": backend.draws_executed,
+        "triangles_executed": backend.triangles_executed,
         "presents_executed": backend.presents_executed,
         "unsupported_checkpoints": backend.unsupported,
         "input_memory_records": input_memory_records,
@@ -1093,7 +1516,7 @@ def replay_pixels(path: Path) -> dict[str, object]:
 def pixel_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="nv2a_capture pixels",
-        description="Replay captured clear/present pixel operations offline.",
+        description="Replay captured clear, fixed-function draw, and present pixels offline.",
     )
     parser.add_argument("capture", type=Path)
     parser.add_argument("--json", action="store_true", help="emit JSON pixel report")
@@ -1110,6 +1533,8 @@ def pixel_main(argv: list[str]) -> int:
         print(
             f"nv2a_capture pixels: {result['status'].upper()} "
             f"clears={result['clears_executed']} "
+            f"draws={result['draws_executed']} "
+            f"triangles={result['triangles_executed']} "
             f"presents={result['presents_executed']} "
             f"scanouts={len(result['scanouts'])} "
             f"unsupported={sum(result['unsupported_checkpoints'].values())} "

@@ -76,11 +76,13 @@ Offline PGRAPH state replay is implemented by `tools/nv2a_capture.py pgraph`.
 It resolves captured RAMIN bindings and emits canonical checkpoints for every
 clear, draw submission, batch end, and present without booting the title.
 
-The first independent pixel slice is also implemented by
-`tools/nv2a_capture.py pixels`: ordered input memory, DMA color/zeta surfaces,
-masked clears, multisample resolve, known-byte coverage, and scanout CRC
-validation. The next extraction is draw execution: vertex fetch and transform,
-triangle setup, texture/depth reads, combiners, blending, and surface writes.
+The independent pixel replay now covers ordered input memory, DMA color/zeta
+surfaces, masked clears, fixed-function float vertex fetch and transform,
+retained indexed batches, triangle-family assembly, diffuse rasterization,
+Z16/Z24 depth, multisample resolve, known-byte coverage, and scanout CRC
+validation. Remaining draw extraction is deliberately bounded to vertex
+programs, textures, non-passthrough register/final combiners, alpha/stencil
+tests, blending, and inline/immediate vertex layouts.
 
 ### 4. State diffs at the first divergent draw
 
