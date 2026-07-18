@@ -1673,14 +1673,19 @@ struct EmuNv2aAaColorSurface
     ULONG Pitch;
     ULONG Width;
     ULONG Height;
+    ULONG Mode;
     ULONG Frame;
     bool Valid;
 };
 static EmuNv2aAaColorSurface g_EmuNv2aAaColorSurface = {};
-// The live overlay must read only the buffer selected at the last flip. Reading
-// the current resolve destination exposes a partially drawn back buffer while
-// the software rasterizer is still processing the frame.
+// The live overlay must read an owned snapshot from the last flip. Guest front
+// buffers are recycled and can become active render targets again immediately.
 static std::atomic<ULONG> g_EmuNv2aPresentedFrameAddress{0};
+static SRWLOCK g_EmuNv2aPresentedFrameLock = SRWLOCK_INIT;
+static ULONG* g_EmuNv2aPresentedFramePixels = NULL;
+static size_t g_EmuNv2aPresentedFrameCapacity = 0;
+static ULONG g_EmuNv2aPresentedFrameWidth = 0;
+static ULONG g_EmuNv2aPresentedFrameHeight = 0;
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
 static bool  g_bEmuNv2aHleRaster = false;
@@ -4405,32 +4410,32 @@ extern "C" void EmuNv2aBlitResolvedFrame()
         return;
     }
 
-    const ULONG Host = EmuNv2aHostPointer(Address);
-    const ULONG Pitch = g_EmuDisplayPitch != 0
-                            ? g_EmuDisplayPitch
-                            : 640 * sizeof(ULONG);
-    if(Host != 0 && Pitch >= sizeof(ULONG))
+    AcquireSRWLockShared(&g_EmuNv2aPresentedFrameLock);
+    const ULONG* Pixels = g_EmuNv2aPresentedFramePixels;
+    const ULONG Width = g_EmuNv2aPresentedFrameWidth;
+    const ULONG Height = g_EmuNv2aPresentedFrameHeight;
+    if(Pixels != NULL && Width != 0 && Height != 0)
     {
         if(BlitLogCount < 4)
         {
-            printf("Emu (0x%lX): NV2A window blit addr=0x%.08lX host=0x%.08lX "
-                   "hwnd=0x%p pitch=%lu.\n",
-                   GetCurrentThreadId(), Address, Host, XTL::g_hEmuWindow, Pitch);
+            printf("Emu (0x%lX): NV2A window blit snapshot addr=0x%.08lX "
+                   "hwnd=0x%p size=%lux%lu.\n",
+                   GetCurrentThreadId(), Address, XTL::g_hEmuWindow,
+                   Width, Height);
             fflush(stdout);
             ++BlitLogCount;
         }
         HWND Overlay = EmuNv2aEnsureOverlayWindow(XTL::g_hEmuWindow);
         if(Overlay != NULL)
         {
-            const ULONG* Pixels = reinterpret_cast<const ULONG*>(
-                static_cast<uintptr_t>(Host));
             const int Result = EmuBlitPixelsToWindow(
-                Overlay, Pixels, Pitch / sizeof(ULONG), 480);
+                Overlay, Pixels, Width, Height);
             static bool LoggedVisibleFrame = false;
             if(!LoggedVisibleFrame)
             {
                 ULONG FirstVisible = 0;
-                for(ULONG Index = 0; Index < 640 * 480; ++Index)
+                for(size_t Index = 0;
+                    Index < static_cast<size_t>(Width) * Height; ++Index)
                 {
                     if((Pixels[Index] & 0x00FFFFFF) != 0)
                     {
@@ -4449,6 +4454,7 @@ extern "C" void EmuNv2aBlitResolvedFrame()
             }
         }
     }
+    ReleaseSRWLockShared(&g_EmuNv2aPresentedFrameLock);
 }
 
 // ******************************************************************
@@ -4845,18 +4851,13 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
         return;
     }
 
-    // Publish the completed front buffer even when diagnostic dumps are off.
-    // The HLE window thread uses this address for its continuously refreshed
-    // overlay, while the title renders the next frame into another buffer.
-    g_EmuNv2aPresentedFrameAddress.store(
-        PhysicalAddress, std::memory_order_release);
-
     bool WantWindow = EmuNv2aWindowEnabled();
+    bool WantOverlay = XTL::g_hEmuWindow != NULL;
     bool WantBmp = (g_EmuNv2aScanoutDumpIndex < 16);
     bool WantCrc = EmuNv2aCrcEnabled();
     cxbx::nv2a::PushbufferCaptureWriter* Capture =
         EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
-    if(!WantBmp && !WantWindow && !WantCrc && Capture == nullptr)
+    if(!WantBmp && !WantWindow && !WantOverlay && !WantCrc && Capture == nullptr)
     {
         return;
     }
@@ -4928,6 +4929,27 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
             else if(Bgra != FirstColor && DistinctSample < 2)
                 DistinctSample = 2;
         }
+    }
+
+    // The guest recycles front buffers. Publish an owned copy so the UI thread
+    // cannot sample the same memory while it is being rendered into again.
+    if(WantOverlay)
+    {
+        const size_t PixelCount = static_cast<size_t>(Width) * Height;
+        AcquireSRWLockExclusive(&g_EmuNv2aPresentedFrameLock);
+        if(g_EmuNv2aPresentedFrameCapacity < PixelCount)
+        {
+            delete[] g_EmuNv2aPresentedFramePixels;
+            g_EmuNv2aPresentedFramePixels = new ULONG[PixelCount];
+            g_EmuNv2aPresentedFrameCapacity = PixelCount;
+        }
+        memcpy(g_EmuNv2aPresentedFramePixels, Pixels,
+               PixelCount * sizeof(ULONG));
+        g_EmuNv2aPresentedFrameWidth = Width;
+        g_EmuNv2aPresentedFrameHeight = Height;
+        g_EmuNv2aPresentedFrameAddress.store(
+            PhysicalAddress, std::memory_order_release);
+        ReleaseSRWLockExclusive(&g_EmuNv2aPresentedFrameLock);
     }
 
     // Per-present CRC of the normalized pixels: the frame-level regression
@@ -5036,6 +5058,13 @@ static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
         return;
     }
 
+    const ULONG HorizontalSamples = AaMode == 1 || AaMode == 2 ? 2 : 1;
+    const ULONG LogicalWidth = Pitch / sizeof(ULONG) / HorizontalSamples;
+    if(LogicalWidth == 0)
+    {
+        return;
+    }
+
     ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
     ULONG Address = Base + g_EmuNv2aSurfaceColorOffset;
     if(EmuNv2aHostPointer(Address) == 0 && Base != 0)
@@ -5046,8 +5075,9 @@ static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
     g_EmuNv2aAaColorSurface.Address = Address;
     g_EmuNv2aAaColorSurface.Host = Host;
     g_EmuNv2aAaColorSurface.Pitch = Pitch;
-    g_EmuNv2aAaColorSurface.Width = Width;
+    g_EmuNv2aAaColorSurface.Width = LogicalWidth;
     g_EmuNv2aAaColorSurface.Height = Height;
+    g_EmuNv2aAaColorSurface.Mode = AaMode;
     g_EmuNv2aAaColorSurface.Frame = g_EmuNv2aDebugFrame;
     g_EmuNv2aAaColorSurface.Valid = true;
 }
@@ -5067,9 +5097,10 @@ static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress)
     {
         DestinationPitch = 640 * sizeof(ULONG);
     }
-    const ULONG Width = min(Source.Width, DestinationPitch / sizeof(ULONG));
+    const ULONG DestinationWidth = DestinationPitch / sizeof(ULONG);
     const ULONG Height = min(Source.Height, 480ul);
-    if(DestinationHost == 0 || Width == 0 || Height == 0)
+    if(DestinationHost == 0 || Source.Width == 0 || DestinationWidth == 0 ||
+       Height == 0)
     {
         return;
     }
@@ -5097,19 +5128,19 @@ static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress)
     const BYTE* SourcePixels = reinterpret_cast<const BYTE*>(
         static_cast<uintptr_t>(Source.Host));
     memset(Destination, 0, DestinationPitch * 480);
-    for(ULONG Y = 0; Y < Height; ++Y)
-    {
-        memcpy(Destination + Y * DestinationPitch,
-               SourcePixels + Y * Source.Pitch,
-               Width * sizeof(ULONG));
-    }
+    cxbx::nv2a::StretchSurfaceRowsNearest(
+        reinterpret_cast<const std::uint32_t*>(SourcePixels),
+        Source.Pitch / sizeof(ULONG), Source.Width, Height,
+        reinterpret_cast<std::uint32_t*>(Destination),
+        DestinationPitch / sizeof(ULONG), DestinationWidth);
     static ULONG ResolveLogCount = 0;
     if(ResolveLogCount < 8)
     {
-        printf("Emu (0x%lX): NV2A resolved AA color 0x%.08lX (%lux%lu pitch=%lu) "
-               "to scanout 0x%.08lX (pitch=%lu).\n",
-               GetCurrentThreadId(), Source.Address, Width, Height, Source.Pitch,
-               DestinationAddress, DestinationPitch);
+        printf("Emu (0x%lX): NV2A resolved AA%lu color 0x%.08lX "
+               "(%lux%lu pitch=%lu) to scanout 0x%.08lX (%lux%lu pitch=%lu).\n",
+               GetCurrentThreadId(), Source.Mode, Source.Address,
+               Source.Width, Height, Source.Pitch, DestinationAddress,
+               DestinationWidth, Height, DestinationPitch);
         fflush(stdout);
         ++ResolveLogCount;
     }

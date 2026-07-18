@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -68,6 +69,32 @@ inline constexpr std::uint32_t BlendSourceAlpha(
         output |= channel << shift;
     }
     return output;
+}
+
+inline void StretchSurfaceRowsNearest(
+    const std::uint32_t* source, std::size_t sourcePitchPixels,
+    std::size_t sourceWidth, std::size_t sourceHeight,
+    std::uint32_t* destination, std::size_t destinationPitchPixels,
+    std::size_t destinationWidth) noexcept
+{
+    if(source == nullptr || destination == nullptr || sourceWidth == 0 ||
+       sourceHeight == 0 || sourcePitchPixels < sourceWidth ||
+       destinationWidth == 0 || destinationPitchPixels < destinationWidth)
+    {
+        return;
+    }
+
+    for(std::size_t y = 0; y < sourceHeight; ++y)
+    {
+        const std::uint32_t* sourceRow = source + y * sourcePitchPixels;
+        std::uint32_t* destinationRow =
+            destination + y * destinationPitchPixels;
+        for(std::size_t x = 0; x < destinationWidth; ++x)
+        {
+            destinationRow[x] =
+                sourceRow[(x * sourceWidth) / destinationWidth];
+        }
+    }
 }
 
 struct AffineQuadSpan
