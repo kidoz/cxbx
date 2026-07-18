@@ -7937,9 +7937,21 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
     PVOID AllocationAddress = EmuResolveContiguousMemoryAllocation(BaseAddress);
     if(AllocationAddress == NULL)
     {
-        printf("EmuKrnl (0x%lX): MmFreeContiguousMemory rejected unknown address 0x%.08lX.\n",
-               GetCurrentThreadId(), (ULONG)BaseAddress);
-        fflush(stdout);
+        static ULONG UnknownFreeLogCount = 0;
+        if(UnknownFreeLogCount < 8)
+        {
+            printf("EmuKrnl (0x%lX): MmFreeContiguousMemory rejected unknown "
+                   "address 0x%.08lX caller=0x%.08lX.\n",
+                   GetCurrentThreadId(), (ULONG)BaseAddress,
+                   (ULONG)__builtin_return_address(0));
+            if(UnknownFreeLogCount == 7)
+            {
+                printf("EmuKrnl: further unknown contiguous-free warnings "
+                       "are suppressed.\n");
+            }
+            fflush(stdout);
+            ++UnknownFreeLogCount;
+        }
         EmuSwapFS(); // Xbox FS
         return;
     }
