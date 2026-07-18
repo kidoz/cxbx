@@ -101,6 +101,31 @@ int main()
         return 1;
     }
 
+    constexpr cxbx::nv2a::RasterBounds primitiveBounds = {
+        0,
+        0,
+        640,
+        480,
+    };
+    constexpr cxbx::nv2a::RasterBounds surfaceClip = {
+        240,
+        200,
+        400,
+        300,
+    };
+    constexpr auto clippedBounds =
+        cxbx::nv2a::IntersectRasterBounds(primitiveBounds, surfaceClip);
+    if(clippedBounds.minX != 240 || clippedBounds.minY != 200 ||
+       clippedBounds.maxX != 400 || clippedBounds.maxY != 300 ||
+       clippedBounds.Empty() ||
+       !cxbx::nv2a::IntersectRasterBounds(
+            { 0, 0, 100, 100 }, surfaceClip)
+            .Empty())
+    {
+        std::fputs("raster bounds must honor offset surface clips\n", stderr);
+        return 1;
+    }
+
     constexpr auto affineSpan = cxbx::nv2a::BuildAffineQuadSpan(
         0.0f, 10.0f, 30.0f, 20.0f, 0.25f, 0.2f, 0.2f);
     if(!Near(affineSpan.value, 7.0f) || !Near(affineSpan.step, 2.0f) ||

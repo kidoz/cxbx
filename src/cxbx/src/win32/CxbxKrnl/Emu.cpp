@@ -5181,12 +5181,9 @@ static void EmuNv2aClearSurface(ULONG Flags)
     {
         ColorPitchB = 640 * 4;
     }
-    int Width = static_cast<int>(g_EmuNv2aSurfaceClipX +
-                                 g_EmuNv2aSurfaceClipW);
-    if(Width <= 0 || Width > ColorPitchB / 4)
-    {
-        Width = ColorPitchB / 4;
-    }
+    const ULONG AaMode = (g_EmuNv2aSurfaceFormat >> 12) & 0x0Fu;
+    const int HorizontalSamples = AaMode == 1 || AaMode == 2 ? 2 : 1;
+    const int Width = ColorPitchB / 4 / HorizontalSamples;
     int Height = static_cast<int>(g_EmuNv2aSurfaceClipY +
                                   g_EmuNv2aSurfaceClipH);
     if(Height <= 0 || Height > 4096)
@@ -5194,22 +5191,46 @@ static void EmuNv2aClearSurface(ULONG Flags)
         Height = 480;
     }
 
-    int MinX = static_cast<int>(g_EmuNv2aClearRectHorizontal & 0xFFFF);
-    int MaxX = static_cast<int>((g_EmuNv2aClearRectHorizontal >> 16) & 0xFFFF);
-    int MinY = static_cast<int>(g_EmuNv2aClearRectVertical & 0xFFFF);
-    int MaxY = static_cast<int>((g_EmuNv2aClearRectVertical >> 16) & 0xFFFF);
-    if(MinX >= Width || MinY >= Height || MaxX < MinX || MaxY < MinY)
+    const int ClearMinX = static_cast<int>(g_EmuNv2aClearRectHorizontal & 0xFFFF);
+    const int ClearMaxX =
+        static_cast<int>((g_EmuNv2aClearRectHorizontal >> 16) & 0xFFFF);
+    const int ClearMinY = static_cast<int>(g_EmuNv2aClearRectVertical & 0xFFFF);
+    const int ClearMaxY =
+        static_cast<int>((g_EmuNv2aClearRectVertical >> 16) & 0xFFFF);
+    if(Width <= 0 || ClearMaxX < ClearMinX || ClearMaxY < ClearMinY)
     {
         return;
     }
-    if(MaxX >= Width)
+
+    const cxbx::nv2a::RasterBounds SurfaceClip = {
+        g_EmuNv2aSurfaceClipW != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceClipX), Width)
+            : 0,
+        g_EmuNv2aSurfaceClipH != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceClipY), Height)
+            : 0,
+        g_EmuNv2aSurfaceClipW != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceClipX +
+                                   g_EmuNv2aSurfaceClipW),
+                  Width)
+            : Width,
+        g_EmuNv2aSurfaceClipH != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceClipY +
+                                   g_EmuNv2aSurfaceClipH),
+                  Height)
+            : Height,
+    };
+    const cxbx::nv2a::RasterBounds ClearBounds =
+        cxbx::nv2a::IntersectRasterBounds(
+            {ClearMinX, ClearMinY, ClearMaxX + 1, ClearMaxY + 1}, SurfaceClip);
+    if(ClearBounds.Empty())
     {
-        MaxX = Width - 1;
+        return;
     }
-    if(MaxY >= Height)
-    {
-        MaxY = Height - 1;
-    }
+    const int MinX = ClearBounds.minX;
+    const int MinY = ClearBounds.minY;
+    const int MaxX = ClearBounds.maxX - 1;
+    const int MaxY = ClearBounds.maxY - 1;
 
     ULONG ColorHost = 0;
     if((Flags & 0xF0) != 0 && g_EmuNv2aSurfaceColorOffset != 0)
@@ -5239,10 +5260,22 @@ static void EmuNv2aClearSurface(ULONG Flags)
         if(ColorHost != 0)
         {
             ULONG Mask = 0;
-            if((Flags & 0x10) != 0) Mask |= 0x00FF0000;
-            if((Flags & 0x20) != 0) Mask |= 0x0000FF00;
-            if((Flags & 0x40) != 0) Mask |= 0x000000FF;
-            if((Flags & 0x80) != 0) Mask |= 0xFF000000;
+            if((Flags & 0x10) != 0)
+            {
+                Mask |= 0x00FF0000;
+            }
+            if((Flags & 0x20) != 0)
+            {
+                Mask |= 0x0000FF00;
+            }
+            if((Flags & 0x40) != 0)
+            {
+                Mask |= 0x000000FF;
+            }
+            if((Flags & 0x80) != 0)
+            {
+                Mask |= 0xFF000000;
+            }
             ULONG *Color = reinterpret_cast<ULONG *>(static_cast<uintptr_t>(ColorHost));
             int Pitch = ColorPitchB / 4;
             for(int Y = MinY; Y <= MaxY; ++Y)
@@ -5260,7 +5293,10 @@ static void EmuNv2aClearSurface(ULONG Flags)
             int PitchB = static_cast<int>(g_EmuNv2aSurfacePitchZeta);
             if(g_EmuNv2aSurfaceZetaFormat == 2)
             {
-                if(PitchB <= 0) PitchB = Width * 4;
+                if(PitchB <= 0)
+                {
+                    PitchB = Width * 4;
+                }
                 ULONG *Zeta = reinterpret_cast<ULONG *>(static_cast<uintptr_t>(ZetaHost));
                 int Pitch = PitchB / 4;
                 ULONG Mask = ((Flags & 0x01) != 0 ? 0xFFFFFF00 : 0) |
@@ -5276,7 +5312,10 @@ static void EmuNv2aClearSurface(ULONG Flags)
             }
             else if(g_EmuNv2aSurfaceZetaFormat == 1 && (Flags & 0x01) != 0)
             {
-                if(PitchB <= 0) PitchB = Width * 2;
+                if(PitchB <= 0)
+                {
+                    PitchB = Width * 2;
+                }
                 unsigned short *Zeta = reinterpret_cast<unsigned short *>(static_cast<uintptr_t>(ZetaHost));
                 int Pitch = PitchB / 2;
                 unsigned short Value = static_cast<unsigned short>(g_EmuNv2aZStencilClearValue);
@@ -5341,6 +5380,10 @@ struct EmuNv2aRasterTarget
     int    PitchPx;
     int    Width;
     int    Height;
+    int    ClipMinX;
+    int    ClipMinY;
+    int    ClipMaxX;
+    int    ClipMaxY;
     void  *Depth;        // NULL when neither depth nor stencil is active this draw
     int    DepthPitchB;
     ULONG  DepthFormat;  // 1=Z16, 2=Z24S8
@@ -5631,6 +5674,12 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
                               float Z, ULONG Diffuse, const float* U,
                               const float* V)
 {
+    if(X < Target->ClipMinX || X >= Target->ClipMaxX ||
+       Y < Target->ClipMinY || Y >= Target->ClipMaxY)
+    {
+        return;
+    }
+
     ULONG Textures[EmuNv2aTextureStageCount] = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
@@ -5761,6 +5810,12 @@ static bool EmuNv2aCanUseP8TileFastPath(
 static void EmuNv2aShadeP8TilePixel(
     const EmuNv2aRasterTarget* Target, int X, int Y, float Z, float U, float V)
 {
+    if(X < Target->ClipMinX || X >= Target->ClipMaxX ||
+       Y < Target->ClipMinY || Y >= Target->ClipMaxY)
+    {
+        return;
+    }
+
     if(Z < 0.0f)
     {
         Z = 0.0f;
@@ -5830,17 +5885,29 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
     float LoYf = ay < by ? (ay < cy ? ay : cy) : (by < cy ? by : cy);
     float HiYf = ay > by ? (ay > cy ? ay : cy) : (by > cy ? by : cy);
 
-    if(HiXf < 0.0f || HiYf < 0.0f || LoXf >= static_cast<float>(T->Width) ||
-       LoYf >= static_cast<float>(T->Height))
+    if(HiXf < static_cast<float>(T->ClipMinX) ||
+       HiYf < static_cast<float>(T->ClipMinY) ||
+       LoXf >= static_cast<float>(T->ClipMaxX) ||
+       LoYf >= static_cast<float>(T->ClipMaxY))
     {
         return;
     }
-    if(LoXf < 0.0f) LoXf = 0.0f;
-    if(LoYf < 0.0f) LoYf = 0.0f;
-    if(HiXf >= static_cast<float>(T->Width))
-        HiXf = static_cast<float>(T->Width - 1);
-    if(HiYf >= static_cast<float>(T->Height))
-        HiYf = static_cast<float>(T->Height - 1);
+    if(LoXf < static_cast<float>(T->ClipMinX))
+    {
+        LoXf = static_cast<float>(T->ClipMinX);
+    }
+    if(LoYf < static_cast<float>(T->ClipMinY))
+    {
+        LoYf = static_cast<float>(T->ClipMinY);
+    }
+    if(HiXf >= static_cast<float>(T->ClipMaxX))
+    {
+        HiXf = static_cast<float>(T->ClipMaxX - 1);
+    }
+    if(HiYf >= static_cast<float>(T->ClipMaxY))
+    {
+        HiYf = static_cast<float>(T->ClipMaxY - 1);
+    }
 
     int MinX = (int)LoXf;       int MinY = (int)LoYf;
     int MaxX = (int)HiXf + 1;   int MaxY = (int)HiYf + 1;
@@ -5960,22 +6027,27 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
         return false;
     }
 
-    if(Right < 0.0f || Bottom < 0.0f ||
-       Left >= static_cast<float>(Target->Width) ||
-       Top >= static_cast<float>(Target->Height))
+    if(Right < static_cast<float>(Target->ClipMinX) ||
+       Bottom < static_cast<float>(Target->ClipMinY) ||
+       Left >= static_cast<float>(Target->ClipMaxX) ||
+       Top >= static_cast<float>(Target->ClipMaxY))
     {
         return true;
     }
 
-    const float ClippedLeft = Left < 0.0f ? 0.0f : Left;
-    const float ClippedTop = Top < 0.0f ? 0.0f : Top;
+    const float ClippedLeft = Left < static_cast<float>(Target->ClipMinX)
+                                  ? static_cast<float>(Target->ClipMinX)
+                                  : Left;
+    const float ClippedTop = Top < static_cast<float>(Target->ClipMinY)
+                                 ? static_cast<float>(Target->ClipMinY)
+                                 : Top;
     const float ClippedRight =
-        Right >= static_cast<float>(Target->Width)
-            ? static_cast<float>(Target->Width - 1)
+        Right >= static_cast<float>(Target->ClipMaxX)
+            ? static_cast<float>(Target->ClipMaxX - 1)
             : Right;
     const float ClippedBottom =
-        Bottom >= static_cast<float>(Target->Height)
-            ? static_cast<float>(Target->Height - 1)
+        Bottom >= static_cast<float>(Target->ClipMaxY)
+            ? static_cast<float>(Target->ClipMaxY - 1)
             : Bottom;
 
     int MinX = static_cast<int>(ClippedLeft);
@@ -6370,12 +6442,40 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     }
 
     int PitchB = (int)g_EmuNv2aSurfacePitchColor;
-    if(PitchB <= 0) PitchB = 640 * 4;
-    int PitchPx = PitchB / 4;
-    int Width = (int)(g_EmuNv2aSurfaceClipX + g_EmuNv2aSurfaceClipW);
-    if(Width <= 0 || Width > PitchPx) Width = PitchPx;
+    if(PitchB <= 0)
+    {
+        PitchB = 640 * 4;
+    }
+    const int PitchPx = PitchB / 4;
+    const ULONG AaMode = (g_EmuNv2aSurfaceFormat >> 12) & 0x0Fu;
+    const int HorizontalSamples = AaMode == 1 || AaMode == 2 ? 2 : 1;
+    const int Width = PitchPx / HorizontalSamples;
     int Height = (int)(g_EmuNv2aSurfaceClipY + g_EmuNv2aSurfaceClipH);
-    if(Height <= 0 || Height > 4096) Height = 480;
+    if(Height <= 0 || Height > 4096)
+    {
+        Height = 480;
+    }
+
+    const int ClipMinX = g_EmuNv2aSurfaceClipW != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipX), Width)
+                             : 0;
+    const int ClipMinY = g_EmuNv2aSurfaceClipH != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipY), Height)
+                             : 0;
+    const int ClipMaxX = g_EmuNv2aSurfaceClipW != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipX +
+                                                    g_EmuNv2aSurfaceClipW),
+                                   Width)
+                             : Width;
+    const int ClipMaxY = g_EmuNv2aSurfaceClipH != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipY +
+                                                    g_EmuNv2aSurfaceClipH),
+                                   Height)
+                             : Height;
+    if(Width <= 0 || ClipMinX >= ClipMaxX || ClipMinY >= ClipMaxY)
+    {
+        return;
+    }
 
     ULONG SurfaceBlockSize = 0;
     const ULONG SurfaceBlockBase =
@@ -6405,6 +6505,10 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     Target.PitchPx = PitchPx;
     Target.Width = Width;
     Target.Height = Height;
+    Target.ClipMinX = ClipMinX;
+    Target.ClipMinY = ClipMinY;
+    Target.ClipMaxX = ClipMaxX;
+    Target.ClipMaxY = ClipMaxY;
     Target.BlendEnable = g_EmuNv2aBlendEnable;
     Target.BlendSFactor = g_EmuNv2aBlendSFactor;
     Target.BlendDFactor = g_EmuNv2aBlendDFactor;
