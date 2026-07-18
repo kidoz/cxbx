@@ -499,6 +499,17 @@ typedef PVOID (NTAPI *FPTR_RtlAllocateHeap)
 );
 
 // ******************************************************************
+// * RtlReAllocateHeap
+// ******************************************************************
+typedef PVOID (NTAPI *FPTR_RtlReAllocateHeap)
+(
+    IN HANDLE hHeap,
+    IN DWORD  dwFlags,
+    IN PVOID  lpMem,
+    IN SIZE_T dwBytes
+);
+
+// ******************************************************************
 // * RtlFreeHeap
 // ******************************************************************
 typedef BOOL (NTAPI *FPTR_RtlFreeHeap)
@@ -899,6 +910,7 @@ extern FPTR_NtReleaseMutant                NtReleaseMutant;
 extern FPTR_NtReleaseSemaphore             NtReleaseSemaphore;
 extern FPTR_RtlCreateHeap                  RtlCreateHeap;
 extern FPTR_RtlAllocateHeap                RtlAllocateHeap;
+extern FPTR_RtlReAllocateHeap              RtlReAllocateHeap;
 extern FPTR_RtlFreeHeap                    RtlFreeHeap;
 extern FPTR_RtlSizeHeap                    RtlSizeHeap;
 extern FPTR_NtAllocateVirtualMemory        NtAllocateVirtualMemory;

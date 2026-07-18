@@ -62,6 +62,121 @@ namespace XTL
     #include "EmuXTL.h"
 };
 
+static bool EmuHeapTraceEnabled()
+{
+    static const bool Enabled = []
+    {
+        char Value[2] = {};
+        return GetEnvironmentVariableA("CXBX_HEAP_TRACE", Value,
+                                       sizeof(Value)) != 0;
+    }();
+    return Enabled;
+}
+
+struct EmuTrackedHeapAllocation
+{
+    PVOID Memory;
+    HANDLE Heap;
+};
+
+static SRWLOCK g_EmuHeapAllocationLock = SRWLOCK_INIT;
+static EmuTrackedHeapAllocation g_EmuHeapAllocations[65536] = {};
+static PVOID const EmuHeapAllocationTombstone = reinterpret_cast<PVOID>(1);
+
+static ULONG EmuHeapAllocationHash(PVOID Memory)
+{
+    return (reinterpret_cast<ULONG>(Memory) >> 3) &
+           (static_cast<ULONG>(sizeof(g_EmuHeapAllocations) /
+                               sizeof(g_EmuHeapAllocations[0])) - 1);
+}
+
+static void EmuTrackHeapAllocation(HANDLE Heap, PVOID Memory)
+{
+    if(Memory == NULL)
+    {
+        return;
+    }
+
+    AcquireSRWLockExclusive(&g_EmuHeapAllocationLock);
+    const ULONG Capacity = static_cast<ULONG>(sizeof(g_EmuHeapAllocations) /
+                                               sizeof(g_EmuHeapAllocations[0]));
+    ULONG Slot = EmuHeapAllocationHash(Memory);
+    ULONG Tombstone = Capacity;
+    for(ULONG Probe = 0; Probe < Capacity; ++Probe)
+    {
+        EmuTrackedHeapAllocation& Entry = g_EmuHeapAllocations[Slot];
+        if(Entry.Memory == Memory)
+        {
+            Entry.Heap = Heap;
+            ReleaseSRWLockExclusive(&g_EmuHeapAllocationLock);
+            return;
+        }
+        if(Entry.Memory == EmuHeapAllocationTombstone && Tombstone == Capacity)
+        {
+            Tombstone = Slot;
+        }
+        else if(Entry.Memory == NULL)
+        {
+            const ULONG Destination = Tombstone != Capacity ? Tombstone : Slot;
+            g_EmuHeapAllocations[Destination].Memory = Memory;
+            g_EmuHeapAllocations[Destination].Heap = Heap;
+            ReleaseSRWLockExclusive(&g_EmuHeapAllocationLock);
+            return;
+        }
+        Slot = (Slot + 1) & (Capacity - 1);
+    }
+    ReleaseSRWLockExclusive(&g_EmuHeapAllocationLock);
+}
+
+static bool EmuUntrackHeapAllocation(HANDLE Heap, PVOID Memory)
+{
+    if(Memory == NULL)
+    {
+        return true;
+    }
+
+    bool Found = false;
+    AcquireSRWLockExclusive(&g_EmuHeapAllocationLock);
+    const ULONG Capacity = static_cast<ULONG>(sizeof(g_EmuHeapAllocations) /
+                                               sizeof(g_EmuHeapAllocations[0]));
+    ULONG Slot = EmuHeapAllocationHash(Memory);
+    for(ULONG Probe = 0; Probe < Capacity; ++Probe)
+    {
+        EmuTrackedHeapAllocation& Entry = g_EmuHeapAllocations[Slot];
+        if(Entry.Memory == NULL)
+        {
+            break;
+        }
+        if(Entry.Memory == Memory && Entry.Heap == Heap)
+        {
+            Entry.Memory = EmuHeapAllocationTombstone;
+            Entry.Heap = NULL;
+            Found = true;
+            break;
+        }
+        Slot = (Slot + 1) & (Capacity - 1);
+    }
+    ReleaseSRWLockExclusive(&g_EmuHeapAllocationLock);
+    return Found;
+}
+
+static bool EmuProcessHeapOwns(PVOID Memory)
+{
+    if(Memory == NULL)
+    {
+        return false;
+    }
+
+    __try
+    {
+        return HeapValidate(GetProcessHeap(), 0, Memory) != FALSE;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
 static bool EmuXInputInjectionConfigured()
 {
     char buffer[2] = {};
@@ -328,6 +443,12 @@ PVOID WINAPI XTL::EmuRtlCreateHeap
 
     PVOID pRet = NtDll::RtlCreateHeap(Flags, Base, Reserve, Commit, Lock, &RtlHeapDefinition);
 
+    if(EmuHeapTraceEnabled())
+    {
+        printf("HEAP| create flags=0x%.08lX reserve=0x%.08lX commit=0x%.08lX heap=0x%.08lX\n",
+               Flags, Reserve, Commit, reinterpret_cast<ULONG>(pRet));
+    }
+
     EmuSwapFS();   // XBox FS
 
     return pRet;
@@ -361,6 +482,51 @@ PVOID WINAPI XTL::EmuRtlAllocateHeap
     #endif
 
     PVOID pRet = NtDll::RtlAllocateHeap(hHeap, dwFlags, dwBytes);
+    EmuTrackHeapAllocation(hHeap, pRet);
+
+    if(EmuHeapTraceEnabled())
+    {
+        printf("HEAP| alloc heap=0x%.08lX flags=0x%.08lX size=0x%.08lX ptr=0x%.08lX\n",
+               reinterpret_cast<ULONG>(hHeap), dwFlags,
+               static_cast<ULONG>(dwBytes), reinterpret_cast<ULONG>(pRet));
+    }
+
+    EmuSwapFS();   // XBox FS
+
+    return pRet;
+}
+
+// ******************************************************************
+// * func: EmuRtlReAllocateHeap
+// ******************************************************************
+PVOID WINAPI XTL::EmuRtlReAllocateHeap
+(
+    IN HANDLE hHeap,
+    IN DWORD  dwFlags,
+    IN PVOID  lpMem,
+    IN SIZE_T dwBytes
+)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    const bool Tracked = EmuUntrackHeapAllocation(hHeap, lpMem);
+    PVOID pRet = NtDll::RtlReAllocateHeap(hHeap, dwFlags, lpMem, dwBytes);
+    if(pRet != NULL)
+    {
+        EmuTrackHeapAllocation(hHeap, pRet);
+    }
+    else if(Tracked)
+    {
+        EmuTrackHeapAllocation(hHeap, lpMem);
+    }
+
+    if(EmuHeapTraceEnabled())
+    {
+        printf("HEAP| realloc heap=0x%.08lX flags=0x%.08lX old=0x%.08lX size=0x%.08lX ptr=0x%.08lX\n",
+               reinterpret_cast<ULONG>(hHeap), dwFlags,
+               reinterpret_cast<ULONG>(lpMem), static_cast<ULONG>(dwBytes),
+               reinterpret_cast<ULONG>(pRet));
+    }
 
     EmuSwapFS();   // XBox FS
 
@@ -394,7 +560,39 @@ BOOL WINAPI XTL::EmuRtlFreeHeap
     }
     #endif
 
-    BOOL bRet = NtDll::RtlFreeHeap(hHeap, dwFlags, lpMem);
+    const bool Tracked = EmuUntrackHeapAllocation(hHeap, lpMem);
+    const bool ProcessOwned = !Tracked && EmuProcessHeapOwns(lpMem);
+    bool Valid = true;
+    if(EmuHeapTraceEnabled() && lpMem != NULL)
+    {
+        __try
+        {
+            Valid = HeapValidate(hHeap, 0, lpMem) != FALSE;
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Valid = false;
+        }
+        printf("HEAP| free heap=0x%.08lX flags=0x%.08lX ptr=0x%.08lX valid=%u tracked=%u process=%u\n",
+               reinterpret_cast<ULONG>(hHeap), dwFlags,
+               reinterpret_cast<ULONG>(lpMem), Valid ? 1u : 0u,
+               Tracked ? 1u : 0u, ProcessOwned ? 1u : 0u);
+        fflush(stdout);
+    }
+
+    BOOL bRet = FALSE;
+    if(ProcessOwned)
+    {
+        bRet = HeapFree(GetProcessHeap(), dwFlags, lpMem);
+    }
+    else if(Valid)
+    {
+        bRet = NtDll::RtlFreeHeap(hHeap, dwFlags, lpMem);
+        if(!bRet && Tracked)
+        {
+            EmuTrackHeapAllocation(hHeap, lpMem);
+        }
+    }
 
     EmuSwapFS();   // XBox FS
 
