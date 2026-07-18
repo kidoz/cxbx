@@ -79,10 +79,14 @@ clear, draw submission, batch end, and present without booting the title.
 The independent pixel replay now covers ordered input memory, DMA color/zeta
 surfaces, masked clears, fixed-function float vertex fetch and transform,
 retained indexed batches, triangle-family assembly, diffuse rasterization,
-Z16/Z24 depth, multisample resolve, known-byte coverage, and scanout CRC
-validation. Remaining draw extraction is deliberately bounded to vertex
-programs, textures, non-passthrough register/final combiners, alpha/stencil
-tests, blending, and inline/immediate vertex layouts.
+Z16/Z24 depth, stage-0 projective texture coordinates, uncompressed and
+swizzled-P8 sampling, palettes, point/bilinear filtering, wrap/mirror/clamp
+addressing, selected texture combiners, multisample resolve, known-byte
+coverage, and scanout CRC validation. Direct-host sampler and vertex inputs are
+captured under stable physical-mirror addresses. Remaining draw extraction is
+deliberately bounded to vertex programs, multitexture and other texture modes,
+scaled or unrecognized register/final combiners, alpha/stencil tests, blending,
+and inline/immediate vertex layouts.
 
 ### 4. State diffs at the first divergent draw
 

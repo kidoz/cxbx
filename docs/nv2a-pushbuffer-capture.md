@@ -133,6 +133,16 @@ color; triangle, strip, fan, quad, quad-strip, and polygon assembly; Gouraud
 color interpolation; Z16/Z24 depth tests and writes; and multisampled color
 resolve into the presented scanout surface.
 
+The bounded texture path supports one active stage in 2D-projective mode. It
+replays the rasterizer's uncompressed 8-, 16-, and 32-bit formats, including
+swizzled P8 surfaces and their captured palettes; point and bilinear
+magnification; wrap, mirror, and clamp addressing; and texture-only, diffuse
+modulate, or factor-RGB/diffuse-alpha register combiners with a passthrough
+final combiner. Texture coordinates use the captured projective Q and
+perspective-correct interpolation. Direct-host texture, palette, and vertex
+reads are recorded under their NV2A-visible physical-mirror addresses so replay
+does not depend on process-specific host pointers.
+
 Draw execution is deferred until the memory records caused by the submission
 have been consumed. Indexed checkpoints retain the submitted indices, and
 physical-memory mirror addresses are normalized when fetching captured vertex
@@ -168,11 +178,13 @@ without invalidating version 1 parsers.
 ## Current boundary
 
 The host tool independently replays PFIFO, pixel-relevant PGRAPH state, DMA
-surface resolution, clears, fixed-function untextured vertex-array draws,
-triangle rasterization, depth, draw-surface writes, and multisample presents.
-Vertex programs, textures, non-diffuse register combiners, non-passthrough final
-combiners, alpha/stencil tests during draws, blending, and inline/immediate
-vertex layouts remain explicit unsupported checkpoints. The bundle contains the
-ordered memory observations and expected scanouts needed for those extractions.
-Checkpoint CRCs isolate command/state divergence; known-byte coverage prevents
-partial pixel replay from being mistaken for a complete rendering result.
+surface resolution, clears, fixed-function vertex-array draws, bounded stage-0
+texture sampling and register combining, triangle rasterization, depth,
+draw-surface writes, and multisample presents. Vertex programs, multitexture and
+non-projective texture modes, scaled or otherwise unrecognized register
+combiners, non-passthrough final combiners, alpha/stencil tests during draws,
+blending, and inline/immediate vertex layouts remain explicit unsupported
+checkpoints. The bundle contains the ordered memory observations and expected
+scanouts needed for those extractions. Checkpoint CRCs isolate command/state
+divergence; known-byte coverage prevents partial pixel replay from being
+mistaken for a complete rendering result.

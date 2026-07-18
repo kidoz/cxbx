@@ -37,6 +37,8 @@ NV097_SET_SURFACE_ZETA_OFFSET = 0x0214
 NV097_SET_CONTEXT_DMA_COLOR = 0x0194
 NV097_SET_CONTEXT_DMA_ZETA = 0x0198
 NV097_SET_CONTEXT_DMA_VERTEX = 0x019C
+NV097_SET_CONTEXT_DMA_A = 0x1A60
+NV097_SET_CONTEXT_DMA_B = 0x1A64
 NV097_SET_BEGIN_END = 0x17FC
 NV097_ARRAY_ELEMENT16 = 0x1800
 NV097_ARRAY_ELEMENT32 = 0x1808
@@ -48,6 +50,14 @@ NV097_SET_VERTEX_DATA4UB = 0x1940
 NV097_SET_VERTEX_DATA4F_M = 0x1A00
 NV097_SET_VERTEX_DATA_ARRAY_OFFSET = 0x1720
 NV097_SET_VERTEX_DATA_ARRAY_FORMAT = 0x1760
+NV097_SET_TEXTURE_OFFSET = 0x1B00
+NV097_SET_TEXTURE_FORMAT = 0x1B04
+NV097_SET_TEXTURE_ADDRESS = 0x1B08
+NV097_SET_TEXTURE_CONTROL0 = 0x1B0C
+NV097_SET_TEXTURE_CONTROL1 = 0x1B10
+NV097_SET_TEXTURE_FILTER = 0x1B14
+NV097_SET_TEXTURE_IMAGE_RECT = 0x1B1C
+NV097_SET_TEXTURE_PALETTE = 0x1B20
 NV097_SET_TRANSFORM_PROGRAM = 0x0B00
 NV097_SET_TRANSFORM_CONSTANT = 0x0B80
 NV097_SET_TRANSFORM_EXECUTION_MODE = 0x1E94
@@ -449,7 +459,7 @@ class CapturedPixelMemory:
         """Read the newest captured bytes without treating guest input as replay output."""
         result = bytearray(size)
         known = bytearray(size)
-        aliases = (address, 0x80000000 | (address & 0x07FFFFFF))
+        aliases = (address, 0x80000000 | (address & 0x03FFFFFF))
         candidates: set[int] = set()
         for candidate in aliases:
             if size:
@@ -558,6 +568,23 @@ class OfflineVertex:
     z: float
     w: float
     color: int
+    texture_u: float = 0.0
+    texture_v: float = 0.0
+    texture_inverse_w: float = 1.0
+
+
+@dataclass(frozen=True)
+class OfflineSampler:
+    source: bytes
+    palette: tuple[int, ...]
+    width: int
+    height: int
+    pitch: int
+    bytes_per_pixel: int
+    kind: int
+    swizzled: bool
+    address: int
+    bilinear: bool
 
 
 @dataclass
@@ -569,6 +596,7 @@ class OfflinePixelReplay:
     aa_surface: AaColorSurface | None = None
     clears_executed: int = 0
     draws_executed: int = 0
+    textured_draws_executed: int = 0
     triangles_executed: int = 0
     presents_executed: int = 0
     unsupported: dict[str, int] = field(default_factory=dict)
@@ -603,7 +631,9 @@ class OfflinePixelReplay:
         stride = (vertex_format >> 8) & 0xFF
         return (base + offset + index * stride) & 0xFFFFFFFF
 
-    def read_vertex(self, state: PgraphReplayState, index: int) -> OfflineVertex | None:
+    def read_vertex(
+        self, state: PgraphReplayState, index: int, read_texture: bool = False
+    ) -> OfflineVertex | None:
         position_format = state.registers[NV097_SET_VERTEX_DATA_ARRAY_FORMAT // 4]
         position_type = position_format & 0xF
         position_count = (position_format >> 4) & 0xF
@@ -642,6 +672,27 @@ class OfflinePixelReplay:
             else:
                 return None
 
+        texture_u = 0.0
+        texture_v = 0.0
+        texture_q = 1.0
+        if read_texture:
+            texture_format = state.registers[(NV097_SET_VERTEX_DATA_ARRAY_FORMAT + 9 * 4) // 4]
+            texture_type = texture_format & 0xF
+            texture_count = (texture_format >> 4) & 0xF
+            texture_stride = (texture_format >> 8) & 0xFF
+            if texture_type != 2 or texture_count not in (2, 3, 4) or texture_stride == 0:
+                return None
+            raw_texture = self.memory.read_observed(
+                self.vertex_address(state, 9, index), texture_count * 4
+            )
+            if raw_texture is None:
+                return None
+            texture = struct.unpack(f"<{texture_count}f", raw_texture)
+            texture_u = texture[0]
+            texture_v = texture[1]
+            if texture_count == 4:
+                texture_q = texture[3]
+
         matrix = [
             struct.unpack("<f", struct.pack("<I", word))[0] for word in state.composite_matrix
         ]
@@ -652,19 +703,253 @@ class OfflinePixelReplay:
             x * matrix[8] + y * matrix[9] + z * matrix[10] + w * matrix[11],
             x * matrix[12] + y * matrix[13] + z * matrix[14] + w * matrix[15],
         )
-        if not all(math.isfinite(value) for value in transformed) or transformed[3] <= 1.0e-5:
+        if not all(math.isfinite(value) for value in transformed) or abs(transformed[3]) <= 1.0e-5:
             return None
         viewport = [
             struct.unpack("<f", struct.pack("<I", word))[0] for word in state.viewport_offset
         ]
         inverse_w = 1.0 / transformed[3]
+        texture_mode = state.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4] & 0x1F
+        texture_inverse_w = inverse_w
+        if read_texture and texture_mode == 1 and abs(texture_q) > 1.0e-6:
+            texture_u /= texture_q
+            texture_v /= texture_q
+            texture_inverse_w = texture_q * inverse_w
         return OfflineVertex(
             transformed[0] * inverse_w + viewport[0],
             transformed[1] * inverse_w + viewport[1],
             transformed[2] * inverse_w,
             transformed[3],
             color,
+            texture_u,
+            texture_v,
+            texture_inverse_w,
         )
+
+    @staticmethod
+    def texture_format_info(color_format: int) -> tuple[int, int, bool] | None:
+        return {
+            0x00: (1, 4, True),
+            0x13: (1, 4, False),
+            0x02: (2, 2, True),
+            0x03: (2, 2, True),
+            0x10: (2, 2, False),
+            0x04: (2, 3, True),
+            0x19: (2, 3, False),
+            0x05: (2, 1, True),
+            0x11: (2, 1, False),
+            0x06: (4, 0, True),
+            0x07: (4, 0, True),
+            0x0B: (1, 5, True),
+            0x12: (4, 0, False),
+            0x1A: (4, 0, False),
+            0x1C: (4, 0, False),
+            0x1E: (4, 0, False),
+        }.get(color_format)
+
+    @staticmethod
+    def swizzle_texel_index(x: int, y: int, log_width: int, log_height: int) -> int:
+        result = 0
+        output_bit = 0
+        x_bit = 0
+        y_bit = 0
+        while x_bit < log_width or y_bit < log_height:
+            if x_bit < log_width:
+                result |= ((x >> x_bit) & 1) << output_bit
+                output_bit += 1
+                x_bit += 1
+            if y_bit < log_height:
+                result |= ((y >> y_bit) & 1) << output_bit
+                output_bit += 1
+                y_bit += 1
+        return result
+
+    @staticmethod
+    def integer_log2(value: int) -> int:
+        result = 0
+        while (1 << result) < value:
+            result += 1
+        return result
+
+    def build_sampler(
+        self, state: PgraphReplayState, checkpoint: PgraphCheckpoint
+    ) -> tuple[OfflineSampler | None, str | None]:
+        prefix = checkpoint.kind
+        texture_format = state.registers[NV097_SET_TEXTURE_FORMAT // 4]
+        color_format = (texture_format >> 8) & 0xFF
+        format_info = self.texture_format_info(color_format)
+        if format_info is None:
+            return None, f"{prefix}_texture_format"
+        bytes_per_pixel, kind, swizzled = format_info
+        size_u = (texture_format >> 20) & 0xF
+        size_v = (texture_format >> 24) & 0xF
+        image_rect = state.registers[NV097_SET_TEXTURE_IMAGE_RECT // 4]
+        if swizzled or image_rect == 0:
+            width = 1 << size_u
+            height = 1 << size_v
+        else:
+            width = image_rect >> 16
+            height = image_rect & 0xFFFF
+        if width <= 0 or height <= 0 or width > 4096 or height > 4096:
+            return None, f"{prefix}_texture_dimensions"
+        pitch = width * bytes_per_pixel
+        if not swizzled:
+            pitch = (state.registers[NV097_SET_TEXTURE_CONTROL1 // 4] >> 16) & 0xFFFF
+            pitch = max(pitch, width * bytes_per_pixel)
+        source_size = width * height * bytes_per_pixel if swizzled else pitch * height
+        context_method = NV097_SET_CONTEXT_DMA_B if texture_format & 3 else NV097_SET_CONTEXT_DMA_A
+        texture_base = resolve_dma_base(
+            state.registers[context_method // 4], self.ramin, self.objects
+        )
+        texture_address = (
+            texture_base + state.registers[NV097_SET_TEXTURE_OFFSET // 4]
+        ) & 0xFFFFFFFF
+        source = self.memory.read_observed(texture_address, source_size)
+        if source is None:
+            return None, f"{prefix}_texture_input"
+
+        palette = [0] * 256
+        if kind == 5:
+            palette_state = state.registers[NV097_SET_TEXTURE_PALETTE // 4]
+            palette_context = (
+                NV097_SET_CONTEXT_DMA_B if palette_state & 1 else NV097_SET_CONTEXT_DMA_A
+            )
+            palette_base = resolve_dma_base(
+                state.registers[palette_context // 4], self.ramin, self.objects
+            )
+            entry_count = 256 >> ((palette_state >> 2) & 3)
+            palette_bytes = entry_count * 4
+            if palette_base:
+                palette_addresses = [palette_base + (palette_state & 0xFFFFFFC0)]
+            else:
+                aligned_down = palette_state & 0xFFFFFFF0
+                aligned_up = min(0xFFFFFFFF, (palette_state + 0xF) & 0xFFFFFFF0)
+                palette_addresses = [aligned_down]
+                if aligned_up != aligned_down:
+                    palette_addresses.append(aligned_up)
+                hardware_address = palette_state & 0xFFFFFFC0
+                if hardware_address not in palette_addresses:
+                    palette_addresses.append(hardware_address)
+            raw_palette = None
+            for palette_address in palette_addresses:
+                raw_palette = self.memory.read_observed(palette_address, palette_bytes)
+                if raw_palette is not None:
+                    break
+            if raw_palette is None:
+                return None, f"{prefix}_palette_input"
+            palette[:entry_count] = struct.unpack(f"<{entry_count}I", raw_palette)
+
+        return (
+            OfflineSampler(
+                source=source,
+                palette=tuple(palette),
+                width=width,
+                height=height,
+                pitch=pitch,
+                bytes_per_pixel=bytes_per_pixel,
+                kind=kind,
+                swizzled=swizzled,
+                address=state.registers[NV097_SET_TEXTURE_ADDRESS // 4],
+                bilinear=((state.registers[NV097_SET_TEXTURE_FILTER // 4] >> 24) & 0xF) == 2,
+            ),
+            None,
+        )
+
+    @staticmethod
+    def unpack_texel(raw: int, kind: int) -> int:
+        alpha = 0xFF
+        if kind == 0:
+            return raw
+        if kind == 1:
+            red = ((raw >> 11) & 0x1F) << 3
+            green = ((raw >> 5) & 0x3F) << 2
+            blue = (raw & 0x1F) << 3
+        elif kind == 2:
+            red = ((raw >> 10) & 0x1F) << 3
+            green = ((raw >> 5) & 0x1F) << 3
+            blue = (raw & 0x1F) << 3
+        elif kind == 3:
+            alpha = ((raw >> 12) & 0xF) << 4
+            red = ((raw >> 8) & 0xF) << 4
+            green = ((raw >> 4) & 0xF) << 4
+            blue = (raw & 0xF) << 4
+        else:
+            red = green = blue = raw & 0xFF
+        return (alpha << 24) | (red << 16) | (green << 8) | blue
+
+    def fetch_texel(self, sampler: OfflineSampler, x: int, y: int) -> int:
+        x = max(0, min(sampler.width - 1, x))
+        y = max(0, min(sampler.height - 1, y))
+        if sampler.swizzled:
+            texel_index = self.swizzle_texel_index(
+                x,
+                y,
+                self.integer_log2(sampler.width),
+                self.integer_log2(sampler.height),
+            )
+            byte_offset = texel_index * sampler.bytes_per_pixel
+        else:
+            byte_offset = y * sampler.pitch + x * sampler.bytes_per_pixel
+        if sampler.kind == 5:
+            return sampler.palette[sampler.source[byte_offset]]
+        raw = int.from_bytes(
+            sampler.source[byte_offset : byte_offset + sampler.bytes_per_pixel], "little"
+        )
+        return self.unpack_texel(raw, sampler.kind)
+
+    @staticmethod
+    def address_coordinate(coordinate: float, mode: int) -> float:
+        if mode == 1:
+            return coordinate - math.floor(coordinate)
+        if mode == 2:
+            whole = math.floor(coordinate)
+            fraction = coordinate - whole
+            return 1.0 - fraction if whole & 1 else fraction
+        return coordinate
+
+    def sample_texture(self, sampler: OfflineSampler, u: float, v: float) -> int:
+        u = self.address_coordinate(u, sampler.address & 0x7)
+        v = self.address_coordinate(v, (sampler.address >> 8) & 0x7)
+        if not sampler.bilinear:
+            return self.fetch_texel(sampler, int(u * sampler.width), int(v * sampler.height))
+        texture_x = u * sampler.width - 0.5
+        texture_y = v * sampler.height - 0.5
+        x0 = math.floor(texture_x)
+        y0 = math.floor(texture_y)
+        weight_x = texture_x - x0
+        weight_y = texture_y - y0
+        colors = (
+            self.fetch_texel(sampler, x0, y0),
+            self.fetch_texel(sampler, x0 + 1, y0),
+            self.fetch_texel(sampler, x0, y0 + 1),
+            self.fetch_texel(sampler, x0 + 1, y0 + 1),
+        )
+        output = 0
+        for shift in range(0, 32, 8):
+            channels = [float((color >> shift) & 0xFF) for color in colors]
+            top = channels[0] + (channels[1] - channels[0]) * weight_x
+            bottom = channels[2] + (channels[3] - channels[2]) * weight_x
+            value = top + (bottom - top) * weight_y
+            output |= (int(value + 0.5) & 0xFF) << shift
+        return output
+
+    @staticmethod
+    def combine_texture(state: PgraphReplayState, diffuse: int, texture: int) -> int:
+        texture_only = (
+            (state.registers[0x1E60 // 4] & 0xFF) == 1
+            and state.registers[0x0AC0 // 4] == 0x08200000
+            and state.registers[0x0260 // 4] == 0x18200000
+        )
+        if texture_only:
+            return texture
+        factor_color = state.registers[0x0AC0 // 4] == 0x08010000
+        factor0 = state.registers[0x0A60 // 4]
+        output = 0
+        for shift in range(0, 32, 8):
+            multiplier = factor0 if factor_color and shift != 24 else diffuse
+            channel = ((multiplier >> shift) & 0xFF) * ((texture >> shift) & 0xFF) // 255
+            output |= channel << shift
+        return output
 
     @staticmethod
     def triangle_indices(primitive: int, count: int) -> list[tuple[int, int, int]] | None:
@@ -730,6 +1015,7 @@ class OfflinePixelReplay:
             return f"{prefix}_blend"
         if state.registers[0x032C // 4]:
             return f"{prefix}_stencil"
+        active_texture_stages = []
         for stage in range(4):
             stage_base = 0x1B00 + stage * 0x40
             texture_format = state.registers[(stage_base + 4) // 4]
@@ -738,7 +1024,17 @@ class OfflinePixelReplay:
                 state.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4] >> (stage * 5)
             ) & 0x1F
             if texture_format and texture_control & 0x40000000 and texture_mode:
-                return f"{prefix}_texture"
+                active_texture_stages.append(stage)
+        if any(stage != 0 for stage in active_texture_stages):
+            return f"{prefix}_multitexture"
+        texture_active = active_texture_stages == [0]
+        if texture_active:
+            texture_mode = state.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4] & 0x1F
+            if texture_mode != 1:
+                return f"{prefix}_texture_mode"
+            color_format = (state.registers[NV097_SET_TEXTURE_FORMAT // 4] >> 8) & 0xFF
+            if self.texture_format_info(color_format) is None:
+                return f"{prefix}_texture_format"
         combiner_control = state.registers[0x1E60 // 4]
         diffuse_combiner = (
             (combiner_control & 0xFF) == 1
@@ -747,12 +1043,39 @@ class OfflinePixelReplay:
             and state.registers[0x1E40 // 4] == 0x00000C00
             and state.registers[0x0AA0 // 4] == 0x00000C00
         )
+        texture_combiner = (
+            (combiner_control & 0xFF) == 1
+            and state.registers[0x0AC0 // 4] == 0x08200000
+            and state.registers[0x0260 // 4] == 0x18200000
+            and state.registers[0x1E40 // 4] == 0x00000C00
+            and state.registers[0x0AA0 // 4] == 0x00000C00
+        )
+        modulate_combiner = (
+            (combiner_control & 0xFF) == 1
+            and state.registers[0x0AC0 // 4] == 0x08040000
+            and state.registers[0x0260 // 4] == 0x18140000
+            and state.registers[0x1E40 // 4] == 0x00000C00
+            and state.registers[0x0AA0 // 4] == 0x00000C00
+        )
+        factor_modulate_combiner = (
+            (combiner_control & 0xFF) == 1
+            and state.registers[0x0AC0 // 4] == 0x08010000
+            and state.registers[0x0260 // 4] == 0x18140000
+            and state.registers[0x1E40 // 4] == 0x00000C00
+            and state.registers[0x0AA0 // 4] == 0x00000C00
+        )
         final_cw0 = state.registers[0x0288 // 4]
         final_cw1 = state.registers[0x028C // 4]
         final_passthrough = final_cw0 == 0x0000000C and ((final_cw1 >> 8) & 0xFF) == 0x1C
-        if (combiner_control and not diffuse_combiner) or (
-            (final_cw0 or final_cw1) and not final_passthrough
-        ):
+        known_combiner = (
+            not combiner_control
+            or (
+                texture_active
+                and (texture_combiner or modulate_combiner or factor_modulate_combiner)
+            )
+            or (not texture_active and diffuse_combiner)
+        )
+        if not known_combiner or ((final_cw0 or final_cw1) and not final_passthrough):
             return f"{prefix}_combiner"
         if checkpoint.count < 3:
             return f"{prefix}_vertex_count"
@@ -816,6 +1139,7 @@ class OfflinePixelReplay:
         width: int,
         height: int,
         zeta_format: int,
+        sampler: OfflineSampler | None,
     ) -> None:
         a, b, c = (vertices[index] for index in triangle)
         if min(a.w, b.w, c.w) <= 1.0e-5:
@@ -865,6 +1189,28 @@ class OfflinePixelReplay:
                         )
                         output.append(max(0, min(255, int(value + 0.5))))
                     color = (output[0] << 24) | (output[1] << 16) | (output[2] << 8) | output[3]
+                if sampler is not None:
+                    interpolation_weight = (
+                        weight_a * a.texture_inverse_w
+                        + weight_b * b.texture_inverse_w
+                        + weight_c * c.texture_inverse_w
+                    )
+                    inverse_weight = (
+                        1.0 / interpolation_weight if abs(interpolation_weight) > 1.0e-9 else 0.0
+                    )
+                    texture_u = (
+                        weight_a * a.texture_u * a.texture_inverse_w
+                        + weight_b * b.texture_u * b.texture_inverse_w
+                        + weight_c * c.texture_u * c.texture_inverse_w
+                    ) * inverse_weight
+                    texture_v = (
+                        weight_a * a.texture_v * a.texture_inverse_w
+                        + weight_b * b.texture_v * b.texture_inverse_w
+                        + weight_c * c.texture_v * c.texture_inverse_w
+                    ) * inverse_weight
+                    color = self.combine_texture(
+                        state, color, self.sample_texture(sampler, texture_u, texture_v)
+                    )
                 z = weight_a * a.z + weight_b * b.z + weight_c * c.z
                 self.write_fragment(
                     state,
@@ -884,6 +1230,18 @@ class OfflinePixelReplay:
         if reason is not None:
             self.note_unsupported(reason)
             return
+        texture_active = bool(
+            state.registers[NV097_SET_TEXTURE_FORMAT // 4]
+            and state.registers[NV097_SET_TEXTURE_CONTROL0 // 4] & 0x40000000
+            and state.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4] & 0x1F
+        )
+        sampler = None
+        if texture_active:
+            sampler, reason = self.build_sampler(state, checkpoint)
+            if reason is not None:
+                self.note_unsupported(reason)
+                return
+            assert sampler is not None
         source_indices = (
             checkpoint.indices
             if checkpoint.kind == "indexed_batch"
@@ -893,7 +1251,7 @@ class OfflinePixelReplay:
         )
         vertices: list[OfflineVertex] = []
         for index in source_indices:
-            vertex = self.read_vertex(state, index)
+            vertex = self.read_vertex(state, index, texture_active)
             if vertex is None:
                 self.note_unsupported(f"{checkpoint.kind}_vertex_input")
                 return
@@ -937,12 +1295,14 @@ class OfflinePixelReplay:
                 width,
                 height,
                 zeta_format,
+                sampler,
             )
         if (state.registers[NV097_SET_SURFACE_FORMAT // 4] >> 12) & 0xF:
             self.aa_surface = AaColorSurface(
                 color_address, color_pitch, width, height, checkpoint.frame
             )
         self.draws_executed += 1
+        self.textured_draws_executed += int(texture_active)
         self.triangles_executed += len(triangles)
 
     def execute_clear(self, state: PgraphReplayState, frame: int, flags: int) -> None:
@@ -1499,6 +1859,7 @@ def replay_pixels(path: Path) -> dict[str, object]:
         "methods": method_index,
         "clears_executed": backend.clears_executed,
         "draws_executed": backend.draws_executed,
+        "textured_draws_executed": backend.textured_draws_executed,
         "triangles_executed": backend.triangles_executed,
         "presents_executed": backend.presents_executed,
         "unsupported_checkpoints": backend.unsupported,
@@ -1534,6 +1895,7 @@ def pixel_main(argv: list[str]) -> int:
             f"nv2a_capture pixels: {result['status'].upper()} "
             f"clears={result['clears_executed']} "
             f"draws={result['draws_executed']} "
+            f"textured={result['textured_draws_executed']} "
             f"triangles={result['triangles_executed']} "
             f"presents={result['presents_executed']} "
             f"scanouts={len(result['scanouts'])} "
