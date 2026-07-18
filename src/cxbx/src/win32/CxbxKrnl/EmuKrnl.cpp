@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include <clocale>
 #include <cstring>
 #include <cstdarg>
+#include <intrin.h>
 #include <malloc.h>
 #include <map>
 #include <string>
@@ -7379,6 +7380,48 @@ static void EmuTraceDispatcherWait(cxbx::trace::Event Event, DWORD Started)
     }
 }
 
+static bool EmuIsNativeD3dWaitCaller(ULONG Caller)
+{
+    if(g_pXbeHeader == NULL || Caller < g_pXbeHeader->dwBaseAddr ||
+       Caller >= g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage)
+    {
+        return false;
+    }
+
+    const ULONG HeaderSize = g_pXbeHeader->dwSizeofHeaders;
+    const ULONG SectionOffset = g_pXbeHeader->dwSectionHeadersAddr - g_pXbeHeader->dwBaseAddr;
+    if(SectionOffset >= HeaderSize ||
+       g_pXbeHeader->dwSections >
+           (HeaderSize - SectionOffset) / sizeof(Xbe::SectionHeader))
+    {
+        return false;
+    }
+
+    Xbe::SectionHeader *Sections =
+        (Xbe::SectionHeader*)((BYTE*)g_pXbeHeader + SectionOffset);
+    for(ULONG Index = 0; Index < g_pXbeHeader->dwSections; Index++)
+    {
+        const Xbe::SectionHeader &Section = Sections[Index];
+        if(!Section.dwFlags.bExecutable || Caller < Section.dwVirtualAddr ||
+           Caller - Section.dwVirtualAddr >= Section.dwVirtualSize)
+        {
+            continue;
+        }
+
+        if(Section.dwSectionNameAddr < g_pXbeHeader->dwBaseAddr)
+            return false;
+
+        const ULONG NameOffset = Section.dwSectionNameAddr - g_pXbeHeader->dwBaseAddr;
+        if(NameOffset > HeaderSize || HeaderSize - NameOffset < 3)
+            return false;
+
+        const char *Name = (const char*)g_pXbeHeader + NameOffset;
+        return _strnicmp(Name, "D3D", 3) == 0;
+    }
+
+    return false;
+}
+
 extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
 (
     IN PVOID Object,
@@ -7405,6 +7448,10 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
     const bool HasTimeout = Timeout != NULL;
     const DWORD TimeoutMilliseconds =
         HasTimeout ? EmuDispatcherTimeoutMilliseconds(*Timeout) : 0;
+    const ULONG Caller = (ULONG)_ReturnAddress();
+    const bool NativeD3dVblankWait =
+        !HasTimeout && !Alertable && WaitMode == 1 && EmuNv2aRenderStarted() &&
+        EmuIsNativeD3dWaitCaller(Caller);
 
     for(;;)
     {
@@ -7420,6 +7467,16 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
             EmuTraceDispatcherWait(cxbx::trace::Event::SyncWaitTimeout, Started);
             EmuSwapFS(); // Xbox FS
             return STATUS_TIMEOUT;
+        }
+
+        // Native/LTCG D3D waits for a display event normally signalled by the
+        // NV2A ISR. Running that guest ISR on a second host thread races the
+        // single-core title. Pace the wait in the calling guest thread instead.
+        if(NativeD3dVblankWait && GetTickCount() - Started >= 16)
+        {
+            EmuTraceDispatcherWait(cxbx::trace::Event::SyncWaitSatisfied, Started);
+            EmuSwapFS(); // Xbox FS
+            return STATUS_SUCCESS;
         }
 
         // Keep Win32 FS active while invoking the host scheduler. The previous
