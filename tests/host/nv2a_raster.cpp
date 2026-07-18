@@ -1,5 +1,6 @@
 #include "core/nv2a_raster.h"
 
+#include <array>
 #include <cstdio>
 #include <limits>
 
@@ -65,6 +66,37 @@ int main()
        0xFFFFFFFFu)
     {
         std::fputs("source-alpha blend fast path must match ADD blending\n",
+                   stderr);
+        return 1;
+    }
+
+    constexpr std::array<std::uint32_t, 6> narrowSurface = {
+        1u,
+        2u,
+        3u,
+        4u,
+        5u,
+        6u,
+    };
+    std::array<std::uint32_t, 10> stretchedSurface = {};
+    cxbx::nv2a::StretchSurfaceRowsNearest(
+        narrowSurface.data(), 3, 3, 2,
+        stretchedSurface.data(), 5, 5);
+    constexpr std::array<std::uint32_t, 10> expectedStretchedSurface = {
+        1u,
+        1u,
+        2u,
+        2u,
+        3u,
+        4u,
+        4u,
+        5u,
+        5u,
+        6u,
+    };
+    if(stretchedSurface != expectedStretchedSurface)
+    {
+        std::fputs("AA resolve must stretch logical rows to the scanout width\n",
                    stderr);
         return 1;
     }
