@@ -3,12 +3,12 @@
 // nv2a_fixed - NV2A software-rasterizer fixed-function transform. Where nv2a_vp
 // transforms object-space vertices with a vertex program, this exercises the
 // other front-end: the fixed-function pipeline. It stays in FIXED execution
-// mode (no program), uploads a composite matrix (object -> clip), and submits
-// object-space vertices. A conforming target multiplies each position by the
-// composite matrix, then applies the perspective divide + viewport, so the
-// object triangle lands where the matrix + viewport predict.
+// mode (no program), uploads a composite matrix (object -> screen homogeneous),
+// and submits object-space vertices. The fixed-function composite matrix
+// already includes viewport scale; hardware divides by w and then adds the
+// viewport offset.
 //
-// The matrix is scale(0.5,0.5,1); with the ndc->screen viewport the object
+// The matrix folds scale(0.5,0.5,1) into the 640x480 viewport, so the object
 // triangle maps to A(320,120) B(480,360) C(160,360), centroid (320,280) --
 // identical placement to nv2a_vp, but reached through the fixed-function matrix
 // rather than a program.
@@ -67,10 +67,11 @@ int main(void)
     vb[2] = (Vertex){ -1.0f, -1.0f, 0.0f, 1.0f, BLUE  };
     uint32_t vbAddr = (uint32_t)(uintptr_t)vb;
 
-    // Composite matrix, row-major: scale(0.5, 0.5, 1).
+    // Composite matrix, row-major: object -> screen homogeneous. The XDK
+    // fixed-function path folds viewport scale into these matrix columns.
     const float M[16] = {
-        0.5f, 0.0f, 0.0f, 0.0f,
-        0.0f, 0.5f, 0.0f, 0.0f,
+        160.0f,   0.0f, 0.0f, 0.0f,
+          0.0f, -120.0f, 0.0f, 0.0f,
         0.0f, 0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f,
     };
@@ -92,7 +93,9 @@ int main(void)
         for (int m = 0; m < 16; m++)
             p = pb_push1(p, NV097_SET_COMPOSITE_MATRIX + m * 4, f2u(M[m]));
 
-        // Viewport ndc -> screen.
+        // Fixed-function hardware adds the viewport offset after divide. The
+        // scale registers remain programmed because that is normal XDK state,
+        // but fixed-function position output already contains their effect.
         p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0,  f2u(vp_ox));
         p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4,  f2u(vp_oy));
         p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8,  f2u(0.0f));
