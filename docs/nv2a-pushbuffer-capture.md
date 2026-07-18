@@ -56,6 +56,44 @@ Replay checks:
 The command exits nonzero on corruption or divergence, so it can be used as a
 focused regression predicate.
 
+## Compare captures
+
+```powershell
+python tools/nv2a_capture.py compare baseline.nv2acap candidate.nv2acap
+python tools/nv2a_capture.py compare baseline.nv2acap candidate.nv2acap --json
+```
+
+Comparison validates and replays both inputs before comparing them. It reports
+the first divergence in the complete record stream and independently for PFIFO
+runs, fetched words, methods, memory observations, RAMIN, scanouts, and the
+completion footer.
+
+Host allocations can move between processes. The default comparison therefore
+uses pusher addresses relative to each run's base, normalizes embedded jump/call
+targets, and ignores absolute memory and scanout addresses. Method data,
+non-control command words, PFIFO state, sizes, payload CRCs, and output CRCs
+remain exact. Use `--strict-addresses` when raw address identity is part of the
+test.
+
+Exit codes form a stable automation contract:
+
+| Code | Meaning |
+|---:|---|
+| `0` | Captures match. |
+| `1` | A valid capture differs. |
+| `2` | An input is missing, corrupt, truncated, or otherwise invalid. |
+
+A bisect wrapper should generate `candidate.nv2acap` for the checked-out commit
+and then return the comparator's result:
+
+```powershell
+git bisect run powershell -File path/to/run_capture_bisect.ps1
+```
+
+Keep the baseline outside build/run output that the wrapper replaces. Treat
+exit code `2` explicitly in the wrapper if an unbuildable commit should be
+reported to Git as `125` (skip) instead of bad.
+
 ## Version 1 binary format
 
 All integers are unsigned little-endian values. The 32-byte header is:
