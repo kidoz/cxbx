@@ -1677,7 +1677,10 @@ struct EmuNv2aAaColorSurface
     bool Valid;
 };
 static EmuNv2aAaColorSurface g_EmuNv2aAaColorSurface = {};
-static std::atomic<ULONG> g_EmuNv2aResolvedFrameAddress{0};
+// The live overlay must read only the buffer selected at the last flip. Reading
+// the current resolve destination exposes a partially drawn back buffer while
+// the software rasterizer is still processing the frame.
+static std::atomic<ULONG> g_EmuNv2aPresentedFrameAddress{0};
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
 static bool  g_bEmuNv2aHleRaster = false;
@@ -4395,7 +4398,7 @@ extern "C" void EmuHostBlitToWindow(const void* Pixels, unsigned Width, unsigned
 extern "C" void EmuNv2aBlitResolvedFrame()
 {
     const ULONG Address =
-        g_EmuNv2aResolvedFrameAddress.load(std::memory_order_acquire);
+        g_EmuNv2aPresentedFrameAddress.load(std::memory_order_acquire);
     static ULONG BlitLogCount = 0;
     if(Address == 0 || XTL::g_hEmuWindow == NULL)
     {
@@ -4837,13 +4840,23 @@ static void EmuNv2aDrawPost(const char *What, ULONG Count, ULONG SurfaceHost,
 // what we write to %TEMP%\cxbx_fbN.bmp and (with CXBX_NV2A_WINDOW=1) the window.
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 {
+    if(PhysicalAddress == 0)
+    {
+        return;
+    }
+
+    // Publish the completed front buffer even when diagnostic dumps are off.
+    // The HLE window thread uses this address for its continuously refreshed
+    // overlay, while the title renders the next frame into another buffer.
+    g_EmuNv2aPresentedFrameAddress.store(
+        PhysicalAddress, std::memory_order_release);
+
     bool WantWindow = EmuNv2aWindowEnabled();
     bool WantBmp = (g_EmuNv2aScanoutDumpIndex < 16);
     bool WantCrc = EmuNv2aCrcEnabled();
     cxbx::nv2a::PushbufferCaptureWriter* Capture =
         EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
-    if(PhysicalAddress == 0 ||
-       (!WantBmp && !WantWindow && !WantCrc && Capture == nullptr))
+    if(!WantBmp && !WantWindow && !WantCrc && Capture == nullptr)
     {
         return;
     }
@@ -5090,9 +5103,6 @@ static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress)
                SourcePixels + Y * Source.Pitch,
                Width * sizeof(ULONG));
     }
-    g_EmuNv2aResolvedFrameAddress.store(
-        DestinationAddress, std::memory_order_release);
-
     static ULONG ResolveLogCount = 0;
     if(ResolveLogCount < 8)
     {
