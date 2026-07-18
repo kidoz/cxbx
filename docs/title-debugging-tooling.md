@@ -72,9 +72,13 @@ reads, and the normalized scanout/CRC. `tools/nv2a_capture.py` replays packet
 control flow and verifies every captured payload. See
 `docs/nv2a-pushbuffer-capture.md`.
 
-Independent PGRAPH raster replay remains the next extraction: move the mutable
-raster state out of `Emu.cpp` behind a reusable state object, then feed the
-captured method and memory records into it.
+Offline PGRAPH state replay is implemented by `tools/nv2a_capture.py pgraph`.
+It resolves captured RAMIN bindings and emits canonical checkpoints for every
+clear, draw submission, batch end, and present without booting the title.
+
+Independent pixel execution remains the next extraction: move triangle setup,
+texture/depth memory access, combiners, and surface writes out of `Emu.cpp`,
+then feed them the replayed state and ordered capture memory observations.
 
 ### 4. State diffs at the first divergent draw
 

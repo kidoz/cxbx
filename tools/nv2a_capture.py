@@ -8,7 +8,7 @@ import json
 import struct
 import sys
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 MAGIC = b"CXNVCAP\0"
@@ -25,6 +25,59 @@ SCANOUT = 5
 FINISH = 6
 RAMIN = 7
 
+NV_CLASS_KELVIN = 0x97
+NV097_SET_FLIP_STALL = 0x0130
+NV097_SET_SURFACE_CLIP_HORIZONTAL = 0x0200
+NV097_SET_SURFACE_CLIP_VERTICAL = 0x0204
+NV097_SET_SURFACE_FORMAT = 0x0208
+NV097_SET_SURFACE_PITCH = 0x020C
+NV097_SET_SURFACE_COLOR_OFFSET = 0x0210
+NV097_SET_SURFACE_ZETA_OFFSET = 0x0214
+NV097_SET_BEGIN_END = 0x17FC
+NV097_ARRAY_ELEMENT16 = 0x1800
+NV097_ARRAY_ELEMENT32 = 0x1808
+NV097_DRAW_ARRAYS = 0x1810
+NV097_INLINE_ARRAY = 0x1818
+NV097_SET_VERTEX4F = 0x1518
+NV097_SET_VERTEX_DATA2F_M = 0x1880
+NV097_SET_VERTEX_DATA4UB = 0x1940
+NV097_SET_VERTEX_DATA4F_M = 0x1A00
+NV097_SET_TRANSFORM_PROGRAM = 0x0B00
+NV097_SET_TRANSFORM_CONSTANT = 0x0B80
+NV097_SET_TRANSFORM_EXECUTION_MODE = 0x1E94
+NV097_SET_TRANSFORM_PROGRAM_LOAD = 0x1E9C
+NV097_SET_TRANSFORM_PROGRAM_START = 0x1EA0
+NV097_SET_TRANSFORM_CONSTANT_LOAD = 0x1EA4
+NV097_SET_SHADER_STAGE_PROGRAM = 0x1E70
+NV097_CLEAR_SURFACE = 0x1D94
+
+PGRAPH_REGISTER_COUNT = 0x2000 // 4
+PGRAPH_VERTEX_ATTRIBUTE_COUNT = 16
+PGRAPH_VERTEX_PROGRAM_WORDS = 136 * 4
+PGRAPH_TRANSFORM_CONSTANT_WORDS = 192 * 4
+PGRAPH_ELEMENT_INDEX_CAPACITY = 4096
+PGRAPH_INLINE_WORD_CAPACITY = 65536
+
+
+def default_pgraph_registers() -> list[int]:
+    registers = [0] * PGRAPH_REGISTER_COUNT
+    registers[0x033C // 4] = 0x0207
+    registers[0x0344 // 4] = 0x0001
+    registers[0x0350 // 4] = 0x8006
+    registers[0x0354 // 4] = 0x0201
+    registers[0x035C // 4] = 1
+    registers[0x0360 // 4] = 0xFF
+    registers[0x0364 // 4] = 0x0207
+    registers[0x036C // 4] = 0xFF
+    registers[0x0370 // 4] = 0x1E00
+    registers[0x0374 // 4] = 0x1E00
+    registers[0x0378 // 4] = 0x1E00
+    return registers
+
+
+def identity_matrix_words() -> list[int]:
+    return [0x3F800000 if index % 5 == 0 else 0 for index in range(16)]
+
 
 class CaptureError(RuntimeError):
     """Raised when a capture is corrupt or cannot be replayed exactly."""
@@ -36,6 +89,263 @@ class ComparisonEvent:
     record_index: int
     signature: tuple[object, ...]
     details: dict[str, object]
+
+
+@dataclass(frozen=True)
+class PgraphCheckpoint:
+    sequence: int
+    record_index: int
+    method_index: int
+    frame: int
+    kind: str
+    method: int
+    data: int
+    primitive: int
+    count: int
+    state_crc32: int
+    surface: dict[str, int]
+    pipeline: dict[str, int]
+
+
+@dataclass
+class PgraphReplayState:
+    registers: list[int] = field(default_factory=default_pgraph_registers)
+    subchannel_classes: list[int] = field(default_factory=lambda: [0] * 8)
+    vertex_program: list[int] = field(default_factory=lambda: [0] * PGRAPH_VERTEX_PROGRAM_WORDS)
+    transform_constants: list[int] = field(
+        default_factory=lambda: [0] * PGRAPH_TRANSFORM_CONSTANT_WORDS
+    )
+    immediate_attributes: list[int] = field(
+        default_factory=lambda: [0] * (PGRAPH_VERTEX_ATTRIBUTE_COUNT * 4)
+    )
+    immediate_formats: list[int] = field(
+        default_factory=lambda: [0] * PGRAPH_VERTEX_ATTRIBUTE_COUNT
+    )
+    composite_matrix: list[int] = field(default_factory=identity_matrix_words)
+    viewport_offset: list[int] = field(default_factory=lambda: [0] * 4)
+    viewport_scale: list[int] = field(default_factory=lambda: [0x3F800000] * 4)
+    element_indices: list[int] = field(default_factory=list)
+    inline_words: list[int] = field(default_factory=list)
+    immediate_words: list[int] = field(default_factory=list)
+    begin_op: int = 0
+    immediate_vertices: int = 0
+    inline_overflow: bool = False
+    immediate_overflow: bool = False
+    vp_write_word: int = 0
+    vp_instruction_count: int = 0
+    vp_start: int = 0
+    vp_execution_mode: int = 0
+    constant_write_word: int = 0
+    checkpoint_count: int = 0
+
+    def reset_batch(self) -> None:
+        self.element_indices.clear()
+        self.inline_words.clear()
+        self.immediate_words.clear()
+        self.immediate_vertices = 0
+        self.inline_overflow = False
+        self.immediate_overflow = False
+
+    def state_crc32(self) -> int:
+        crc = 0
+        scalar = (
+            1,
+            self.begin_op,
+            self.immediate_vertices,
+            self.inline_overflow,
+            self.immediate_overflow,
+            self.vp_write_word,
+            self.vp_instruction_count,
+            self.vp_start,
+            self.vp_execution_mode,
+            self.constant_write_word,
+        )
+        for values in (
+            scalar,
+            self.subchannel_classes,
+            self.registers,
+            self.vertex_program,
+            self.transform_constants,
+            self.immediate_attributes,
+            self.immediate_formats,
+            self.composite_matrix,
+            self.viewport_offset,
+            self.viewport_scale,
+            self.element_indices,
+            self.inline_words,
+            self.immediate_words,
+        ):
+            crc = zlib.crc32(struct.pack(f"<{len(values)}I", *values), crc)
+        return crc & 0xFFFFFFFF
+
+    def checkpoint(
+        self,
+        record_index: int,
+        method_index: int,
+        frame: int,
+        kind: str,
+        method: int,
+        data: int,
+        count: int,
+    ) -> PgraphCheckpoint:
+        surface = {
+            "clip_horizontal": self.registers[NV097_SET_SURFACE_CLIP_HORIZONTAL // 4],
+            "clip_vertical": self.registers[NV097_SET_SURFACE_CLIP_VERTICAL // 4],
+            "format": self.registers[NV097_SET_SURFACE_FORMAT // 4],
+            "pitch": self.registers[NV097_SET_SURFACE_PITCH // 4],
+            "color_offset": self.registers[NV097_SET_SURFACE_COLOR_OFFSET // 4],
+            "zeta_offset": self.registers[NV097_SET_SURFACE_ZETA_OFFSET // 4],
+        }
+        pipeline = {
+            "alpha_test": self.registers[0x0300 // 4],
+            "blend": self.registers[0x0304 // 4],
+            "depth_test": self.registers[0x030C // 4],
+            "stencil_test": self.registers[0x032C // 4],
+            "texture0_format": self.registers[0x1B04 // 4],
+            "shader_stage_program": self.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4],
+            "vp_execution_mode": self.vp_execution_mode,
+            "vp_start": self.vp_start,
+            "vp_instruction_count": self.vp_instruction_count,
+        }
+        result = PgraphCheckpoint(
+            sequence=self.checkpoint_count,
+            record_index=record_index,
+            method_index=method_index,
+            frame=frame,
+            kind=kind,
+            method=method,
+            data=data,
+            primitive=self.begin_op,
+            count=count,
+            state_crc32=self.state_crc32(),
+            surface=surface,
+            pipeline=pipeline,
+        )
+        self.checkpoint_count += 1
+        return result
+
+    def apply_method(
+        self,
+        frame: int,
+        subchannel: int,
+        method: int,
+        data: int,
+        record_index: int,
+        method_index: int,
+        objects: dict[int, tuple[int, int]],
+    ) -> PgraphCheckpoint | None:
+        channel = subchannel & 7
+        if method == 0:
+            self.subchannel_classes[channel] = objects.get(data, (0, NV_CLASS_KELVIN))[1]
+            return None
+
+        class_id = self.subchannel_classes[channel] or NV_CLASS_KELVIN
+        if class_id != NV_CLASS_KELVIN:
+            return None
+        if 0x180 <= method < 0x200 and data in objects:
+            data = objects[data][0]
+
+        method &= 0x1FFC
+        self.registers[method // 4] = data
+
+        if method == NV097_SET_TRANSFORM_EXECUTION_MODE:
+            self.vp_execution_mode = data & 3
+        elif method == NV097_SET_TRANSFORM_PROGRAM_LOAD:
+            self.vp_write_word = data * 4
+        elif method == NV097_SET_TRANSFORM_PROGRAM_START:
+            self.vp_start = data
+        elif method == NV097_SET_TRANSFORM_CONSTANT_LOAD:
+            self.constant_write_word = data * 4
+        elif NV097_SET_TRANSFORM_PROGRAM <= method < NV097_SET_TRANSFORM_PROGRAM + 0x80:
+            if self.vp_write_word < len(self.vertex_program):
+                self.vertex_program[self.vp_write_word] = data
+                self.vp_write_word += 1
+                self.vp_instruction_count = max(
+                    self.vp_instruction_count, (self.vp_write_word + 3) // 4
+                )
+        elif NV097_SET_TRANSFORM_CONSTANT <= method < NV097_SET_TRANSFORM_CONSTANT + 0x80:
+            if self.constant_write_word < len(self.transform_constants):
+                self.transform_constants[self.constant_write_word] = data
+                self.constant_write_word += 1
+        elif 0x0680 <= method < 0x0680 + 16 * 4:
+            self.composite_matrix[(method - 0x0680) // 4] = data
+        elif 0x0A20 <= method < 0x0A20 + 4 * 4:
+            self.viewport_offset[(method - 0x0A20) // 4] = data
+        elif 0x0AF0 <= method < 0x0AF0 + 4 * 4:
+            self.viewport_scale[(method - 0x0AF0) // 4] = data
+        elif method == NV097_ARRAY_ELEMENT16:
+            for index in (data & 0xFFFF, data >> 16):
+                if len(self.element_indices) < PGRAPH_ELEMENT_INDEX_CAPACITY:
+                    self.element_indices.append(index)
+        elif method == NV097_ARRAY_ELEMENT32:
+            if len(self.element_indices) < PGRAPH_ELEMENT_INDEX_CAPACITY:
+                self.element_indices.append(data)
+        elif method == NV097_INLINE_ARRAY:
+            if len(self.inline_words) < PGRAPH_INLINE_WORD_CAPACITY:
+                self.inline_words.append(data)
+            else:
+                self.inline_overflow = True
+        elif NV097_SET_VERTEX_DATA2F_M <= method < NV097_SET_VERTEX_DATA2F_M + 16 * 8:
+            relative = method - NV097_SET_VERTEX_DATA2F_M
+            attribute = relative // 8
+            component = (relative & 7) // 4
+            self.immediate_attributes[attribute * 4 + component] = data
+            self.immediate_formats[attribute] = 0x22
+        elif NV097_SET_VERTEX_DATA4UB <= method < NV097_SET_VERTEX_DATA4UB + 16 * 4:
+            attribute = (method - NV097_SET_VERTEX_DATA4UB) // 4
+            self.immediate_attributes[attribute * 4] = data
+            self.immediate_formats[attribute] = 0x40
+        elif NV097_SET_VERTEX_DATA4F_M <= method < NV097_SET_VERTEX_DATA4F_M + 16 * 16:
+            relative = method - NV097_SET_VERTEX_DATA4F_M
+            attribute = relative // 16
+            component = (relative & 15) // 4
+            self.immediate_attributes[attribute * 4 + component] = data
+            self.immediate_formats[attribute] = 0x42
+        elif NV097_SET_VERTEX4F <= method < NV097_SET_VERTEX4F + 16:
+            component = (method - NV097_SET_VERTEX4F) // 4
+            self.immediate_attributes[component] = data
+            self.immediate_formats[0] = 0x42
+            if component == 3:
+                if (
+                    len(self.immediate_words) + PGRAPH_VERTEX_ATTRIBUTE_COUNT * 4
+                    <= PGRAPH_INLINE_WORD_CAPACITY
+                ):
+                    self.immediate_words.extend(self.immediate_attributes)
+                    self.immediate_vertices += 1
+                else:
+                    self.immediate_overflow = True
+
+        if method == NV097_CLEAR_SURFACE:
+            return self.checkpoint(record_index, method_index, frame, "clear", method, data, 0)
+        if method == NV097_DRAW_ARRAYS:
+            count = ((data >> 24) & 0xFF) + 1
+            return self.checkpoint(
+                record_index, method_index, frame, "draw_arrays", method, data, count
+            )
+        if method == NV097_SET_FLIP_STALL:
+            return self.checkpoint(record_index, method_index, frame, "present", method, data, 0)
+        if method == NV097_SET_BEGIN_END:
+            if data != 0:
+                self.reset_batch()
+                self.begin_op = data
+                return None
+            if self.immediate_vertices:
+                kind = "immediate_batch"
+                count = self.immediate_vertices
+            elif self.inline_words:
+                kind = "inline_batch"
+                count = len(self.inline_words)
+            elif self.element_indices:
+                kind = "indexed_batch"
+                count = len(self.element_indices)
+            else:
+                self.begin_op = 0
+                return None
+            result = self.checkpoint(record_index, method_index, frame, kind, method, data, count)
+            self.reset_batch()
+            self.begin_op = 0
+            return result
+        return None
 
 
 def unpack_fields(payload: bytes, count: int, name: str) -> tuple[int, ...]:
@@ -69,10 +379,12 @@ class PusherReplay:
         if not self.active:
             self.packet_errors.append("push word appeared before a push-run record")
             return
-        if frame != self.frame:
+        if frame < self.frame:
             self.packet_errors.append(
-                f"push word frame {frame} does not match run frame {self.frame}"
+                f"push word frame moved backwards from {self.frame} to {frame}"
             )
+        else:
+            self.frame = frame
         if address != self.get:
             self.address_errors.append(
                 f"frame {frame}: fetched 0x{address:08X}, expected 0x{self.get:08X}"
@@ -266,6 +578,211 @@ def analyze_capture(path: Path, allow_truncated: bool = False) -> dict[str, obje
         "output_crc32": f"0x{output_crc:08X}",
         "replay": "pass",
     }
+
+
+def discover_ramin_objects(ramin: bytes) -> dict[int, tuple[int, int]]:
+    objects: dict[int, tuple[int, int]] = {}
+    for offset in range(0, len(ramin) - 7, 8):
+        handle, context = struct.unpack_from("<II", ramin, offset)
+        if handle == 0 or (context & 0x80000000) == 0:
+            continue
+        instance = (context & 0xFFFF) << 4
+        if instance + 4 > len(ramin):
+            continue
+        class_id = struct.unpack_from("<I", ramin, instance)[0] & 0xFF
+        if class_id != 0:
+            objects.setdefault(handle, (instance, class_id))
+    return objects
+
+
+def checkpoint_json(checkpoint: PgraphCheckpoint | None) -> dict[str, object] | None:
+    if checkpoint is None:
+        return None
+    return {
+        "sequence": checkpoint.sequence,
+        "record_index": checkpoint.record_index,
+        "method_index": checkpoint.method_index,
+        "frame": checkpoint.frame,
+        "kind": checkpoint.kind,
+        "method": checkpoint.method,
+        "data": checkpoint.data,
+        "primitive": checkpoint.primitive,
+        "count": checkpoint.count,
+        "state_crc32": checkpoint.state_crc32,
+        "surface": checkpoint.surface,
+        "pipeline": checkpoint.pipeline,
+    }
+
+
+def replay_pgraph(path: Path) -> dict[str, object]:
+    analysis = analyze_capture(path)
+    ramin = b""
+    methods: list[tuple[int, int, int, int, int]] = []
+
+    with path.open("rb") as stream:
+        stream.seek(HEADER.size)
+        record_index = 0
+        while raw_header := stream.read(RECORD_HEADER.size):
+            record_type, payload_size = RECORD_HEADER.unpack(raw_header)
+            payload = stream.read(payload_size)
+            if record_type == RAMIN:
+                size, _crc = unpack_fields(payload, 2, "RAMIN")
+                ramin = payload[8 : 8 + size]
+            elif record_type == METHOD:
+                frame, subchannel, method, data = unpack_fields(payload, 4, "method")
+                methods.append((record_index, frame, subchannel, method, data))
+            record_index += 1
+
+    objects = discover_ramin_objects(ramin)
+    state = PgraphReplayState()
+    checkpoints: list[PgraphCheckpoint] = []
+    kelvin_methods = 0
+    for method_index, (record_index, frame, subchannel, method, data) in enumerate(methods):
+        class_before = state.subchannel_classes[subchannel & 7] or NV_CLASS_KELVIN
+        checkpoint = state.apply_method(
+            frame,
+            subchannel,
+            method,
+            data,
+            record_index,
+            method_index,
+            objects,
+        )
+        if method == 0:
+            class_before = state.subchannel_classes[subchannel & 7]
+        if class_before == NV_CLASS_KELVIN:
+            kelvin_methods += 1
+        if checkpoint is not None:
+            checkpoints.append(checkpoint)
+
+    counts: dict[str, int] = {}
+    for checkpoint in checkpoints:
+        counts[checkpoint.kind] = counts.get(checkpoint.kind, 0) + 1
+    return {
+        "schema_version": 1,
+        "capture": str(path.resolve()),
+        "target_frame": analysis["target_frame"],
+        "methods": len(methods),
+        "kelvin_methods": kelvin_methods,
+        "ramin_objects": len(objects),
+        "memory_records": analysis["memory_records"],
+        "memory_bytes": analysis["memory_bytes"],
+        "checkpoint_count": len(checkpoints),
+        "checkpoint_counts": counts,
+        "final_state_crc32": state.state_crc32(),
+        "checkpoints": [checkpoint_json(checkpoint) for checkpoint in checkpoints],
+    }
+
+
+def pgraph_checkpoint_signature(checkpoint: dict[str, object]) -> tuple[object, ...]:
+    return (
+        checkpoint["frame"],
+        checkpoint["kind"],
+        checkpoint["method"],
+        checkpoint["data"],
+        checkpoint["primitive"],
+        checkpoint["count"],
+        checkpoint["state_crc32"],
+    )
+
+
+def compare_pgraph_replays(baseline_path: Path, candidate_path: Path) -> dict[str, object]:
+    baseline = replay_pgraph(baseline_path)
+    candidate = replay_pgraph(candidate_path)
+    baseline_checkpoints = baseline["checkpoints"]
+    candidate_checkpoints = candidate["checkpoints"]
+    assert isinstance(baseline_checkpoints, list)
+    assert isinstance(candidate_checkpoints, list)
+    shared = min(len(baseline_checkpoints), len(candidate_checkpoints))
+    divergence = None
+    for index in range(shared):
+        if pgraph_checkpoint_signature(baseline_checkpoints[index]) != pgraph_checkpoint_signature(
+            candidate_checkpoints[index]
+        ):
+            divergence = {
+                "index": index,
+                "baseline": baseline_checkpoints[index],
+                "candidate": candidate_checkpoints[index],
+            }
+            break
+    if divergence is None and len(baseline_checkpoints) != len(candidate_checkpoints):
+        divergence = {
+            "index": shared,
+            "baseline": (
+                baseline_checkpoints[shared] if shared < len(baseline_checkpoints) else None
+            ),
+            "candidate": (
+                candidate_checkpoints[shared] if shared < len(candidate_checkpoints) else None
+            ),
+        }
+    if divergence is None and baseline["final_state_crc32"] != candidate["final_state_crc32"]:
+        divergence = {
+            "index": shared,
+            "baseline": {"final_state_crc32": baseline["final_state_crc32"]},
+            "candidate": {"final_state_crc32": candidate["final_state_crc32"]},
+        }
+    return {
+        "schema_version": 1,
+        "equal": divergence is None,
+        "baseline": baseline,
+        "candidate": candidate,
+        "first_divergence": divergence,
+    }
+
+
+def format_pgraph_checkpoint(checkpoint: dict[str, object] | None) -> str:
+    if checkpoint is None:
+        return "<missing>"
+    if "kind" not in checkpoint:
+        return f"final_state_crc32=0x{checkpoint['final_state_crc32']:08X}"
+    return (
+        f"{checkpoint['kind']} frame={checkpoint['frame']} "
+        f"method=0x{checkpoint['method']:04X} data=0x{checkpoint['data']:08X} "
+        f"primitive=0x{checkpoint['primitive']:02X} count={checkpoint['count']} "
+        f"state_crc32=0x{checkpoint['state_crc32']:08X}"
+    )
+
+
+def pgraph_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="nv2a_capture pgraph",
+        description="Replay captured PGRAPH state and emit deterministic checkpoints.",
+    )
+    parser.add_argument("baseline", type=Path)
+    parser.add_argument("candidate", type=Path, nargs="?")
+    parser.add_argument("--json", action="store_true", help="emit JSON replay report")
+    args = parser.parse_args(argv)
+    try:
+        if args.candidate is None:
+            result = replay_pgraph(args.baseline)
+        else:
+            result = compare_pgraph_replays(args.baseline, args.candidate)
+    except (OSError, CaptureError) as error:
+        print(f"nv2a_capture pgraph: INVALID: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif args.candidate is None:
+        print(
+            "nv2a_capture pgraph: PASS "
+            f"methods={result['methods']} checkpoints={result['checkpoint_count']} "
+            f"state_crc32=0x{result['final_state_crc32']:08X}"
+        )
+    elif result["equal"]:
+        baseline = result["baseline"]
+        print(
+            "nv2a_capture pgraph: MATCH "
+            f"checkpoints={baseline['checkpoint_count']} "
+            f"state_crc32=0x{baseline['final_state_crc32']:08X}"
+        )
+    else:
+        divergence = result["first_divergence"]
+        assert isinstance(divergence, dict)
+        print(f"nv2a_capture pgraph: DIFFER at checkpoint {divergence['index']}")
+        print(f"  baseline : {format_pgraph_checkpoint(divergence['baseline'])}")
+        print(f"  candidate: {format_pgraph_checkpoint(divergence['candidate'])}")
+    return 0 if args.candidate is None or result["equal"] else 1
 
 
 def normalize_run_address(value: int, host_mode: bool, base: int) -> int:
@@ -566,6 +1083,8 @@ def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
     if effective_argv and effective_argv[0] == "compare":
         return compare_main(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "pgraph":
+        return pgraph_main(effective_argv[1:])
 
     parser = argparse.ArgumentParser(
         description="Validate a CXBX NV2A capture and replay its PFIFO command stream."
