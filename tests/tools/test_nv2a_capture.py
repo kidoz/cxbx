@@ -339,6 +339,129 @@ def build_draw_capture(
     path.write_bytes(header + b"".join(records))
 
 
+def texture_pixels(bilinear: bool) -> bytes:
+    if bilinear:
+        rows = (
+            ((255, 0, 0), (191, 64, 0), (64, 191, 0), (0, 255, 0)),
+            ((191, 0, 64), (159, 64, 64), (96, 191, 64), (64, 255, 64)),
+            ((64, 0, 191), (96, 64, 191), (159, 191, 191), (191, 255, 191)),
+            ((0, 0, 255), (64, 64, 255), (191, 191, 255), (255, 255, 255)),
+        )
+    else:
+        rows = (
+            ((255, 0, 0), (255, 0, 0), (0, 255, 0), (0, 255, 0)),
+            ((255, 0, 0), (255, 0, 0), (0, 255, 0), (0, 255, 0)),
+            ((0, 0, 255), (0, 0, 255), (255, 255, 255), (255, 255, 255)),
+            ((0, 0, 255), (0, 0, 255), (255, 255, 255), (255, 255, 255)),
+        )
+    colors = [
+        0xFF000000 | red << 16 | green << 8 | blue for row in rows for red, green, blue in row
+    ]
+    return struct.pack("<16I", *colors)
+
+
+def build_texture_capture(path: Path, *, paletted: bool, bilinear: bool) -> None:
+    vertices = b"".join(
+        struct.pack("<fffff", x, y, 0.0, u, v)
+        for x, y, u, v in (
+            (0.0, 0.0, 0.0, 0.0),
+            (4.0, 0.0, 1.0, 0.0),
+            (4.0, 4.0, 1.0, 1.0),
+            (0.0, 4.0, 0.0, 1.0),
+        )
+    )
+    texels = struct.pack("<4I", 0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF)
+    palette = bytearray(256 * 4)
+    for index, color in enumerate((0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF)):
+        struct.pack_into("<I", palette, index * 4, color)
+    source = bytes(range(4)) if paletted else texels
+    texture_format = (
+        (1 << 24) | (1 << 20) | (0x0B << 8) | (2 << 4) if paletted else (0x12 << 8) | (2 << 4)
+    )
+    methods: list[tuple[int, int, list[tuple[int, bytes]] | None]] = [
+        (0x0200, 4 << 16, None),
+        (0x0204, 4 << 16, None),
+        (0x020C, 16, None),
+        (0x0210, 0x2000, None),
+        (0x1D98, 3 << 16, None),
+        (0x1D9C, 3 << 16, None),
+        (0x1D90, 0xFF000000, None),
+        (0x1D94, 0xF0, None),
+        (0x1B00, 0x5000, None),
+        (0x1B04, texture_format, None),
+        (0x1B08, 0x00030303, None),
+        (0x1B0C, 0x4003FFC0, None),
+        (0x1B10, 8 << 16, None),
+        (0x1B14, (2 if bilinear else 1) << 24, None),
+        (0x1B1C, (2 << 16) | 2, None),
+        (0x1B20, 0x6000, None),
+        (0x1E70, 1, None),
+        (0x1720, 0x4000, None),
+        (0x1760, (20 << 8) | (3 << 4) | 2, None),
+        (0x1744, 0x400C, None),
+        (0x1784, (20 << 8) | (2 << 4) | 2, None),
+        (0x17FC, 8, None),
+        (
+            0x1810,
+            0x03000000,
+            [(0x80004000, vertices), (0x80005000, source)]
+            + ([(0x80006000, bytes(palette))] if paletted else []),
+        ),
+        (0x17FC, 0, None),
+        (0x0130, 0, None),
+    ]
+    expected = texture_pixels(bilinear)
+    crc = zlib.crc32(expected) & 0xFFFFFFFF
+    base = 0x10000000
+    records = [
+        record(
+            nv2a_capture.RAMIN,
+            struct.pack("<II", 4, zlib.crc32(b"RAM!") & 0xFFFFFFFF) + b"RAM!",
+        ),
+        record(
+            nv2a_capture.PUSH_RUN,
+            struct.pack("<9I", 0, 1, base, base, base + len(methods) * 8, 0, 0, 0, 0xFFFFFFFF),
+        ),
+    ]
+    address = base
+    for method, data, memory_records in methods:
+        packet = 0x40000000 | (1 << 18) | method
+        records.append(record(nv2a_capture.PUSH_WORD, struct.pack("<3I", 0, address, packet)))
+        address += 4
+        records.append(record(nv2a_capture.PUSH_WORD, struct.pack("<3I", 0, address, data)))
+        records.append(record(nv2a_capture.METHOD, struct.pack("<4I", 0, 0, method, data)))
+        address += 4
+        for memory_address, memory in memory_records or ():
+            records.append(
+                record(
+                    nv2a_capture.MEMORY,
+                    struct.pack(
+                        "<III",
+                        memory_address,
+                        len(memory),
+                        zlib.crc32(memory) & 0xFFFFFFFF,
+                    )
+                    + memory,
+                )
+            )
+    records.append(
+        record(
+            nv2a_capture.SCANOUT,
+            struct.pack("<6I", 0, 0x2000, 4, 4, crc, len(expected)) + expected,
+        )
+    )
+    records.append(record(nv2a_capture.FINISH, struct.pack("<5I", 0, 0, len(records), 0, crc)))
+    header = nv2a_capture.HEADER.pack(
+        nv2a_capture.MAGIC,
+        nv2a_capture.VERSION,
+        nv2a_capture.ENDIAN_MARKER,
+        nv2a_capture.HEADER.size,
+        0,
+        64 * 1024 * 1024,
+    )
+    path.write_bytes(header + b"".join(records))
+
+
 class Nv2aCaptureTests(unittest.TestCase):
     def test_pixel_memory_applies_each_observation_once(self) -> None:
         memory = nv2a_capture.CapturedPixelMemory()
@@ -356,6 +479,8 @@ class Nv2aCaptureTests(unittest.TestCase):
         memory.observe(0x80001000, b"\x11\x22\x33\x44")
         memory.observe(0x80001001, b"\x99")
         self.assertEqual(memory.read_observed(0x1000, 4), b"\x11\x99\x33\x44")
+        memory.observe(0x82F93D50, b"\x55\x66\x77\x88")
+        self.assertEqual(memory.read_observed(0x0EF93D50, 4), b"\x55\x66\x77\x88")
         self.assertIsNone(memory.read_observed(0x2000, 4))
 
     def test_replays_clear_and_aa_resolve_pixels(self) -> None:
@@ -409,6 +534,68 @@ class Nv2aCaptureTests(unittest.TestCase):
         self.assertEqual(pixels["draws_executed"], 1)
         self.assertTrue(pixels["scanouts"][0]["match"])
 
+    def test_replays_linear_point_and_paletted_bilinear_textures(self) -> None:
+        cases = ((False, False), (True, True))
+        for paletted, bilinear in cases:
+            with (
+                self.subTest(paletted=paletted, bilinear=bilinear),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "texture.nv2acap"
+                build_texture_capture(path, paletted=paletted, bilinear=bilinear)
+                result = nv2a_capture.replay_pixels(path)
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["draws_executed"], 1)
+            self.assertEqual(result["textured_draws_executed"], 1)
+            self.assertEqual(result["triangles_executed"], 2)
+            self.assertEqual(result["unsupported_checkpoints"], {})
+            self.assertTrue(result["scanouts"][0]["match"])
+
+    def test_texture_addressing_and_bilinear_sampling(self) -> None:
+        source = struct.pack("<4I", 0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF)
+        backend = nv2a_capture.OfflinePixelReplay(b"", {}, {})
+
+        def sampler(address: int, bilinear: bool) -> nv2a_capture.OfflineSampler:
+            return nv2a_capture.OfflineSampler(
+                source=source,
+                palette=tuple([0] * 256),
+                width=2,
+                height=2,
+                pitch=8,
+                bytes_per_pixel=4,
+                kind=0,
+                swizzled=False,
+                address=address,
+                bilinear=bilinear,
+            )
+
+        self.assertEqual(backend.sample_texture(sampler(0x00000303, False), 1.25, 0.25), 0xFF00FF00)
+        self.assertEqual(backend.sample_texture(sampler(0x00000101, False), 1.25, 0.25), 0xFFFF0000)
+        self.assertEqual(backend.sample_texture(sampler(0x00000303, True), 0.5, 0.5), 0xFF808080)
+
+        palette = tuple(0xFF000000 | index for index in range(256))
+        swizzled = nv2a_capture.OfflineSampler(
+            source=bytes(range(8)),
+            palette=palette,
+            width=4,
+            height=2,
+            pitch=4,
+            bytes_per_pixel=1,
+            kind=5,
+            swizzled=True,
+            address=0x00000303,
+            bilinear=False,
+        )
+        self.assertEqual(backend.fetch_texel(swizzled, 2, 0), 0xFF000004)
+        self.assertEqual(backend.fetch_texel(swizzled, 0, 1), 0xFF000002)
+
+    def test_combines_texture_with_factor_rgb_and_diffuse_alpha(self) -> None:
+        state = nv2a_capture.PgraphReplayState()
+        state.registers[0x0AC0 // 4] = 0x08010000
+        state.registers[0x0A60 // 4] = 0xFF4080C0
+        color = nv2a_capture.OfflinePixelReplay.combine_texture(state, 0x80402010, 0xFF804020)
+        self.assertEqual(color, 0x80202018)
+
     def test_replays_z16_and_z24_depth_ordering(self) -> None:
         for depth_format in (1, 2):
             with (
@@ -438,6 +625,11 @@ class Nv2aCaptureTests(unittest.TestCase):
         vertex = backend.read_vertex(state, 0)
         assert vertex is not None
         self.assertEqual((vertex.x, vertex.y, vertex.z, vertex.w), (12.0, 24.0, 3.0, 1.0))
+
+        state.composite_matrix[15] = struct.unpack("<I", struct.pack("<f", -1.0))[0]
+        clipped_vertex = backend.read_vertex(state, 0)
+        assert clipped_vertex is not None
+        self.assertEqual(clipped_vertex.w, -1.0)
 
     def test_accepts_diffuse_and_final_passthrough_combiners(self) -> None:
         state = nv2a_capture.PgraphReplayState()

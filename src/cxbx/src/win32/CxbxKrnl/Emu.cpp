@@ -3738,6 +3738,11 @@ static bool EmuNv2aLoadSamplerPalette(ULONG Stage, EmuNv2aSampler* Sampler)
     ZeroMemory(Sampler->Palette, sizeof(Sampler->Palette));
     if(PaletteHost != 0 && EmuTryReadHost(PaletteHost, Sampler->Palette, PaletteBytes))
     {
+        const ULONG CaptureAddress = EmuIsPhysicalMapAddress(PaletteAddress)
+                                         ? PaletteAddress
+                                         : EmuPhysicalMapBase +
+                                               (PaletteAddress & EmuPhysicalRamMirrorMask);
+        EmuNv2aCaptureMemory(CaptureAddress, Sampler->Palette, PaletteBytes);
         return true;
     }
 
@@ -3819,6 +3824,7 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     BYTE* Source = nullptr;
     bool OwnsSource = true;
     bool Loaded = false;
+    bool LoadedFromHost = false;
     if(S->Kind == 5 && Host != 0)
     {
         BYTE Probe = 0;
@@ -3828,6 +3834,7 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
         {
             Source = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(Host));
             OwnsSource = false;
+            LoadedFromHost = true;
         }
     }
 
@@ -3835,6 +3842,7 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     {
         Source = new BYTE[S->Size];
         Loaded = Host != 0 && EmuTryReadHost(Host, Source, S->Size);
+        LoadedFromHost = Loaded;
         if(!Loaded)
         {
             ULONG Phys = Address;
@@ -3849,6 +3857,14 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     {
         delete[] Source;
         return false;
+    }
+    if(LoadedFromHost)
+    {
+        const ULONG CaptureAddress = EmuIsPhysicalMapAddress(Address)
+                                         ? Address
+                                         : EmuPhysicalMapBase +
+                                               (Address & EmuPhysicalRamMirrorMask);
+        EmuNv2aCaptureMemory(CaptureAddress, Source, S->Size);
     }
 
     S->Pixels = new ULONG[S->Width * S->Height];
@@ -3943,6 +3959,21 @@ static const EmuNv2aSampler* EmuNv2aGetSampler(ULONG Stage)
     g_EmuNv2aSamplerCache[Stage].Address = g_EmuNv2aTexture[Stage].Address;
     g_EmuNv2aSamplerCache[Stage].Bilinear =
         ((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xFu) == 2u;
+    if(g_EmuNv2aSamplerCache[Stage].Kind == 5 &&
+       g_EmuNv2aSamplerCache[Stage].Source != nullptr)
+    {
+        const ULONG Format = g_EmuNv2aTexture[Stage].Format;
+        const ULONG Base = EmuNv2aResolveDmaBase(
+            EmuNv2aTextureDmaHandle(Format));
+        const ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
+        const ULONG CaptureAddress = EmuIsPhysicalMapAddress(Address)
+                                         ? Address
+                                         : EmuPhysicalMapBase +
+                                               (Address & EmuPhysicalRamMirrorMask);
+        EmuNv2aCaptureMemory(CaptureAddress,
+                             g_EmuNv2aSamplerCache[Stage].Source,
+                             g_EmuNv2aSamplerCache[Stage].Size);
+    }
     return &g_EmuNv2aSamplerCache[Stage];
 }
 
@@ -6448,6 +6479,25 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         const ULONG Host = EmuNv2aHostPointer(Address);
         if(Host != 0)
         {
+            const ULONG Type = Array->Format & 0x0Fu;
+            const ULONG Components = (Array->Format >> 4) & 0x0Fu;
+            ULONG AttributeBytes = Type == 2u ? Components * sizeof(float)
+                                              : sizeof(ULONG);
+            if(AttributeBytes > sizeof(AttributeScratch[Attribute]))
+            {
+                AttributeBytes = sizeof(AttributeScratch[Attribute]);
+            }
+            if(AttributeBytes != 0 &&
+               EmuTryReadHost(Host, AttributeScratch[Attribute], AttributeBytes))
+            {
+                const ULONG CaptureAddress = EmuIsPhysicalMapAddress(Address)
+                                                 ? Address
+                                                 : EmuPhysicalMapBase +
+                                                       (Address & EmuPhysicalRamMirrorMask);
+                EmuNv2aCaptureMemory(CaptureAddress,
+                                     AttributeScratch[Attribute],
+                                     AttributeBytes);
+            }
             return Host;
         }
 
