@@ -45,6 +45,27 @@ inline constexpr std::uint32_t PixelShaderTextureMode(
     return stage < Shifts.size() ? (definition[54] >> Shifts[stage]) & 0x1Fu : 0;
 }
 
+// Bump and dependent texture modes on stages 1-3 consume an earlier texture
+// register. Stage 1 always consumes t0; the Xbox PS_INPUTTEXTURE field selects
+// the source for stages 2 and 3.
+inline constexpr unsigned int PixelShaderInputTexture(
+    const XboxPixelShaderDefinition& definition, unsigned int stage) noexcept
+{
+    if(stage == 1)
+    {
+        return 0;
+    }
+    if(stage == 2)
+    {
+        return static_cast<unsigned int>((definition[55] >> 16) & 0x03u);
+    }
+    if(stage == 3)
+    {
+        return static_cast<unsigned int>((definition[55] >> 20) & 0x03u);
+    }
+    return 0;
+}
+
 inline constexpr std::uint32_t PixelShaderInputRegister(std::uint32_t input,
                                                         unsigned int operand) noexcept
 {

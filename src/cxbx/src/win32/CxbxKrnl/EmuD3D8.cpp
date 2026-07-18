@@ -3447,6 +3447,9 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetVertexShaderConstant4
 
 static bool g_bUsePixelShaderFallback = false;
 static DWORD g_EmuCurrentPixelShaderHandle = 0;
+// texbem consumes four BUMPENVMAT values. Do not bind a translated texbem
+// program until the title has supplied all of them for the affected stage.
+static std::array<std::uint8_t, 8> g_EmuBumpEnvMatrixWrites{};
 
 struct EmuPixelShaderFallbackDefinition
 {
@@ -3455,6 +3458,9 @@ struct EmuPixelShaderFallbackDefinition
 };
 
 static std::vector<EmuPixelShaderFallbackDefinition> g_EmuPixelShaderFallbacks;
+
+static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindTranslatedPixelShader(
+    DWORD handle);
 
 static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindPixelShaderFallback(
     DWORD handle)
@@ -3472,6 +3478,10 @@ static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindPixelShaderFallback(
 static cxbx::d3d::PixelShaderFallback EmuCurrentPixelShaderFallback()
 {
     const auto* definition = EmuFindPixelShaderFallback(g_EmuCurrentPixelShaderHandle);
+    if(definition == nullptr)
+    {
+        definition = EmuFindTranslatedPixelShader(g_EmuCurrentPixelShaderHandle);
+    }
     return definition != nullptr
                ? cxbx::d3d::ClassifyPixelShaderFallback(*definition)
                : cxbx::d3d::PixelShaderFallback::TextureModulate;
@@ -4103,6 +4113,20 @@ static const cxbx::d3d::XboxPixelShaderDefinition* EmuFindTranslatedPixelShader(
     return nullptr;
 }
 
+static bool EmuTranslatedPixelShaderHasUnconfiguredBump(
+    const cxbx::d3d::XboxPixelShaderDefinition& definition)
+{
+    for(unsigned int stage = 1; stage < 4; ++stage)
+    {
+        if(cxbx::d3d::PixelShaderTextureMode(definition, stage) == 6 &&
+           g_EmuBumpEnvMatrixWrites[stage] != 0x0Fu)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_CreatePixelShader
 // ******************************************************************
@@ -4278,12 +4302,16 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
     // the bound textures are sampled and lit. Record it so the draw path keeps the
     // modulate stages asserted even if the title later touches texture state.
     g_EmuCurrentPixelShaderHandle = Handle;
+    const auto* translatedDefinition = EmuFindTranslatedPixelShader(Handle);
+    const bool useFixedFunctionBump = translatedDefinition != nullptr &&
+        EmuTranslatedPixelShaderHasUnconfiguredBump(*translatedDefinition);
     if(Handle == 0)
     {
         g_bUsePixelShaderFallback = false;
         g_pD3DDevice8->SetPixelShader(0);
     }
     else if((Handle & X_PIXELSHADER_FALLBACK_MASK) == X_PIXELSHADER_FALLBACK_MARKER ||
+            useFixedFunctionBump ||
             FAILED(g_pD3DDevice8->SetPixelShader(Handle)))
     {
         g_bUsePixelShaderFallback = true;
@@ -4296,9 +4324,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader
                      Handle) == s_LoggedFallbackHandles.end())
         {
             s_LoggedFallbackHandles.push_back(Handle);
-            printf("PSH| fallback_active handle=0x%08lX class=%s\n",
+            printf("PSH| fallback_active handle=0x%08lX class=%s%s\n",
                    static_cast<unsigned long>(Handle),
-                   cxbx::d3d::PixelShaderFallbackName(EmuCurrentPixelShaderFallback()));
+                   cxbx::d3d::PixelShaderFallbackName(EmuCurrentPixelShaderFallback()),
+                   useFixedFunctionBump ? " reason=unconfigured_bump_matrix" : "");
         }
 
         EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), false);
@@ -4440,11 +4469,65 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BumpEnv
     EmuSwapFS();   // Win2k/XP FS
     D3D_TRACE("SetTextureState_BumpEnv");
 
-    if(Stage < 8 &&
-       ((Type >= D3DTSS_BUMPENVMAT00 && Type <= D3DTSS_BUMPENVMAT11) ||
-        Type == D3DTSS_BUMPENVLSCALE || Type == D3DTSS_BUMPENVLOFFSET))
+    constexpr DWORD XboxBumpEnvMat00 = 22;
+    constexpr DWORD XboxBumpEnvMat01 = 23;
+    constexpr DWORD XboxBumpEnvMat11 = 24;
+    constexpr DWORD XboxBumpEnvMat10 = 25;
+    constexpr DWORD XboxBumpEnvLScale = 26;
+    constexpr DWORD XboxBumpEnvLOffset = 27;
+    const DWORD xboxType = static_cast<DWORD>(Type);
+
+    if(Stage < 8 && xboxType >= XboxBumpEnvMat00 && xboxType <= XboxBumpEnvLOffset)
     {
-        g_pD3DDevice8->SetTextureStageState(Stage, Type, Value);
+        // Xbox and PC D3D8 assign different numeric values to the bump-env
+        // states. Forwarding the guest enum directly silently updates an
+        // unrelated host state, which makes texbem sample without displacement.
+        D3DTEXTURESTAGESTATETYPE hostType = D3DTSS_BUMPENVMAT00;
+        switch(xboxType)
+        {
+            case XboxBumpEnvMat00:
+                hostType = D3DTSS_BUMPENVMAT00;
+                break;
+            case XboxBumpEnvMat01:
+                hostType = D3DTSS_BUMPENVMAT01;
+                break;
+            case XboxBumpEnvMat10:
+                hostType = D3DTSS_BUMPENVMAT10;
+                break;
+            case XboxBumpEnvMat11:
+                hostType = D3DTSS_BUMPENVMAT11;
+                break;
+            case XboxBumpEnvLScale:
+                hostType = D3DTSS_BUMPENVLSCALE;
+                break;
+            case XboxBumpEnvLOffset:
+                hostType = D3DTSS_BUMPENVLOFFSET;
+                break;
+            default:
+                EmuWarning("SetTextureState_BumpEnv ignored unsupported type 0x%.08lX",
+                           Type);
+                EmuSwapFS();   // Xbox FS
+                return;
+        }
+        g_pD3DDevice8->SetTextureStageState(Stage, hostType, Value);
+
+        std::uint8_t matrixBit = 0;
+        switch(xboxType)
+        {
+            case XboxBumpEnvMat00:
+                matrixBit = 0x01u;
+                break;
+            case XboxBumpEnvMat01:
+                matrixBit = 0x02u;
+                break;
+            case XboxBumpEnvMat10:
+                matrixBit = 0x04u;
+                break;
+            case XboxBumpEnvMat11:
+                matrixBit = 0x08u;
+                break;
+        }
+        g_EmuBumpEnvMatrixWrites[Stage] |= matrixBit;
     }
     else
     {

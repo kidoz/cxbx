@@ -70,6 +70,18 @@ struct DefBuilder
         def[54] |= mode << (stage * 5);
         return *this;
     }
+    DefBuilder& InputTexture(unsigned stage, unsigned source)
+    {
+        if(stage == 2)
+        {
+            def[55] |= (source & 0x3u) << 16;
+        }
+        else if(stage == 3)
+        {
+            def[55] |= (source & 0x3u) << 20;
+        }
+        return *this;
+    }
     DefBuilder& Rgb(unsigned stage, std::uint32_t inputs, std::uint32_t outputs)
     {
         def[34 + stage] = inputs;
@@ -294,7 +306,9 @@ int main()
             .Rgb(0, Inputs(In(R0), In(T0), In(ZERO), In(ZERO)),
                  Outputs(DISCARD, DISCARD, R1))
             .Alpha(0, Inputs(In(T0, CH_ALPHA), In(V0, CH_ALPHA), In(ZERO), In(ZERO)),
-                   Outputs(DISCARD, DISCARD, R1));
+                   Outputs(DISCARD, DISCARD, R1))
+            .Final(Inputs(In(ZERO, CH_RGB, MAP_INVERT), In(R1), In(ZERO), In(ZERO)),
+                   Inputs(In(ZERO), In(ZERO), In(R1, CH_ALPHA), In(ZERO)));
         const PixelShaderTranslation t = TranslatePixelShader(b.def);
         Check(!t.ok() && std::strcmp(t.failure, "register_read_before_write") == 0,
               "r0 read before write bails");
@@ -331,6 +345,52 @@ int main()
         const PixelShaderTranslation t = TranslatePixelShader(b.def);
         Check(t.ok(), "final combiner translates");
         Check(CountToken(t, 0x12) == 1, "final combiner emits lrp");
+    }
+
+    // 9b. Stage-2 BUMPENVMAP loads its source from t1 and emits texbem for
+    //     the stage-2 sampler. This is the texture arrangement used by Turok.
+    {
+        DefBuilder b;
+        b.Combiners(1)
+            .TextureMode(1, 1)
+            .TextureMode(2, 6)
+            .InputTexture(2, 1)
+            .Rgb(0, Inputs(In(T2), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO),
+                           In(ZERO)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Alpha(0, Inputs(In(T2, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT),
+                             In(ZERO), In(ZERO)),
+                   Outputs(DISCARD, DISCARD, R0));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(t.ok(), "stage-2 bumpenvmap translates");
+        Check(t.textures == 2, "stage-2 bumpenvmap loads source and env textures");
+        Check(CountToken(t, 0x43) == 1, "stage-2 bumpenvmap emits texbem");
+    }
+
+    // 9c. A=ONE in the final combiner leaves C dead. Omitting that dead r1
+    //     read permits the sum to use r1 scratch instead of falling back.
+    {
+        DefBuilder b;
+        b.Combiners(2)
+            .TextureMode(0, 1)
+            .TextureMode(1, 1)
+            .Rgb(0, Inputs(In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO),
+                           In(ZERO)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Alpha(0, Inputs(In(T0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT),
+                             In(ZERO), In(ZERO)),
+                   Outputs(DISCARD, DISCARD, R0))
+            .Rgb(1, Inputs(In(R0), In(T0), In(T1),
+                           In(ZERO, CH_RGB, MAP_INVERT)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Alpha(1, Inputs(In(T0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT),
+                             In(ZERO), In(ZERO)),
+                   Outputs(DISCARD, DISCARD, R0))
+            .Final(Inputs(In(ZERO, CH_RGB, MAP_INVERT), In(R0), In(R1), In(ZERO)),
+                   Inputs(In(ZERO), In(ZERO), In(R0, CH_ALPHA), In(ZERO)));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(t.ok(), "sum shape with dead final C translates");
+        Check(CountToken(t, 0x04) == 1, "sum shape emits a multiply-add");
     }
 
     // 10a. Turok Evolution's 4-combiner material shader (hash 0xB29D9DD0,
@@ -372,7 +432,9 @@ int main()
             .Rgb(0, Inputs(In(T0), In(V0), In(ZERO), In(ZERO)),
                  Outputs(R0, DISCARD, DISCARD))
             .Alpha(0, Inputs(In(R0, CH_BLUE, 0xC0), In(V0, CH_ALPHA), In(ZERO | CH_ALPHA), In(ZERO | CH_ALPHA)),
-                   Outputs(R1, DISCARD, DISCARD));
+                   Outputs(R1, DISCARD, DISCARD))
+            .Final(Inputs(In(ZERO, CH_RGB, MAP_INVERT), In(R0), In(ZERO), In(ZERO)),
+                   Inputs(In(ZERO), In(ZERO), In(R1, CH_ALPHA), In(ZERO)));
         const PixelShaderTranslation t = TranslatePixelShader(b.def);
         Check(!t.ok() && std::strcmp(t.failure, "stage_blue_hazard") == 0,
               "stage blue-read hazard bails");
@@ -457,7 +519,8 @@ int main()
               "portion write hazard bails");
     }
 
-    // 10. Instruction budget: 8 combiners of rgb+alpha exceed ps.1.1.
+    // 10. Eight overwritten combiners without a final combiner leave only the
+    //     final r0 values observable. Liveness keeps the ps.1.1 program small.
     {
         DefBuilder b;
         b.Combiners(8).TextureMode(0, 1);
@@ -470,8 +533,8 @@ int main()
                     Outputs(DISCARD, DISCARD, R0));
         }
         const PixelShaderTranslation t = TranslatePixelShader(b.def);
-        Check(!t.ok() && std::strcmp(t.failure, "instruction_budget") == 0,
-              "instruction budget bails");
+        Check(t.ok(), "overwritten combiners translate");
+        Check(t.arithmetic == 2, "overwritten combiners retain final rgb and alpha");
     }
 
     if(g_failures == 0)
