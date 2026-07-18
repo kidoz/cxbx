@@ -7516,7 +7516,15 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
             }
     #endif
 
-    HRESULT hRet;
+    HRESULT hRet = D3DERR_INVALIDCALL;
+
+    if(pThis == NULL || pLockedRect == NULL)
+    {
+        EmuSwapFS();   // XBox FS
+        return hRet;
+    }
+
+    ZeroMemory(pLockedRect, sizeof(*pLockedRect));
 
     EmuYuy2TextureInfo *pYuy2 = EmuFindYuy2Texture(pThis);
     if(pYuy2 != NULL)
@@ -7528,6 +7536,13 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
         EmuVerifyResourceIsRegistered(pThis);
 
         IDirect3DSurface8 *pSurface8 = pThis->EmuSurface8;
+        if(pSurface8 == NULL)
+        {
+            EmuWarning("Surface_LockRect rejected an unbacked surface at 0x%.08X",
+                       reinterpret_cast<DWORD>(pThis));
+            EmuSwapFS();   // XBox FS
+            return hRet;
+        }
 
         DWORD NewFlags = 0;
 
@@ -7550,12 +7565,26 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
 
         if(!(Flags & EMU_D3DLOCK_TILED) || FAILED(hRet))
         {
-            EmuFlushTiledSurfaceLock(pThis);
+            // Host D3D can fault internally when a partially-HLE title hands
+            // us a stale surface interface during streaming. Keep that host
+            // failure inside the HLE boundary so the guest can observe an
+            // ordinary failed lock instead of losing the entire process.
+            __try
+            {
+                EmuFlushTiledSurfaceLock(pThis);
 
-            // Remove old lock(s)
-            pSurface8->UnlockRect();
+                // Remove old lock(s)
+                pSurface8->UnlockRect();
 
-            hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+                hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ZeroMemory(pLockedRect, sizeof(*pLockedRect));
+                hRet = D3DERR_INVALIDCALL;
+                EmuWarning("Surface_LockRect caught a host fault for surface 0x%.08X",
+                           reinterpret_cast<DWORD>(pThis));
+            }
 
             if(FAILED(hRet))
                 printf("*Warning* LockRect failed\n");
