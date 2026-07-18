@@ -51,13 +51,20 @@ frame CRCs or golden images.
 
 ## Next tooling investments
 
-### 1. Manifest comparison
+### 1. Capture comparison (implemented)
+
+`tools/nv2a_capture.py compare` validates and replays two `.nv2acap` bundles,
+then reports the first global and per-category divergence. It normalizes
+relocated host addresses by default, supports strict address comparison, emits
+JSON, and returns stable match/differ/invalid exit codes for bisect wrappers.
+
+### 2. Manifest comparison
 
 Compare two `summary.json` files by aligned frame CRC, draw count, faults, and
 representative-image metrics. This should become the title-level CI verdict and
 the predicate for automated `git bisect run`.
 
-### 2. Pushbuffer capture and replay (implemented for PFIFO)
+### 3. Pushbuffer capture and replay (implemented for PFIFO)
 
 `--capture-pushbuffer FRAME` now records a bounded versioned bundle containing
 PFIFO run state, fetched words/addresses, method dispatches, RAMIN, exact memory
@@ -69,13 +76,13 @@ Independent PGRAPH raster replay remains the next extraction: move the mutable
 raster state out of `Emu.cpp` behind a reusable state object, then feed the
 captured method and memory records into it.
 
-### 3. State diffs at the first divergent draw
+### 4. State diffs at the first divergent draw
 
 Store normalized state snapshots keyed by frame/draw and compare them field by
 field. Surface identity, viewport, vertex program, constants, texture formats,
 and combiner equations should be compared structurally instead of as log text.
 
-### 4. Golden XDK probes
+### 5. Golden XDK probes
 
 Use official-XDK probes for isolated texture, shader, clipping, input, and
 audio semantics. Title traces should discover missing cases; probes should own
