@@ -1,6 +1,7 @@
 #include "core/nv2a_raster.h"
 
 #include <cstdio>
+#include <limits>
 
 namespace
 {
@@ -15,6 +16,18 @@ constexpr bool Near(float lhs, float rhs)
 
 int main()
 {
+    if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(1.0f, 0.5f, 2.0f) ||
+       cxbx::nv2a::CanRasterizeHomogeneousTriangle(1.0f, -0.5f, 2.0f) ||
+       cxbx::nv2a::CanRasterizeHomogeneousTriangle(1.0f, 0.0f, 2.0f) ||
+       cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+           1.0f, std::numeric_limits<float>::infinity(), 2.0f))
+    {
+        std::fputs(
+            "triangles crossing or behind the camera plane require clipping\n",
+            stderr);
+        return 1;
+    }
+
     constexpr auto projected =
         cxbx::nv2a::ProjectTexture2D(0.5f, 0.25f, 2.0f, 0.5f);
     if(!Near(projected.u, 0.25f) || !Near(projected.v, 0.125f) ||
