@@ -84,6 +84,18 @@ int main()
         return 1;
     }
 
+    if(cxbx::nv2a::SelectRegisterCombinerOutput(
+           64, 0, 0x00010C00u, 17) != 128 ||
+       cxbx::nv2a::SelectRegisterCombinerOutput(
+           160, 0, 0x00010C00u, 17) != 255 ||
+       cxbx::nv2a::SelectRegisterCombinerOutput(
+           64, 0, 0x00000C00u, 17) != 64)
+    {
+        std::fputs("register-combiner mapping must apply once at the selected output\n",
+                   stderr);
+        return 1;
+    }
+
     cxbx::nv2a::FinalCombinerRegisters registers = {};
     registers.r0 = 0x7A123456u;
     if(cxbx::nv2a::RunFinalCombiner(0x0000000Cu, 0x00001C80u,

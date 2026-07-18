@@ -7,7 +7,7 @@
 namespace cxbx::nv2a
 {
 
-inline constexpr std::uint32_t CaptureFormatVersion = 1;
+inline constexpr std::uint32_t CaptureFormatVersion = 2;
 inline constexpr std::uint64_t DefaultCaptureLimit = 256ull * 1024ull * 1024ull;
 
 enum class CaptureRecordType : std::uint32_t
@@ -19,6 +19,7 @@ enum class CaptureRecordType : std::uint32_t
     Scanout = 5,
     Finish = 6,
     Ramin = 7,
+    PgraphState = 8,
 };
 
 std::uint32_t CaptureCrc32(const void* data, std::size_t size) noexcept;
@@ -49,6 +50,8 @@ class PushbufferCaptureWriter final
     void RecordMemory(std::uint32_t address, const void* data,
                       std::uint32_t size) noexcept;
     void RecordRamin(const void* data, std::uint32_t size) noexcept;
+    void RecordTransformConstant(std::uint32_t frame, std::uint32_t index,
+                                 const float value[4]) noexcept;
     [[nodiscard]] std::uint32_t RecordScanout(
         std::uint32_t frame, std::uint32_t address, std::uint32_t width,
         std::uint32_t height, const void* pixels, std::uint32_t size) noexcept;

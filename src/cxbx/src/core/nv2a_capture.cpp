@@ -1,6 +1,7 @@
 #include "core/nv2a_capture.h"
 
 #include <array>
+#include <cstring>
 #include <limits>
 
 namespace cxbx::nv2a
@@ -224,6 +225,19 @@ void PushbufferCaptureWriter::RecordRamin(const void* data,
     const std::array fields = { size, CaptureCrc32(data, size) };
     WriteRecord(CaptureRecordType::Ramin, fields.data(), fields.size(), data,
                 size);
+}
+
+void PushbufferCaptureWriter::RecordTransformConstant(
+    std::uint32_t frame, std::uint32_t index, const float value[4]) noexcept
+{
+    if(value == nullptr || index >= 192)
+    {
+        return;
+    }
+    std::array<std::uint32_t, 6> fields = { frame, index, 0, 0, 0, 0 };
+    std::memcpy(&fields[2], value, 4 * sizeof(float));
+    WriteRecord(CaptureRecordType::PgraphState, fields.data(), fields.size(),
+                nullptr, 0);
 }
 
 std::uint32_t PushbufferCaptureWriter::RecordScanout(

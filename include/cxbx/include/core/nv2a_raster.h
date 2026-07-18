@@ -99,6 +99,41 @@ inline constexpr AffineQuadSpan BuildAffineQuadSpan(
     return { left + (right - left) * firstX, (right - left) * xStep };
 }
 
+inline constexpr int MapRegisterCombinerOutput(
+    int value, std::uint32_t flags) noexcept
+{
+    switch(flags & 0x38u)
+    {
+        case 0x08u: value -= 128; break;
+        case 0x10u: value *= 2; break;
+        case 0x18u: value = (value - 128) * 2; break;
+        case 0x20u: value *= 4; break;
+        case 0x30u: value /= 2; break;
+        default: break;
+    }
+    return value < 0 ? 0 : (value > 255 ? 255 : value);
+}
+
+inline constexpr int SelectRegisterCombinerOutput(
+    int ab, int cd, std::uint32_t output, int previous) noexcept
+{
+    const std::uint32_t flags = output >> 12;
+    int result = previous;
+    if(((output >> 4) & 0x0Fu) == 0x0Cu)
+    {
+        result = MapRegisterCombinerOutput(ab, flags);
+    }
+    if((output & 0x0Fu) == 0x0Cu)
+    {
+        result = MapRegisterCombinerOutput(cd, flags);
+    }
+    if(((output >> 8) & 0x0Fu) == 0x0Cu)
+    {
+        result = MapRegisterCombinerOutput(ab + cd, flags);
+    }
+    return result;
+}
+
 struct FinalCombinerRegisters
 {
     std::uint32_t constant0 = 0;

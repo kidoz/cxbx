@@ -2456,6 +2456,23 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport
     // the call. (Same guard discipline as SetRenderTarget / Clear.)
     D3DVIEWPORT8 vp = *pViewport;
 
+    const FLOAT XboxHalfWidth = static_cast<FLOAT>(pViewport->Width) * 0.5f;
+    const FLOAT XboxHalfHeight = static_cast<FLOAT>(pViewport->Height) * 0.5f;
+    const FLOAT XboxViewportScale[4] = {
+        XboxHalfWidth,
+        -XboxHalfHeight,
+        pViewport->MaxZ - pViewport->MinZ,
+        0.0f,
+    };
+    const FLOAT XboxViewportOffset[4] = {
+        static_cast<FLOAT>(pViewport->X) + XboxHalfWidth,
+        static_cast<FLOAT>(pViewport->Y) + XboxHalfHeight,
+        pViewport->MinZ,
+        0.0f,
+    };
+    EmuNv2aSetTransformConstant(58, XboxViewportScale);
+    EmuNv2aSetTransformConstant(59, XboxViewportOffset);
+
     bool Clamped = false;
 
     // Depth range: host requires MinZ/MaxZ within [0,1].
