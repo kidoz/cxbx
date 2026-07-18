@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 MAGIC = b"CXNVCAP\0"
-VERSION = 1
+VERSION = 2
+SUPPORTED_VERSIONS = frozenset((1, VERSION))
 ENDIAN_MARKER = 0x01020304
 HEADER = struct.Struct("<8sIIIIQ")
 RECORD_HEADER = struct.Struct("<II")
@@ -25,6 +26,7 @@ MEMORY = 4
 SCANOUT = 5
 FINISH = 6
 RAMIN = 7
+PGRAPH_STATE = 8
 
 NV_CLASS_KELVIN = 0x97
 NV097_SET_FLIP_STALL = 0x0130
@@ -77,6 +79,48 @@ PGRAPH_VERTEX_PROGRAM_WORDS = 136 * 4
 PGRAPH_TRANSFORM_CONSTANT_WORDS = 192 * 4
 PGRAPH_ELEMENT_INDEX_CAPACITY = 4096
 PGRAPH_INLINE_WORD_CAPACITY = 65536
+
+VP_FIELDS = {
+    "ilu": (1, 25, 3),
+    "mac": (1, 21, 4),
+    "constant": (1, 13, 8),
+    "vertex": (1, 9, 4),
+    "a_negate": (1, 8, 1),
+    "a_swizzle_x": (1, 6, 2),
+    "a_swizzle_y": (1, 4, 2),
+    "a_swizzle_z": (1, 2, 2),
+    "a_swizzle_w": (1, 0, 2),
+    "a_register": (2, 28, 4),
+    "a_mux": (2, 26, 2),
+    "b_negate": (2, 25, 1),
+    "b_swizzle_x": (2, 23, 2),
+    "b_swizzle_y": (2, 21, 2),
+    "b_swizzle_z": (2, 19, 2),
+    "b_swizzle_w": (2, 17, 2),
+    "b_register": (2, 13, 4),
+    "b_mux": (2, 11, 2),
+    "c_negate": (2, 10, 1),
+    "c_swizzle_x": (2, 8, 2),
+    "c_swizzle_y": (2, 6, 2),
+    "c_swizzle_z": (2, 4, 2),
+    "c_swizzle_w": (2, 2, 2),
+    "c_register_high": (2, 0, 2),
+    "c_register_low": (3, 30, 2),
+    "c_mux": (3, 28, 2),
+    "mac_mask": (3, 24, 4),
+    "output_register": (3, 20, 4),
+    "ilu_mask": (3, 16, 4),
+    "output_mask": (3, 12, 4),
+    "output_bank": (3, 11, 1),
+    "output_address": (3, 3, 8),
+    "output_mux": (3, 2, 1),
+    "relative": (3, 1, 1),
+    "final": (3, 0, 1),
+}
+
+VP_SUPPORTED_MAC_OPS = frozenset((0, 1, 2, 3, 4, 5, 7, 13))
+VP_SUPPORTED_ILU_OPS = frozenset((0, 1, 2, 3))
+VP_OUTPUT_ADDRESSES = frozenset((0, 3, 4, 5, 6, 9, 10, 11, 12))
 
 
 def default_pgraph_registers() -> list[int]:
@@ -166,6 +210,10 @@ class PgraphReplayState:
         self.immediate_vertices = 0
         self.inline_overflow = False
         self.immediate_overflow = False
+
+    def set_transform_constant(self, index: int, words: tuple[int, ...]) -> None:
+        if 0 <= index < 192 and len(words) == 4:
+            self.transform_constants[index * 4 : index * 4 + 4] = words
 
     def state_crc32(self) -> int:
         crc = 0
@@ -631,9 +679,291 @@ class OfflinePixelReplay:
         stride = (vertex_format >> 8) & 0xFF
         return (base + offset + index * stride) & 0xFFFFFFFF
 
+    @staticmethod
+    def vp_field(instruction: tuple[int, ...] | list[int], name: str) -> int:
+        word, start, length = VP_FIELDS[name]
+        return (instruction[word] >> start) & ((1 << length) - 1)
+
+    @classmethod
+    def vp_source(
+        cls, instruction: tuple[int, ...] | list[int], source: str
+    ) -> tuple[int, int, tuple[int, ...], bool]:
+        if source == "c":
+            register = (
+                cls.vp_field(instruction, "c_register_high") << 2
+            ) | cls.vp_field(instruction, "c_register_low")
+        else:
+            register = cls.vp_field(instruction, f"{source}_register")
+        swizzle = tuple(
+            cls.vp_field(instruction, f"{source}_swizzle_{component}")
+            for component in "xyzw"
+        )
+        return (
+            cls.vp_field(instruction, f"{source}_mux"),
+            register,
+            swizzle,
+            bool(cls.vp_field(instruction, f"{source}_negate")),
+        )
+
+    @staticmethod
+    def vp_used_sources(mac: int, ilu: int) -> set[str]:
+        used: set[str] = set()
+        if mac in (1, 13):
+            used.add("a")
+        elif mac in (2, 5, 7):
+            used.update(("a", "b"))
+        elif mac == 3:
+            used.update(("a", "c"))
+        elif mac == 4:
+            used.update(("a", "b", "c"))
+        if ilu:
+            used.add("c")
+        return used
+
+    def vertex_program_attributes(self, state: PgraphReplayState) -> set[int] | None:
+        if state.vp_start < 0 or state.vp_start >= state.vp_instruction_count:
+            return None
+        attributes: set[int] = set()
+        found_final = False
+        for pc in range(state.vp_start, state.vp_instruction_count):
+            instruction = state.vertex_program[pc * 4 : pc * 4 + 4]
+            if len(instruction) != 4:
+                return None
+            mac = self.vp_field(instruction, "mac")
+            ilu = self.vp_field(instruction, "ilu")
+            if mac not in VP_SUPPORTED_MAC_OPS or ilu not in VP_SUPPORTED_ILU_OPS:
+                return None
+            for source_name in self.vp_used_sources(mac, ilu):
+                mux, _register, _swizzle, _negate = self.vp_source(
+                    instruction, source_name
+                )
+                if mux not in (1, 2, 3):
+                    return None
+                if mux == 2:
+                    attributes.add(self.vp_field(instruction, "vertex"))
+            output_mask = self.vp_field(instruction, "output_mask")
+            if output_mask and (
+                self.vp_field(instruction, "output_bank") != 1
+                or self.vp_field(instruction, "output_address") not in VP_OUTPUT_ADDRESSES
+            ):
+                return None
+            if self.vp_field(instruction, "final"):
+                found_final = True
+                break
+        return attributes if found_final else None
+
+    def vertex_program_unsupported_reason(self, state: PgraphReplayState) -> str | None:
+        attributes = self.vertex_program_attributes(state)
+        if attributes is None:
+            return "vertex_program_shape"
+        for attribute in attributes:
+            vertex_format = state.registers[
+                (NV097_SET_VERTEX_DATA_ARRAY_FORMAT + attribute * 4) // 4
+            ]
+            value_type = vertex_format & 0xF
+            count = (vertex_format >> 4) & 0xF
+            stride = (vertex_format >> 8) & 0xFF
+            if stride == 0 or not (
+                (value_type == 2 and count in (1, 2, 3, 4))
+                or (value_type == 0 and count == 4)
+            ):
+                return "vertex_program_input_format"
+        return None
+
+    def read_vertex_program_inputs(
+        self, state: PgraphReplayState, index: int
+    ) -> list[list[float]] | None:
+        attributes = self.vertex_program_attributes(state)
+        if attributes is None:
+            return None
+        inputs = [[0.0, 0.0, 0.0, 1.0] for _ in range(PGRAPH_VERTEX_ATTRIBUTE_COUNT)]
+        for attribute in attributes:
+            vertex_format = state.registers[
+                (NV097_SET_VERTEX_DATA_ARRAY_FORMAT + attribute * 4) // 4
+            ]
+            value_type = vertex_format & 0xF
+            count = (vertex_format >> 4) & 0xF
+            size = count * 4 if value_type == 2 else 4
+            raw = self.memory.read_observed(self.vertex_address(state, attribute, index), size)
+            if raw is None:
+                return None
+            if value_type == 2:
+                values = struct.unpack(f"<{count}f", raw)
+                inputs[attribute][:count] = values
+            else:
+                packed = struct.unpack("<I", raw)[0]
+                inputs[attribute] = [
+                    ((packed >> 16) & 0xFF) / 255.0,
+                    ((packed >> 8) & 0xFF) / 255.0,
+                    (packed & 0xFF) / 255.0,
+                    ((packed >> 24) & 0xFF) / 255.0,
+                ]
+        return inputs
+
+    @classmethod
+    def execute_vertex_program(
+        cls, state: PgraphReplayState, inputs: list[list[float]]
+    ) -> tuple[list[float], list[list[float]], list[list[float]]] | None:
+        registers = [[0.0, 0.0, 0.0, 0.0] for _ in range(13)]
+        registers[12] = list(inputs[0])
+        colors = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]]
+        texcoords = [[0.0, 0.0, 0.0, 0.0] for _ in range(4)]
+        fog = [0.0, 0.0, 0.0, 0.0]
+        point_size = [0.0, 0.0, 0.0, 0.0]
+        constants = [
+            struct.unpack("<f", struct.pack("<I", word))[0]
+            for word in state.transform_constants
+        ]
+        address_register = 0
+
+        def read_source(
+            instruction: list[int], source_name: str
+        ) -> list[float] | None:
+            mux, register, swizzle, negate = cls.vp_source(instruction, source_name)
+            if mux == 1:
+                value = registers[min(register, 12)]
+            elif mux == 2:
+                value = inputs[cls.vp_field(instruction, "vertex") & 15]
+            elif mux == 3:
+                constant = cls.vp_field(instruction, "constant")
+                if cls.vp_field(instruction, "relative"):
+                    constant += address_register
+                constant = max(0, min(191, constant))
+                value = constants[constant * 4 : constant * 4 + 4]
+            else:
+                return None
+            result = [value[component] for component in swizzle]
+            return [-component for component in result] if negate else result
+
+        def write_masked(destination: list[float], value: list[float], mask: int) -> None:
+            for component in range(4):
+                if mask & (1 << (3 - component)):
+                    destination[component] = value[component]
+
+        def output_destination(address: int) -> list[float] | None:
+            if address == 0:
+                return registers[12]
+            if address in (3, 4):
+                return colors[address - 3]
+            if address == 5:
+                return fog
+            if address == 6:
+                return point_size
+            if 9 <= address <= 12:
+                return texcoords[address - 9]
+            return None
+
+        for pc in range(state.vp_start, state.vp_instruction_count):
+            instruction = state.vertex_program[pc * 4 : pc * 4 + 4]
+            mac = cls.vp_field(instruction, "mac")
+            ilu = cls.vp_field(instruction, "ilu")
+            sources = {
+                name: read_source(instruction, name) for name in ("a", "b", "c")
+            }
+            if any(sources[name] is None for name in cls.vp_used_sources(mac, ilu)):
+                return None
+            a = sources["a"] or [0.0] * 4
+            b = sources["b"] or [0.0] * 4
+            c = sources["c"] or [0.0] * 4
+            mac_result: list[float] | None = None
+            if mac == 13:
+                address_register = math.floor(a[0])
+            elif mac == 1:
+                mac_result = list(a)
+            elif mac == 2:
+                mac_result = [a[i] * b[i] for i in range(4)]
+            elif mac == 3:
+                mac_result = [a[i] + c[i] for i in range(4)]
+            elif mac == 4:
+                mac_result = [a[i] * b[i] + c[i] for i in range(4)]
+            elif mac == 5:
+                value = sum(a[i] * b[i] for i in range(3))
+                mac_result = [value] * 4
+            elif mac == 7:
+                value = sum(a[i] * b[i] for i in range(4))
+                mac_result = [value] * 4
+            elif mac != 0:
+                return None
+
+            mac_mask = cls.vp_field(instruction, "mac_mask")
+            output_register = min(cls.vp_field(instruction, "output_register"), 12)
+            output_mask = cls.vp_field(instruction, "output_mask")
+            output_mux = cls.vp_field(instruction, "output_mux")
+            if mac_result is not None:
+                if mac_mask:
+                    write_masked(registers[output_register], mac_result, mac_mask)
+                if output_mask and output_mux == 0:
+                    destination = output_destination(
+                        cls.vp_field(instruction, "output_address")
+                    )
+                    if destination is None:
+                        return None
+                    write_masked(destination, mac_result, output_mask)
+
+            if ilu:
+                if ilu == 1:
+                    ilu_result = list(c)
+                elif ilu in (2, 3):
+                    value = c[0]
+                    if ilu == 3:
+                        minimum = 2.0**-64
+                        if 0.0 <= value < minimum:
+                            value = minimum
+                        elif -minimum < value < 0.0:
+                            value = -minimum
+                    reciprocal = 1.0 / value if value != 0.0 else 0.0
+                    ilu_result = [reciprocal] * 4
+                else:
+                    return None
+                ilu_mask = cls.vp_field(instruction, "ilu_mask")
+                ilu_register = 1 if mac and mac_mask else output_register
+                if ilu_mask:
+                    write_masked(registers[ilu_register], ilu_result, ilu_mask)
+                if output_mask and output_mux == 1:
+                    destination = output_destination(
+                        cls.vp_field(instruction, "output_address")
+                    )
+                    if destination is None:
+                        return None
+                    write_masked(destination, ilu_result, output_mask)
+            if cls.vp_field(instruction, "final"):
+                return list(registers[12]), colors, texcoords
+        return None
+
+    def read_program_vertex(
+        self, state: PgraphReplayState, index: int, read_texture: bool
+    ) -> OfflineVertex | None:
+        inputs = self.read_vertex_program_inputs(state, index)
+        if inputs is None:
+            return None
+        result = self.execute_vertex_program(state, inputs)
+        if result is None:
+            return None
+        position, colors, texcoords = result
+        if not all(math.isfinite(value) for value in position) or abs(position[3]) <= 1.0e-5:
+            return None
+        packed = [max(0, min(255, int(value * 255.0 + 0.5))) for value in colors[0]]
+        color = (packed[3] << 24) | (packed[0] << 16) | (packed[1] << 8) | packed[2]
+        if read_texture and color == 0xFF000000:
+            color = 0xFFFFFFFF
+        texture_u, texture_v, _texture_z, texture_q = texcoords[0]
+        inverse_w = 1.0 / position[3]
+        texture_inverse_w = inverse_w
+        texture_mode = state.registers[NV097_SET_SHADER_STAGE_PROGRAM // 4] & 0x1F
+        if read_texture and texture_mode == 1 and abs(texture_q) > 1.0e-6:
+            texture_u /= texture_q
+            texture_v /= texture_q
+            texture_inverse_w = texture_q * inverse_w
+        return OfflineVertex(
+            position[0], position[1], position[2], position[3], color,
+            texture_u, texture_v, texture_inverse_w
+        )
+
     def read_vertex(
         self, state: PgraphReplayState, index: int, read_texture: bool = False
     ) -> OfflineVertex | None:
+        if state.vp_execution_mode == 2 and state.vp_instruction_count:
+            return self.read_program_vertex(state, index, read_texture)
         position_format = state.registers[NV097_SET_VERTEX_DATA_ARRAY_FORMAT // 4]
         position_type = position_format & 0xF
         position_count = (position_format >> 4) & 0xF
@@ -944,10 +1274,13 @@ class OfflinePixelReplay:
             return texture
         factor_color = state.registers[0x0AC0 // 4] == 0x08010000
         factor0 = state.registers[0x0A60 // 4]
+        color_flags = state.registers[0x1E40 // 4] >> 12
         output = 0
         for shift in range(0, 32, 8):
             multiplier = factor0 if factor_color and shift != 24 else diffuse
             channel = ((multiplier >> shift) & 0xFF) * ((texture >> shift) & 0xFF) // 255
+            if shift != 24 and color_flags & 0x10:
+                channel = min(255, channel * 2)
             output |= channel << shift
         return output
 
@@ -1008,7 +1341,9 @@ class OfflinePixelReplay:
         if checkpoint.kind not in ("draw_arrays", "indexed_batch"):
             return checkpoint.kind
         if state.vp_execution_mode == 2 and state.vp_instruction_count:
-            return f"{prefix}_vertex_program"
+            vertex_program_reason = self.vertex_program_unsupported_reason(state)
+            if vertex_program_reason is not None:
+                return f"{prefix}_{vertex_program_reason}"
         if state.registers[0x0300 // 4]:
             return f"{prefix}_alpha_test"
         if state.registers[0x0304 // 4]:
@@ -1054,7 +1389,7 @@ class OfflinePixelReplay:
             (combiner_control & 0xFF) == 1
             and state.registers[0x0AC0 // 4] == 0x08040000
             and state.registers[0x0260 // 4] == 0x18140000
-            and state.registers[0x1E40 // 4] == 0x00000C00
+            and state.registers[0x1E40 // 4] in (0x00000C00, 0x00010C00)
             and state.registers[0x0AA0 // 4] == 0x00000C00
         )
         factor_modulate_combiner = (
@@ -1539,7 +1874,7 @@ def analyze_capture(path: Path, allow_truncated: bool = False) -> dict[str, obje
         magic, version, endian, header_size, target_frame, byte_limit = HEADER.unpack(header_bytes)
         if magic != MAGIC:
             raise CaptureError(f"bad capture magic: {magic!r}")
-        if version != VERSION:
+        if version not in SUPPORTED_VERSIONS:
             raise CaptureError(f"unsupported capture version {version}")
         if endian != ENDIAN_MARKER or header_size != HEADER.size:
             raise CaptureError("capture byte order or header size is invalid")
@@ -1613,6 +1948,10 @@ def analyze_capture(path: Path, allow_truncated: bool = False) -> dict[str, obje
                 data = payload[8:]
                 if len(data) != size or zlib.crc32(data) & 0xFFFFFFFF != expected_crc:
                     raise CaptureError("RAMIN snapshot failed size or CRC validation")
+            elif record_type == PGRAPH_STATE:
+                unpack_fields(payload, 6, "PGRAPH state")
+                if len(payload) != 24:
+                    raise CaptureError("PGRAPH state record has trailing data")
             elif record_type == FINISH:
                 finish = unpack_fields(payload, 5, "finish")
                 if len(payload) != 20:
@@ -1710,7 +2049,7 @@ def checkpoint_json(checkpoint: PgraphCheckpoint | None) -> dict[str, object] | 
 def replay_pgraph(path: Path) -> dict[str, object]:
     analysis = analyze_capture(path)
     ramin = b""
-    methods: list[tuple[int, int, int, int, int]] = []
+    events: list[tuple[int, ...]] = []
 
     with path.open("rb") as stream:
         stream.seek(HEADER.size)
@@ -1723,14 +2062,23 @@ def replay_pgraph(path: Path) -> dict[str, object]:
                 ramin = payload[8 : 8 + size]
             elif record_type == METHOD:
                 frame, subchannel, method, data = unpack_fields(payload, 4, "method")
-                methods.append((record_index, frame, subchannel, method, data))
+                events.append((METHOD, record_index, frame, subchannel, method, data))
+            elif record_type == PGRAPH_STATE:
+                frame, index, *words = unpack_fields(payload, 6, "PGRAPH state")
+                events.append((PGRAPH_STATE, record_index, frame, index, *words))
             record_index += 1
 
     objects = discover_ramin_objects(ramin)
     state = PgraphReplayState()
     checkpoints: list[PgraphCheckpoint] = []
     kelvin_methods = 0
-    for method_index, (record_index, frame, subchannel, method, data) in enumerate(methods):
+    method_index = 0
+    for event in events:
+        if event[0] == PGRAPH_STATE:
+            _kind, _record_index, _frame, index, *words = event
+            state.set_transform_constant(index, tuple(words))
+            continue
+        _kind, record_index, frame, subchannel, method, data = event
         class_before = state.subchannel_classes[subchannel & 7] or NV_CLASS_KELVIN
         checkpoint = state.apply_method(
             frame,
@@ -1747,6 +2095,7 @@ def replay_pgraph(path: Path) -> dict[str, object]:
             kelvin_methods += 1
         if checkpoint is not None:
             checkpoints.append(checkpoint)
+        method_index += 1
 
     counts: dict[str, int] = {}
     for checkpoint in checkpoints:
@@ -1755,7 +2104,7 @@ def replay_pgraph(path: Path) -> dict[str, object]:
         "schema_version": 1,
         "capture": str(path.resolve()),
         "target_frame": analysis["target_frame"],
-        "methods": len(methods),
+        "methods": method_index,
         "kelvin_methods": kelvin_methods,
         "ramin_objects": len(objects),
         "memory_records": analysis["memory_records"],
@@ -1840,6 +2189,9 @@ def replay_pixels(path: Path) -> dict[str, object]:
                         pending_draw = checkpoint
                     else:
                         backend.note_unsupported(checkpoint.kind)
+            elif record_type == PGRAPH_STATE:
+                _frame, index, *words = unpack_fields(payload, 6, "PGRAPH state")
+                state.set_transform_constant(index, tuple(words))
             elif record_type == SCANOUT:
                 scanouts.append(backend.validate_scanout(payload))
             record_index += 1
@@ -2148,6 +2500,11 @@ def comparison_events(path: Path, strict_addresses: bool = False) -> list[Compar
                 signature = (size, crc)
                 details = {"size": size, "crc32": crc}
                 category = "ramin"
+            elif record_type == PGRAPH_STATE:
+                frame, index, *words = unpack_fields(payload, 6, "PGRAPH state")
+                signature = (frame, index, *words)
+                details = {"frame": frame, "index": index, "words": words}
+                category = "pgraph_state"
             elif record_type == FINISH:
                 target, completed, count, truncated, output_crc = unpack_fields(
                     payload, 5, "finish"

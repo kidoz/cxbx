@@ -50,6 +50,8 @@ int main()
         0xFF000000u, 0xFFFF0000u, 0xFF00FF00u, 0xFF0000FFu
     };
     writer.RecordRamin(ramin.data(), sizeof(ramin));
+    constexpr float transformConstant[4] = { 320.0f, -240.0f, 1.0f, 0.0f };
+    writer.RecordTransformConstant(0, 58, transformConstant);
     writer.RecordPushRun(0, true, 0x00100000u, 0, 12, 0, 0, 0,
                          0xFFFFFFFFu);
     writer.RecordPushWord(0, 0, 0x00040100u);
@@ -67,12 +69,16 @@ int main()
     input.close();
     std::remove(path);
 
-    if(bytes.size() < 40 ||
+    if(bytes.size() < 84 ||
        std::string(bytes.begin(), bytes.begin() + 7) != "CXNVCAP" ||
        ReadU32(bytes, 8) != cxbx::nv2a::CaptureFormatVersion ||
        ReadU32(bytes, 12) != 0x01020304u || ReadU32(bytes, 16) != 32u ||
        ReadU32(bytes, 32) !=
-           static_cast<std::uint32_t>(cxbx::nv2a::CaptureRecordType::Ramin))
+           static_cast<std::uint32_t>(cxbx::nv2a::CaptureRecordType::Ramin) ||
+       ReadU32(bytes, 64) !=
+           static_cast<std::uint32_t>(cxbx::nv2a::CaptureRecordType::PgraphState) ||
+       ReadU32(bytes, 68) != 24u || ReadU32(bytes, 72) != 0u ||
+       ReadU32(bytes, 76) != 58u || ReadU32(bytes, 80) != 0x43A00000u)
     {
         std::fputs("capture bundle header or first record is invalid\n", stderr);
         return 1;

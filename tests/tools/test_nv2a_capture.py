@@ -19,6 +19,54 @@ def record(record_type: int, payload: bytes) -> bytes:
     return struct.pack("<II", record_type, len(payload)) + payload
 
 
+def encode_vp_instruction(
+    mac: int,
+    sources: dict[str, tuple[int, int, tuple[int, int, int, int], bool]],
+    *,
+    ilu: int = 0,
+    vertex: int = 0,
+    constant: int = 0,
+    mac_mask: int = 0,
+    output_register: int = 0,
+    ilu_mask: int = 0,
+    output_mask: int = 0,
+    output_address: int = 0,
+    output_mux: int = 0,
+    relative: bool = False,
+    final: bool = False,
+) -> list[int]:
+    instruction = [0, 0, 0, 0]
+
+    def set_field(name: str, value: int) -> None:
+        word, start, length = nv2a_capture.VP_FIELDS[name]
+        instruction[word] |= (value & ((1 << length) - 1)) << start
+
+    set_field("mac", mac)
+    set_field("ilu", ilu)
+    set_field("vertex", vertex)
+    set_field("constant", constant)
+    set_field("mac_mask", mac_mask)
+    set_field("output_register", output_register)
+    set_field("ilu_mask", ilu_mask)
+    set_field("output_mask", output_mask)
+    set_field("output_bank", 1)
+    set_field("output_address", output_address)
+    set_field("output_mux", output_mux)
+    set_field("relative", int(relative))
+    set_field("final", int(final))
+    for source_name, (mux, register, swizzle, negate) in sources.items():
+        set_field(f"{source_name}_mux", mux)
+        if source_name == "c":
+            set_field("c_register_high", register >> 2)
+            set_field("c_register_low", register)
+        else:
+            set_field(f"{source_name}_register", register)
+        set_field(f"{source_name}_negate", int(negate))
+        for component, swizzle_component in zip("xyzw", swizzle, strict=True):
+            set_field(f"{source_name}_swizzle_{component}", swizzle_component)
+    return instruction
+
+
 def build_capture(
     path: Path,
     bad_method: bool = False,
@@ -33,6 +81,10 @@ def build_capture(
     records = [
         record(
             nv2a_capture.RAMIN, struct.pack("<II", 4, zlib.crc32(b"RAM!") & 0xFFFFFFFF) + b"RAM!"
+        ),
+        record(
+            nv2a_capture.PGRAPH_STATE,
+            struct.pack("<6I", 0, 58, 0x43A00000, 0xC3700000, 0x3F800000, 0),
         ),
         record(
             nv2a_capture.PUSH_RUN,
@@ -596,6 +648,11 @@ class Nv2aCaptureTests(unittest.TestCase):
         color = nv2a_capture.OfflinePixelReplay.combine_texture(state, 0x80402010, 0xFF804020)
         self.assertEqual(color, 0x80202018)
 
+        state.registers[0x0AC0 // 4] = 0x08040000
+        state.registers[0x1E40 // 4] = 0x00010C00
+        color = nv2a_capture.OfflinePixelReplay.combine_texture(state, 0xFF808080, 0xFF808080)
+        self.assertEqual(color, 0xFF808080)
+
     def test_replays_z16_and_z24_depth_ordering(self) -> None:
         for depth_format in (1, 2):
             with (
@@ -630,6 +687,98 @@ class Nv2aCaptureTests(unittest.TestCase):
         clipped_vertex = backend.read_vertex(state, 0)
         assert clipped_vertex is not None
         self.assertEqual(clipped_vertex.w, -1.0)
+
+    def test_executes_bounded_vertex_program_with_viewport_pair(self) -> None:
+        vector = (0, 1, 2, 3)
+        scalar_x = (0, 0, 0, 0)
+        scalar_w = (3, 3, 3, 3)
+        register_12 = (1, 12, vector, False)
+        register_12_w = (1, 12, scalar_w, False)
+        register_1_x = (1, 1, scalar_x, False)
+        vertex_source = (2, 0, vector, False)
+        constant_source = (3, 0, vector, False)
+        state = nv2a_capture.PgraphReplayState()
+        program = [
+            *encode_vp_instruction(
+                1,
+                {"a": vertex_source},
+                vertex=0,
+                output_mask=0xF,
+                output_address=0,
+            ),
+            *encode_vp_instruction(
+                2,
+                {"a": register_12, "b": constant_source, "c": register_12_w},
+                ilu=3,
+                constant=58,
+                output_register=1,
+                ilu_mask=0x8,
+                output_mask=0xE,
+                output_address=0,
+            ),
+            *encode_vp_instruction(
+                4,
+                {"a": register_12, "b": register_1_x, "c": constant_source},
+                constant=59,
+                output_mask=0xE,
+                output_address=0,
+            ),
+            *encode_vp_instruction(
+                1,
+                {"a": vertex_source},
+                vertex=2,
+                output_mask=0xF,
+                output_address=3,
+            ),
+            *encode_vp_instruction(
+                1,
+                {"a": vertex_source},
+                vertex=1,
+                output_mask=0xF,
+                output_address=9,
+                final=True,
+            ),
+        ]
+        state.vertex_program[: len(program)] = program
+        state.vp_instruction_count = 5
+        state.vp_execution_mode = 2
+        state.registers[nv2a_capture.NV097_SET_SHADER_STAGE_PROGRAM // 4] = 1
+        for attribute, offset, value_format in (
+            (0, 0x4000, 0x42),
+            (1, 0x4010, 0x22),
+            (2, 0x4018, 0x40),
+        ):
+            state.registers[
+                (nv2a_capture.NV097_SET_VERTEX_DATA_ARRAY_OFFSET + attribute * 4) // 4
+            ] = offset
+            state.registers[
+                (nv2a_capture.NV097_SET_VERTEX_DATA_ARRAY_FORMAT + attribute * 4) // 4
+            ] = (28 << 8) | value_format
+        constants = {
+            58: (100.0, 200.0, 300.0, 1.0),
+            59: (10.0, 20.0, 30.0, 0.0),
+        }
+        for index, values in constants.items():
+            state.transform_constants[index * 4 : index * 4 + 4] = struct.unpack(
+                "<4I", struct.pack("<4f", *values)
+            )
+        backend = nv2a_capture.OfflinePixelReplay(b"", {}, {})
+        backend.memory.observe(
+            0x80004000,
+            struct.pack("<4f2fI", 0.25, -0.5, 0.75, 1.0, 4.0, 8.0, 0x80402010),
+        )
+        self.assertIsNone(backend.vertex_program_unsupported_reason(state))
+        vertex = backend.read_vertex(state, 0, True)
+        assert vertex is not None
+        self.assertEqual((vertex.x, vertex.y, vertex.z, vertex.w), (35.0, -80.0, 255.0, 1.0))
+        self.assertEqual(vertex.color, 0x80402010)
+        self.assertEqual((vertex.texture_u, vertex.texture_v), (4.0, 8.0))
+
+        state.vertex_program[1] &= ~(0xF << 21)
+        state.vertex_program[1] |= 6 << 21
+        self.assertEqual(
+            backend.vertex_program_unsupported_reason(state), "vertex_program_shape"
+        )
 
     def test_accepts_diffuse_and_final_passthrough_combiners(self) -> None:
         state = nv2a_capture.PgraphReplayState()

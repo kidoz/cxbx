@@ -14,6 +14,11 @@
 #include <utility>
 #include <vector>
 
+extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount, int Start,
+                                             const float* Const, const float* Input,
+                                             float* OutPos, float* OutColors,
+                                             float* OutTexCoords);
+
 namespace
 {
 int g_failures = 0;
@@ -2934,6 +2939,34 @@ int RunTests()
         0xE, 0, 0, false, 58);
     std::copy(fusedViewportScale.begin(), fusedViewportScale.end(),
               fusedViewportPairProgram.begin() + 5);
+    std::vector<DWORD> rasterViewportPairProgram = viewportPairProgram;
+    const std::array<DWORD, 4> rasterViewportScale = EncodeNvTestInstruction(
+        2, 3, 0, viewportPositionSource, constantSource, positionWSource, 0, 1, 0x8,
+        0xE, 0, 0, false, 58);
+    std::copy(rasterViewportScale.begin(), rasterViewportScale.end(),
+              rasterViewportPairProgram.begin() + 5);
+    std::array<float, 192 * 4> rasterViewportConstants = differentialHardwareConstants;
+    rasterViewportConstants[58 * 4 + 0] = 100.0f;
+    rasterViewportConstants[58 * 4 + 1] = 200.0f;
+    rasterViewportConstants[58 * 4 + 2] = 300.0f;
+    rasterViewportConstants[58 * 4 + 3] = 1.0f;
+    rasterViewportConstants[59 * 4 + 0] = 10.0f;
+    rasterViewportConstants[59 * 4 + 1] = 20.0f;
+    rasterViewportConstants[59 * 4 + 2] = 30.0f;
+    rasterViewportConstants[59 * 4 + 3] = 0.0f;
+    ShaderOutputs rasterFusedViewportPairOutputs{};
+    Check(EmuVshExecuteProgramRaster(
+              rasterViewportPairProgram.data() + 1, 4, 0,
+              rasterViewportConstants.data(), differentialInputs.data(),
+              rasterFusedViewportPairOutputs.position.data(),
+              rasterFusedViewportPairOutputs.colors.data(),
+              rasterFusedViewportPairOutputs.texCoords.data()),
+          "raw raster fused viewport pair shader executes");
+    Check(NearlyEqual(rasterFusedViewportPairOutputs.position[0], 35.0f) &&
+              NearlyEqual(rasterFusedViewportPairOutputs.position[1], -80.0f) &&
+              NearlyEqual(rasterFusedViewportPairOutputs.position[2], 255.0f) &&
+              NearlyEqual(rasterFusedViewportPairOutputs.position[3], 1.0f),
+          "raw raster execution preserves fused c58/c59 viewport pair");
     ShaderOutputs cpuFusedViewportPairOutputs{};
     Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
               fusedViewportPairProgram.data(), differentialHardwareConstants.data(),

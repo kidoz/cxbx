@@ -1712,6 +1712,13 @@ extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Va
     if(HardwareIndex < 192 && Value != nullptr)
     {
         memcpy(&g_EmuNv2aTransformConstant[HardwareIndex * 4], Value, 4 * sizeof(float));
+        cxbx::nv2a::PushbufferCaptureWriter* Capture =
+            EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
+        if(Capture != nullptr)
+        {
+            Capture->RecordTransformConstant(g_EmuNv2aDebugFrame,
+                                             HardwareIndex, Value);
+        }
     }
 }
 
@@ -5440,28 +5447,6 @@ static int EmuNv2aCombinerSource(ULONG Input, int Component, bool Alpha,
     }
 }
 
-static int EmuNv2aCombinerMapOutput(int Value, ULONG Flags)
-{
-    switch(Flags & 0x38u)
-    {
-        case 0x08: Value -= 128; break;
-        case 0x10: Value *= 2; break;
-        case 0x18: Value = (Value - 128) * 2; break;
-        case 0x20: Value *= 4; break;
-        case 0x30: Value /= 2; break;
-        default: break;
-    }
-    if(Value < 0)
-    {
-        return 0;
-    }
-    if(Value > 255)
-    {
-        return 255;
-    }
-    return Value;
-}
-
 static int EmuNv2aRunCombinerChannel(ULONG Icw, ULONG Ocw, int Component, bool Alpha,
                                      ULONG Diffuse, const ULONG* Textures,
                                      ULONG Factor0, ULONG Factor1, ULONG R0)
@@ -5478,24 +5463,13 @@ static int EmuNv2aRunCombinerChannel(ULONG Icw, ULONG Ocw, int Component, bool A
                                         Factor0, Factor1, R0);
     const int D = EmuNv2aCombinerSource(DInput, Component, Alpha, Diffuse, Textures,
                                         Factor0, Factor1, R0);
-    const ULONG Flags = Ocw >> 12;
-    const int AB = EmuNv2aCombinerMapOutput((A * B) / 255, Flags);
-    const int CD = EmuNv2aCombinerMapOutput((C * D) / 255, Flags);
-    int Result = static_cast<int>((R0 >> (Alpha ? 24 : (Component == 0 ? 16 : (Component == 1 ? 8 : 0)))) & 0xFFu);
-
-    if(((Ocw >> 4) & 0x0Fu) == 0x0Cu)
-    {
-        Result = AB;
-    }
-    if((Ocw & 0x0Fu) == 0x0Cu)
-    {
-        Result = CD;
-    }
-    if(((Ocw >> 8) & 0x0Fu) == 0x0Cu)
-    {
-        Result = EmuNv2aCombinerMapOutput(AB + CD, Flags);
-    }
-    return Result;
+    const int AB = (A * B) / 255;
+    const int CD = (C * D) / 255;
+    const int Previous = static_cast<int>(
+        (R0 >> (Alpha ? 24 : (Component == 0 ? 16 : (Component == 1 ? 8 : 0)))) &
+        0xFFu);
+    return cxbx::nv2a::SelectRegisterCombinerOutput(
+        AB, CD, Ocw, Previous);
 }
 
 static ULONG EmuNv2aRunStage0Combiner(const EmuNv2aRasterTarget* Target,

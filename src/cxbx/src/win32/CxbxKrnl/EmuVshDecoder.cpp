@@ -3177,7 +3177,8 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
                                       float* OutPos, float* OutColors,
                                       std::size_t OutColorFloatCount, float* OutTexCoords,
                                       std::size_t OutTexCoordFloatCount,
-                                      XTL::VshDiagnostics::RasterOutputs* OutRaster)
+                                      XTL::VshDiagnostics::RasterOutputs* OutRaster,
+                                      bool ElideViewportTransform)
 {
     if(Program == NULL || InstrCount <= 0)
         return false;
@@ -3207,13 +3208,15 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
     if(Start < 0) Start = 0;
     for(int pc = Start; pc < InstrCount; pc++)
     {
-        if(static_cast<std::size_t>(pc) == viewportPair.offset ||
-           (static_cast<std::size_t>(pc) == viewportPair.scale &&
-            viewportPair.discardScale))
+        if(ElideViewportTransform &&
+           (static_cast<std::size_t>(pc) == viewportPair.offset ||
+            (static_cast<std::size_t>(pc) == viewportPair.scale &&
+             viewportPair.discardScale)))
         {
             continue;
         }
-        if(static_cast<std::size_t>(pc) >= screenSpaceSuffix.start)
+        if(ElideViewportTransform &&
+           static_cast<std::size_t>(pc) >= screenSpaceSuffix.start)
         {
             break;
         }
@@ -3232,7 +3235,8 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
         bool Relative = VshGetField(I, FLD_A0X) != 0;
         DWORD Vfield = VshGetField(I, FLD_V);
         bool Final = VshGetField(I, FLD_FINAL) != 0;
-        if(static_cast<std::size_t>(pc) == viewportPair.scale)
+        if(ElideViewportTransform &&
+           static_cast<std::size_t>(pc) == viewportPair.scale)
         {
             OMask = 0;
         }
@@ -3334,7 +3338,7 @@ extern "C" bool EmuVshExecuteProgram(const DWORD* Program, int InstrCount, int S
 {
     return VshExecuteProgramInternal(Program, InstrCount, Start, Const, Input, OutPos, OutCol0,
                                      OutCol0 == nullptr ? 0 : 4, OutTex0,
-                                     OutTex0 == nullptr ? 0 : 4, nullptr);
+                                     OutTex0 == nullptr ? 0 : 4, nullptr, true);
 }
 
 extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount, int Start,
@@ -3345,7 +3349,7 @@ extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount,
     return VshExecuteProgramInternal(Program, InstrCount, Start, Const, Input, OutPos,
                                      OutColors, OutColors == nullptr ? 0 : 8,
                                      OutTexCoords, OutTexCoords == nullptr ? 0 : 16,
-                                     nullptr);
+                                     nullptr, false);
 }
 
 bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, const float* constants,
@@ -3371,5 +3375,5 @@ bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, 
     return VshExecuteProgramInternal(&xboxFunction[1], static_cast<int>(instructionCount), 0, constants,
                                      inputRegisters, outputPosition, outputColors,
                                      outputColorFloatCount, outputTexCoords,
-                                     outputTexCoordFloatCount, outputRaster);
+                                     outputTexCoordFloatCount, outputRaster, true);
 }
