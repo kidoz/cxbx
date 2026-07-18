@@ -118,6 +118,27 @@ The PGRAPH command uses the same automation exit codes as capture comparison:
 `0` for a valid replay or match, `1` for a valid replay difference, and `2` for
 an invalid capture.
 
+## Replay clear and present pixels
+
+```powershell
+python tools/nv2a_capture.py pixels frame00000.nv2acap
+python tools/nv2a_capture.py pixels frame00000.nv2acap --json
+```
+
+Pixel replay reconstructs sparse surfaces from ordered captured-memory
+observations, resolves color and zeta DMA objects through RAMIN, executes color,
+depth, and stencil clear masks, and resolves multisampled color targets into the
+presented scanout surface. Scanout-source memory reads are explicitly excluded
+from replay inputs, so the expected framebuffer cannot make an unimplemented
+pixel path pass accidentally.
+
+Every scanout reports known-byte coverage plus actual and expected CRC32 values.
+The command reports `PASS` and exits `0` only when every output byte was produced
+or initialized independently, all scanout CRCs match, captured observations do
+not conflict with replay-owned bytes, and the capture contains no unsupported
+draw checkpoints. A valid but incomplete replay reports `PARTIAL` and exits `1`;
+corrupt input exits `2`.
+
 ## Version 1 binary format
 
 All integers are unsigned little-endian values. The 32-byte header is:
@@ -139,11 +160,10 @@ without invalidating version 1 parsers.
 
 ## Current boundary
 
-The host tool independently replays the PFIFO command processor and the
-pixel-relevant PGRAPH state machine through draw checkpoints. It does not yet
-execute the software pixel backend: triangle setup, texture sampling, depth and
-stencil access, combiners, and surface writes still live in `Emu.cpp` and use
-emulator-owned memory services. The bundle contains the ordered memory
-observations and expected scanouts needed for that extraction. Until then,
-checkpoint CRCs isolate command/state divergence and scanout CRC validation
-proves capture integrity, while title/probe execution remains the pixel oracle.
+The host tool independently replays PFIFO, pixel-relevant PGRAPH state, DMA
+surface resolution, clears, and multisample presents. Triangle setup, vertex and
+texture reads, depth/stencil tests during draws, combiners, blending, and draw
+surface writes still live in `Emu.cpp`. The bundle contains the ordered memory
+observations and expected scanouts needed for those extractions. Checkpoint CRCs
+isolate command/state divergence; known-byte coverage prevents partial pixel
+replay from being mistaken for a complete rendering result.
