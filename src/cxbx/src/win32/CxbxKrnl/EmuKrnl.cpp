@@ -9748,13 +9748,21 @@ XBSYSAPI EXPORTNUM(207) NTSTATUS NTAPI xboxkrnl::NtQueryDirectoryFile
     {
         ZeroMemory(wcstr, 160*2);
 
+        // ReturnSingleEntry must be TRUE on every host call: with FALSE the
+        // host packs several entries into the buffer and advances the
+        // directory position past all of them, but only the first is copied
+        // to the guest -- the rest were silently dropped (NestopiaX's ROM
+        // browser saw one file per directory and listed "No games found").
         ret = NtDll::NtQueryDirectoryFile
         (
             FileHandle, Event, (NtDll::PIO_APC_ROUTINE)ApcRoutine, ApcContext, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock, FileDirInfo,
-            0x40+160*2, (NtDll::FILE_INFORMATION_CLASS)FileInformationClass, bFirstIteration, &NtFileMask, bFirstIteration
+            0x40+160*2, (NtDll::FILE_INFORMATION_CLASS)FileInformationClass, TRUE, &NtFileMask, bFirstIteration
         );
 
         bFirstIteration = FALSE;
+
+        if(FAILED(ret))
+            break;      // e.g. STATUS_NO_MORE_FILES: FileDirInfo holds no entry
 
         // ******************************************************************
         // * Convert from PC to Xbox
@@ -9768,6 +9776,14 @@ XBSYSAPI EXPORTNUM(207) NTSTATUS NTAPI xboxkrnl::NtQueryDirectoryFile
         }
     } // Xbox does not return . and ..
     while(strcmp(mbstr, ".") == 0 || strcmp(mbstr, "..") == 0);
+
+    if(EmuFileIoTraceEnabled())
+    {
+        printf("FIO| querydir tid=0x%X handle=0x%X mask=\"%s\" class=%u restart=%u status=0x%.08X name=\"%s\"\n",
+               (uint32)GetCurrentThreadId(), (uint32)FileHandle,
+               (FileMask != 0) ? FileMask->Buffer : "", (uint32)FileInformationClass,
+               (uint32)RestartScan, (uint32)ret, FAILED(ret) ? "" : FileInformation->FileName);
+    }
 
     // TODO: Cache the last search result for quicker access with CreateFile (xbox does this internally!)
     free(FileDirInfo);
