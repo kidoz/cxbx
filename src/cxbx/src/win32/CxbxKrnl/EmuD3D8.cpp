@@ -9456,6 +9456,15 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_CullMode
     }
     #endif
 
+    // Deferred-state restore paths can pass the internal "not initialized"
+    // marker before the title has selected a cull mode. Preserve the current
+    // host state instead of interpreting the marker as an Xbox enumeration.
+    if(Value == X_D3DRS_UNK)
+    {
+        EmuSwapFS();   // XBox FS
+        return;
+    }
+
     // ******************************************************************
     // * Convert from Xbox D3D to PC D3D enumeration
     // ******************************************************************
