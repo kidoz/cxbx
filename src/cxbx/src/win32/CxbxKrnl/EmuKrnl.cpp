@@ -3476,6 +3476,26 @@ static bool EmuIsLowXboxRam(PVOID Address)
     return Value >= 0x01000000 && Value < g_EmuXboxRamLimit;
 }
 
+// Allocate and register contiguous memory while the caller is already in host
+// FS context. Bootstrap code uses this for kernel-owned data that the guest is
+// expected to release through MmFreeContiguousMemory.
+extern "C" PVOID EmuAllocateContiguousMemoryHost(ULONG NumberOfBytes, ULONG Alignment)
+{
+    const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
+    if(AllocationSize == 0)
+    {
+        return NULL;
+    }
+
+    PVOID Address = EmuAllocateContiguousLow(AllocationSize, Alignment);
+    if(Address == NULL)
+    {
+        Address = (PVOID)new unsigned char[AllocationSize];
+    }
+    EmuTrackContiguousMemoryAllocation(Address, AllocationSize);
+    return Address;
+}
+
 static PVOID EmuResolveContiguousMemoryAllocation(PVOID Address)
 {
     const ULONG Value = (ULONG)Address;
