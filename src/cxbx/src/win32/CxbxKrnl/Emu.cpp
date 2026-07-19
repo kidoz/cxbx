@@ -9304,6 +9304,58 @@ static LONG EmuSsTraceLimit()
     }
     return g_SsTraceLimit;
 }
+
+// A single-step chain dies silently when the traced thread enters a blocking
+// host syscall (the kernel transition clears TF), leaving the original byte
+// in place and the breakpoint disarmed for the rest of the run. Called
+// periodically from the timer-DPC thread: when the hook has been "mid-step"
+// for a while, declare the chain dead and re-arm the int3 -- the blocked
+// thread is already past the hook address, so rewriting it is safe.
+static ULONGLONG g_Crc32ArmAtTick = 0;   // deferred arming (CXBX_CRC_DELAY)
+
+extern "C" void EmuCrc32TraceRearm()
+{
+    static ULONGLONG StuckSince = 0;
+
+    if(g_Crc32BpAddr == 0)
+        return;
+
+    // Deferred first arming.
+    if(g_Crc32ArmAtTick != 0)
+    {
+        if(GetTickCount64() < g_Crc32ArmAtTick)
+            return;
+        g_Crc32ArmAtTick = 0;
+        *(uint8_t*)g_Crc32BpAddr = 0xCC;
+        printf("Emu (0x%lX): CRC32 trace breakpoint now armed at 0x%.08lX.\n",
+               GetCurrentThreadId(), (unsigned long)g_Crc32BpAddr);
+        fflush(stdout);
+        return;
+    }
+
+    if(*(volatile uint8_t*)g_Crc32BpAddr == 0xCC || g_Crc32SingleStep <= 0)
+    {
+        StuckSince = 0;
+        return;
+    }
+
+    ULONGLONG Now = GetTickCount64();
+    if(StuckSince == 0)
+    {
+        StuckSince = Now;
+        return;
+    }
+    if(Now - StuckSince < 300)
+        return;
+
+    InterlockedExchange(&g_Crc32SingleStep, 0);
+    g_SsTraceBudget = 0;
+    *(uint8_t*)g_Crc32BpAddr = 0xCC;
+    StuckSince = 0;
+    printf("Emu (0x%lX): CRC trace breakpoint re-armed after a stalled single-step chain.\n",
+           GetCurrentThreadId());
+    fflush(stdout);
+}
 static const uint32_t crc32_table[256] = {
     0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,0xE963A535,0x9E6495A3,
     0x0EDB8832,0x79DCB8A4,0xE0D5E91E,0x97D2D988,0x09B64C2B,0x7EB17CBD,0xE7B82D07,0x90BF1D91,
@@ -9644,6 +9696,20 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     if(e->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP &&
        g_Crc32SingleStep > 0)
     {
+        // Never step through host code: the trap either dies in a blocking
+        // syscall (chain stalls, hook stays disarmed) or grinds each host
+        // instruction through SEH repair until an unhandled single-step kills
+        // the guest. A host call ends this hit's trace; re-arm for the next.
+        if(g_SsTraceBudget > 0 && e->ContextRecord->Eip >= 0x10000000)
+        {
+            g_SsTraceBudget = 0;
+            InterlockedDecrement(&g_Crc32SingleStep);
+            *(uint8_t*)g_Crc32BpAddr = 0xCC;
+            printf("SS| (host call, trace hit ended)\n");
+            fflush(stdout);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
         if(g_SsTraceBudget > 0)
         {
             InterlockedDecrement(&g_SsTraceBudget);
@@ -10577,9 +10643,23 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
         g_Crc32OrigByte = *(uint8_t*)Addr;
         g_Crc32BpAddr = Addr;
-        *(uint8_t*)Addr = 0xCC;
-        printf("Emu (0x%X): CRC32 trace breakpoint installed at 0x%.08X (orig byte 0x%02X).\n",
-               GetCurrentThreadId(), Addr, g_Crc32OrigByte);
+
+        // CXBX_CRC_DELAY=<ms>: arm later (via the timer-DPC thread) so a
+        // hot-at-boot hook doesn't single-step the title to a crawl before
+        // the interesting phase is reached.
+        const char *DelayValue = getenv("CXBX_CRC_DELAY");
+        if(DelayValue != NULL)
+        {
+            g_Crc32ArmAtTick = GetTickCount64() + strtoul(DelayValue, NULL, 10);
+            printf("Emu (0x%X): CRC32 trace breakpoint at 0x%.08X armed in %s ms.\n",
+                   GetCurrentThreadId(), Addr, DelayValue);
+        }
+        else
+        {
+            *(uint8_t*)Addr = 0xCC;
+            printf("Emu (0x%X): CRC32 trace breakpoint installed at 0x%.08X (orig byte 0x%02X).\n",
+                   GetCurrentThreadId(), Addr, g_Crc32OrigByte);
+        }
     }
 
     // Initialize the host XInput backend before the guest thread starts.
