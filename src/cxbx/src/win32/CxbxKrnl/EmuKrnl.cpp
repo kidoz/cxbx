@@ -5548,6 +5548,7 @@ extern "C" void EmuStartTimerDpcThread()
 extern "C" ULONG g_EmuDsoundApuContextTable;   // Emu.cpp (pattern scan)
 extern "C" void EmuApuRaiseVoiceInterrupt();   // Emu.cpp (ISTS latch)
 extern "C" ULONG EmuApuReadInterruptStatus();  // Emu.cpp (ISTS peek, diagnostics)
+extern "C" int EmuApuConsumeOffPendingVoice(ULONG Voice);   // Emu.cpp (VP PIO capture)
 static volatile LONG g_EmuApuVoiceThreadStarted = 0;
 
 static DWORD WINAPI EmuApuVoiceThread(LPVOID)
@@ -5568,40 +5569,82 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
         if(g_EmuDsoundApuContextTable == 0)
             continue;
 
-        BYTE *VoiceArray = *(BYTE**)(g_EmuDsoundApuContextTable + 0x30);
-        if(VoiceArray == NULL ||
-           IsBadWritePtr(VoiceArray, VoiceCount * VoiceStructBytes))
-            continue;
+        // The static m_ctxMemory table is refilled by every DirectSoundCreate,
+        // but a client's notifier POINTER is captured at object creation --
+        // a buffer created under an earlier DSound generation arms and reads
+        // the OLD block while the table already names the new one. The old
+        // allocations stay mapped (the release paths are neutralised), so
+        // remember every voice-array / notifier-block base ever seen and
+        // complete voice-off events in all of them.
+        const int MaxGenerations = 8;
+        static BYTE *VoiceArrays[MaxGenerations];
+        static BYTE *NotifierBases[MaxGenerations];
 
-        // The active bit is set by the real VP when it takes a voice on; under
-        // emulation nothing sets it, so an all-clear array already reads as
-        // "every voice idle" to HandleIdleVoice. Clear any bits that do appear
-        // and deliver the voice interrupt unconditionally -- the DSOUND DPC
-        // only acts on voices its own lists say are pending.
-        for(ULONG Voice = 0; Voice < VoiceCount; Voice++)
+        BYTE *CurrentVoiceArray = *(BYTE**)(g_EmuDsoundApuContextTable + 0x30);
+        BYTE *CurrentNotifier = *(BYTE**)(g_EmuDsoundApuContextTable + 0x40);
+        for(int Pass = 0; Pass < 2; Pass++)
         {
-            ULONG *Flags = (ULONG*)(VoiceArray + Voice * VoiceStructBytes + 4);
-            if((*Flags & VoiceActiveBit) != 0)
-                *Flags &= ~VoiceActiveBit;
+            BYTE **Table = Pass == 0 ? VoiceArrays : NotifierBases;
+            BYTE *Value = Pass == 0 ? CurrentVoiceArray : CurrentNotifier;
+            if(Value == NULL)
+                continue;
+            for(int i = 0; i < MaxGenerations; i++)
+            {
+                if(Table[i] == Value)
+                    break;
+                if(Table[i] == NULL)
+                {
+                    Table[i] = Value;
+                    break;
+                }
+            }
         }
 
-        // Signal every voice's VOICE_OFF notifier: entries live in
-        // m_ctxMemory[4] (16 bytes each; voice v's four event notifiers start
-        // at index v*4+2, type 3 = voice off), status byte +0xF, 0x01 =
-        // signaled (CMcpxNotifier::GetStatus), 0x80 = armed (::Reset). The
-        // per-voice ServiceVoiceInterrupt consumes the signal, deactivates the
-        // voice and clears the client's PLAYING flags -- the completion the
-        // real voice processor would deliver.
-        BYTE *NotifierBase = *(BYTE**)(g_EmuDsoundApuContextTable + 0x40);
-        if(NotifierBase != NULL &&
-           !IsBadWritePtr(NotifierBase, (VoiceCount * 4 + 2) * 16))
+        // Complete exactly the voices the guest commanded off through the VP
+        // PIO (voice number written to 0x20128): clear the hardware
+        // voice-structure active bit and signal the voice's VOICE_OFF
+        // notifier (16-byte entries; voice v's four event notifiers start at
+        // index v*4+2, type 3 = voice off; status byte +0xF, 0x01 = signaled,
+        // 0x80 = armed) -- in every remembered generation.
+        int Completed = 0;
+        for(ULONG Voice = 0; Voice < VoiceCount; Voice++)
         {
-            for(ULONG Voice = 0; Voice < VoiceCount; Voice++)
+            if(!EmuApuConsumeOffPendingVoice(Voice))
+                continue;
+
+            for(int i = 0; i < MaxGenerations; i++)
             {
-                BYTE *Status = NotifierBase + (Voice * 4 + 2 + 3) * 16 + 0xF;
-                if(*Status == 0x80)
-                    *Status = 0x01;
+                BYTE *VoiceArray = VoiceArrays[i];
+                if(VoiceArray != NULL &&
+                   !IsBadWritePtr(VoiceArray, VoiceCount * VoiceStructBytes))
+                {
+                    ULONG *Flags = (ULONG*)(VoiceArray + Voice * VoiceStructBytes + 4);
+                    *Flags &= ~VoiceActiveBit;
+                }
+
+                BYTE *NotifierBase = NotifierBases[i];
+                if(NotifierBase != NULL &&
+                   !IsBadWritePtr(NotifierBase, (VoiceCount * 4 + 2) * 16))
+                {
+                    BYTE *Status = NotifierBase + (Voice * 4 + 2 + 3) * 16 + 0xF;
+                    if(*Status == 0x80)
+                        *Status = 0x01;
+                }
             }
+            Completed++;
+        }
+
+        if(Completed == 0)
+            continue;
+
+        static int s_VoiceTraceEnabled = -1;
+        if(s_VoiceTraceEnabled < 0)
+            s_VoiceTraceEnabled = getenv("CXBX_MMIO_TRACE") != NULL ? 1 : 0;
+        if(s_VoiceTraceEnabled == 1)
+        {
+            printf("EmuKrnl (0x%lX): APUVOICE completing %d voice(s).\n",
+                   GetCurrentThreadId(), Completed);
+            fflush(stdout);
         }
 
         EmuApuRaiseVoiceInterrupt();
@@ -5625,11 +5668,10 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
             EmuSwapFS();   // Win2k/XP FS
         }
 
-        static ULONG TickCount = 0;
-        if((TickCount++ % 100) == 0)
+        if(s_VoiceTraceEnabled == 1)
         {
-            printf("EmuKrnl (0x%lX): APUVOICE tick=%lu fired=%d ists=0x%.08lX\n",
-                   GetCurrentThreadId(), TickCount, Fired, EmuApuReadInterruptStatus());
+            printf("EmuKrnl (0x%lX): APUVOICE fired=%d ists=0x%.08lX\n",
+                   GetCurrentThreadId(), Fired, EmuApuReadInterruptStatus());
             fflush(stdout);
         }
     }

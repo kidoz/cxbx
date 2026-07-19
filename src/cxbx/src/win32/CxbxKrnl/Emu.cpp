@@ -962,8 +962,45 @@ static const ULONG EmuApuInterruptStatus = 0x00001000;   // NV_PAPU ISTS: W1C
 static const ULONG EmuApuIstsClaimBit = 0x00000001;      // "our interrupt"
 static const ULONG EmuApuIstsVoiceBit = 0x00000040;      // voice event pending
 
+// VP PIO command capture. Live traces settled the encoding by REGISTER, not
+// command-word bits: every submission is strobed via 0x202F8 (voice select)
+// and the 0x202FC 1/0 toggle; ActivateVoice adds a voice to the hardware
+// list through 0x20120/0x20124/0x20140, while DeactivateVoice (and only it,
+// in practice -- steady-state playback shows zero such writes) removes it
+// through a write of the voice number to 0x20128. Record voices commanded
+// off so the voice-event thread completes exactly those.
+static const ULONG EmuApuVpVoiceSelect = 0x000202F8;
+static const ULONG EmuApuVpVoiceOff = 0x00020128;
+static ULONG g_EmuApuSelectedVoice = 0xFFFF;
+static volatile LONG g_EmuApuVoiceOffPending[8];   // 256-bit set
+
+extern "C" int EmuApuConsumeOffPendingVoice(ULONG Voice)
+{
+    if(Voice >= 256)
+        return 0;
+    LONG Mask = 1 << (Voice & 31);
+    return (InterlockedAnd(&g_EmuApuVoiceOffPending[Voice >> 5], ~Mask) & Mask) != 0;
+}
+
 static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
 {
+    ULONG Offset = EmuApuOffset(Address);
+    if(Offset == EmuApuVpVoiceSelect)
+    {
+        g_EmuApuSelectedVoice = Value & 0xFFFF;
+    }
+    else if(Offset == EmuApuVpVoiceOff && (Value & 0xFFFF) < 256)
+    {
+        ULONG Voice = Value & 0xFFFF;
+        InterlockedOr(&g_EmuApuVoiceOffPending[Voice >> 5], 1 << (Voice & 31));
+        if(EmuMmioTraceEnabled())
+        {
+            printf("Emu (0x%lX): APU voice 0x%02lX commanded off.\n",
+                   GetCurrentThreadId(), Voice);
+            fflush(stdout);
+        }
+    }
+
     if(EmuApuOffset(Address) == EmuApuInterruptStatus)
     {
         // Interrupt status is write-1-to-clear: the DSOUND ISR acks by
