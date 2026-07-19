@@ -104,7 +104,7 @@ static void  EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader);
 extern "C" void EmuAciStartDmaThread();   // EmuKrnl.cpp: AC97 DMA delivery thread
-extern "C" void EmuApuStartVoiceThread();  // EmuKrnl.cpp: APU voice-event delivery thread
+extern "C" void EmuApuStartVoiceThread(bool EnableByDefault);  // EmuKrnl.cpp: APU voice-event delivery thread
 extern "C" void EmuStartTimerDpcThread();  // EmuKrnl.cpp: due-time KeSetTimer DPC dispatch
 extern "C" PVOID EmuAllocateContiguousMemoryHost(ULONG NumberOfBytes, ULONG Alignment);
 extern "C" ULONG g_EmuDsoundApuContextTable;
@@ -10855,7 +10855,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // titles do not program this device, and creating an unnecessary worker at
     // guest entry can perturb their startup ordering.
     EmuAciStartDmaThread();
-    EmuApuStartVoiceThread();
+    EmuApuStartVoiceThread(EmuIsNestopiaX13(pXbeHeader));
     EmuStartTimerDpcThread();
 
     printf("Emu (0x%X): Initial thread starting.\n", GetCurrentThreadId());

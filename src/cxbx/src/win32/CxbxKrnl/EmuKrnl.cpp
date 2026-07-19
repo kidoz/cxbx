@@ -5814,10 +5814,11 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
     return 0;
 }
 
-extern "C" void EmuApuStartVoiceThread()
+extern "C" void EmuApuStartVoiceThread(bool EnableByDefault)
 {
     char enabled[8] = {0};
-    if(GetEnvironmentVariableA("CXBX_APU_VOICE", enabled, sizeof(enabled)) == 0)
+    if(!EnableByDefault &&
+       GetEnvironmentVariableA("CXBX_APU_VOICE", enabled, sizeof(enabled)) == 0)
     {
         return;
     }
