@@ -697,6 +697,25 @@ struct VshViewportPair
     bool discardScale;
 };
 
+static bool VshInstructionWritesTempMask(const DWORD* instruction, DWORD tempRegister,
+                                         DWORD componentMask)
+{
+    const DWORD mac = VshGetField(instruction, FLD_MAC);
+    const DWORD macMask = VshGetField(instruction, FLD_OUT_MAC_MASK);
+    const DWORD outputRegister = VshGetField(instruction, FLD_OUT_R);
+    if(mac != MAC_NOP && mac != MAC_ARL && outputRegister == tempRegister &&
+       (macMask & componentMask) != 0)
+    {
+        return true;
+    }
+
+    const DWORD ilu = VshGetField(instruction, FLD_ILU);
+    const DWORD iluMask = VshGetField(instruction, FLD_OUT_ILU_MASK);
+    const DWORD iluRegister = mac != MAC_NOP && macMask != 0 ? 1 : outputRegister;
+    return ilu != ILU_NOP && iluRegister == tempRegister &&
+           (iluMask & componentMask) != 0;
+}
+
 static VshViewportPair VshFindViewportScaleAddPair(const DWORD* instructions,
                                                    std::size_t instructionCount)
 {
@@ -730,8 +749,7 @@ static VshViewportPair VshFindViewportScaleAddPair(const DWORD* instructions,
             continue;
         }
 
-        const std::size_t lastOffset = (std::min)(scaleIndex + 2, instructionCount - 1);
-        for(std::size_t offsetIndex = scaleIndex + 1; offsetIndex <= lastOffset;
+        for(std::size_t offsetIndex = scaleIndex + 1; offsetIndex < instructionCount;
             ++offsetIndex)
         {
             const DWORD* offset = &instructions[offsetIndex * 4];
@@ -762,6 +780,22 @@ static VshViewportPair VshFindViewportScaleAddPair(const DWORD* instructions,
                 offsetB.Swz[2] == 0 && offsetB.Swz[3] == 0 &&
                 offsetC.Mux == PARAM_C && VshIsIdentitySource(offsetC);
             if(!exactPair)
+            {
+                continue;
+            }
+
+            bool reciprocalOverwritten = false;
+            if(fusedReciprocal)
+            {
+                for(std::size_t intervening = scaleIndex + 1; intervening < offsetIndex;
+                    ++intervening)
+                {
+                    reciprocalOverwritten = reciprocalOverwritten ||
+                                            VshInstructionWritesTempMask(
+                                                &instructions[intervening * 4], 1, 0x8);
+                }
+            }
+            if(reciprocalOverwritten)
             {
                 continue;
             }
