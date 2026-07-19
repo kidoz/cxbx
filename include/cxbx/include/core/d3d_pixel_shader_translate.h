@@ -12,10 +12,11 @@
 // instructions), multiply/dot/sum portions, all eight NV2A input mappings,
 // alpha/blue channel selects, output shifts x2/x4/d2, plain 2D/3D/cube
 // texture lookups, per-stage or shared constants (up to 7 distinct values),
-// and A*B+(1-A)*C+D final combiners over ordinary registers.
+// and A*B+(1-A)*C+D final combiners over ordinary registers. The standard
+// EF_PROD fog final combiner is lowered to E*F plus the host fog stage.
 // Unsupported (fails): MUX, output BIAS, blue-to-alpha, dependent texture
-// modes other than BUMPENVMAP, FOG/V1R0_SUM/EF_PROD reads, register reads before any
-// write (r0/r1), more constants or instructions than ps.1.1 holds.
+// modes other than BUMPENVMAP, other FOG/V1R0_SUM/EF_PROD reads, register reads
+// before any write (r0/r1), more constants or instructions than ps.1.1 holds.
 
 #include <array>
 #include <cstdint>
@@ -815,14 +816,25 @@ inline PixelShaderTranslation TranslatePixelShader(
         const Operand c = DecodeOperand(def[FinalInputsABCD], 2);
         const Operand d = DecodeOperand(def[FinalInputsABCD], 3);
 
+        auto isIdentity = [](const Operand& op) {
+            return op.mapping == MapUnsignedIdentity ||
+                   op.mapping == MapSignedIdentity;
+        };
+        const bool hostFogProduct =
+            a.reg == RegFog && a.alphaChannel && isIdentity(a) &&
+            b.reg == RegEfProd && !b.alphaChannel && isIdentity(b) &&
+            c.reg == RegFog && !c.alphaChannel && isIdentity(c) &&
+            OperandIsZero(d);
+
         // The PS_FINALCOMBINERSETTING flags (byte 0 of EFG) only shape the
-        // V1R0_SUM special input; when nothing reads it they are inert, so
-        // they need no handling here. Special registers that ARE read fail
-        // in MapRegister. E/F feed only EF_PROD, which likewise fails when
-        // read; non-zero E/F with no EF_PROD reader would be inert too, but
-        // bail conservatively rather than assume.
-        if(!OperandIsZero(e) || !OperandIsZero(f))
+        // V1R0_SUM special input; when nothing reads it they are inert. The
+        // standard fog combiner is identical to Direct3D's post-shader fog
+        // blend, so emit EF into r0 and let the host fog stage finish it.
+        // Other special-register shapes remain unsupported.
+        if((!OperandIsZero(e) || !OperandIsZero(f)) && !hostFogProduct)
+        {
             emitter.Fail("final_combiner_ef");
+        }
 
         if(out.failure == nullptr)
         {
@@ -839,10 +851,15 @@ inline PixelShaderTranslation TranslatePixelShader(
                         op.mapping == MapSignedIdentity);
             };
 
+            if(hostFogProduct)
+            {
+                emitter.Arithmetic(OpMul, emitter.DestToken(RegR0, MaskRgb, 0),
+                                   { src(e), src(f) });
+            }
             // Algebraic pre-simplification: a degenerate A collapses the
             // lerp, and the dropped term's register is never even mapped
             // (titles routinely park FOG in the dead slot).
-            if(OperandIsOne(a))
+            else if(OperandIsOne(a))
             {
                 // rgb = B + D
                 if(OperandIsZero(d))
