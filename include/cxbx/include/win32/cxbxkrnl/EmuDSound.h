@@ -710,6 +710,16 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_Play
 );
 
 // ******************************************************************
+// * func: EmuIDirectSoundBuffer8_PlayEx
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_PlayEx
+(
+    X_CDirectSoundBuffer   *pThis,
+    LONGLONG                rtTimeStamp,
+    DWORD                   dwFlags
+);
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_Lock
 // ******************************************************************
 HRESULT WINAPI EmuIDirectSoundBuffer8_Lock
