@@ -2812,6 +2812,25 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_GetCurrentPosition
     // NOTE: TODO: This call always seems to fail on primary buffers!
     HRESULT hRet = pThis->EmuDirectSoundBuffer8->GetCurrentPosition(pdwCurrentPlayCursor, pdwCurrentWriteCursor);
 
+    if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+    {
+        static thread_local X_CDirectSoundBuffer* s_LastBuffer = NULL;
+        static thread_local DWORD s_LastPlayCursor = MAXDWORD;
+        static thread_local DWORD s_LastWriteCursor = MAXDWORD;
+        const DWORD playCursor = pdwCurrentPlayCursor != NULL ? *pdwCurrentPlayCursor : 0;
+        const DWORD writeCursor = pdwCurrentWriteCursor != NULL ? *pdwCurrentWriteCursor : 0;
+
+        if(FAILED(hRet) || pThis != s_LastBuffer || playCursor != s_LastPlayCursor ||
+           writeCursor != s_LastWriteCursor)
+        {
+            printf("AUDIO| static-buffer-position this=0x%p result=0x%lX play=0x%lX write=0x%lX\n",
+                   pThis, hRet, playCursor, writeCursor);
+            s_LastBuffer = pThis;
+            s_LastPlayCursor = playCursor;
+            s_LastWriteCursor = writeCursor;
+        }
+    }
+
     if(FAILED(hRet))
         EmuWarning("GetCurrentPosition FAILED");
 
@@ -2866,9 +2885,31 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Play
 
     HRESULT hRet = pThis->EmuDirectSoundBuffer8->Play(0, 0, dwFlags);
 
+    if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+    {
+        printf("AUDIO| static-buffer-play this=0x%p flags=0x%lX result=0x%lX\n",
+               pThis, dwFlags, hRet);
+    }
+
     EmuSwapFS();   // XBox FS
 
     return hRet;
+}
+
+// ******************************************************************
+// * func: EmuIDirectSoundBuffer8_PlayEx
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_PlayEx
+(
+    X_CDirectSoundBuffer   *pThis,
+    LONGLONG                rtTimeStamp,
+    DWORD                   dwFlags
+)
+{
+    // Host DirectSound has no timestamped static-buffer start. NestopiaX
+    // passes zero and only needs the Xbox flags translated by Play.
+    (void)rtTimeStamp;
+    return EmuIDirectSoundBuffer8_Play(pThis, 0, 0, dwFlags);
 }
 
 // ******************************************************************
@@ -3344,6 +3385,16 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Lock
                                                       ppvAudioPtr1, pdwAudioBytes1,
                                                       ppvAudioPtr2, pdwAudioBytes2,
                                                       dwFlags);
+
+    if(cxbx::trace::IsEnabled(cxbx::trace::Channel::Audio))
+    {
+        printf("AUDIO| static-buffer-ring-lock this=0x%p offset=0x%lX requested=0x%lX flags=0x%lX result=0x%lX first=0x%p/0x%lX second=0x%p/0x%lX\n",
+               pThis, dwOffset, dwBytes, dwFlags, hRet,
+               ppvAudioPtr1 != NULL ? *ppvAudioPtr1 : NULL,
+               pdwAudioBytes1 != NULL ? *pdwAudioBytes1 : 0,
+               ppvAudioPtr2 != NULL ? *ppvAudioPtr2 : NULL,
+               pdwAudioBytes2 != NULL ? *pdwAudioBytes2 : 0);
+    }
 
     if(SUCCEEDED(hRet))
         EmuBufferRecordLock(pThis->EmuDirectSoundBuffer8,

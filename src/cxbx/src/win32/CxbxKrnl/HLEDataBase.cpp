@@ -76,6 +76,7 @@ namespace XTL
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
 #include "DSound.1.0.5849.inl"
+#include "DSound.1.0.5933.inl"
 #include "DSound.1.0.5233.inl"
 #include "DSound.1.0.5344.inl"
 #include "DSound.1.0.5558.inl"
@@ -334,16 +335,14 @@ HLEData HLEDataBase[] =
         DSound_1_0_5849,
         DSound_1_0_5849_SIZE
     },
-    // DSound 1.0.5933 reuse: attempted TWICE, reverted twice -- do not
-    // re-register without 5933-exact signatures. Even with the full 5849
-    // lifecycle covered (creates, all buffer methods, DoWork, stream
-    // vtable/FlushEx; audio-critical set dry-run-verified byte-identical in
-    // the NestopiaX 1.3 image), the title died at ~520 log lines (baseline
-    // un-HLE'd: ~4600) at guest 0x181DA6 -- `mov al,[esi+0x12]` with esi=0,
-    // i.e. a 5933-CHANGED dsound internal (no 5849 byte-equivalent exists;
-    // verified unmatchable against dsound.lib) reading a guest global that
-    // only the guest's own -- now skipped -- init would set. Coherent 5933
-    // coverage needs a 5933 XDK dsound.lib to generate from.
+    // DSound Version 1.0.5933: exact static-buffer lifecycle signatures from
+    // the 5933 SDK. This keeps NestopiaX's PCM ring entirely inside HLE state.
+    {
+        "DSOUND",
+        1, 0, 5933,
+        DSound_1_0_5933,
+        DSound_1_0_5933_SIZE
+    },
     // XG Version 1.0.4361
     {
         "XGRAPHC",
@@ -560,6 +559,28 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_KICKOFF
     -1, // XREF_KICKOFFANDWAITFORIDLE
     -1, // XREF_XAPI5233_XINPUTCLOSE
+    -1, // XREF_DS5933_CREATESOUNDBUFFER
+    -1, // XREF_DS5933_BUF_SETMIXBINS_T
+    -1, // XREF_DS5933_BUF_SETMIXBINS
+    -1, // XREF_DS5933_BUF_PLAY_T
+    -1, // XREF_DS5933_BUF_PLAY
+    -1, // XREF_DS5933_BUF_SETVOLUME_T
+    -1, // XREF_DS5933_BUF_SETVOLUME
+    -1, // XREF_DS5933_BUF_GETCURRENTPOSITION
+    -1, // XREF_DS5933_BUF_GETSTATUS_T
+    -1, // XREF_DS5933_BUF_GETSTATUS
+    -1, // XREF_DS5933_BUF_SETBUFFERDATA
+    -1, // XREF_DS5933_BUF_SETCURRENTPOSITION_T
+    -1, // XREF_DS5933_BUF_SETCURRENTPOSITION
+    -1, // XREF_DS5933_BUF_SETPLAYREGION
+    -1, // XREF_DS5933_BUF_SETLOOPREGION
+    -1, // XREF_DS5933_BUF_STOPEX_T_T
+    -1, // XREF_DS5933_BUF_STOPEX_T
+    -1, // XREF_DS5933_BUF_STOPEX
+    -1, // XREF_DS5933_BUF_PLAYEX_T
+    -1, // XREF_DS5933_BUF_PLAYEX
+    -1, // XREF_DS5933_BUF_SETFORMAT_T
+    -1, // XREF_DS5933_BUF_SETFORMAT
 };
 
 // ******************************************************************
