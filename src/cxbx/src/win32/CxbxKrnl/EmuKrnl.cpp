@@ -2926,29 +2926,67 @@ extern "C" VOID NTAPI EmuRtlInitializeCriticalSection(xboxkrnl::PRTL_CRITICAL_SE
     CriticalSection->OwningThread = 0;
 }
 
-extern "C" BOOLEAN NTAPI EmuRtlTryEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+extern "C" BOOLEAN NTAPI EmuRtlTryEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection);
+
+// Guest critical sections are backed by real host CRITICAL_SECTIONs, looked
+// up (and created on demand) by guest address. The previous implementation
+// spin-waited with CAS + Sleep(0) on OwningThread, which starves forever
+// against a thread that takes and releases the lock in a tight loop -- on
+// NestopiaX 1.3 the audio worker's status-poll loop over
+// g_DirectSoundCriticalSection starved the game-launch thread's StopEx
+// indefinitely. A host critical section blocks waiters on an event that the
+// releasing thread signals, so a waiter always gets through. The guest-visible
+// LockCount/RecursionCount/OwningThread fields are still mirrored for titles
+// that peek at them.
+struct EmuHostCriticalSectionEntry
 {
-    if(CriticalSection == NULL || !EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
-        return FALSE;
+    ULONG GuestAddress;
+    CRITICAL_SECTION HostLock;
+};
 
-    ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
+static std::vector<EmuHostCriticalSectionEntry*> g_EmuHostCriticalSections;
+static CRITICAL_SECTION g_EmuHostCriticalSectionTableLock;
+static LONG g_EmuHostCriticalSectionTableInit = 0;
 
-    if(CriticalSection->OwningThread == CurrentThread)
+static CRITICAL_SECTION *EmuHostLockForGuestCriticalSection(ULONG GuestAddress)
+{
+    if(InterlockedCompareExchange(&g_EmuHostCriticalSectionTableInit, 2, 2) != 2)
     {
-        CriticalSection->LockCount++;
-        CriticalSection->RecursionCount++;
-        return TRUE;
+        if(InterlockedCompareExchange(&g_EmuHostCriticalSectionTableInit, 1, 0) == 0)
+        {
+            InitializeCriticalSection(&g_EmuHostCriticalSectionTableLock);
+            InterlockedExchange(&g_EmuHostCriticalSectionTableInit, 2);
+        }
+        else
+        {
+            while(InterlockedCompareExchange(&g_EmuHostCriticalSectionTableInit, 2, 2) != 2)
+                Sleep(0);
+        }
     }
 
-    if(InterlockedCompareExchange((volatile LONG*)&CriticalSection->OwningThread,
-                                  (LONG)CurrentThread, 0) == 0)
+    EnterCriticalSection(&g_EmuHostCriticalSectionTableLock);
+
+    CRITICAL_SECTION *HostLock = NULL;
+    for(EmuHostCriticalSectionEntry *Entry : g_EmuHostCriticalSections)
     {
-        CriticalSection->LockCount = 0;
-        CriticalSection->RecursionCount = 1;
-        return TRUE;
+        if(Entry->GuestAddress == GuestAddress)
+        {
+            HostLock = &Entry->HostLock;
+            break;
+        }
     }
 
-    return FALSE;
+    if(HostLock == NULL)
+    {
+        EmuHostCriticalSectionEntry *Entry = new EmuHostCriticalSectionEntry();
+        Entry->GuestAddress = GuestAddress;
+        InitializeCriticalSection(&Entry->HostLock);
+        g_EmuHostCriticalSections.push_back(Entry);
+        HostLock = &Entry->HostLock;
+    }
+
+    LeaveCriticalSection(&g_EmuHostCriticalSectionTableLock);
+    return HostLock;
 }
 
 extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
@@ -2964,24 +3002,32 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
     }
 
     ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
+    CRITICAL_SECTION *HostLock = EmuHostLockForGuestCriticalSection((ULONG)CriticalSection);
 
-    if(CriticalSection->OwningThread == CurrentThread)
-    {
-        CriticalSection->LockCount++;
-        CriticalSection->RecursionCount++;
-        return;
-    }
+    EmuSwapFS();   // Win2k/XP FS: the wait can block on the host lock's event
+    EnterCriticalSection(HostLock);
+    EmuSwapFS();   // Xbox FS
 
-    while(InterlockedCompareExchange((volatile LONG*)&CriticalSection->OwningThread,
-                                     (LONG)CurrentThread, 0) != 0)
-    {
-        EmuSwapFS();
-        Sleep(0);
-        EmuSwapFS();
-    }
+    CriticalSection->OwningThread = CurrentThread;
+    CriticalSection->RecursionCount++;
+    CriticalSection->LockCount++;
+}
 
-    CriticalSection->LockCount = 0;
-    CriticalSection->RecursionCount = 1;
+extern "C" BOOLEAN NTAPI EmuRtlTryEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
+{
+    if(CriticalSection == NULL || !EmuIsWritableMemoryRange(CriticalSection, sizeof(*CriticalSection)))
+        return FALSE;
+
+    ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
+    CRITICAL_SECTION *HostLock = EmuHostLockForGuestCriticalSection((ULONG)CriticalSection);
+
+    if(!TryEnterCriticalSection(HostLock))
+        return FALSE;
+
+    CriticalSection->OwningThread = CurrentThread;
+    CriticalSection->RecursionCount++;
+    CriticalSection->LockCount++;
+    return TRUE;
 }
 
 extern "C" VOID NTAPI EmuRtlEnterCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
@@ -3022,11 +3068,14 @@ extern "C" VOID NTAPI EmuRtlLeaveCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
         CriticalSection->LockCount = -1;
         CriticalSection->RecursionCount = 0;
         InterlockedExchange((volatile LONG*)&CriticalSection->OwningThread, 0);
-        return;
+    }
+    else
+    {
+        CriticalSection->LockCount--;
+        CriticalSection->RecursionCount--;
     }
 
-    CriticalSection->LockCount--;
-    CriticalSection->RecursionCount--;
+    LeaveCriticalSection(EmuHostLockForGuestCriticalSection((ULONG)CriticalSection));
 }
 
 extern "C" VOID NTAPI EmuRtlLeaveCriticalSectionAndRegion(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
@@ -5344,6 +5393,266 @@ extern "C" void EmuAciStartDmaThread()
     }
 }
 
+// KeSetTimer historically dispatched the timer DPC once, immediately, and
+// never again. Code that schedules work for a FUTURE time -- DSOUND's
+// deferred-command engine runs envelope stops through exactly this
+// (KeSetTimer -> DeferredCommandDpcRoutine -> ServiceDeferredCommands, which
+// no-ops when nothing is due yet) -- therefore never saw its work execute.
+// Track pending timers and re-fire each DPC once its due time arrives; the
+// immediate fire is kept for compatibility with titles tuned to it.
+extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemArgument1, PVOID SystemArgument2);
+
+struct EmuPendingTimerDpc
+{
+    xboxkrnl::PKTIMER Timer;
+    xboxkrnl::PKDPC Dpc;
+    ULONGLONG DueTime;   // absolute FILETIME (100ns)
+};
+
+static EmuPendingTimerDpc g_EmuPendingTimerDpcs[64];
+static CRITICAL_SECTION g_EmuPendingTimerDpcLock;
+static volatile LONG g_EmuPendingTimerDpcLockInit = 0;
+static volatile LONG g_EmuTimerDpcThreadStarted = 0;
+
+static void EmuPendingTimerDpcLock()
+{
+    if(InterlockedCompareExchange(&g_EmuPendingTimerDpcLockInit, 2, 2) != 2)
+    {
+        if(InterlockedCompareExchange(&g_EmuPendingTimerDpcLockInit, 1, 0) == 0)
+        {
+            InitializeCriticalSection(&g_EmuPendingTimerDpcLock);
+            InterlockedExchange(&g_EmuPendingTimerDpcLockInit, 2);
+        }
+        else
+        {
+            while(InterlockedCompareExchange(&g_EmuPendingTimerDpcLockInit, 2, 2) != 2)
+                Sleep(0);
+        }
+    }
+    EnterCriticalSection(&g_EmuPendingTimerDpcLock);
+}
+
+static ULONGLONG EmuCurrentFileTime()
+{
+    FILETIME Now;
+    GetSystemTimeAsFileTime(&Now);
+    return ((ULONGLONG)Now.dwHighDateTime << 32) | Now.dwLowDateTime;
+}
+
+extern "C" void EmuScheduleTimerDpc(xboxkrnl::PKTIMER Timer, xboxkrnl::PKDPC Dpc,
+                                    LONGLONG DueTime)
+{
+    // Negative due times are relative (100ns units); positive are absolute.
+    ULONGLONG Due = (DueTime < 0) ? EmuCurrentFileTime() + (ULONGLONG)(-DueTime)
+                                  : (ULONGLONG)DueTime;
+
+    EmuPendingTimerDpcLock();
+
+    EmuPendingTimerDpc *Slot = NULL;
+    for(int i = 0; i < 64; i++)
+    {
+        if(g_EmuPendingTimerDpcs[i].Timer == Timer)
+        {
+            Slot = &g_EmuPendingTimerDpcs[i];
+            break;
+        }
+        if(Slot == NULL && g_EmuPendingTimerDpcs[i].Timer == NULL)
+            Slot = &g_EmuPendingTimerDpcs[i];
+    }
+
+    if(Slot != NULL)
+    {
+        Slot->Timer = Timer;
+        Slot->Dpc = Dpc;
+        Slot->DueTime = Due;
+    }
+
+    LeaveCriticalSection(&g_EmuPendingTimerDpcLock);
+}
+
+static DWORD WINAPI EmuTimerDpcThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): timer DPC thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    for(;;)
+    {
+        Sleep(10);
+
+        ULONGLONG Now = EmuCurrentFileTime();
+        xboxkrnl::PKTIMER FireTimer = NULL;
+        xboxkrnl::PKDPC FireDpc = NULL;
+
+        EmuPendingTimerDpcLock();
+        for(int i = 0; i < 64; i++)
+        {
+            EmuPendingTimerDpc *Slot = &g_EmuPendingTimerDpcs[i];
+            if(Slot->Timer == NULL || Slot->DueTime > Now)
+                continue;
+
+            FireTimer = Slot->Timer;
+            FireDpc = Slot->Dpc;
+            Slot->Timer = NULL;
+            break;   // one per pass keeps the lock hold short
+        }
+        LeaveCriticalSection(&g_EmuPendingTimerDpcLock);
+
+        if(FireTimer == NULL)
+            continue;
+
+        if(!EmuIsWritableMemoryRange(FireTimer, sizeof(*FireTimer)) ||
+           FireTimer->Header.Inserted == 0)
+            continue;   // cancelled or re-set since scheduling
+
+        FireTimer->Header.SignalState = 1;
+        FireTimer->Header.Inserted = 0;
+
+        if(FireDpc != NULL)
+        {
+            EmuSwapFS();   // Xbox FS: the DPC routine is guest code
+            __try
+            {
+                EmuKeInsertQueueDpc(FireDpc, NULL, NULL);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            EmuSwapFS();   // Win2k/XP FS
+        }
+    }
+
+    return 0;
+}
+
+extern "C" void EmuStartTimerDpcThread()
+{
+    if(InterlockedExchange(&g_EmuTimerDpcThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting timer DPC thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuTimerDpcThread, NULL, 0, NULL);
+    }
+}
+
+// Minimal APU voice-event model. Real hardware's voice processor takes voices
+// off its lists (end of buffer, deactivate command) and raises the APU voice
+// interrupt; DSOUND's ISR/DPC then runs HandleIdleVoice for each listed voice
+// whose hardware voice-structure dword +4 has bit 23 clear, completing stops
+// and stream packets. Without any of that, a title's stop path waits forever
+// on DSBSTATUS_PLAYING (NestopiaX 1.3's ROM launch). Model the VP as draining
+// instantly: every tick, clear the active bit of every voice structure (array
+// = DSOUND m_ctxMemory[3].virt, located generically by the context-release
+// patch), latch the voice-interrupt status, and fire the connected ISR.
+extern "C" ULONG g_EmuDsoundApuContextTable;   // Emu.cpp (pattern scan)
+extern "C" void EmuApuRaiseVoiceInterrupt();   // Emu.cpp (ISTS latch)
+extern "C" ULONG EmuApuReadInterruptStatus();  // Emu.cpp (ISTS peek, diagnostics)
+static volatile LONG g_EmuApuVoiceThreadStarted = 0;
+
+static DWORD WINAPI EmuApuVoiceThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): APU voice-event thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    const ULONG VoiceCount = 256;
+    const ULONG VoiceStructBytes = 128;
+    const ULONG VoiceActiveBit = 0x00800000;   // struct dword +4, "on hardware"
+
+    for(;;)
+    {
+        Sleep(20);
+
+        if(g_EmuDsoundApuContextTable == 0)
+            continue;
+
+        BYTE *VoiceArray = *(BYTE**)(g_EmuDsoundApuContextTable + 0x30);
+        if(VoiceArray == NULL ||
+           IsBadWritePtr(VoiceArray, VoiceCount * VoiceStructBytes))
+            continue;
+
+        // The active bit is set by the real VP when it takes a voice on; under
+        // emulation nothing sets it, so an all-clear array already reads as
+        // "every voice idle" to HandleIdleVoice. Clear any bits that do appear
+        // and deliver the voice interrupt unconditionally -- the DSOUND DPC
+        // only acts on voices its own lists say are pending.
+        for(ULONG Voice = 0; Voice < VoiceCount; Voice++)
+        {
+            ULONG *Flags = (ULONG*)(VoiceArray + Voice * VoiceStructBytes + 4);
+            if((*Flags & VoiceActiveBit) != 0)
+                *Flags &= ~VoiceActiveBit;
+        }
+
+        // Signal every voice's VOICE_OFF notifier: entries live in
+        // m_ctxMemory[4] (16 bytes each; voice v's four event notifiers start
+        // at index v*4+2, type 3 = voice off), status byte +0xF, 0x01 =
+        // signaled (CMcpxNotifier::GetStatus), 0x80 = armed (::Reset). The
+        // per-voice ServiceVoiceInterrupt consumes the signal, deactivates the
+        // voice and clears the client's PLAYING flags -- the completion the
+        // real voice processor would deliver.
+        BYTE *NotifierBase = *(BYTE**)(g_EmuDsoundApuContextTable + 0x40);
+        if(NotifierBase != NULL &&
+           !IsBadWritePtr(NotifierBase, (VoiceCount * 4 + 2) * 16))
+        {
+            for(ULONG Voice = 0; Voice < VoiceCount; Voice++)
+            {
+                BYTE *Status = NotifierBase + (Voice * 4 + 2 + 3) * 16 + 0xF;
+                if(*Status == 0x80)
+                    *Status = 0x01;
+            }
+        }
+
+        EmuApuRaiseVoiceInterrupt();
+
+        int Fired = 0;
+        for(int i = 0; i < 2; i++)
+        {
+            EmuKInterrupt *Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuAudioInterruptLevels[i]];
+            if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
+                continue;
+
+            Fired++;
+            EmuSwapFS();   // Xbox FS
+            __try
+            {
+                Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            EmuSwapFS();   // Win2k/XP FS
+        }
+
+        static ULONG TickCount = 0;
+        if((TickCount++ % 100) == 0)
+        {
+            printf("EmuKrnl (0x%lX): APUVOICE tick=%lu fired=%d ists=0x%.08lX\n",
+                   GetCurrentThreadId(), TickCount, Fired, EmuApuReadInterruptStatus());
+            fflush(stdout);
+        }
+    }
+
+    return 0;
+}
+
+extern "C" void EmuApuStartVoiceThread()
+{
+    char enabled[8] = {0};
+    if(GetEnvironmentVariableA("CXBX_APU_VOICE", enabled, sizeof(enabled)) == 0)
+    {
+        return;
+    }
+
+    if(InterlockedExchange(&g_EmuApuVoiceThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting APU voice-event thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuApuVoiceThread, NULL, 0, NULL);
+    }
+}
+
 static void EmuStartAudioInterruptThread()
 {
     // Opt-in only: the synthesized APU interrupt fires an ISR asynchronously and
@@ -7179,6 +7488,12 @@ XBSYSAPI EXPORTNUM(149) xboxkrnl::BOOLEAN NTAPI xboxkrnl::KeSetTimer
     Timer->Dpc = Dpc;
     Timer->Header.SignalState = 0;
     Timer->Header.Inserted = 1;
+
+    // Re-fire the DPC when the due time actually arrives (see the timer DPC
+    // thread); a future-scheduled consumer (DSOUND deferred commands) no-ops
+    // the immediate fire below and relies on the timed one.
+    if(Dpc != NULL)
+        EmuScheduleTimerDpc(Timer, Dpc, DueTime.QuadPart);
 
     EmuSwapFS();   // Xbox FS
 
