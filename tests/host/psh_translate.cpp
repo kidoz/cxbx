@@ -49,6 +49,7 @@ enum : unsigned
 {
     ZERO = 0x0, C0 = 0x1, C1 = 0x2, FOG = 0x3, V0 = 0x4, V1 = 0x5,
     T0 = 0x8, T1 = 0x9, T2 = 0xA, T3 = 0xB, R0 = 0xC, R1 = 0xD,
+    EF_PROD = 0xF,
     DISCARD = 0x0,
     CH_RGB = 0x00, CH_ALPHA = 0x10, CH_BLUE = 0x00,
     MAP_IDENTITY = 0x00, MAP_INVERT = 0x20, MAP_EXPAND = 0x40,
@@ -169,6 +170,79 @@ int main()
             }
         }
         Check(sawZeroConstant, "zero constant reserved for ONE");
+    }
+
+    // 1c. The XDK Dolphin sample uses EF_PROD for the lit base texture and
+    //     the standard fog final combiner. Host post-shader fog performs the
+    //     same blend after the translator writes E*F to r0.
+    {
+        DefBuilder b;
+        b.Combiners(1)
+            .TextureMode(0, 1)
+            .TextureMode(1, 1)
+            .StageConstant0(0, 0x40404040u)
+            .Rgb(0, Inputs(In(T1), In(V0), In(C0), In(ZERO, CH_RGB, MAP_INVERT)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Alpha(0, Inputs(In(T1, CH_ALPHA), In(V0, CH_ALPHA), In(C0, CH_ALPHA),
+                             In(ZERO, CH_ALPHA, MAP_INVERT)),
+                   Outputs(DISCARD, DISCARD, R0))
+            .Final(Inputs(In(FOG, CH_ALPHA), In(EF_PROD), In(FOG), In(ZERO)),
+                   Inputs(In(R0), In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO)));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(t.ok(), "dolphin EF product fog shader translates");
+        if(!t.ok())
+        {
+            std::printf("  reason: %s\n", t.failure);
+        }
+        Check(t.textures == 2, "dolphin fog shader loads both textures");
+        Check(t.arithmetic <= 8, "dolphin fog shader fits ps.1.1 arithmetic budget");
+    }
+
+    // 1d. The seafloor variant adds a third shadow texture and a second
+    //     combiner before the same EF product fog epilogue.
+    {
+        DefBuilder b;
+        b.Combiners(2)
+            .TextureMode(0, 1)
+            .TextureMode(1, 1)
+            .TextureMode(2, 1)
+            .StageConstant0(0, 0x40404040u)
+            .Rgb(0, Inputs(In(T1), In(V0), In(C0), In(ZERO, CH_RGB, MAP_INVERT)),
+                 Outputs(R0, R1, DISCARD))
+            .Alpha(0, Inputs(In(T1, CH_ALPHA), In(V0, CH_ALPHA), In(C0, CH_ALPHA),
+                             In(ZERO, CH_ALPHA, MAP_INVERT)),
+                   Outputs(R0, R1, DISCARD))
+            .Rgb(1, Inputs(In(R0), In(T2), In(R1), In(ZERO, CH_RGB, MAP_INVERT)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Alpha(1, Inputs(In(R0, CH_ALPHA), In(T2, CH_ALPHA), In(R1, CH_ALPHA),
+                             In(ZERO, CH_ALPHA, MAP_INVERT)),
+                   Outputs(DISCARD, DISCARD, R0))
+            .Final(Inputs(In(FOG, CH_ALPHA), In(EF_PROD), In(FOG), In(ZERO)),
+                   Inputs(In(R0), In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO)));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(t.ok(), "dolphin seafloor EF product fog shader translates");
+        if(!t.ok())
+        {
+            std::printf("  reason: %s\n", t.failure);
+        }
+        Check(t.textures == 3, "dolphin seafloor shader loads three textures");
+        Check(t.arithmetic <= 8,
+              "dolphin seafloor shader fits ps.1.1 arithmetic budget");
+    }
+
+    // 1e. EF inputs remain unsupported when the final combiner is not the
+    //     exact host-fog equivalent.
+    {
+        DefBuilder b;
+        b.Combiners(1)
+            .TextureMode(0, 1)
+            .Rgb(0, Inputs(In(T0), In(V0), In(ZERO), In(ZERO)),
+                 Outputs(DISCARD, DISCARD, R0))
+            .Final(Inputs(In(ZERO, CH_RGB, MAP_INVERT), In(R0), In(ZERO), In(ZERO)),
+                   Inputs(In(R0), In(T0), In(R0, CH_ALPHA), In(ZERO)));
+        const PixelShaderTranslation t = TranslatePixelShader(b.def);
+        Check(!t.ok() && std::strcmp(t.failure, "final_combiner_ef") == 0,
+              "non-fog EF product remains rejected");
     }
 
     // 2. UNSIGNED_INVERT maps to the 1-x source modifier (D3DSPSM_COMP).
