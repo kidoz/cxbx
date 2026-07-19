@@ -24,6 +24,7 @@ Current active developer and maintainer: Aleksandr Pavlov <ckidoz@gmail.com>.
 
 <img src="docs/screenshots/dolphin-demo.png" alt="CXBX emulating Dolphin demos" width="320">
 <img src="docs/screenshots/nestopiax-v1.3.png" alt="CXBX emulating NestopiaX 1.3" width="320">
+<img src="docs/screenshots/nestopiax-v1.3-battle-tank.png" alt="CXBX emulating Battle City in NestopiaX 1.3" width="320">
 <img src="docs/screenshots/turok-evalution.png" alt="CXBX emulating Turok: Evolution" width="320">
 
 ## Current Status
