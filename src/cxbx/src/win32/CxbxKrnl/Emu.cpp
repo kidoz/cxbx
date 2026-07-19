@@ -3180,6 +3180,23 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
     printf("WATCHDOG: armed, snapshot interval %lums.\n", IntervalMs);
     fflush(stdout);
 
+    // CXBX_WATCH_MEM="hexaddr[,bytes]": hexdump a guest address with each
+    // snapshot (e.g. a critical section, to read its owner during a deadlock).
+    ULONG WatchAddress = 0;
+    ULONG WatchBytes = 0x20;
+    const char *WatchValue = getenv("CXBX_WATCH_MEM");
+    if(WatchValue != NULL)
+    {
+        char *End = NULL;
+        WatchAddress = strtoul(WatchValue, &End, 16);
+        if(End != NULL && *End == ',')
+        {
+            ULONG Bytes = strtoul(End + 1, NULL, 0);
+            if(Bytes >= 4 && Bytes <= 0x100)
+                WatchBytes = Bytes;
+        }
+    }
+
     for(;;)
     {
         Sleep(IntervalMs);
@@ -3193,6 +3210,31 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
         THREADENTRY32 Te;
         Te.dwSize = sizeof(Te);
         printf("WATCHDOG: --- thread EIP snapshot ---\n");
+
+        if(WatchAddress != 0 && !IsBadReadPtr((void*)WatchAddress, WatchBytes))
+        {
+            printf("WATCHDOG: mem 0x%.08lX:", WatchAddress);
+            for(ULONG i = 0; i < WatchBytes; i += 4)
+                printf(" %.08lX", *(ULONG*)(WatchAddress + i));
+            printf("\n");
+
+            // Treat the watched address as an Xbox RTL_CRITICAL_SECTION and
+            // name the owner: OwningThread at +0x18 is an &ETHREAD->Tcb whose
+            // host thread id lives at ETHREAD+0x12C.
+            ULONG Owner = *(ULONG*)(WatchAddress + 0x18);
+            if(Owner != 0 && !IsBadReadPtr((void*)(Owner + 0x12C), 4))
+            {
+                DWORD OwnerTid = *(DWORD*)(Owner + 0x12C);
+                HANDLE OwnerThread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, OwnerTid);
+                DWORD ExitCode = 0;
+                bool Alive = OwnerThread != NULL &&
+                             GetExitCodeThread(OwnerThread, &ExitCode) && ExitCode == STILL_ACTIVE;
+                if(OwnerThread != NULL)
+                    CloseHandle(OwnerThread);
+                printf("WATCHDOG: cs owner=0x%.08lX host_tid=0x%lX alive=%d\n",
+                       Owner, (unsigned long)OwnerTid, Alive ? 1 : 0);
+            }
+        }
         if(Thread32First(Snap, &Te))
         {
             do
