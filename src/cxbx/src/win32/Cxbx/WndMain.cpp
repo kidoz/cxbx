@@ -335,9 +335,13 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 char buffer[255];
 
                 if(m_Xbe != 0 && m_Xbe->GetError() == 0)
+                {
                     sprintf(buffer, "%s Loaded!", m_Xbe->m_szAsciiTitle);
+                }
                 else
-    				sprintf(buffer, "%s", "Disclaimer: cxbx has no affiliation with Microsoft");
+                {
+                    sprintf(buffer, "%s", "https://github.com/kidoz/cxbx");
+                }
 
                 RECT rect = {0, 187, 321, 201};
 
@@ -1063,7 +1067,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 break;
 
                 case ID_HELP_HOMEPAGE:
-                    ShellExecute(NULL, "open", "http://www.caustik.com/cxbx/", NULL, NULL, SW_SHOWNORMAL);
+                    ShellExecute(NULL, "open", "https://github.com/kidoz/cxbx", NULL, NULL, SW_SHOWNORMAL);
                     break;
             }
 
