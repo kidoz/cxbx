@@ -11109,6 +11109,8 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
         fflush(stdout);
 }
 
+extern "C" ULONG g_EmuDsoundSingletonAddress;   // defined below the patch
+
 // The XDK DSOUND ~CMcpxAPU destructor tears the audio core down: Terminate,
 // KeDisconnectInterrupt(m_Interrupt), timer/DPC cancel, shutdown-notification
 // deregistration and the ~CMcpxCore chain. Titles that over-release the
@@ -11164,11 +11166,88 @@ static void EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader)
 
         const uint08 Patch[1] = { 0xC3 };   // thiscall, no args: plain ret
         EmuWriteBytes(Address, Patch, sizeof(Patch));
-        printf("Emu (0x%lX): DSOUND ~CMcpxAPU (0x%.08lX, interrupt 0x%.08lX) neutralised.\n",
-               GetCurrentThreadId(), Address, InterruptBase);
+
+        // CDirectSound::m_pDirectSound sits 0x58 before the KINTERRUPT static
+        // in the 5933 dsound data layout. The final Release NULLs it, making
+        // the next DirectSoundCreate build a SECOND core whose interrupt then
+        // services different voice lists than existing buffers live on; the
+        // keep-alive in the timer thread restores the pointer so the create
+        // path's own singleton branch reuses the original instance.
+        g_EmuDsoundSingletonAddress = InterruptBase - 0x58;
+
+        printf("Emu (0x%lX): DSOUND ~CMcpxAPU (0x%.08lX, interrupt 0x%.08lX, singleton 0x%.08lX) neutralised.\n",
+               GetCurrentThreadId(), Address, InterruptBase, g_EmuDsoundSingletonAddress);
+
+        // ~CDirectSound clears m_pDirectSound and releases the core's members
+        // -- the whole multi-instance divergence (a fresh core whose interrupt
+        // services different voice lists than existing buffers live on), and
+        // resurrecting a partially-destroyed core crashes deferred-command
+        // servicing. Locate the destructor by the singleton-clear it contains
+        // (entry = clear - 9: 56 8B F1 C7 06 <vt> 83 25 <m_pDirectSound> 00)
+        // and neutralise the entire function so the singleton stays fully
+        // alive; DirectSoundCreate's own AddRef branch then reuses it.
+        const uint08 ClearPattern[7] = {
+            0x83, 0x25,
+            (uint08)(g_EmuDsoundSingletonAddress),
+            (uint08)(g_EmuDsoundSingletonAddress >> 8),
+            (uint08)(g_EmuDsoundSingletonAddress >> 16),
+            (uint08)(g_EmuDsoundSingletonAddress >> 24),
+            0x00
+        };
+        for(uint32 Clear = Base; Clear + sizeof(ClearPattern) <= End; Clear++)
+        {
+            if(IsBadReadPtr((void*)Clear, sizeof(ClearPattern)))
+            {
+                Clear += 0xFFF;
+                continue;
+            }
+            if(memcmp((const void*)Clear, ClearPattern, sizeof(ClearPattern)) != 0)
+                continue;
+
+            const uint08 *Entry = (const uint08*)(Clear - 9);
+            if(Entry[0] != 0x56 || Entry[1] != 0x8B || Entry[2] != 0xF1 ||
+               Entry[3] != 0xC7 || Entry[4] != 0x06)
+                continue;
+
+            const uint08 Ret[1] = { 0xC3 };   // thiscall, no args
+            EmuWriteBytes(Clear - 9, Ret, sizeof(Ret));
+            printf("Emu (0x%lX): DSOUND ~CDirectSound (0x%.08lX) neutralised.\n",
+                   GetCurrentThreadId(), Clear - 9);
+            break;
+        }
+
         fflush(stdout);
         return;
     }
+}
+
+// See EmuInstallDsoundApuDestructorPatch: the guest CDirectSound singleton
+// pointer, kept alive across over-releases so DirectSoundCreate always
+// returns the original core.
+extern "C" ULONG g_EmuDsoundSingletonAddress = 0;
+
+extern "C" void EmuDsoundSingletonKeepAlive()
+{
+    static ULONG Remembered = 0;
+
+    if(g_EmuDsoundSingletonAddress == 0 ||
+       IsBadWritePtr((void*)g_EmuDsoundSingletonAddress, 4))
+        return;
+
+    ULONG Current = *(ULONG*)g_EmuDsoundSingletonAddress;
+    if(Current != 0)
+    {
+        Remembered = Current;
+        return;
+    }
+
+    if(Remembered == 0 || IsBadReadPtr((void*)Remembered, 4))
+        return;
+
+    *(ULONG*)g_EmuDsoundSingletonAddress = Remembered;
+    printf("Emu (0x%lX): DSOUND singleton pointer restored (0x%.08lX).\n",
+           GetCurrentThreadId(), Remembered);
+    fflush(stdout);
 }
 
 // The native XAPI QueryPerformanceCounter is a raw `rdtsc` read (mov ecx,
