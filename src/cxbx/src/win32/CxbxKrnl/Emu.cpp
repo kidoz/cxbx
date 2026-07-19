@@ -96,6 +96,7 @@ HANDLE       g_hZDrive    = NULL;
 static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
 static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
 static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
+static bool  EmuIsNestopiaX13(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
@@ -105,6 +106,8 @@ static void  EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader);
 extern "C" void EmuAciStartDmaThread();   // EmuKrnl.cpp: AC97 DMA delivery thread
 extern "C" void EmuApuStartVoiceThread();  // EmuKrnl.cpp: APU voice-event delivery thread
 extern "C" void EmuStartTimerDpcThread();  // EmuKrnl.cpp: due-time KeSetTimer DPC dispatch
+extern "C" PVOID EmuAllocateContiguousMemoryHost(ULONG NumberOfBytes, ULONG Alignment);
+extern "C" ULONG g_EmuDsoundApuContextTable;
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
 static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static bool  EmuLooksLikeReturnAddress(ULONG Address);
@@ -112,7 +115,7 @@ static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, siz
 static bool  EmuIsReadableRange(ULONG Address, ULONG Bytes);
 // Optional D3D wrapper entry trace (EmuD3D8.cpp); NULL when the trace is off.
 extern "C" const char *EmuGetLastD3DCall(void);
-static void  EmuInstallAutoBootLaunchData();
+static void  EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader);
 static void  EmuInstallFakeKernelImage();
 static void  EmuXRefFailure();
 static int   ExitException(LPEXCEPTION_POINTERS e);
@@ -928,6 +931,163 @@ static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
     fflush(stdout);
 }
 
+static const ULONG EmuApuVpVoiceSelect = 0x000202F8;
+static const ULONG EmuApuVpVoiceOn = 0x00020124;
+static const ULONG EmuApuVpVoiceOff = 0x00020128;
+static ULONG g_EmuApuSelectedVoice = 0xFFFF;
+static volatile LONG g_EmuApuVoiceOffPending[8];   // 256-bit set
+
+static BYTE *EmuApuGetVoiceState(ULONG Voice)
+{
+    if(Voice >= 256 || g_EmuDsoundApuContextTable == 0 ||
+       IsBadReadPtr((void*)(g_EmuDsoundApuContextTable + 0x30), sizeof(PVOID)))
+    {
+        return NULL;
+    }
+
+    BYTE *VoiceArray = *(BYTE**)(g_EmuDsoundApuContextTable + 0x30);
+    BYTE *State = VoiceArray != NULL ? VoiceArray + Voice * 0x80 : NULL;
+    return State != NULL && !IsBadWritePtr(State, 0x80) ? State : NULL;
+}
+
+static void EmuApuMirrorVoiceMethod(ULONG Method, ULONG Value)
+{
+    BYTE *State = EmuApuGetVoiceState(g_EmuApuSelectedVoice);
+    if(State == NULL)
+    {
+        return;
+    }
+
+    ULONG StateOffset = 0xFFFFFFFF;
+    if(Method >= 0x00020300 && Method <= 0x0002031C)
+    {
+        StateOffset = Method - 0x00020300;
+    }
+    else if(Method >= 0x00020360 && Method <= 0x0002036C)
+    {
+        StateOffset = Method - 0x00020300;
+    }
+    else if(Method >= 0x00020374 && Method <= 0x0002037C)
+    {
+        StateOffset = Method - 0x00020300;
+    }
+    else
+    {
+        switch(Method)
+        {
+            case 0x000203A0: StateOffset = 0x20; break;
+            case 0x000203A4: StateOffset = 0x24; break;
+            case 0x000203D8: StateOffset = 0x58; break;
+            case 0x000203DC: StateOffset = 0x5C; break;
+            default: break;
+        }
+    }
+
+    if(StateOffset == 0xFFFFFFFF)
+    {
+        return;
+    }
+    if(StateOffset == 0x20 || StateOffset == 0x24 ||
+       StateOffset == 0x58 || StateOffset == 0x5C)
+    {
+        ULONG &Field = *(ULONG*)(State + StateOffset);
+        Field = (Field & 0xFF000000) | (Value & 0x00FFFFFF);
+    }
+    else if(StateOffset == 0x7C)
+    {
+        ULONG &Field = *(ULONG*)(State + StateOffset);
+        Field = (Field & 0x0000FFFF) | (Value & 0xFFFF0000);
+    }
+    else
+    {
+        *(ULONG*)(State + StateOffset) = Value;
+    }
+}
+
+static void EmuApuAdvanceSelectedVoice()
+{
+    static DWORD LastTick[256] = {};
+    static unsigned __int64 Remainder[256] = {};
+
+    const ULONG Voice = g_EmuApuSelectedVoice;
+    BYTE *State = EmuApuGetVoiceState(Voice);
+    if(State == NULL)
+    {
+        return;
+    }
+
+    const DWORD Now = GetTickCount();
+    DWORD &Previous = LastTick[Voice];
+    if(Previous == 0)
+    {
+        Previous = Now;
+        return;
+    }
+    const DWORD ElapsedMs = Now - Previous;
+    if(ElapsedMs == 0)
+    {
+        return;
+    }
+    Previous = Now;
+
+    const ULONG VoiceState = *(ULONG*)(State + 0x54);
+    if((VoiceState & 0x00200000) == 0 || (VoiceState & 0x00040000) != 0)
+    {
+        return;
+    }
+
+    const ULONG Format = *(ULONG*)(State + 0x04);
+    const int Pitch = (short)(*(ULONG*)(State + 0x7C) >> 16);
+    const unsigned ContainerBytes[] = { 1, 2, 1, 4 };
+    const ULONG BytesPerSample = ContainerBytes[(Format >> 30) & 3];
+    const ULONG Channels = (Format & 0x08000000) != 0 ? 2 : 1;
+    const double SamplesPerSecond = 48000.0 * pow(2.0, Pitch / 4096.0);
+    const unsigned __int64 BytesPerSecond =
+        (unsigned __int64)(SamplesPerSecond * BytesPerSample * Channels);
+    const unsigned __int64 Numerator =
+        BytesPerSecond * ElapsedMs + Remainder[Voice];
+    ULONG Advance = (ULONG)(Numerator / 1000);
+    Remainder[Voice] = Numerator % 1000;
+    if(Advance == 0)
+    {
+        return;
+    }
+
+    ULONG &OffsetAndLevel = *(ULONG*)(State + 0x58);
+    const ULONG Current = OffsetAndLevel & 0x00FFFFFF;
+    const ULONG LoopStart = *(ULONG*)(State + 0x24) & 0x00FFFFFF;
+    const ULONG End = *(ULONG*)(State + 0x5C) & 0x00FFFFFF;
+    static LONG TraceCount = 0;
+    if(getenv("CXBX_APU_CURSOR_TRACE") != NULL &&
+       InterlockedIncrement(&TraceCount) <= 32)
+    {
+        printf("Emu (0x%lX): APU cursor voice=0x%02lX state=0x%.08lX "
+               "format=0x%.08lX pitch=%d cbo=0x%.06lX lbo=0x%.06lX "
+               "ebo=0x%.06lX advance=0x%lX.\n",
+               GetCurrentThreadId(), Voice, VoiceState, Format, Pitch, Current,
+               LoopStart, End, Advance);
+        fflush(stdout);
+    }
+    if(End < LoopStart)
+    {
+        return;
+    }
+    ULONG Next = Current + Advance;
+    if(End >= LoopStart && Next > End)
+    {
+        if((Format & 0x02000000) != 0)
+        {
+            const ULONG LoopBytes = End - LoopStart + 1;
+            Next = LoopStart + (Next - LoopStart) % LoopBytes;
+        }
+        else
+        {
+            Next = End;
+        }
+    }
+    OffsetAndLevel = (OffsetAndLevel & 0xFF000000) | (Next & 0x00FFFFFF);
+}
+
 static ULONG EmuApuReadRegister32(ULONG Address)
 {
     ULONG Offset = EmuApuOffset(Address);
@@ -940,6 +1100,7 @@ static ULONG EmuApuReadRegister32(ULONG Address)
             break;
 
         case EmuApuVpPioFree:
+            EmuApuAdvanceSelectedVoice();
             Value = EmuApuVpPioFreeQueueEmpty;
             break;
 
@@ -969,11 +1130,6 @@ static const ULONG EmuApuIstsVoiceBit = 0x00000040;      // voice event pending
 // in practice -- steady-state playback shows zero such writes) removes it
 // through a write of the voice number to 0x20128. Record voices commanded
 // off so the voice-event thread completes exactly those.
-static const ULONG EmuApuVpVoiceSelect = 0x000202F8;
-static const ULONG EmuApuVpVoiceOff = 0x00020128;
-static ULONG g_EmuApuSelectedVoice = 0xFFFF;
-static volatile LONG g_EmuApuVoiceOffPending[8];   // 256-bit set
-
 extern "C" int EmuApuConsumeOffPendingVoice(ULONG Voice)
 {
     if(Voice >= 256)
@@ -989,9 +1145,23 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
     {
         g_EmuApuSelectedVoice = Value & 0xFFFF;
     }
+    else if(Offset == EmuApuVpVoiceOn)
+    {
+        BYTE *State = EmuApuGetVoiceState(Value & 0xFFFF);
+        if(State != NULL)
+        {
+            *(ULONG*)(State + 0x54) |= 0x00200000;
+            *(ULONG*)(State + 0x58) &= 0xFF000000;
+        }
+    }
     else if(Offset == EmuApuVpVoiceOff && (Value & 0xFFFF) < 256)
     {
         ULONG Voice = Value & 0xFFFF;
+        BYTE *State = EmuApuGetVoiceState(Voice);
+        if(State != NULL)
+        {
+            *(ULONG*)(State + 0x54) &= ~0x00200000;
+        }
         InterlockedOr(&g_EmuApuVoiceOffPending[Voice >> 5], 1 << (Voice & 31));
         if(EmuMmioTraceEnabled())
         {
@@ -999,6 +1169,10 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
                    GetCurrentThreadId(), Voice);
             fflush(stdout);
         }
+    }
+    else
+    {
+        EmuApuMirrorVoiceMethod(Offset, Value);
     }
 
     if(EmuApuOffset(Address) == EmuApuInterruptStatus)
@@ -10428,7 +10602,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         EmuInstallDsoundApuContextReleasePatch(pXbeHeader);
         EmuInstallDsoundApuDestructorPatch(pXbeHeader);
         EmuInstallXapiRdtscQpcPatch(pXbeHeader);
-        EmuInstallAutoBootLaunchData();
+        EmuInstallAutoBootLaunchData(pXbeHeader);
 
         uint32 dwLibraryVersions = pXbeHeader->dwLibraryVersions;
         uint32 dwHLEEntries      = HLEDataBaseSize/sizeof(HLEData);
@@ -10935,25 +11109,46 @@ static VOID WINAPI EmuNestopiaX13XapiInitProcess()
 
 // Optionally seed the kernel LaunchDataPage so a homebrew emulator auto-boots a
 // ROM instead of stalling at its menu for controller input we can't supply
-// headless. The guest ROM path (e.g. "d:\\nesroms\\Battle.nes", relative to the
-// title's D: = its own directory) comes from the CXBX_AUTOBOOT_ROM environment
-// variable. FCEUltra/z26x/etc. read this in XGetCustomLaunchData via XGetLaunchInfo,
+// headless. The value comes from CXBX_AUTOBOOT_ROM. Emulator frontends commonly
+// expect a filename such as "Battle.nes" and resolve it against their configured
+// ROM directory. FCEUltra/z26x/etc. read this in XGetCustomLaunchData via XGetLaunchInfo,
 // which wants launch type LDT_TITLE (0) plus a CUSTOM_LAUNCH_DATA carrying magic
 // 0xEE456777 and szFilename. Page layout is the XDK's LAUNCH_DATA_PAGE:
-// Header.dwLaunchDataType at +0x000, the 3 KiB LaunchData blob at +0x400;
+// Header.dwLaunchDataType at +0x000, Header.dwTitleId at +0x004, and the 3 KiB
+// LaunchData blob at +0x400. XGetLaunchInfo validates the title ID for LDT_TITLE.
 // CUSTOM_LAUNCH_DATA is { DWORD magic; char szFilename[300]; ... }.
-static void EmuInstallAutoBootLaunchData()
+static void EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader)
 {
     char rom[300] = {0};
-    if(GetEnvironmentVariableA("CXBX_AUTOBOOT_ROM", rom, sizeof(rom)) == 0 || rom[0] == '\0')
+    const DWORD romLength = GetEnvironmentVariableA("CXBX_AUTOBOOT_ROM", rom, sizeof(rom));
+    if(romLength == 0 || romLength >= sizeof(rom) || rom[0] == '\0')
+    {
         return;
+    }
 
-    unsigned char *Page = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if(Page == NULL)
+    if(pXbeHeader->dwCertificateAddr < pXbeHeader->dwBaseAddr)
+    {
         return;
+    }
+    const uint32 certificateOffset =
+        pXbeHeader->dwCertificateAddr - pXbeHeader->dwBaseAddr;
+    if(certificateOffset > pXbeHeader->dwSizeofHeaders ||
+       sizeof(Xbe::Certificate) > pXbeHeader->dwSizeofHeaders - certificateOffset)
+    {
+        return;
+    }
+    const Xbe::Certificate *pCertificate = (Xbe::Certificate*)((uint08*)pXbeHeader +
+                                                                certificateOffset);
+
+    unsigned char *Page = (unsigned char*)EmuAllocateContiguousMemoryHost(0x1000, 0x1000);
+    if(Page == NULL)
+    {
+        return;
+    }
     memset(Page, 0, 0x1000);
 
-    *(uint32*)(Page + 0x000) = 0;                    // Header.dwLaunchDataType = LDT_TITLE
+    *(uint32*)(Page + 0x000) = 0;                       // Header.dwLaunchDataType = LDT_TITLE
+    *(uint32*)(Page + 0x004) = pCertificate->dwTitleId; // Header.dwTitleId
 
     unsigned char *LaunchData = Page + 0x400;
     *(uint32*)(LaunchData + 0x000) = 0xEE456777;     // CUSTOM_LAUNCH_DATA.magic
@@ -10961,8 +11156,9 @@ static void EmuInstallAutoBootLaunchData()
 
     xboxkrnl::LaunchDataPage = (xboxkrnl::DWORD)(uintptr_t)Page;
 
-    printf("Emu (0x%lX): auto-boot launch data installed rom=\"%s\" page=0x%.08lX.\n",
-           GetCurrentThreadId(), rom, (unsigned long)(uintptr_t)Page);
+    printf("Emu (0x%lX): auto-boot launch data installed rom=\"%s\" title=0x%.08lX page=0x%.08lX.\n",
+           GetCurrentThreadId(), rom, (unsigned long)pCertificate->dwTitleId,
+           (unsigned long)(uintptr_t)Page);
     fflush(stdout);
 }
 
@@ -11472,8 +11668,10 @@ static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader)
 // approach as EmuInstallFceultraBootstrap, made title-agnostic.
 static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
 {
-    if(pXbeHeader->dwBaseAddr != 0x00010000)
+    if(pXbeHeader->dwBaseAddr != 0x00010000 || EmuIsNestopiaX13(pXbeHeader))
+    {
         return;
+    }
 
     // XLaunchNewImage wrapper prologue: push ebp / mov ebp,esp / push args / push 1
     const uint08 LaunchWrapperSig[] =
@@ -11633,13 +11831,32 @@ static PVOID WINAPI EmuNestopiaX13GetXapiProcess()
     return XapiProcess;
 }
 
+static VOID WINAPI EmuNestopiaX13D3DDeviceGetCreationParameters(
+    XTL::D3DDEVICE_CREATION_PARAMETERS *pParameters)
+{
+    EmuSwapFS();   // Win2k/XP FS
+
+    if(pParameters != NULL)
+    {
+        ZeroMemory(pParameters, sizeof(*pParameters));
+        pParameters->DeviceType = XTL::D3DDEVTYPE_HAL;
+        pParameters->BehaviorFlags = 0x40;
+    }
+
+    EmuSwapFS();   // XBox FS
+}
+
 static bool EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader)
 {
     if(Address < pXbeHeader->dwBaseAddr)
+    {
         return false;
+    }
 
     if(Address + Count > pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage)
+    {
         return false;
+    }
 
     return memcmp((void*)Address, Bytes, Count) == 0;
 }
@@ -11652,9 +11869,23 @@ static void EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count)
 static bool EmuIsNestopiaX13(Xbe::Header *pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000 || pXbeHeader->dwSizeofImage != 0x00314240)
+    {
         return false;
+    }
 
-    Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
+    if(pXbeHeader->dwCertificateAddr < pXbeHeader->dwBaseAddr)
+    {
+        return false;
+    }
+    const uint32 CertificateOffset =
+        pXbeHeader->dwCertificateAddr - pXbeHeader->dwBaseAddr;
+    if(CertificateOffset > pXbeHeader->dwSizeofHeaders ||
+       sizeof(Xbe::Certificate) > pXbeHeader->dwSizeofHeaders - CertificateOffset)
+    {
+        return false;
+    }
+    const Xbe::Certificate *pCertificate =
+        (const Xbe::Certificate*)((const uint08*)pXbeHeader + CertificateOffset);
 
     return pCertificate->dwTitleId == 0xFFFF0780;
 }
@@ -11662,7 +11893,9 @@ static bool EmuIsNestopiaX13(Xbe::Header *pXbeHeader)
 static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
 {
     if(!EmuIsNestopiaX13(pXbeHeader))
+    {
         return;
+    }
 
     const uint08 XapiThreadStartupBytes[] =
     {
@@ -11705,6 +11938,31 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     {
         0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
         0x50, 0x02, 0x00, 0x00
+    };
+    const uint08 D3DDeviceGetCreationParametersBytes[] =
+    {
+        0x8B, 0x15, 0x48, 0xA0, 0x15, 0x00, 0x8B, 0x44,
+        0x24, 0x04, 0x53, 0x56, 0x33, 0xC9, 0x8B, 0xF0
+    };
+    const uint08 D3DDeviceSetFlickerFilterBytes[] =
+    {
+        0x8B, 0x0D, 0x80, 0x8F, 0x15, 0x00, 0x85, 0xC9,
+        0xA1, 0x48, 0xA0, 0x15, 0x00, 0x56, 0x8B, 0x74
+    };
+    const uint08 D3DDeviceSetSoftDisplayFilterBytes[] =
+    {
+        0x8B, 0x0D, 0x7C, 0x8F, 0x15, 0x00, 0x85, 0xC9,
+        0xA1, 0x48, 0xA0, 0x15, 0x00, 0x56, 0x8B, 0x74
+    };
+    const uint08 D3DDeviceSetRenderStateNotInlineBytes[] =
+    {
+        0x56, 0x8B, 0x74, 0x24, 0x08, 0x83, 0xFE, 0x5C,
+        0x7D, 0x1F, 0x8B, 0x0C, 0xB5, 0xC0, 0x51, 0x1C
+    };
+    const uint08 D3DDeviceSetTextureStageStateNotInlineBytes[] =
+    {
+        0x8B, 0x44, 0x24, 0x08, 0x83, 0xF8, 0x0C, 0x7D,
+        0x2E, 0x8B, 0x4C, 0x24, 0x04, 0xBA, 0x01, 0x00
     };
     const uint08 DSoundApuHeapAllocateAccountingBytes[] =
     {
@@ -11776,6 +12034,13 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     const uint32 XapiAfterBugCheckGuard = 0x0013BB4D;
     const uint32 XapiPerThreadData = 0x0013BB4F;
     const uint32 XapiGlobalDataFallback = 0x0013BB72;
+    const uint32 D3DDeviceGetCreationParameters = 0x0014A7C0;
+    const uint32 D3DDeviceSetFlickerFilter = 0x0014A960;
+    const uint32 D3DDeviceSetSoftDisplayFilter = 0x0014A9B0;
+    const uint32 D3DDeviceSetRenderStateNotInline = 0x0014BF50;
+    const uint32 D3DDeviceSetTextureStageStateNotInline = 0x0014C990;
+    const uint32 D3DDeferredRenderState = 0x00159F20;
+    const uint32 D3DDeferredTextureState = 0x00159BB0;
     const uint32 DSoundApuHeapAllocateAccounting = 0x0017FB26;
     const uint32 DSoundApuHeapFreeAccounting = 0x0017FCA8;
     const uint32 DSoundApuHeapCommitAccounting = 0x0017FA55;
@@ -11839,6 +12104,49 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
         return;
     }
 
+    if(!EmuBytesMatch(D3DDeviceGetCreationParameters,
+                      D3DDeviceGetCreationParametersBytes,
+                      sizeof(D3DDeviceGetCreationParametersBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; "
+               "D3DDevice_GetCreationParameters bytes did not match.\n",
+               GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(D3DDeviceSetFlickerFilter,
+                      D3DDeviceSetFlickerFilterBytes,
+                      sizeof(D3DDeviceSetFlickerFilterBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; "
+               "D3DDevice_SetFlickerFilter bytes did not match.\n",
+               GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(D3DDeviceSetSoftDisplayFilter,
+                      D3DDeviceSetSoftDisplayFilterBytes,
+                      sizeof(D3DDeviceSetSoftDisplayFilterBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; "
+               "D3DDevice_SetSoftDisplayFilter bytes did not match.\n",
+               GetCurrentThreadId());
+        return;
+    }
+
+    if(!EmuBytesMatch(D3DDeviceSetRenderStateNotInline,
+                      D3DDeviceSetRenderStateNotInlineBytes,
+                      sizeof(D3DDeviceSetRenderStateNotInlineBytes), pXbeHeader) ||
+       !EmuBytesMatch(D3DDeviceSetTextureStageStateNotInline,
+                      D3DDeviceSetTextureStageStateNotInlineBytes,
+                      sizeof(D3DDeviceSetTextureStageStateNotInlineBytes), pXbeHeader))
+    {
+        printf("Emu (0x%lX): NestopiaX 1.3 bootstrap skipped; "
+               "D3D deferred-state bytes did not match.\n",
+               GetCurrentThreadId());
+        return;
+    }
+
     for(uint32 i = 0; i < sizeof(XapiFsCallbackPatches) / sizeof(XapiFsCallbackPatches[0]); i++)
     {
         if(!EmuBytesMatch(XapiFsCallbackPatches[i].From, XapiFsCallbackBytes, sizeof(XapiFsCallbackBytes), pXbeHeader))
@@ -11854,6 +12162,16 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13XapiInitProcess\n", GetCurrentThreadId(), XapiInitProcess);
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13XLaunchNewImageA\n", GetCurrentThreadId(), XLaunchNewImageA);
     printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13GetXapiProcess\n", GetCurrentThreadId(), XapiProcessGetter);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuNestopiaX13D3DDeviceGetCreationParameters\n",
+           GetCurrentThreadId(), D3DDeviceGetCreationParameters);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuIDirect3DDevice8_SetFlickerFilter\n",
+           GetCurrentThreadId(), D3DDeviceSetFlickerFilter);
+    printf("Emu (0x%lX): 0x%.08lX -> EmuIDirect3DDevice8_SetSoftDisplayFilter\n",
+           GetCurrentThreadId(), D3DDeviceSetSoftDisplayFilter);
+    printf("Emu (0x%lX): NestopiaX 1.3 D3D deferred render=0x%.08lX "
+           "texture=0x%.08lX.\n",
+           GetCurrentThreadId(), D3DDeferredRenderState,
+           D3DDeferredTextureState);
     printf("Emu (0x%lX): 0x%.08lX -> EmuQueryPerformanceCounter\n", GetCurrentThreadId(), QueryPerformanceCounter);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (skip FS bugcheck guard)\n", GetCurrentThreadId(), XapiBugCheckGuard, XapiAfterBugCheckGuard);
     printf("Emu (0x%lX): 0x%.08lX -> 0x%.08lX (use XAPI global data fallback)\n", GetCurrentThreadId(), XapiPerThreadData, XapiGlobalDataFallback);
@@ -11873,11 +12191,28 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
     EmuInstallWrapper((void*)XapiInitProcess, EmuNestopiaX13XapiInitProcess);
     EmuInstallWrapper((void*)XLaunchNewImageA, EmuNestopiaX13XLaunchNewImageA);
     EmuInstallWrapper((void*)XapiProcessGetter, EmuNestopiaX13GetXapiProcess);
+    EmuInstallWrapper((void*)D3DDeviceGetCreationParameters,
+                      EmuNestopiaX13D3DDeviceGetCreationParameters);
+    EmuInstallWrapper((void*)D3DDeviceSetFlickerFilter,
+                      XTL::EmuIDirect3DDevice8_SetFlickerFilter);
+    EmuInstallWrapper((void*)D3DDeviceSetSoftDisplayFilter,
+                      XTL::EmuIDirect3DDevice8_SetSoftDisplayFilter);
     EmuInstallWrapper((void*)QueryPerformanceCounter, XTL::EmuQueryPerformanceCounter);
     EmuInstallWrapper((void*)XapiBugCheckGuard, (void*)XapiAfterBugCheckGuard);
     EmuInstallWrapper((void*)XapiPerThreadData, (void*)XapiGlobalDataFallback);
     for(uint32 i = 0; i < sizeof(XapiFsCallbackPatches) / sizeof(XapiFsCallbackPatches[0]); i++)
         EmuInstallWrapper((void*)XapiFsCallbackPatches[i].From, (void*)XapiFsCallbackPatches[i].To);
+
+    XTL::EmuD3DDeferredRenderState = (DWORD*)D3DDeferredRenderState;
+    XTL::EmuD3DDeferredTextureState = (DWORD*)D3DDeferredTextureState;
+    for(uint32 i = 0; i < 174 - 92; ++i)
+    {
+        XTL::EmuD3DDeferredRenderState[i] = X_D3DRS_UNK;
+    }
+    for(uint32 i = 0; i < 4 * 32; ++i)
+    {
+        XTL::EmuD3DDeferredTextureState[i] = X_D3DTSS_UNK;
+    }
 
     EmuInstallNestopiaX13DSoundCounters(true);
     EmuWriteBytes(DSoundApuHeapAllocateAccounting, DSoundApuHeapAllocateAccountingPatch,
