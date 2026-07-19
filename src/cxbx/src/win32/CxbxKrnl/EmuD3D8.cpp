@@ -1733,13 +1733,51 @@ static bool EmuD3DCopyReadableRange(const void* source, DWORD bytes,
 // ******************************************************************
 // * func: EmuVerifyResourceIsRegistered
 // ******************************************************************
+// Host-side D3D objects we created (device creates and Register). A non-zero
+// Lock that is NOT one of these belongs to a NATIVE-created Xbox resource
+// whose Lock field holds a guest lock cookie -- treating it as a host
+// interface hands garbage to the host device (silently no-ops under the SEH
+// guards) and the resource renders black.
+static std::vector<void*> g_EmuKnownHostResources;
+
+static void EmuRememberHostResource(void *pHostResource)
+{
+    if(pHostResource == nullptr)
+        return;
+    for(void *known : g_EmuKnownHostResources)
+        if(known == pHostResource)
+            return;
+    g_EmuKnownHostResources.push_back(pHostResource);
+}
+
+static bool EmuIsKnownHostResource(void *pHostResource)
+{
+    for(void *known : g_EmuKnownHostResources)
+        if(known == pHostResource)
+            return true;
+    return false;
+}
+
 static inline void EmuVerifyResourceIsRegistered(XTL::X_D3DResource *pResource)
 {
-    if(pResource->Lock == 0)
+    bool bNeedsRegister = pResource->Lock == 0;
+
+    // A texture-typed resource created by the NATIVE runtime (unmatched
+    // CreateTexture2) carries a full Xbox header and a guest Lock value;
+    // register it so a real host texture backs it.
+    if(!bNeedsRegister &&
+       (pResource->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_TEXTURE &&
+       !EmuIsKnownHostResource((void*)pResource->Lock))
+    {
+        bNeedsRegister = true;
+    }
+
+    if(bNeedsRegister)
     {
         EmuSwapFS();    // XBox FS;
         XTL::EmuIDirect3DResource8_Register(pResource, 0/*(PVOID)pResource->Data*/);
         EmuSwapFS();    // Win2k/XP FS
+        EmuRememberHostResource((void*)pResource->Lock);
     }
 }
 
@@ -3987,12 +4025,21 @@ static void EmuD3DPerfFrameBoundary(void)
 // Called at the top of every guest draw wrapper. Assigns the draw its
 // per-frame index, traces/marks it, and returns false when the draw falls
 // inside the CXBX_D3D_SKIP_DRAWS bisection range (the caller must skip it).
+static void EmuFlushBoundHostTextureLocks();
+static void EmuTraceBoundTextureAtDraw();
+
 static bool EmuD3DDrawGate(const char* what, DWORD pcPrimitiveType,
                            DWORD primitiveCount)
 {
     static int s_SkipEnabled = -1;
     static DWORD s_SkipBegin = 0, s_SkipEnd = 0;
     static int s_TraceEnabled = -1;
+
+    // Xbox texture locks expose unified memory and do not require a matching
+    // UnlockRect call. Host D3D8 does, so commit every bound texture before
+    // the guest submits a draw, even when it bound the texture only once.
+    EmuFlushBoundHostTextureLocks();
+    EmuTraceBoundTextureAtDraw();
 
     const DWORD index = g_D3DDebugDrawIndex++;
 
@@ -4755,15 +4802,47 @@ static bool EmuXboxFormatIsSwizzled(DWORD XboxFormat, DWORD *pdwBPP)
     return false;
 }
 
+static bool EmuXboxFormatIsLinear(DWORD xboxFormat, DWORD* bytesPerPixel)
+{
+    switch(xboxFormat)
+    {
+        case 0x11: // LIN_R5G6B5
+        case 0x17: // LIN_G8B8
+        case 0x20: // LIN_A8L8
+        {
+            *bytesPerPixel = 2;
+            return true;
+        }
+        case 0x12: // LIN_A8R8G8B8
+        {
+            *bytesPerPixel = 4;
+            return true;
+        }
+        case 0x13: // LIN_L8
+        {
+            *bytesPerPixel = 1;
+            return true;
+        }
+        default:
+        {
+            return false;
+        }
+    }
+}
+
 static EmuSwizzledTextureInfo *EmuFindSwizzledTexture(
     XTL::IDirect3DBaseTexture8 *pHostTexture)
 {
     if(pHostTexture == nullptr)
+    {
         return nullptr;
+    }
     for(auto &info : g_EmuSwizzledTextures)
     {
         if(info.pHostTexture == pHostTexture)
+        {
             return &info;
+        }
     }
     return nullptr;
 }
@@ -4775,7 +4854,9 @@ static void EmuDiscardSwizzledTexture(XTL::IDirect3DBaseTexture8 *pHostTexture)
         if(it->pHostTexture == pHostTexture)
         {
             if(it->pGuestData != nullptr)
+            {
                 _aligned_free(it->pGuestData);
+            }
             g_EmuSwizzledTextures.erase(it);
             return;
         }
@@ -4788,6 +4869,163 @@ static bool EmuD3DTexTraceEnabled()
     if(s_Enabled < 0)
         s_Enabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
     return s_Enabled == 1;
+}
+
+// LINEAR texture metadata serves two purposes: registered resources with guest
+// backing need a fresh upload, while host-created linear textures still need
+// texel-space coordinate normalization when sampled.
+struct EmuLinearTextureRefresh
+{
+    XTL::IDirect3DBaseTexture8 *pHostTexture;
+    const BYTE *pGuestData;
+    DWORD dwPitch;
+    DWORD dwWidth;
+    DWORD dwHeight;
+    DWORD dwBPP;
+};
+
+static std::vector<EmuLinearTextureRefresh> g_EmuLinearTextureRefreshes;
+
+static void EmuTrackLinearTexture(XTL::IDirect3DBaseTexture8 *pHostTexture,
+                                  const BYTE *pGuestData, DWORD dwPitch,
+                                  DWORD dwWidth, DWORD dwHeight, DWORD dwBPP)
+{
+    if(pHostTexture == nullptr)
+    {
+        return;
+    }
+    for(auto &entry : g_EmuLinearTextureRefreshes)
+    {
+        if(entry.pHostTexture == pHostTexture)
+        {
+            entry = { pHostTexture, pGuestData, dwPitch, dwWidth, dwHeight, dwBPP };
+            return;
+        }
+    }
+    g_EmuLinearTextureRefreshes.push_back(
+        { pHostTexture, pGuestData, dwPitch, dwWidth, dwHeight, dwBPP });
+
+    if(EmuD3DTexTraceEnabled())
+    {
+        printf("TEX| linear-track host=0x%p guest=0x%p pitch=%lu %lux%lu bpp=%lu\n",
+               pHostTexture, pGuestData, dwPitch, dwWidth, dwHeight, dwBPP);
+        fflush(stdout);
+    }
+}
+
+static void EmuDiscardLinearTexture(XTL::IDirect3DBaseTexture8 *pHostTexture)
+{
+    for(auto it = g_EmuLinearTextureRefreshes.begin();
+        it != g_EmuLinearTextureRefreshes.end(); ++it)
+    {
+        if(it->pHostTexture == pHostTexture)
+        {
+            g_EmuLinearTextureRefreshes.erase(it);
+            return;
+        }
+    }
+}
+
+static void EmuCopyLinearTexture(XTL::IDirect3DTexture8 *pTexture,
+                                 const BYTE *pGuestData, DWORD dwPitch,
+                                 DWORD dwWidth, DWORD dwHeight, DWORD dwBPP)
+{
+    XTL::D3DLOCKED_RECT lock;
+    __try
+    {
+        if(FAILED(pTexture->LockRect(0, &lock, NULL, 0)))
+            return;
+
+        const DWORD rowBytes = dwWidth * dwBPP;
+        BYTE *destination = static_cast<BYTE *>(lock.pBits);
+        const BYTE *source = pGuestData;
+        for(DWORD y = 0; y < dwHeight; y++)
+        {
+            memcpy(destination, source, rowBytes);
+            destination += lock.Pitch;
+            source += dwPitch;
+        }
+        pTexture->UnlockRect(0);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static void EmuRefreshLinearTexture(XTL::IDirect3DBaseTexture8 *pBaseTexture)
+{
+    if(pBaseTexture == nullptr)
+    {
+        return;
+    }
+
+    for(size_t i = 0; i < g_EmuLinearTextureRefreshes.size(); i++)
+    {
+        const EmuLinearTextureRefresh &entry = g_EmuLinearTextureRefreshes[i];
+        if(entry.pHostTexture != pBaseTexture)
+        {
+            continue;
+        }
+
+        if(entry.pGuestData != nullptr &&
+           !IsBadReadPtr(entry.pGuestData,
+                         (size_t)entry.dwPitch * entry.dwHeight))
+        {
+            EmuCopyLinearTexture(static_cast<XTL::IDirect3DTexture8 *>(pBaseTexture),
+                                 entry.pGuestData, entry.dwPitch,
+                                 entry.dwWidth, entry.dwHeight, entry.dwBPP);
+        }
+        return;
+    }
+}
+
+static void EmuConfigureLinearTextureCoordinates(
+    DWORD stage, XTL::IDirect3DBaseTexture8* baseTexture)
+{
+    static bool linearStages[4] = {};
+    if(stage >= 4 || g_pD3DDevice8 == nullptr)
+    {
+        return;
+    }
+
+    const EmuLinearTextureRefresh* linearTexture = nullptr;
+    for(const auto& entry : g_EmuLinearTextureRefreshes)
+    {
+        if(entry.pHostTexture == baseTexture)
+        {
+            linearTexture = &entry;
+            break;
+        }
+    }
+
+    if(linearTexture == nullptr && !linearStages[stage])
+    {
+        return;
+    }
+
+    XTL::D3DMATRIX transform = {};
+    transform.m[0][0] = 1.0f;
+    transform.m[1][1] = 1.0f;
+    transform.m[2][2] = 1.0f;
+    transform.m[3][3] = 1.0f;
+    DWORD flags = XTL::D3DTTFF_DISABLE;
+    if(linearTexture != nullptr && linearTexture->dwWidth != 0 &&
+       linearTexture->dwHeight != 0)
+    {
+        transform.m[0][0] = 1.0f / static_cast<float>(linearTexture->dwWidth);
+        transform.m[1][1] = 1.0f / static_cast<float>(linearTexture->dwHeight);
+        flags = XTL::D3DTTFF_COUNT2;
+        linearStages[stage] = true;
+    }
+    else
+    {
+        linearStages[stage] = false;
+    }
+
+    g_pD3DDevice8->SetTransform(
+        static_cast<XTL::D3DTRANSFORMSTATETYPE>(16 + stage), &transform);
+    g_pD3DDevice8->SetTextureStageState(
+        stage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS, flags);
 }
 
 // Titles (guest D3DX in particular) also upload swizzled texels through
@@ -5107,6 +5345,17 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
                 {(*ppTexture)->EmuTexture8, dwSwizzledBPP, 0, {},
                  pGuestData, dwGuestSize, Width, Height, false, false});
         }
+
+        DWORD linearBPP = 0;
+        if(SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
+           EmuXboxFormatIsLinear(static_cast<DWORD>(Format), &linearBPP))
+        {
+            EmuTrackLinearTexture((*ppTexture)->EmuTexture8, nullptr,
+                                  Width * linearBPP, Width, Height, linearBPP);
+        }
+
+        if(SUCCEEDED(hRet))
+            EmuRememberHostResource((*ppTexture)->EmuTexture8);
 
         if(EmuD3DTexTraceEnabled())
         {
@@ -5660,6 +5909,17 @@ static void EmuFlushHostTextureLocks(XTL::IDirect3DBaseTexture8* baseTexture)
     }
 }
 
+static constexpr DWORD EmuXboxTextureStageCount = 4;
+static XTL::IDirect3DBaseTexture8 *g_EmuBoundHostTextures[EmuXboxTextureStageCount] = {};
+
+static void EmuFlushBoundHostTextureLocks()
+{
+    for(DWORD stage = 0; stage < EmuXboxTextureStageCount; ++stage)
+    {
+        EmuFlushHostTextureLocks(g_EmuBoundHostTextures[stage]);
+    }
+}
+
 static bool EmuHostTextureHasData(XTL::IDirect3DBaseTexture8* baseTexture)
 {
     if(baseTexture == nullptr || baseTexture->GetType() != XTL::D3DRTYPE_TEXTURE)
@@ -5724,6 +5984,117 @@ static bool EmuHostTextureHasData(XTL::IDirect3DBaseTexture8* baseTexture)
     return hasData;
 }
 
+static void EmuTraceBoundTextureAtDraw()
+{
+    static int traceEnabled = -1;
+    static DWORD traceCount = 0;
+    static bool stateTraced = false;
+    if(traceEnabled < 0)
+    {
+        traceEnabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
+    }
+    if(traceEnabled != 1 || traceCount >= 16)
+    {
+        return;
+    }
+
+    XTL::IDirect3DBaseTexture8* texture = g_EmuBoundHostTextures[0];
+    const bool hasData = EmuHostTextureHasData(texture);
+    printf("TEX| draw-bind frame=%lu stage=0 host=0x%.08lX has_data=%d\n",
+           static_cast<unsigned long>(g_D3DDebugFrame),
+           reinterpret_cast<unsigned long>(texture),
+           hasData ? 1 : 0);
+    ++traceCount;
+
+    if(!hasData || stateTraced || g_pD3DDevice8 == nullptr)
+    {
+        return;
+    }
+    stateTraced = true;
+
+    DWORD lighting = 0;
+    DWORD cullMode = 0;
+    DWORD zEnable = 0;
+    DWORD colorOp = 0;
+    DWORD colorArg1 = 0;
+    DWORD colorArg2 = 0;
+    DWORD alphaOp = 0;
+    DWORD texCoordIndex = 0;
+    XTL::D3DVIEWPORT8 viewport = {};
+    XTL::D3DMATRIX world = {};
+    XTL::D3DMATRIX view = {};
+    XTL::D3DMATRIX projection = {};
+    g_pD3DDevice8->GetRenderState(XTL::D3DRS_LIGHTING, &lighting);
+    g_pD3DDevice8->GetRenderState(XTL::D3DRS_CULLMODE, &cullMode);
+    g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZENABLE, &zEnable);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLOROP, &colorOp);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLORARG1, &colorArg1);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLORARG2, &colorArg2);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_ALPHAOP, &alphaOp);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_TEXCOORDINDEX,
+                                        &texCoordIndex);
+    g_pD3DDevice8->GetViewport(&viewport);
+    g_pD3DDevice8->GetTransform(
+        static_cast<XTL::D3DTRANSFORMSTATETYPE>(256), &world);
+    g_pD3DDevice8->GetTransform(XTL::D3DTS_VIEW, &view);
+    g_pD3DDevice8->GetTransform(XTL::D3DTS_PROJECTION, &projection);
+    printf("TEX| draw-state lighting=%lu cull=%lu z=%lu color=%lu/%lu/%lu "
+           "alpha=%lu texcoord=%lu viewport=%lu,%lu %lux%lu depth=%g:%g\n",
+           static_cast<unsigned long>(lighting),
+           static_cast<unsigned long>(cullMode),
+           static_cast<unsigned long>(zEnable),
+           static_cast<unsigned long>(colorOp),
+           static_cast<unsigned long>(colorArg1),
+           static_cast<unsigned long>(colorArg2),
+           static_cast<unsigned long>(alphaOp),
+           static_cast<unsigned long>(texCoordIndex),
+           static_cast<unsigned long>(viewport.X),
+           static_cast<unsigned long>(viewport.Y),
+           static_cast<unsigned long>(viewport.Width),
+           static_cast<unsigned long>(viewport.Height), viewport.MinZ,
+           viewport.MaxZ);
+    printf("TEX| draw-transform world_diag=%g,%g,%g,%g view_t=%g,%g,%g "
+           "projection_diag=%g,%g,%g,%g\n",
+           world.m[0][0], world.m[1][1], world.m[2][2], world.m[3][3],
+           view.m[3][0], view.m[3][1], view.m[3][2], projection.m[0][0],
+           projection.m[1][1], projection.m[2][2], projection.m[3][3]);
+
+    XTL::IDirect3DVertexBuffer8* vertexBuffer = nullptr;
+    UINT stride = 0;
+    if(SUCCEEDED(g_pD3DDevice8->GetStreamSource(0, &vertexBuffer, &stride)) &&
+       vertexBuffer != nullptr)
+    {
+        BYTE* bytes = nullptr;
+        if(stride >= 24 && SUCCEEDED(vertexBuffer->Lock(0, stride * 4, &bytes,
+                                                        D3DLOCK_READONLY)) &&
+           bytes != nullptr)
+        {
+            for(UINT vertex = 0; vertex < 4; ++vertex)
+            {
+                const BYTE* source = bytes + vertex * stride;
+                float x = 0.0f;
+                float y = 0.0f;
+                float z = 0.0f;
+                float u = 0.0f;
+                float v = 0.0f;
+                DWORD color = 0;
+                memcpy(&x, source, sizeof(x));
+                memcpy(&y, source + 4, sizeof(y));
+                memcpy(&z, source + 8, sizeof(z));
+                memcpy(&color, source + 12, sizeof(color));
+                memcpy(&u, source + 16, sizeof(u));
+                memcpy(&v, source + 20, sizeof(v));
+                printf("TEX| draw-vertex index=%u xyz=%g,%g,%g color=0x%.08lX "
+                       "uv=%g,%g stride=%u\n",
+                       vertex, x, y, z, static_cast<unsigned long>(color), u,
+                       v, stride);
+            }
+            vertexBuffer->Unlock();
+        }
+        vertexBuffer->Release();
+    }
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetTexture
 // ******************************************************************
@@ -5782,6 +6153,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     // guest Unlock call. End any host lock before sampling the resource.
     EmuFlushHostTextureLocks(pBaseTexture8);
 
+    // Linear textures stream from live guest memory; re-upload current pixels.
+    EmuRefreshLinearTexture(pBaseTexture8);
+    EmuConfigureLinearTextureCoordinates(Stage, pBaseTexture8);
+
     HRESULT hRet = D3D_OK;
     __try
     {
@@ -5790,6 +6165,25 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
         hRet = D3D_OK;
+    }
+
+    if(Stage < EmuXboxTextureStageCount)
+    {
+        g_EmuBoundHostTextures[Stage] = pBaseTexture8;
+    }
+
+    static int traceEnabled = -1;
+    if(traceEnabled < 0)
+    {
+        traceEnabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
+    }
+    if(traceEnabled == 1)
+    {
+        printf("TEX| bind stage=%lu guest=0x%.08lX host=0x%.08lX result=0x%.08lX\n",
+               static_cast<unsigned long>(Stage),
+               reinterpret_cast<unsigned long>(pTexture),
+               reinterpret_cast<unsigned long>(pBaseTexture8),
+               static_cast<unsigned long>(hRet));
     }
 
     EmuSwapFS();   // XBox FS
@@ -7118,6 +7512,8 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
             if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
             {
                 hRet = g_pD3DDevice8->CreateImageSurface(dwWidth, dwHeight, Format, &pResource->EmuSurface8);
+                if(SUCCEEDED(hRet))
+                    EmuRememberHostResource(pResource->EmuSurface8);
             }
             else
             {
@@ -7153,6 +7549,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                     D3DPOOL_MANAGED, &pResource->EmuTexture8
                 );
 
+                if(SUCCEEDED(hRet))
+                    EmuRememberHostResource(pResource->EmuTexture8);
+
                 if(FAILED(hRet))
                 {
                     EmuWarning("Resource_Register: CreateTexture(%lu, %lu, %lu, format=0x%.08lX) failed (0x%.08lX); using a blank placeholder",
@@ -7177,6 +7576,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                                    hRet);
                         break;
                     }
+                    EmuRememberHostResource(pResource->EmuTexture8);
 
                     dwWidth = 4;
                     dwHeight = 4;
@@ -7276,6 +7676,20 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                         pDest += LockedRect.Pitch;
                         pSrc  += dwPitch;
                     }
+                }
+
+                // Linear textures keep a live guest backing the title streams
+                // into per frame (e.g. an emulator core's framebuffer); track
+                // the source so SetTexture re-uploads current pixels on bind.
+                if(dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
+                   pResource->EmuTexture8 != NULL)
+                {
+                    const BYTE *LiveSource = copiedSource
+                        ? reinterpret_cast<const BYTE *>(pBase)
+                        : reinterpret_cast<const BYTE *>(dwUnmaskedDataAddress);
+                    EmuTrackLinearTexture(pResource->EmuTexture8, LiveSource,
+                                          dwPitch, dwSourceWidth, dwSourceHeight,
+                                          dwBPP);
                 }
             }
 
@@ -7546,6 +7960,8 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
                 EmuDiscardCreatedIndexBuffer(static_cast<X_D3DIndexBuffer*>(pThis));
             }
             EmuDiscardSwizzledTexture(
+                reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
+            EmuDiscardLinearTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
             delete pThis;
         }
@@ -12108,21 +12524,41 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
     // Host d3d8 throws when bound state is invalid (e.g. null texture from an
     // unresolved archive path, or an incompatible vertex format). Guard so the
     // throw is caught locally rather than escaping the FS content-swap.
+    HRESULT hRet = D3D_OK;
     __try
     {
-        g_pD3DDevice8->DrawPrimitive(
+        hRet = g_pD3DDevice8->DrawPrimitive(
             PCPrimitiveType,
             StartVertex,
             PrimitiveCount);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
+        hRet = D3DERR_INVALIDCALL;
         static LONG s_DrawGuardCount = 0;
         if(InterlockedIncrement(&s_DrawGuardCount) <= 3)
+        {
             EmuWarning("DrawVertices: host d3d8 threw during DrawPrimitive (caught)");
+        }
     }
 
-    EmuD3DDrawPost();
+    if(FAILED(hRet))
+    {
+        static LONG warningCount = 0;
+        if(InterlockedIncrement(&warningCount) <= 5)
+        {
+            printf("EmuD3D8: DrawVertices failed (0x%.08lX) prim=%lu "
+                   "start=%u primCount=%u.\n",
+                   static_cast<unsigned long>(hRet),
+                   static_cast<unsigned long>(PCPrimitiveType), StartVertex,
+                   PrimitiveCount);
+            EmuWarning("DrawVertices failed (0x%.08X)", hRet);
+        }
+    }
+    else
+    {
+        EmuD3DDrawPost();
+    }
 
     // TODO: use original stride here (duh!)
     if(PrimitiveType == 8) // Quad List
