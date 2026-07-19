@@ -5401,6 +5401,7 @@ extern "C" void EmuAciStartDmaThread()
 // Track pending timers and re-fire each DPC once its due time arrives; the
 // immediate fire is kept for compatibility with titles tuned to it.
 extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemArgument1, PVOID SystemArgument2);
+extern "C" void EmuDsoundSingletonKeepAlive();   // Emu.cpp: DSOUND core keep-alive
 
 struct EmuPendingTimerDpc
 {
@@ -5481,6 +5482,8 @@ static DWORD WINAPI EmuTimerDpcThread(LPVOID)
     {
         Sleep(10);
 
+
+        EmuDsoundSingletonKeepAlive();   // keep the guest DSOUND core a singleton
         ULONGLONG Now = EmuCurrentFileTime();
         xboxkrnl::PKTIMER FireTimer = NULL;
         xboxkrnl::PKDPC FireDpc = NULL;
