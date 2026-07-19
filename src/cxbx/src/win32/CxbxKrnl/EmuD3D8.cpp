@@ -4705,6 +4705,17 @@ struct EmuSwizzledTextureInfo
     DWORD dwBPP;
     DWORD dwDirtyLevels; // bitmask of levels with pending Morton-order writes
     EmuSwizzledTextureLevelLock Levels[EMU_SWIZZLED_TEXTURE_MAX_LEVELS];
+
+    // Guest-visible Morton-order backing (X_D3DResource::Data). Titles with a
+    // native D3DX/XGraphics upload path write texels straight through the
+    // resource's Data pointer, never calling a LockRect wrapper; the block is
+    // unswizzled into the host texture at bind time.
+    BYTE *pGuestData;
+    DWORD dwGuestSize;
+    DWORD dwWidth;
+    DWORD dwHeight;
+    bool bLockPathUsed;   // a LockRect wrapper wrote this texture: trust it
+    bool bGuestCommitted; // the one-shot Data-pointer upload already ran
 };
 
 static std::vector<EmuSwizzledTextureInfo> g_EmuSwizzledTextures;
@@ -4749,18 +4760,115 @@ static void EmuDiscardSwizzledTexture(XTL::IDirect3DBaseTexture8 *pHostTexture)
     {
         if(it->pHostTexture == pHostTexture)
         {
+            if(it->pGuestData != nullptr)
+                _aligned_free(it->pGuestData);
             g_EmuSwizzledTextures.erase(it);
             return;
         }
     }
 }
 
+static bool EmuD3DTexTraceEnabled()
+{
+    static int s_Enabled = -1;
+    if(s_Enabled < 0)
+        s_Enabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
+    return s_Enabled == 1;
+}
+
+// Titles (guest D3DX in particular) also upload swizzled texels through
+// GetSurfaceLevel + Surface::LockRect, which bypasses the texture-lock
+// tracking above. Remember which host surfaces belong to a tracked swizzled
+// texture so the surface-lock path can mark the level dirty too.
+struct EmuSwizzledSurfaceLink
+{
+    XTL::IDirect3DSurface8 *pHostSurface;
+    XTL::IDirect3DBaseTexture8 *pHostTexture;
+    DWORD dwLevel;
+};
+
+static std::vector<EmuSwizzledSurfaceLink> g_EmuSwizzledSurfaceLinks;
+
+static void EmuLinkSwizzledSurface(XTL::IDirect3DSurface8 *pHostSurface,
+                                   XTL::IDirect3DBaseTexture8 *pHostTexture,
+                                   DWORD dwLevel)
+{
+    if(pHostSurface == nullptr || pHostTexture == nullptr)
+        return;
+    for(auto &link : g_EmuSwizzledSurfaceLinks)
+    {
+        if(link.pHostSurface == pHostSurface)
+        {
+            link.pHostTexture = pHostTexture;
+            link.dwLevel = dwLevel;
+            return;
+        }
+    }
+    g_EmuSwizzledSurfaceLinks.push_back({pHostSurface, pHostTexture, dwLevel});
+}
+
+static const EmuSwizzledSurfaceLink *EmuFindSwizzledSurfaceLink(
+    XTL::IDirect3DSurface8 *pHostSurface)
+{
+    if(pHostSurface == nullptr)
+        return nullptr;
+    for(const auto &link : g_EmuSwizzledSurfaceLinks)
+    {
+        if(link.pHostSurface == pHostSurface)
+            return &link;
+    }
+    return nullptr;
+}
+
 // Unswizzle every dirty level in place, while the host lock that received the
 // title's Morton-order write is still held.
+// One-shot upload of the guest's Data-pointer Morton block into host level 0,
+// for textures whose texels arrived through the resource Data pointer (native
+// guest D3DX / XGraphics) rather than a LockRect wrapper.
+static void EmuCommitGuestSwizzledData(EmuSwizzledTextureInfo *info)
+{
+    if(info->pGuestData == nullptr || info->bGuestCommitted || info->bLockPathUsed)
+        return;
+
+    auto *texture = static_cast<XTL::IDirect3DTexture8 *>(info->pHostTexture);
+    XTL::D3DLOCKED_RECT lock;
+    __try
+    {
+        if(FAILED(texture->LockRect(0, &lock, NULL, 0)))
+            return;
+
+        RECT sourceRect = {0, 0, 0, 0};
+        POINT destinationPoint = {0, 0};
+        XTL::EmuXGUnswizzleRect(info->pGuestData, info->dwWidth, info->dwHeight, 1,
+                                lock.pBits, lock.Pitch, sourceRect,
+                                destinationPoint, info->dwBPP);
+        texture->UnlockRect(0);
+        info->bGuestCommitted = true;
+
+        if(EmuD3DTexTraceEnabled())
+        {
+            printf("TEX| commit guest-data host=0x%.08lX %lux%lu bpp=%lu data=0x%.08lX\n",
+                   reinterpret_cast<unsigned long>(info->pHostTexture),
+                   static_cast<unsigned long>(info->dwWidth),
+                   static_cast<unsigned long>(info->dwHeight),
+                   static_cast<unsigned long>(info->dwBPP),
+                   reinterpret_cast<unsigned long>(info->pGuestData));
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
 static void EmuCommitSwizzledTexture(XTL::IDirect3DBaseTexture8 *pBaseTexture)
 {
     EmuSwizzledTextureInfo *info = EmuFindSwizzledTexture(pBaseTexture);
-    if(info == nullptr || info->dwDirtyLevels == 0)
+    if(info == nullptr)
+        return;
+
+    EmuCommitGuestSwizzledData(info);
+
+    if(info->dwDirtyLevels == 0)
         return;
 
     auto *texture = static_cast<XTL::IDirect3DTexture8 *>(info->pHostTexture);
@@ -4797,6 +4905,28 @@ static void EmuCommitSwizzledTexture(XTL::IDirect3DBaseTexture8 *pBaseTexture)
         XTL::EmuXGUnswizzleRect(morton.data(), width, height, 1, lock.pBits,
                                 lock.Pitch, sourceRect, destinationPoint,
                                 info->dwBPP);
+
+        if(EmuD3DTexTraceEnabled())
+        {
+            printf("TEX| commit swizzled host=0x%.08lX level=%lu %lux%lu pitch=%ld rowBytes=%lu bpp=%lu\n",
+                   reinterpret_cast<unsigned long>(info->pHostTexture),
+                   static_cast<unsigned long>(level),
+                   static_cast<unsigned long>(width), static_cast<unsigned long>(height),
+                   static_cast<long>(lock.Pitch), static_cast<unsigned long>(rowBytes),
+                   static_cast<unsigned long>(info->dwBPP));
+
+            char tempDir[MAX_PATH];
+            char path[MAX_PATH];
+            if(info->dwBPP == 4 && GetTempPathA(MAX_PATH, tempDir) != 0)
+            {
+                CreateDirectoryA((std::string(tempDir) + "cxbx_tex").c_str(), NULL);
+                sprintf(path, "%scxbx_tex\\swz_%08lX_L%lu.bmp", tempDir,
+                        reinterpret_cast<unsigned long>(info->pHostTexture),
+                        static_cast<unsigned long>(level));
+                EmuD3DWriteBmp(path, width, height, lock.Pitch, lock.pBits,
+                               XTL::D3DFMT_A8R8G8B8);
+            }
+        }
     }
 
     info->dwDirtyLevels = 0;
@@ -4915,11 +5045,62 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
             printf("*Warning* CreateTexture FAILED\n");
 
         DWORD dwSwizzledBPP = 0;
-        if(SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
-           EmuXboxFormatIsSwizzled(static_cast<DWORD>(Format), &dwSwizzledBPP))
+        const bool bSwizzled =
+            SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
+            EmuXboxFormatIsSwizzled(static_cast<DWORD>(Format), &dwSwizzledBPP);
+        if(bSwizzled)
         {
+            // Build a guest-visible Xbox texture header. A title's native
+            // D3DX/XGraphics upload reads the dimensions from Format and
+            // writes its Morton-order texels through Data without any
+            // LockRect; leaving these fields zero silently discards every
+            // skin/menu image such a title loads (NestopiaX 1.3).
+            DWORD dwLog2W = 0, dwLog2H = 0;
+            while((1u << dwLog2W) < Width)  dwLog2W++;
+            while((1u << dwLog2H) < Height) dwLog2H++;
+
+            DWORD dwLevelCount = Levels;
+            if(dwLevelCount == 0)
+            {
+                dwLevelCount = 1;
+                while((Width >> dwLevelCount) > 0 || (Height >> dwLevelCount) > 0)
+                    dwLevelCount++;
+            }
+
+            DWORD dwGuestSize = 0;
+            for(DWORD level = 0; level < dwLevelCount; ++level)
+            {
+                const DWORD w = max(1u, Width >> level);
+                const DWORD h = max(1u, Height >> level);
+                dwGuestSize += w * h * dwSwizzledBPP;
+            }
+
+            BYTE *pGuestData = static_cast<BYTE *>(_aligned_malloc(dwGuestSize, 128));
+            if(pGuestData != NULL)
+                ZeroMemory(pGuestData, dwGuestSize);
+
+            (*ppTexture)->Common = X_D3DCOMMON_TYPE_TEXTURE | X_D3DCOMMON_D3DCREATED | 1;
+            (*ppTexture)->Data = reinterpret_cast<DWORD>(pGuestData);
+            (*ppTexture)->Format =
+                X_D3DFORMAT_DMACHANNEL_A | (2u << X_D3DFORMAT_DIMENSION_SHIFT) |
+                ((static_cast<DWORD>(Format) & 0xFF) << X_D3DFORMAT_FORMAT_SHIFT) |
+                (dwLevelCount << X_D3DFORMAT_MIPMAP_SHIFT) |
+                (dwLog2W << X_D3DFORMAT_USIZE_SHIFT) |
+                (dwLog2H << X_D3DFORMAT_VSIZE_SHIFT);
+            (*ppTexture)->Size = 0;   // power-of-2 swizzled: dims live in Format
+
             g_EmuSwizzledTextures.push_back(
-                {(*ppTexture)->EmuTexture8, dwSwizzledBPP, 0, {}});
+                {(*ppTexture)->EmuTexture8, dwSwizzledBPP, 0, {},
+                 pGuestData, dwGuestSize, Width, Height, false, false});
+        }
+
+        if(EmuD3DTexTraceEnabled())
+        {
+            printf("TEX| create host=0x%.08lX %ux%u levels=%u xfmt=0x%02lX swizzled=%d status=0x%.08lX\n",
+                   reinterpret_cast<unsigned long>(
+                       SUCCEEDED(hRet) ? (*ppTexture)->EmuTexture8 : NULL),
+                   Width, Height, Levels, static_cast<unsigned long>(Format),
+                   bSwizzled ? 1 : 0, static_cast<unsigned long>(hRet));
         }
     }
     else
@@ -7630,10 +7811,39 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
             {
                 EmuFlushTiledSurfaceLock(pThis);
 
+                const EmuSwizzledSurfaceLink *pLink = EmuFindSwizzledSurfaceLink(pSurface8);
+
+                // Commit any pending Morton-order write before re-locking.
+                if(pLink != nullptr)
+                    EmuCommitSwizzledTexture(pLink->pHostTexture);
+
                 // Remove old lock(s)
                 pSurface8->UnlockRect();
 
                 hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+
+                // A writable full lock of a swizzled texture level receives the
+                // title's Morton-order texels; mark it for unswizzling exactly
+                // like the texture-lock path.
+                if(SUCCEEDED(hRet) && pLink != nullptr && pRect == NULL &&
+                   (NewFlags & D3DLOCK_READONLY) == 0)
+                {
+                    EmuSwizzledTextureInfo *pSwizzled =
+                        EmuFindSwizzledTexture(pLink->pHostTexture);
+                    if(pSwizzled != nullptr &&
+                       pLink->dwLevel < EMU_SWIZZLED_TEXTURE_MAX_LEVELS)
+                    {
+                        pSwizzled->dwDirtyLevels |= 1u << pLink->dwLevel;
+                        pSwizzled->bLockPathUsed = true;
+                        pSwizzled->Levels[pLink->dwLevel].pBits = pLockedRect->pBits;
+                        pSwizzled->Levels[pLink->dwLevel].Pitch = pLockedRect->Pitch;
+                        if(EmuD3DTexTraceEnabled())
+                            printf("TEX| surface-lock dirty host_tex=0x%.08lX level=%lu pitch=%ld\n",
+                                   reinterpret_cast<unsigned long>(pLink->pHostTexture),
+                                   static_cast<unsigned long>(pLink->dwLevel),
+                                   static_cast<long>(pLockedRect->Pitch));
+                    }
+                }
             }
             __except(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -7788,6 +7998,7 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_LockRect
         if(pSwizzled != NULL && Level < EMU_SWIZZLED_TEXTURE_MAX_LEVELS)
         {
             pSwizzled->dwDirtyLevels |= 1u << Level;
+            pSwizzled->bLockPathUsed = true;
             pSwizzled->Levels[Level].pBits = pLockedRect->pBits;
             pSwizzled->Levels[Level].Pitch = pLockedRect->Pitch;
         }
@@ -7844,6 +8055,39 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel
         *ppSurfaceLevel = new X_D3DSurface();
 
         hRet = pTexture8->GetSurfaceLevel(Level, &((*ppSurfaceLevel)->EmuSurface8));
+
+        // Surface writes to a swizzled texture level must trigger the same
+        // Morton-order commit as texture locks; remember the association.
+        const EmuSwizzledTextureInfo *pSwizzled = EmuFindSwizzledTexture(pTexture8);
+        if(SUCCEEDED(hRet) && pSwizzled != nullptr)
+        {
+            EmuLinkSwizzledSurface((*ppSurfaceLevel)->EmuSurface8, pTexture8, Level);
+
+            // Give the surface the same guest-visible header a native upload
+            // path (guest D3DX) expects: the parent's format and the level's
+            // Morton block inside the parent's Data allocation.
+            DWORD dwLevelOffset = 0;
+            for(DWORD level = 0; level < Level; ++level)
+            {
+                const DWORD w = max(1u, pSwizzled->dwWidth >> level);
+                const DWORD h = max(1u, pSwizzled->dwHeight >> level);
+                dwLevelOffset += w * h * pSwizzled->dwBPP;
+            }
+
+            (*ppSurfaceLevel)->Common = X_D3DCOMMON_TYPE_SURFACE | 1;
+            (*ppSurfaceLevel)->Data =
+                (pSwizzled->pGuestData != nullptr && dwLevelOffset < pSwizzled->dwGuestSize)
+                    ? reinterpret_cast<DWORD>(pSwizzled->pGuestData + dwLevelOffset)
+                    : 0;
+            (*ppSurfaceLevel)->Format = pThis->Format;
+            (*ppSurfaceLevel)->Size = pThis->Size;
+
+            if(EmuD3DTexTraceEnabled())
+                printf("TEX| surface-link host_tex=0x%.08lX level=%u surface=0x%.08lX data=0x%.08lX\n",
+                       reinterpret_cast<unsigned long>(pTexture8), Level,
+                       reinterpret_cast<unsigned long>((*ppSurfaceLevel)->EmuSurface8),
+                       static_cast<unsigned long>((*ppSurfaceLevel)->Data));
+        }
     }
 
     EmuSwapFS();   // XBox FS
