@@ -5611,6 +5611,28 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
         // notifier (16-byte entries; voice v's four event notifiers start at
         // index v*4+2, type 3 = voice off; status byte +0xF, 0x01 = signaled,
         // 0x80 = armed) -- in every remembered generation.
+        // Remember every audio-level ServiceContext (APU instance) observed --
+        // used below for DATA-ONLY voice->client lookups (never for calls;
+        // stale instances' lists hold freed clients and calling through them
+        // executes reused heap).
+        static PVOID ApuContexts[8];
+        {
+            EmuKInterrupt *Level6 = (EmuKInterrupt*)g_EmuInterruptList[6];
+            if(Level6 != NULL && Level6->Connected && Level6->ServiceContext != NULL)
+            {
+                for(int Slot = 0; Slot < 8; Slot++)
+                {
+                    if(ApuContexts[Slot] == Level6->ServiceContext)
+                        break;
+                    if(ApuContexts[Slot] == NULL)
+                    {
+                        ApuContexts[Slot] = Level6->ServiceContext;
+                        break;
+                    }
+                }
+            }
+        }
+
         int Completed = 0;
         for(ULONG Voice = 0; Voice < VoiceCount; Voice++)
         {
@@ -5636,6 +5658,50 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
                         *Status = 0x01;
                 }
             }
+
+            // Direct completion, the write RemoveIdleVoice would perform: the
+            // APU's voice->client table lives at +0x88 (HandleIdleVoice:
+            // `mov ecx,[apu + voice*4 + 0x88]`); the client's status word at
+            // +0x12 reports DSBSTATUS_PLAYING while (flags & 0x8001) ==
+            // 0x8001 or (flags & 3) == 3 (CMcpxBuffer::GetStatus). Clearing
+            // the on/off-pending bits ends every stop wait even when the
+            // guest's own service walk cannot reach this client's instance.
+            for(int Slot = 0; Slot < 8; Slot++)
+            {
+                BYTE *Apu = (BYTE*)ApuContexts[Slot];
+                if(Apu == NULL)
+                    break;
+                if(IsBadReadPtr(Apu + 0x88 + Voice * 4, 4))
+                    continue;
+
+                BYTE *Client = *(BYTE**)(Apu + 0x88 + Voice * 4);
+                if(Client == NULL || IsBadWritePtr(Client + 0x12, 2))
+                {
+                    static int s_MissTraceEnabled = -1;
+                    if(s_MissTraceEnabled < 0)
+                        s_MissTraceEnabled = getenv("CXBX_MMIO_TRACE") != NULL ? 1 : 0;
+                    if(s_MissTraceEnabled == 1)
+                    {
+                        printf("EmuKrnl: APUVOICE voice 0x%02lX apu=0x%p client=0x%p (miss)\n",
+                               Voice, Apu, Client);
+                        fflush(stdout);
+                    }
+                    continue;
+                }
+
+                USHORT Before = *(USHORT*)(Client + 0x12);
+                *(USHORT*)(Client + 0x12) &= ~0x8003;
+
+                static int s_HitTraceEnabled = -1;
+                if(s_HitTraceEnabled < 0)
+                    s_HitTraceEnabled = getenv("CXBX_MMIO_TRACE") != NULL ? 1 : 0;
+                if(s_HitTraceEnabled == 1)
+                {
+                    printf("EmuKrnl: APUVOICE voice 0x%02lX apu=0x%p client=0x%p flags 0x%04X -> 0x%04X\n",
+                           Voice, Apu, Client, Before, *(USHORT*)(Client + 0x12));
+                    fflush(stdout);
+                }
+            }
             Completed++;
         }
 
@@ -5649,6 +5715,29 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
         {
             printf("EmuKrnl (0x%lX): APUVOICE completing %d voice(s).\n",
                    GetCurrentThreadId(), Completed);
+
+            // Name the instance the ISR will walk and whether its three
+            // service lists hold any clients (LIST_ENTRY head at +0x488,
+            // +0x490, +0x498; empty iff flink points back at the head).
+            for(int i = 0; i < 2; i++)
+            {
+                EmuKInterrupt *Interrupt =
+                    (EmuKInterrupt*)g_EmuInterruptList[EmuAudioInterruptLevels[i]];
+                if(Interrupt == NULL || !Interrupt->Connected)
+                    continue;
+                ULONG Ctx = (ULONG)Interrupt->ServiceContext;
+                if(Ctx == 0 || IsBadReadPtr((void*)(Ctx + 0x488), 0x18))
+                {
+                    printf("EmuKrnl: APUVOICE level %lu ctx=0x%.08lX (unreadable)\n",
+                           EmuAudioInterruptLevels[i], Ctx);
+                    continue;
+                }
+                printf("EmuKrnl: APUVOICE level %lu ctx=0x%.08lX lists %s/%s/%s\n",
+                       EmuAudioInterruptLevels[i], Ctx,
+                       *(ULONG*)(Ctx + 0x488) == Ctx + 0x488 ? "empty" : "live",
+                       *(ULONG*)(Ctx + 0x490) == Ctx + 0x490 ? "empty" : "live",
+                       *(ULONG*)(Ctx + 0x498) == Ctx + 0x498 ? "empty" : "live");
+            }
             fflush(stdout);
         }
 
