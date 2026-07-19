@@ -99,7 +99,12 @@ static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
+static void  EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader);
+static void  EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader);
+static void  EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader);
 extern "C" void EmuAciStartDmaThread();   // EmuKrnl.cpp: AC97 DMA delivery thread
+extern "C" void EmuApuStartVoiceThread();  // EmuKrnl.cpp: APU voice-event delivery thread
+extern "C" void EmuStartTimerDpcThread();  // EmuKrnl.cpp: due-time KeSetTimer DPC dispatch
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
 static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static bool  EmuLooksLikeReturnAddress(ULONG Address);
@@ -953,9 +958,24 @@ static ULONG EmuApuReadRegister32(ULONG Address)
     return Value;
 }
 
+static const ULONG EmuApuInterruptStatus = 0x00001000;   // NV_PAPU ISTS: W1C
+static const ULONG EmuApuIstsClaimBit = 0x00000001;      // "our interrupt"
+static const ULONG EmuApuIstsVoiceBit = 0x00000040;      // voice event pending
+
 static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
 {
-    EmuStoreMmioRegister(Address, Value);
+    if(EmuApuOffset(Address) == EmuApuInterruptStatus)
+    {
+        // Interrupt status is write-1-to-clear: the DSOUND ISR acks by
+        // writing back the bits it read. Storing the raw value would leave
+        // the status latched forever.
+        ULONG Status = EmuApuCachedRegister(Address, 0);
+        EmuStoreMmioRegister(Address, Status & ~Value);
+    }
+    else
+    {
+        EmuStoreMmioRegister(Address, Value);
+    }
 
     if(EmuMmioTraceEnabled())
     {
@@ -963,6 +983,25 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
                GetCurrentThreadId(), Address, Value);
         fflush(stdout);
     }
+}
+
+// Latch a voice-event interrupt status (claim + voice bits) so the DSOUND
+// ApuInterruptServiceRoutine reads a real pending interrupt from ISTS, claims
+// it, and queues its voice-service DPC. Called by the voice-event thread
+// right before it fires the connected audio-level ISR.
+extern "C" void EmuApuRaiseVoiceInterrupt()
+{
+    ULONG Address = EmuApuMmioBase + EmuApuInterruptStatus;
+    ULONG Status = 0;
+    EmuLookupMmioRegister(Address, &Status);
+    EmuStoreMmioRegister(Address, Status | EmuApuIstsClaimBit | EmuApuIstsVoiceBit);
+}
+
+extern "C" ULONG EmuApuReadInterruptStatus()
+{
+    ULONG Status = 0;
+    EmuLookupMmioRegister(EmuApuMmioBase + EmuApuInterruptStatus, &Status);
+    return Status;
 }
 
 static void EmuAciDmaSync();   // time-based DMA state-machine catch-up (defined below)
@@ -10214,6 +10253,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         EmuInstallFceultraBootstrap(pXbeHeader);
         EmuInstallCdxLaunchBootstrap(pXbeHeader);
         EmuInstallDsoundApuAccountingPatch(pXbeHeader);
+        EmuInstallDsoundApuContextReleasePatch(pXbeHeader);
+        EmuInstallDsoundApuDestructorPatch(pXbeHeader);
+        EmuInstallXapiRdtscQpcPatch(pXbeHeader);
         EmuInstallAutoBootLaunchData();
 
         uint32 dwLibraryVersions = pXbeHeader->dwLibraryVersions;
@@ -10453,6 +10495,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // titles do not program this device, and creating an unnecessary worker at
     // guest entry can perturb their startup ordering.
     EmuAciStartDmaThread();
+    EmuApuStartVoiceThread();
+    EmuStartTimerDpcThread();
 
     printf("Emu (0x%X): Initial thread starting.\n", GetCurrentThreadId());
 
@@ -10984,6 +11028,172 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
 
     if(Patched != 0)
         fflush(stdout);
+}
+
+// The XDK DSOUND ~CMcpxAPU destructor tears the audio core down: Terminate,
+// KeDisconnectInterrupt(m_Interrupt), timer/DPC cancel, shutdown-notification
+// deregistration and the ~CMcpxCore chain. Titles that over-release the
+// DirectSound refcount under emulation (NestopiaX 1.3's splash->menu audio
+// switch) run this while their stream threads still use the core: the APU
+// interrupt stays disconnected forever, so no voice completion can ever be
+// delivered and every later voice stop hangs. Same philosophy as the 5849
+// DSOUND singleton and the context-release patch above: the APU core is
+// immortal under the HLE -- locate the destructor by its (reloc-wildcarded)
+// entry and neutralise it to `ret`.
+static void EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
+        return;
+
+    // 53 55 56 8B F1 57 / C7 06 <vt> / C7 46 08 <vt> / E8 <Terminate> /
+    // 83 3D <m_Interrupt+c> 00 / 74 12 / 68 <m_Interrupt> / FF 15 <imp> /
+    // 83 25 <m_Interrupt+c> 00
+    const uint32 PatternLength = 0x33;
+
+    uint32 Base = pXbeHeader->dwBaseAddr;
+    uint32 End = Base + pXbeHeader->dwSizeofImage;
+    for(uint32 Address = Base; Address + PatternLength <= End; Address++)
+    {
+        if(IsBadReadPtr((void*)Address, PatternLength))
+        {
+            Address += 0xFFF;   // skip toward the next page
+            continue;
+        }
+
+        const uint08 *p = (const uint08*)Address;
+        if(p[0x00] != 0x53 || p[0x01] != 0x55 || p[0x02] != 0x56 ||
+           p[0x03] != 0x8B || p[0x04] != 0xF1 || p[0x05] != 0x57 ||
+           p[0x06] != 0xC7 || p[0x07] != 0x06 ||
+           p[0x0C] != 0xC7 || p[0x0D] != 0x46 || p[0x0E] != 0x08 ||
+           p[0x13] != 0xE8 ||
+           p[0x18] != 0x83 || p[0x19] != 0x3D ||
+           p[0x1E] != 0x00 || p[0x1F] != 0x74 || p[0x20] != 0x12 ||
+           p[0x21] != 0x68 ||
+           p[0x26] != 0xFF || p[0x27] != 0x15 ||
+           p[0x2C] != 0x83 || p[0x2D] != 0x25 || p[0x32] != 0x00)
+            continue;
+
+        // The connected-check, the disconnect argument and the flag clear all
+        // reference the one static KINTERRUPT object.
+        uint32 InterruptFlag = *(uint32*)(p + 0x1A);
+        uint32 InterruptBase = *(uint32*)(p + 0x22);
+        uint32 InterruptClear = *(uint32*)(p + 0x2E);
+        if(InterruptBase < Base || InterruptBase >= End)
+            continue;
+        if(InterruptFlag - InterruptBase > 0x100 || InterruptClear - InterruptBase > 0x100)
+            continue;
+
+        const uint08 Patch[1] = { 0xC3 };   // thiscall, no args: plain ret
+        EmuWriteBytes(Address, Patch, sizeof(Patch));
+        printf("Emu (0x%lX): DSOUND ~CMcpxAPU (0x%.08lX, interrupt 0x%.08lX) neutralised.\n",
+               GetCurrentThreadId(), Address, InterruptBase);
+        fflush(stdout);
+        return;
+    }
+}
+
+// The native XAPI QueryPerformanceCounter is a raw `rdtsc` read (mov ecx,
+// [esp+4]; rdtsc; store; ret 4). The Xbox TSC ticks at 733 MHz -- and the
+// paired native QueryPerformanceFrequency returns that constant -- but the
+// host TSC ticks at multi-GHz, so every QPC-paced title timer runs ~5x fast
+// (NestopiaX 1.3's 3-minute menu screensaver blanked the screen ~33s after
+// boot). The 17-byte function is byte-stable across XAPI builds and unique in
+// the image; redirect it to the 733 MHz-scaled EmuQueryPerformanceCounter.
+static void EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader)
+{
+    static const uint08 Signature[] =
+    {
+        0x8B, 0x4C, 0x24, 0x04, 0x0F, 0x31, 0x89, 0x01,
+        0x89, 0x51, 0x04, 0x33, 0xC0, 0x40, 0xC2, 0x04, 0x00
+    };
+
+    uint32 Address = EmuFindUniquePattern(pXbeHeader, Signature, sizeof(Signature));
+    if(Address == 0)
+        return;
+
+    EmuInstallWrapper((void*)Address, XTL::EmuQueryPerformanceCounter);
+    printf("Emu (0x%lX): XAPI rdtsc QueryPerformanceCounter (0x%.08lX) -> EmuQueryPerformanceCounter.\n",
+           GetCurrentThreadId(), Address);
+    fflush(stdout);
+}
+
+// Location of the XDK DSOUND MCPX_ALLOC_CONTEXT table (m_ctxMemory) when the
+// context-release scan below matched: entry[3].virt (+0x30) is the APU voice
+// structure array (256 voices x 128 bytes) the voice-event model sweeps.
+extern "C" ULONG g_EmuDsoundApuContextTable = 0;
+
+// The XDK DSOUND ~CMcpxCore destructor PhysicalFree()s and zeroes the static
+// MCPX_ALLOC_CONTEXT table (m_ctxMemory) -- including the APU voice-structure
+// array pointer the whole voice engine reads (e.g. CMcpxVoiceClient::SetFilter
+// indexes [m_ctxMemory[3].virt + voice*128]). Titles that tear DirectSound
+// down and re-create it while a stream thread is still running (NestopiaX 1.3
+// switching splash music -> menu music/XMV) leave that thread dereferencing
+// the zeroed pointer for the whole (emulation-slow) re-init window -> AV at
+// guest SetFilter. On the HLE there is no hardware owning that memory, so the
+// bounded fix is the same idea as the committed 5849 DSOUND singleton: never
+// release the APU allocation contexts. Locate the destructor's free+zero loop
+// by pattern and jump over it (entering after its `push ebx` so the stack
+// stays balanced); the next CMcpxCore::Initialize simply refills the same
+// contexts via AllocateContext.
+static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
+        return;
+
+    // 33 FF 53 / 39 AF <base+0xC> / 74 16 / 8D 9F <base> / 8B 03 3B C5 74 10 /
+    // 50 E8 <rel32> / 89 2B EB 06 / 89 AF <base> / 89 AF <base+4> /
+    // 89 AF <base+8> / 83 C7 10 / 81 FF 00 01 00 00 / 72 C5
+    const uint32 PatternLength = 0x3E;
+
+    uint32 Base = pXbeHeader->dwBaseAddr;
+    uint32 End = Base + pXbeHeader->dwSizeofImage;
+    for(uint32 Address = Base; Address + PatternLength <= End; Address++)
+    {
+        if(IsBadReadPtr((void*)Address, PatternLength))
+        {
+            Address += 0xFFF;   // skip toward the next page
+            continue;
+        }
+
+        const uint08 *p = (const uint08*)Address;
+        if(p[0x00] != 0x33 || p[0x01] != 0xFF || p[0x02] != 0x53 ||
+           p[0x03] != 0x39 || p[0x04] != 0xAF ||
+           p[0x09] != 0x74 || p[0x0A] != 0x16 ||
+           p[0x0B] != 0x8D || p[0x0C] != 0x9F ||
+           p[0x11] != 0x8B || p[0x12] != 0x03 ||
+           p[0x13] != 0x3B || p[0x14] != 0xC5 ||
+           p[0x15] != 0x74 || p[0x16] != 0x10 ||
+           p[0x17] != 0x50 || p[0x18] != 0xE8 ||
+           p[0x1D] != 0x89 || p[0x1E] != 0x2B ||
+           p[0x1F] != 0xEB || p[0x20] != 0x06 ||
+           p[0x21] != 0x89 || p[0x22] != 0xAF ||
+           p[0x27] != 0x89 || p[0x28] != 0xAF ||
+           p[0x2D] != 0x89 || p[0x2E] != 0xAF ||
+           p[0x33] != 0x83 || p[0x34] != 0xC7 || p[0x35] != 0x10 ||
+           p[0x36] != 0x81 || p[0x37] != 0xFF ||
+           *(uint32*)(p + 0x38) != 0x00000100 ||
+           p[0x3C] != 0x72 || p[0x3D] != 0xC5)
+            continue;
+
+        // The four displacements must reference one in-image context table.
+        uint32 CtxBase = *(uint32*)(p + 0x0D);
+        if(CtxBase < Base || CtxBase + 0x100 > End)
+            continue;
+        if(*(uint32*)(p + 0x05) != CtxBase + 0xC ||
+           *(uint32*)(p + 0x23) != CtxBase ||
+           *(uint32*)(p + 0x29) != CtxBase + 4 ||
+           *(uint32*)(p + 0x2F) != CtxBase + 8)
+            continue;
+
+        // jmp +0x39: from after `push ebx` straight past the loop's `jb`.
+        const uint08 Patch[2] = { 0xEB, 0x39 };
+        EmuWriteBytes(Address + 0x03, Patch, sizeof(Patch));
+        g_EmuDsoundApuContextTable = CtxBase;
+        printf("Emu (0x%lX): DSOUND APU context release (0x%.08lX, table 0x%.08lX) neutralised.\n",
+               GetCurrentThreadId(), Address, CtxBase);
+        fflush(stdout);
+        return;   // one table per DSOUND; first unique match wins
+    }
 }
 
 // XDK 5849 titles built on the CDX demo framework (the dolphin demo, the CDX
