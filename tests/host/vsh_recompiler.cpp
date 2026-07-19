@@ -3004,6 +3004,80 @@ int RunTests()
         delete[] fusedViewportPairD3D8;
     }
 
+    std::vector<DWORD> delayedFusedViewportPairProgram{ 0x00062078u };
+    AppendNvTestInstruction(
+        delayedFusedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 0, vertexPositionSource, viewportUnusedSource,
+                                viewportUnusedSource, 0, 0, 0, 0xF, 0, 0, false));
+    AppendNvTestInstruction(delayedFusedViewportPairProgram, fusedViewportScale);
+    AppendNvTestInstruction(
+        delayedFusedViewportPairProgram,
+        EncodeNvTestInstruction(0, 2, 0, viewportUnusedSource, viewportUnusedSource,
+                                vertexPositionSource, 0, 1, 0x2, 0, 0, 0, false));
+    AppendNvTestInstruction(
+        delayedFusedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 1, vertexSecondaryColorSource,
+                                viewportUnusedSource, viewportUnusedSource, 0, 0, 0, 0xF,
+                                4, 0, false));
+    AppendNvTestInstruction(
+        delayedFusedViewportPairProgram,
+        EncodeNvTestInstruction(1, 0, 0, vertexColorSource, viewportUnusedSource,
+                                viewportUnusedSource, 0, 0, 0, 0xF, 3, 0, false));
+    AppendNvTestInstruction(
+        delayedFusedViewportPairProgram,
+        EncodeNvTestInstruction(4, 0, 0, viewportPositionSource, reciprocalWSource,
+                                constantSource, 0, 0, 0, 0xE, 0, 0, true, 59));
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(
+              delayedFusedViewportPairProgram.data(), fallbackReason) ==
+              XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
+          "delayed fused viewport pair permits host translation");
+    Check(fallbackReason.empty(), "delayed fused viewport pair has no fallback reason");
+    ShaderOutputs cpuDelayedFusedViewportPairOutputs{};
+    Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
+              delayedFusedViewportPairProgram.data(),
+              differentialHardwareConstants.data(), differentialInputs.data(),
+              cpuDelayedFusedViewportPairOutputs.position.data(),
+              cpuDelayedFusedViewportPairOutputs.colors.data(),
+              cpuDelayedFusedViewportPairOutputs.colors.size(),
+              cpuDelayedFusedViewportPairOutputs.texCoords.data(),
+              cpuDelayedFusedViewportPairOutputs.texCoords.size()),
+          "CPU delayed fused viewport pair shader executes");
+    Check(PositionsEqual(cpuDelayedFusedViewportPairOutputs, cpuEpilogueOutputs),
+          "CPU removes delayed fused RCC c58/c59 viewport pair");
+    DWORD* delayedFusedViewportPairD3D8 =
+        XTL::EmuVshRecompileXboxFunction(delayedFusedViewportPairProgram.data());
+    Check(delayedFusedViewportPairD3D8 != nullptr,
+          "delayed fused RCC viewport pair shader translates");
+    if(delayedFusedViewportPairD3D8 != nullptr)
+    {
+        ShaderOutputs d3d8DelayedFusedViewportPairOutputs{};
+        Check(ExecuteD3D8Bytecode(delayedFusedViewportPairD3D8, 4 + 6 * 20,
+                                  differentialD3D8Constants.data(),
+                                  differentialInputs.data(),
+                                  d3d8DelayedFusedViewportPairOutputs),
+              "translated delayed fused viewport pair bytecode executes independently");
+        Check(OutputsEqual(cpuDelayedFusedViewportPairOutputs,
+                           d3d8DelayedFusedViewportPairOutputs),
+              "CPU and translator preserve delayed fused viewport pair semantics");
+        delete[] delayedFusedViewportPairD3D8;
+    }
+
+    std::vector<DWORD> overwrittenFusedViewportPairProgram =
+        delayedFusedViewportPairProgram;
+    const std::array<DWORD, 4> overwriteReciprocal = EncodeNvTestInstruction(
+        0, 2, 0, viewportUnusedSource, viewportUnusedSource, vertexPositionSource, 0, 1,
+        0x8, 0, 0, 0, false);
+    std::copy(overwriteReciprocal.begin(), overwriteReciprocal.end(),
+              overwrittenFusedViewportPairProgram.begin() + 9);
+    fallbackReason.clear();
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(
+              overwrittenFusedViewportPairProgram.data(), fallbackReason) ==
+              XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu,
+          "overwritten fused viewport reciprocal requires CPU fallback");
+    Check(fallbackReason == "ambiguous_screen_space_suffix",
+          "overwritten fused viewport fallback reason is stable");
+
     std::vector<DWORD> terminalFusedViewportPairProgram{ 0x00032078u };
     AppendNvTestInstruction(
         terminalFusedViewportPairProgram,
