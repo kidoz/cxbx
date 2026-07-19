@@ -5660,46 +5660,67 @@ static DWORD WINAPI EmuApuVoiceThread(LPVOID)
             }
 
             // Direct completion, the write RemoveIdleVoice would perform: the
-            // APU's voice->client table lives at +0x88 (HandleIdleVoice:
-            // `mov ecx,[apu + voice*4 + 0x88]`); the client's status word at
-            // +0x12 reports DSBSTATUS_PLAYING while (flags & 0x8001) ==
-            // 0x8001 or (flags & 3) == 3 (CMcpxBuffer::GetStatus). Clearing
-            // the on/off-pending bits ends every stop wait even when the
-            // guest's own service walk cannot reach this client's instance.
+            // APU's voice->client table lives at apu+0x88 (HandleIdleVoice:
+            // `mov ecx,[apu + voice*4 + 0x88]`). The KINTERRUPT ServiceContext
+            // is NOT the apu base (census: apu 0x0109939C, ctx 0x010993B8 =
+            // apu+0x1C), so probe both candidate bases and accept a client
+            // only when its own voice-number word at +0xC matches. Clearing
+            // the on/off-pending bits in the client's status word (+0x12)
+            // ends the DSBSTATUS_PLAYING wait ((flags & 0x8001) == 0x8001 or
+            // (flags & 3) == 3 per CMcpxBuffer::GetStatus).
+            static int s_VoiceHitTrace = -1;
+            if(s_VoiceHitTrace < 0)
+                s_VoiceHitTrace = getenv("CXBX_MMIO_TRACE") != NULL ? 1 : 0;
+
             for(int Slot = 0; Slot < 8; Slot++)
             {
-                BYTE *Apu = (BYTE*)ApuContexts[Slot];
-                if(Apu == NULL)
+                BYTE *Context = (BYTE*)ApuContexts[Slot];
+                if(Context == NULL)
                     break;
-                if(IsBadReadPtr(Apu + 0x88 + Voice * 4, 4))
-                    continue;
 
-                BYTE *Client = *(BYTE**)(Apu + 0x88 + Voice * 4);
-                if(Client == NULL || IsBadWritePtr(Client + 0x12, 2))
+                for(int Base = 0; Base < 2; Base++)
                 {
-                    static int s_MissTraceEnabled = -1;
-                    if(s_MissTraceEnabled < 0)
-                        s_MissTraceEnabled = getenv("CXBX_MMIO_TRACE") != NULL ? 1 : 0;
-                    if(s_MissTraceEnabled == 1)
+                    BYTE *Apu = Context - (Base == 0 ? 0 : 0x1C);
+                    if(IsBadReadPtr(Apu + 0x88 + Voice * 4, 4))
+                        continue;
+
+                    BYTE *Client = *(BYTE**)(Apu + 0x88 + Voice * 4);
+                    if(Client == NULL || IsBadWritePtr(Client + 0x12, 2) ||
+                       IsBadReadPtr(Client + 0xC, 2) ||
+                       *(USHORT*)(Client + 0xC) != (USHORT)Voice)
+                        continue;
+
+                    // Only complete clients whose deactivate is pending
+                    // (bit15); a client still playing on another instance
+                    // shares the voice number and must not be touched.
+                    USHORT Before = *(USHORT*)(Client + 0x12);
+                    if((Before & 0x8000) == 0)
+                        continue;
+
+                    *(USHORT*)(Client + 0x12) &= ~0x8003;
+
+                    // Finish what RemoveIdleVoice would do: unlink the client
+                    // from its service list (LIST_ENTRY at +0x4C) and clear
+                    // the voice->client slot, so later interrupt walks never
+                    // touch the client once the title frees it.
+                    BYTE *Flink = *(BYTE**)(Client + 0x4C);
+                    BYTE *Blink = *(BYTE**)(Client + 0x50);
+                    if(Flink != NULL && Blink != NULL &&
+                       !IsBadWritePtr(Flink + 4, 4) && !IsBadWritePtr(Blink, 4))
                     {
-                        printf("EmuKrnl: APUVOICE voice 0x%02lX apu=0x%p client=0x%p (miss)\n",
-                               Voice, Apu, Client);
+                        *(BYTE**)(Blink) = Flink;       // blink->Flink = flink
+                        *(BYTE**)(Flink + 4) = Blink;   // flink->Blink = blink
+                        *(BYTE**)(Client + 0x4C) = Client + 0x4C;
+                        *(BYTE**)(Client + 0x50) = Client + 0x4C;
+                    }
+                    *(BYTE**)(Apu + 0x88 + Voice * 4) = NULL;
+
+                    if(s_VoiceHitTrace == 1)
+                    {
+                        printf("EmuKrnl: APUVOICE voice 0x%02lX apu=0x%p client=0x%p flags 0x%04X -> 0x%04X (unlinked)\n",
+                               Voice, Apu, Client, Before, *(USHORT*)(Client + 0x12));
                         fflush(stdout);
                     }
-                    continue;
-                }
-
-                USHORT Before = *(USHORT*)(Client + 0x12);
-                *(USHORT*)(Client + 0x12) &= ~0x8003;
-
-                static int s_HitTraceEnabled = -1;
-                if(s_HitTraceEnabled < 0)
-                    s_HitTraceEnabled = getenv("CXBX_MMIO_TRACE") != NULL ? 1 : 0;
-                if(s_HitTraceEnabled == 1)
-                {
-                    printf("EmuKrnl: APUVOICE voice 0x%02lX apu=0x%p client=0x%p flags 0x%04X -> 0x%04X\n",
-                           Voice, Apu, Client, Before, *(USHORT*)(Client + 0x12));
-                    fflush(stdout);
                 }
             }
             Completed++;
