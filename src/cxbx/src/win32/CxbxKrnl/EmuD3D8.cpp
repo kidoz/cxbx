@@ -472,6 +472,20 @@ static HRESULT EmuPresentHostDevice(const RECT* sourceRect, const RECT* destinat
                        endSceneResult);
         }
     }
+
+    // A windowed host Present that silently starts failing (or recovering) is
+    // exactly how a title "fades to black" while its backbuffer stays correct;
+    // log every transition so display-path failures are visible in run logs.
+    static HRESULT s_LastPresentResult = D3D_OK;
+    if(presentResult != s_LastPresentResult)
+    {
+        printf("EmuD3D8 (0x%X): host Present result changed 0x%.08lX -> 0x%.08lX\n",
+               GetCurrentThreadId(), static_cast<unsigned long>(s_LastPresentResult),
+               static_cast<unsigned long>(presentResult));
+        fflush(stdout);
+        s_LastPresentResult = presentResult;
+    }
+
     if(FAILED(presentResult))
     {
         return presentResult;
@@ -5543,6 +5557,39 @@ static XTL::IDirect3DTexture8 *EmuConvertYuy2Texture(EmuYuy2TextureInfo *pInfo)
                    static_cast<unsigned>(maximum),
                    static_cast<unsigned long>(hash),
                    converted ? 1u : 0u);
+        }
+    }
+
+    // Opt-in (CXBX_YUV_DUMP=N): dump the first N converted frames (BMP) plus
+    // their raw YUY2 source blocks to %TEMP% so video corruption can be
+    // attributed to decode (bad source) vs conversion/draw (bad output).
+    static int s_YuvDumpRemaining = -1;
+    static DWORD s_YuvDumpIndex = 0;
+    if(s_YuvDumpRemaining < 0)
+    {
+        const char *v = getenv("CXBX_YUV_DUMP");
+        s_YuvDumpRemaining = (v == NULL) ? 0 : max(1, atoi(v));
+    }
+    if(converted && s_YuvDumpRemaining > 0)
+    {
+        s_YuvDumpRemaining--;
+        const DWORD index = ++s_YuvDumpIndex;
+        char tempDir[MAX_PATH];
+        char path[MAX_PATH];
+        if(GetTempPathA(MAX_PATH, tempDir) != 0)
+        {
+            sprintf(path, "%scxbx_yuv_%03lu.bmp", tempDir, (unsigned long)index);
+            EmuD3DWriteBmp(path, w, h, lr.Pitch, lr.pBits, XTL::D3DFMT_A8R8G8B8);
+
+            sprintf(path, "%scxbx_yuv_%03lu.yuy2", tempDir, (unsigned long)index);
+            HANDLE rawFile = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                                         FILE_ATTRIBUTE_NORMAL, NULL);
+            if(rawFile != INVALID_HANDLE_VALUE)
+            {
+                DWORD rawWritten = 0;
+                WriteFile(rawFile, pInfo->pPixels, pInfo->DataSize, &rawWritten, NULL);
+                CloseHandle(rawFile);
+            }
         }
     }
 
