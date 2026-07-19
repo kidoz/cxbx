@@ -3217,10 +3217,16 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
     printf("WATCHDOG: armed, snapshot interval %lums.\n", IntervalMs);
     fflush(stdout);
 
-    // CXBX_WATCH_MEM="hexaddr[,bytes]": hexdump a guest address with each
-    // snapshot (e.g. a critical section, to read its owner during a deadlock).
+    // CXBX_WATCH_MEM="hexaddr[,bytes[,hexoff[:hexdisp]]]": hexdump a guest
+    // address with each snapshot (e.g. a critical section, to read its owner
+    // during a deadlock). The optional third field names an offset holding a
+    // pointer; the pointed-to block (plus an optional displacement into it)
+    // is dumped too -- one deref hop, e.g. an entry inside a dynamically
+    // allocated notifier block.
     ULONG WatchAddress = 0;
     ULONG WatchBytes = 0x20;
+    LONG WatchDerefOffset = -1;
+    ULONG WatchDerefDisp = 0;
     const char *WatchValue = getenv("CXBX_WATCH_MEM");
     if(WatchValue != NULL)
     {
@@ -3228,9 +3234,15 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
         WatchAddress = strtoul(WatchValue, &End, 16);
         if(End != NULL && *End == ',')
         {
-            ULONG Bytes = strtoul(End + 1, NULL, 0);
+            ULONG Bytes = strtoul(End + 1, &End, 0);
             if(Bytes >= 4 && Bytes <= 0x100)
                 WatchBytes = Bytes;
+            if(End != NULL && *End == ',')
+            {
+                WatchDerefOffset = (LONG)strtoul(End + 1, &End, 16);
+                if(End != NULL && *End == ':')
+                    WatchDerefDisp = strtoul(End + 1, NULL, 16);
+            }
         }
     }
 
@@ -3254,6 +3266,21 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
             for(ULONG i = 0; i < WatchBytes; i += 4)
                 printf(" %.08lX", *(ULONG*)(WatchAddress + i));
             printf("\n");
+
+            if(WatchDerefOffset >= 0 &&
+               (ULONG)WatchDerefOffset + 4 <= WatchBytes)
+            {
+                ULONG Pointee = *(ULONG*)(WatchAddress + WatchDerefOffset);
+                if(Pointee != 0)
+                    Pointee += WatchDerefDisp;
+                if(Pointee != 0 && !IsBadReadPtr((void*)Pointee, 0x40))
+                {
+                    printf("WATCHDOG: mem2 0x%.08lX:", Pointee);
+                    for(ULONG i = 0; i < 0x40; i += 4)
+                        printf(" %.08lX", *(ULONG*)(Pointee + i));
+                    printf("\n");
+                }
+            }
 
             // Treat the watched address as an Xbox RTL_CRITICAL_SECTION and
             // name the owner: OwningThread at +0x18 is an &ETHREAD->Tcb whose
