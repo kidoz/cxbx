@@ -38,6 +38,17 @@ cxbx_xbox_adpcm_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_nv2a_capture = static_library(
+  'cxbx_nv2a_capture',
+  'src/core/nv2a_capture.cpp',
+  include_directories : cxbx_inc,
+)
+
+cxbx_nv2a_capture_dep = declare_dependency(
+  link_with : cxbx_nv2a_capture,
+  include_directories : cxbx_inc,
+)
+
 cxbx_platform_win32 = static_library(
   'cxbx_platform_win32',
   'src/win32/Mutex.cpp',
@@ -298,7 +309,6 @@ cxbx_launcher_src = files(
 )
 
 cxbx_runtime_src = files(
-  'src/core/nv2a_capture.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
@@ -388,6 +398,7 @@ cxbx_runtime = shared_library(
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
+    cxbx_nv2a_capture_dep,
     cxbx_trace_dep,
     cxbx_yuy2_dep,
   ],
