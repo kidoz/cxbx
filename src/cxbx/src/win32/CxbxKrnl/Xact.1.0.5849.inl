@@ -287,6 +287,89 @@ SOOVPA<8> IXACTSoundBank_Stop_1_0_5849 =
     }
 };
 
+// ?RegisterNotification@CEngine@XACT@@QAGJPBU_XACT_NOTIFICATION_DESCRIPTION@@@Z
+SOOVPA<9> XACTEngine_RegisterNotificationInternal_1_0_5849 =
+{
+    0, 9, XREF_XACT5849_REGISTER_NOTIFICATION, 0,
+    {
+        { 0x00, 0x56 }, { 0x07, 0x8B }, { 0x0C, 0x01 },
+        { 0x0D, 0xFF }, { 0x14, 0xE8 }, { 0x1B, 0x8B },
+        { 0x24, 0xFF }, { 0x2A, 0x8B }, { 0x30, 0x00 }
+    }
+};
+
+// _IXACTEngine_RegisterNotification@8
+// call@0x1F -> XREF_XACT5849_REGISTER_NOTIFICATION
+SOOVPA<9> IXACTEngine_RegisterNotification_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x1F, XREF_XACT5849_REGISTER_NOTIFICATION },
+        { 0x00, 0x56 }, { 0x08, 0x74 }, { 0x10, 0x24 },
+        { 0x18, 0xD9 }, { 0x23, 0x85 }, { 0x29, 0x68 },
+        { 0x2F, 0x15 }, { 0x3A, 0x00 }
+    }
+};
+
+// ?UnRegisterNotification@CEngine@XACT@@QAGJPBU_XACT_NOTIFICATION_DESCRIPTION@@@Z
+SOOVPA<9> XACTEngine_UnRegisterNotificationInternal_1_0_5849 =
+{
+    0, 9, XREF_XACT5849_UNREGISTER_NOTIFICATION, 0,
+    {
+        { 0x00, 0x56 }, { 0x07, 0x8B }, { 0x0C, 0x00 },
+        { 0x0D, 0xFF }, { 0x14, 0xE8 }, { 0x1B, 0x8B },
+        { 0x24, 0xFF }, { 0x2A, 0x8B }, { 0x30, 0x00 }
+    }
+};
+
+// _IXACTEngine_UnRegisterNotification@8
+// call@0x1F -> XREF_XACT5849_UNREGISTER_NOTIFICATION
+SOOVPA<9> IXACTEngine_UnRegisterNotification_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x1F, XREF_XACT5849_UNREGISTER_NOTIFICATION },
+        { 0x00, 0x56 }, { 0x08, 0x74 }, { 0x10, 0x24 },
+        { 0x18, 0xD9 }, { 0x23, 0x85 }, { 0x29, 0x68 },
+        { 0x2F, 0x15 }, { 0x3A, 0x00 }
+    }
+};
+
+// _IXACTEngine_GetNotification@12
+SOOVPA<8> IXACTEngine_GetNotification_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x08, 0x74 }, { 0x11, 0x10 },
+        { 0x1A, 0xF8 }, { 0x22, 0xE8 }, { 0x2C, 0x0B },
+        { 0x33, 0x15 }, { 0x3E, 0x00 }
+    }
+};
+
+// ?FlushNotification@CEngine@XACT@@QAGJPBU_XACT_NOTIFICATION_DESCRIPTION@@@Z
+SOOVPA<8> XACTEngine_FlushNotificationInternal_1_0_5849 =
+{
+    0, 8, XREF_XACT5849_FLUSH_NOTIFICATION, 0,
+    {
+        { 0x00, 0x55 }, { 0x0E, 0xE8 }, { 0x1E, 0x3B },
+        { 0x2C, 0xE8 }, { 0x3C, 0x04 }, { 0x4B, 0x89 },
+        { 0x5A, 0x8D }, { 0x69, 0x00 }
+    }
+};
+
+// _IXACTEngine_FlushNotification@8
+// call@0x1F -> XREF_XACT5849_FLUSH_NOTIFICATION
+SOOVPA<9> IXACTEngine_FlushNotification_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x1F, XREF_XACT5849_FLUSH_NOTIFICATION },
+        { 0x00, 0x56 }, { 0x08, 0x74 }, { 0x10, 0x24 },
+        { 0x18, 0xD9 }, { 0x23, 0x85 }, { 0x29, 0x68 },
+        { 0x2F, 0x15 }, { 0x3A, 0x00 }
+    }
+};
+
 OOVPATable XACTENG_1_0_5849[] =
 {
     {
@@ -432,6 +515,52 @@ OOVPATable XACTENG_1_0_5849[] =
         XTL::EmuIXACTSoundBank_Stop,
         #ifdef _DEBUG_TRACE
         "EmuIXACTSoundBank_Stop"
+        #endif
+    },
+    {
+        (OOVPA*)&XACTEngine_RegisterNotificationInternal_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "XACT::CEngine::RegisterNotification (XREF)"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTEngine_RegisterNotification_1_0_5849,
+        XTL::EmuIXACTEngine_RegisterNotification,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTEngine_RegisterNotification"
+        #endif
+    },
+    {
+        (OOVPA*)&XACTEngine_UnRegisterNotificationInternal_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "XACT::CEngine::UnRegisterNotification (XREF)"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTEngine_UnRegisterNotification_1_0_5849,
+        XTL::EmuIXACTEngine_UnRegisterNotification,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTEngine_UnRegisterNotification"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTEngine_GetNotification_1_0_5849,
+        XTL::EmuIXACTEngine_GetNotification,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTEngine_GetNotification"
+        #endif
+    },
+    {
+        (OOVPA*)&XACTEngine_FlushNotificationInternal_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "XACT::CEngine::FlushNotification (XREF)"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTEngine_FlushNotification_1_0_5849,
+        XTL::EmuIXACTEngine_FlushNotification,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTEngine_FlushNotification"
         #endif
     }
 };

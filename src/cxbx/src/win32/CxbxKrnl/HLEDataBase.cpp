@@ -622,6 +622,9 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_XACT5849_SOUNDBANK_RELEASE
     -1, // XREF_XACT5849_SOUNDBANK_PREPARE
     -1, // XREF_XACT5849_SOUNDBANK_PLAY
+    -1, // XREF_XACT5849_REGISTER_NOTIFICATION
+    -1, // XREF_XACT5849_UNREGISTER_NOTIFICATION
+    -1, // XREF_XACT5849_FLUSH_NOTIFICATION
 };
 
 // ******************************************************************
