@@ -85,6 +85,25 @@ cxbx_trace_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_hle_dispatch = static_library(
+  'cxbx_hle_dispatch',
+  'src/win32/CxbxKrnl/HLEDataBase.cpp',
+  'src/win32/CxbxKrnl/KernelThunk.cpp',
+  include_directories : cxbx_inc,
+  dependencies : cxbx_trace_dep,
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_dispatch_dep = declare_dependency(
+  link_whole : cxbx_hle_dispatch,
+  dependencies : cxbx_trace_dep,
+  include_directories : cxbx_inc,
+)
+
 cxbx_yuy2 = static_library(
   'cxbx_yuy2',
   'src/core/Yuy2Converter.cpp',
@@ -125,8 +144,6 @@ cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/EmuXG.cpp',
   'src/win32/CxbxKrnl/EmuXOnline.cpp',
   'src/win32/CxbxKrnl/EmuXapi.cpp',
-  'src/win32/CxbxKrnl/HLEDataBase.cpp',
-  'src/win32/CxbxKrnl/KernelThunk.cpp',
 )
 
 cxbx_link_libs = [
@@ -204,6 +221,7 @@ cxbx_runtime = shared_library(
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
   dependencies : [
+    cxbx_hle_dispatch_dep,
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
