@@ -2,7 +2,11 @@
 # stage the SDK's Test.xmv so the guest can open D:\Media\Videos\Test.xmv.
 $ErrorActionPreference = "Stop"
 
-$xdk = "D:\projects\cxbx\other\sdk\XDKSetup5849.15_extracted\XDK"
+if (-not $env:CXBX_XDK_ROOT) {
+    throw "Set CXBX_XDK_ROOT to an Xbox XDK root containing xbox/lib"
+}
+
+$xdk = (Resolve-Path -LiteralPath $env:CXBX_XDK_ROOT).Path
 $vc  = Join-Path $xdk "xbox\bin\vc71"
 $bin = Join-Path $PSScriptRoot "bin"
 New-Item -ItemType Directory -Force $bin | Out-Null
