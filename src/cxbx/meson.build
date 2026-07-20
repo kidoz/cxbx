@@ -85,6 +85,28 @@ cxbx_trace_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_hle_kernel = static_library(
+  'cxbx_hle_kernel',
+  'src/win32/CxbxKrnl/EmuFile.cpp',
+  'src/win32/CxbxKrnl/EmuKrnl.cpp',
+  include_directories : cxbx_inc,
+  dependencies : cxbx_trace_dep,
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_kernel_dep = declare_dependency(
+  link_whole : cxbx_hle_kernel,
+  dependencies : [
+    cxbx_guest_tls_win32_dep,
+    cxbx_trace_dep,
+  ],
+  include_directories : cxbx_inc,
+)
+
 cxbx_hle_dispatch = static_library(
   'cxbx_hle_dispatch',
   'src/win32/CxbxKrnl/HLEDataBase.cpp',
@@ -138,8 +160,6 @@ cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/EmuDInput.cpp',
   'src/win32/CxbxKrnl/EmuDSound.cpp',
   'src/win32/CxbxKrnl/EmuXact.cpp',
-  'src/win32/CxbxKrnl/EmuFile.cpp',
-  'src/win32/CxbxKrnl/EmuKrnl.cpp',
   'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
   'src/win32/CxbxKrnl/EmuXG.cpp',
   'src/win32/CxbxKrnl/EmuXOnline.cpp',
@@ -222,6 +242,7 @@ cxbx_runtime = shared_library(
   include_directories : cxbx_inc,
   dependencies : [
     cxbx_hle_dispatch_dep,
+    cxbx_hle_kernel_dep,
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
