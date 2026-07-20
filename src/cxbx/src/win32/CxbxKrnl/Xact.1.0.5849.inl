@@ -66,6 +66,32 @@ SOOVPA<14> IXACTEngine_Release_1_0_5849 =
     }
 };
 
+// _IXACTEngine_RegisterWaveBank@16 (xacteng.lib, 67 bytes)
+SOOVPA<13> IXACTEngine_RegisterWaveBank_1_0_5849 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x07, 0xFF }, { 0x0B, 0x0F },
+        { 0x10, 0x24 }, { 0x16, 0x8B }, { 0x1B, 0x18 },
+        { 0x21, 0x1B }, { 0x26, 0xE8 }, { 0x2C, 0xF6 },
+        { 0x31, 0x68 }, { 0x37, 0x15 }, { 0x3C, 0x8B },
+        { 0x42, 0x00 }
+    }
+};
+
+// _IXACTEngine_UnRegisterWaveBank@8 (xacteng.lib, 59 bytes)
+SOOVPA<13> IXACTEngine_UnRegisterWaveBank_1_0_5849 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x02, 0xE8 }, { 0x09, 0x24 },
+        { 0x0E, 0x8B }, { 0x13, 0xC8 }, { 0x18, 0xD9 },
+        { 0x1D, 0x51 }, { 0x23, 0x85 }, { 0x26, 0xF8 },
+        { 0x29, 0x68 }, { 0x2F, 0x15 }, { 0x35, 0xC7 },
+        { 0x3A, 0x00 }
+    }
+};
+
 OOVPATable XACTENG_1_0_5849[] =
 {
     {
@@ -100,6 +126,20 @@ OOVPATable XACTENG_1_0_5849[] =
         XTL::EmuIXACTEngine_Release,
         #ifdef _DEBUG_TRACE
         "EmuIXACTEngine_Release"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTEngine_RegisterWaveBank_1_0_5849,
+        XTL::EmuIXACTEngine_RegisterWaveBank,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTEngine_RegisterWaveBank"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTEngine_UnRegisterWaveBank_1_0_5849,
+        XTL::EmuIXACTEngine_UnRegisterWaveBank,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTEngine_UnRegisterWaveBank"
         #endif
     }
 };
