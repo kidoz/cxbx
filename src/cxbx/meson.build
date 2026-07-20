@@ -336,7 +336,6 @@ cxbx_frontend_win32_dep = declare_dependency(
 )
 
 cxbx_runtime_src = files(
-  'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
 )
 
@@ -395,6 +394,41 @@ cxbx_hle_d3d8_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_hle_runtime = static_library(
+  'cxbx_hle_runtime',
+  'src/win32/CxbxKrnl/Emu.cpp',
+  include_directories : cxbx_inc,
+  dependencies : [
+    cxbx_core_dep,
+    cxbx_host_input_win32_dep,
+    cxbx_nv2a_capture_dep,
+    cxbx_platform_win32_dep,
+    cxbx_trace_dep,
+  ],
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_runtime_dep = declare_dependency(
+  link_whole : cxbx_hle_runtime,
+  dependencies : [
+    cxbx_core_dep,
+    cxbx_guest_tls_win32_dep,
+    cxbx_hle_d3d8_dep,
+    cxbx_hle_dispatch_dep,
+    cxbx_hle_kernel_dep,
+    cxbx_hle_xapi_dep,
+    cxbx_host_input_win32_dep,
+    cxbx_nv2a_capture_dep,
+    cxbx_platform_win32_dep,
+    cxbx_trace_dep,
+  ],
+  include_directories : cxbx_inc,
+)
+
 resource_compiler = find_program('llvm-rc')
 resource_root = join_paths(meson.project_source_root(), 'Resource')
 branding_root = join_paths(meson.project_source_root(), 'docs', 'branding')
@@ -444,6 +478,7 @@ cxbx_runtime = shared_library(
     cxbx_hle_d3d8_dep,
     cxbx_hle_dispatch_dep,
     cxbx_hle_kernel_dep,
+    cxbx_hle_runtime_dep,
     cxbx_hle_xapi_dep,
     cxbx_hle_xonline_dep,
     cxbx_hle_xg_dep,
