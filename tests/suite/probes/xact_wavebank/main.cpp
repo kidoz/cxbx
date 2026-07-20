@@ -134,7 +134,9 @@ void __cdecl main()
     xt_chk("xact.wavebank_engine_owned_register", 1,
            SUCCEEDED(result) && wave_bank != NULL);
 
-    xt_chk_u32("xact.wavebank_engine_release", 0,
+    xt_chk_u32("xact.wavebank_engine_child_reference", 1,
                IXACTEngine_Release(engine));
+    xt_chk("xact.wavebank_engine_owned_cleanup", 1,
+           SUCCEEDED(IXACTEngine_UnRegisterWaveBank(engine, wave_bank)));
     xt_end_and_exit();
 }
