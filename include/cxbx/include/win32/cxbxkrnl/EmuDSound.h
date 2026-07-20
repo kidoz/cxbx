@@ -785,6 +785,14 @@ HRESULT WINAPI EmuXAudioDownloadEffectsImage
 // ******************************************************************
 VOID WINAPI EmuDirectSoundDoWork();
 
+// Host-FS helper for emulator-owned audio systems such as XACT. The returned
+// DirectSound buffer owns a copy of the supplied PCM bytes.
+HRESULT EmuDSoundCreateHostBuffer(
+    const WAVEFORMATEX* pFormat,
+    const BYTE* pData,
+    DWORD dwSize,
+    IDirectSoundBuffer** ppBuffer);
+
 // ******************************************************************
 // * func: EmuCDirectSoundStream_Flush
 // ******************************************************************

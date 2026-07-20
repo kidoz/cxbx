@@ -17,6 +17,18 @@ static_assert(sizeof(X_XACT_RUNTIME_PARAMETERS) == 0x14,
 struct X_XACTEngine;
 struct X_XACTWaveBank;
 struct X_XACTSoundBank;
+struct X_XACTSoundCue;
+
+struct X_XACT_PREPARE_SOUNDCUE
+{
+    DWORD dwFlags;
+    DWORD dwCueIndex;
+    PVOID pSoundSource;
+    const void* pParameterControls;
+};
+
+static_assert(sizeof(X_XACT_PREPARE_SOUNDCUE) == 0x10,
+              "Xbox XACT_PREPARE_SOUNDCUE ABI size changed");
 
 HRESULT WINAPI EmuXACTEngineCreate(
     const X_XACT_RUNTIME_PARAMETERS* pParams,
@@ -43,5 +55,18 @@ HRESULT WINAPI EmuIXACTSoundBank_GetSoundCueIndexFromFriendlyName(
     X_XACTSoundBank* pSoundBank,
     PCSTR pFriendlyName,
     PDWORD pdwSoundCueIndex);
+HRESULT WINAPI EmuIXACTSoundBank_PrepareEx(
+    X_XACTSoundBank* pSoundBank,
+    const X_XACT_PREPARE_SOUNDCUE* pPrepareData,
+    X_XACTSoundCue** ppSoundCue);
+HRESULT WINAPI EmuIXACTSoundBank_PlayEx(
+    X_XACTSoundBank* pSoundBank,
+    const X_XACT_PREPARE_SOUNDCUE* pPrepareData,
+    X_XACTSoundCue** ppSoundCue);
+HRESULT WINAPI EmuIXACTSoundBank_Stop(
+    X_XACTSoundBank* pSoundBank,
+    DWORD dwSoundCueIndex,
+    DWORD dwFlags,
+    X_XACTSoundCue* pSoundCue);
 
 #endif

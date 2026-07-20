@@ -38,7 +38,17 @@ struct XTL::X_XACTSoundBank
     const BYTE* Data;
     DWORD Size;
     ULONG ReferenceCount;
+    X_XACTSoundCue* Cues;
     X_XACTSoundBank* Next;
+};
+
+struct XTL::X_XACTSoundCue
+{
+    X_XACTSoundBank* SoundBank;
+    DWORD CueIndex;
+    DWORD Flags;
+    IDirectSoundBuffer* HostBuffer;
+    X_XACTSoundCue* Next;
 };
 
 namespace
@@ -61,9 +71,14 @@ constexpr DWORD XactWaveBankMinimumAlignment = 4;
 constexpr DWORD XactSoundBankSignature = 0x4B424453; // "SDBK" in guest memory.
 constexpr WORD XactSoundBankVersion = 11;
 constexpr DWORD XactSoundBankHeaderSize = 0x3C;
+constexpr DWORD XactSoundBankCueTableOffset = 0x38;
 constexpr DWORD XactSoundBankCueEntrySize = 0x14;
 constexpr DWORD XactSoundBankNamesUnavailableFlag = 0x00000001;
 constexpr DWORD XactSoundBankInvalidCueIndex = 0xFFFFFFFF;
+constexpr DWORD XactSoundBankWaveBankNameSize = 0x10;
+constexpr DWORD XactSoundBankDirectSoundFlag = 0x08;
+constexpr DWORD XactSoundBankSoundFlagMask = 0x18;
+constexpr DWORD XactSoundCueAutoReleaseFlag = 0x0001;
 
 struct XactWaveBankRegion
 {
@@ -256,6 +271,217 @@ bool IsInMemoryWaveBankValid(const BYTE* data, DWORD size)
     return true;
 }
 
+bool FixedXactNameEquals(
+    const BYTE* left,
+    const BYTE* right,
+    DWORD length)
+{
+    return std::memcmp(left, right, length) == 0;
+}
+
+bool ResolveWaveBankPcmEntry(
+    XTL::X_XACTWaveBank* waveBank,
+    DWORD waveEntryIndex,
+    WAVEFORMATEX* format,
+    const BYTE** audioData,
+    DWORD* audioSize)
+{
+    XactWaveBankRegion bankData = {};
+    XactWaveBankRegion metadata = {};
+    XactWaveBankRegion waveData = {};
+    if(!ReadWaveBankRegion(
+           waveBank->Data,
+           waveBank->Size,
+           XactWaveBankBankDataSegment,
+           &bankData) ||
+       !ReadWaveBankRegion(
+           waveBank->Data,
+           waveBank->Size,
+           XactWaveBankMetadataSegment,
+           &metadata) ||
+       !ReadWaveBankRegion(
+           waveBank->Data,
+           waveBank->Size,
+           XactWaveBankWaveDataSegment,
+           &waveData))
+    {
+        return false;
+    }
+
+    DWORD flags = 0;
+    DWORD entryCount = 0;
+    DWORD metadataElementSize = 0;
+    if(!ReadXactDword(
+           waveBank->Data, waveBank->Size, bankData.Offset, &flags) ||
+       !ReadXactDword(
+           waveBank->Data,
+           waveBank->Size,
+           bankData.Offset + 4,
+           &entryCount) ||
+       !ReadXactDword(
+           waveBank->Data,
+           waveBank->Size,
+           bankData.Offset + 24,
+           &metadataElementSize) ||
+       (flags & XactWaveBankCompactFlag) != 0 ||
+       metadataElementSize < XactWaveBankEntrySize ||
+       waveEntryIndex >= entryCount)
+    {
+        return false;
+    }
+
+    const DWORD entryOffset =
+        metadata.Offset + waveEntryIndex * metadataElementSize;
+    DWORD encodedFormat = 0;
+    DWORD playOffset = 0;
+    DWORD playLength = 0;
+    if(!ReadXactDword(
+           waveBank->Data,
+           waveBank->Size,
+           entryOffset + 4,
+           &encodedFormat) ||
+       !ReadXactDword(
+           waveBank->Data,
+           waveBank->Size,
+           entryOffset + 8,
+           &playOffset) ||
+       !ReadXactDword(
+           waveBank->Data,
+           waveBank->Size,
+           entryOffset + 12,
+           &playLength) ||
+       (encodedFormat & 0x3) != 0 || playLength == 0 ||
+       playOffset > waveData.Length ||
+       playLength > waveData.Length - playOffset)
+    {
+        return false;
+    }
+
+    const WORD channels = static_cast<WORD>((encodedFormat >> 2) & 0x7);
+    const DWORD samplesPerSecond =
+        (encodedFormat >> 5) & 0x03FFFFFF;
+    const WORD bitsPerSample =
+        (encodedFormat & 0x80000000) != 0 ? 16 : 8;
+    const WORD blockAlign =
+        static_cast<WORD>(channels * bitsPerSample / 8);
+    if(channels == 0 || samplesPerSecond == 0 || blockAlign == 0 ||
+       playLength % blockAlign != 0)
+    {
+        return false;
+    }
+
+    *format = {};
+    format->wFormatTag = WAVE_FORMAT_PCM;
+    format->nChannels = channels;
+    format->nSamplesPerSec = samplesPerSecond;
+    format->nBlockAlign = blockAlign;
+    format->nAvgBytesPerSec = samplesPerSecond * blockAlign;
+    format->wBitsPerSample = bitsPerSample;
+    format->cbSize = 0;
+    *audioData = waveBank->Data + waveData.Offset + playOffset;
+    *audioSize = playLength;
+    return true;
+}
+
+bool ResolveSoundCuePcm(
+    XTL::X_XACTSoundBank* soundBank,
+    DWORD cueIndex,
+    WAVEFORMATEX* format,
+    const BYTE** audioData,
+    DWORD* audioSize)
+{
+    WORD cueCount = 0;
+    if(!ReadXactWord(
+           soundBank->Data, soundBank->Size, 0x1E, &cueCount) ||
+       cueIndex >= cueCount)
+    {
+        return false;
+    }
+
+    const DWORD cueEntryOffset =
+        XactSoundBankCueTableOffset +
+        cueIndex * XactSoundBankCueEntrySize;
+    WORD soundIndex = 0;
+    if(!ReadXactWord(
+           soundBank->Data,
+           soundBank->Size,
+           cueEntryOffset + 2,
+           &soundIndex))
+    {
+        return false;
+    }
+
+    const DWORD soundEntryOffset =
+        XactSoundBankCueTableOffset +
+        (static_cast<DWORD>(cueCount) + soundIndex) *
+            XactSoundBankCueEntrySize;
+    DWORD packedWaveIndex = 0;
+    if(soundEntryOffset > soundBank->Size ||
+       XactSoundBankCueEntrySize > soundBank->Size - soundEntryOffset ||
+       !ReadXactDword(
+           soundBank->Data,
+           soundBank->Size,
+           soundEntryOffset,
+           &packedWaveIndex) ||
+       soundBank->Data[soundEntryOffset + 8] != 1 ||
+       (soundBank->Data[soundEntryOffset + 0x0B] &
+        XactSoundBankSoundFlagMask) != XactSoundBankDirectSoundFlag)
+    {
+        return false;
+    }
+
+    const DWORD waveEntryIndex = packedWaveIndex & 0xFFFF;
+    const DWORD waveBankIndex = packedWaveIndex >> 16;
+    DWORD waveBankNamesOffset = 0;
+    WORD waveBankCount = 0;
+    if(!ReadXactDword(
+           soundBank->Data,
+           soundBank->Size,
+           0x08,
+           &waveBankNamesOffset) ||
+       !ReadXactWord(
+           soundBank->Data,
+           soundBank->Size,
+           0x22,
+           &waveBankCount) ||
+       waveBankIndex >= waveBankCount ||
+       waveBankNamesOffset > soundBank->Size ||
+       XactSoundBankWaveBankNameSize >
+           soundBank->Size - waveBankNamesOffset ||
+       waveBankIndex >
+           (soundBank->Size - waveBankNamesOffset -
+            XactSoundBankWaveBankNameSize) /
+               XactSoundBankWaveBankNameSize)
+    {
+        return false;
+    }
+
+    const BYTE* waveBankName =
+        soundBank->Data + waveBankNamesOffset +
+        waveBankIndex * XactSoundBankWaveBankNameSize;
+    for(XTL::X_XACTWaveBank* waveBank = soundBank->Engine->WaveBanks;
+        waveBank != nullptr;
+        waveBank = waveBank->Next)
+    {
+        XactWaveBankRegion bankData = {};
+        if(ReadWaveBankRegion(
+               waveBank->Data,
+               waveBank->Size,
+               XactWaveBankBankDataSegment,
+               &bankData) &&
+           bankData.Length >= XactWaveBankDataSize &&
+           FixedXactNameEquals(
+               waveBankName,
+               waveBank->Data + bankData.Offset + 8,
+               XactSoundBankWaveBankNameSize))
+        {
+            return ResolveWaveBankPcmEntry(
+                waveBank, waveEntryIndex, format, audioData, audioSize);
+        }
+    }
+    return false;
+}
+
 bool GetSoundBankSize(const BYTE* data, DWORD size, DWORD* soundBankSize)
 {
     if(data == nullptr || size < XactSoundBankHeaderSize)
@@ -373,6 +599,94 @@ XTL::X_XACTEngine* ReleaseXactEngineReferenceLocked(
     engine->ReferenceCount = 0;
     *referenceCount = 0;
     return engine;
+}
+
+void DestroyXactCue(XTL::X_XACTSoundCue* cue)
+{
+    if(cue->HostBuffer != nullptr)
+    {
+        cue->HostBuffer->Stop();
+        cue->HostBuffer->SetCurrentPosition(0);
+        cue->HostBuffer->Release();
+    }
+    delete cue;
+}
+
+void DestroyXactCueList(XTL::X_XACTSoundCue* cues)
+{
+    while(cues != nullptr)
+    {
+        XTL::X_XACTSoundCue* next = cues->Next;
+        DestroyXactCue(cues);
+        cues = next;
+    }
+}
+
+HRESULT CreateXactCueLocked(
+    XTL::X_XACTSoundBank* soundBank,
+    const XTL::X_XACT_PREPARE_SOUNDCUE* prepareData,
+    bool play,
+    XTL::X_XACTSoundCue** soundCue)
+{
+    if(prepareData->pSoundSource != nullptr ||
+       prepareData->pParameterControls != nullptr)
+    {
+        return E_NOTIMPL;
+    }
+
+    WAVEFORMATEX format = {};
+    const BYTE* audioData = nullptr;
+    DWORD audioSize = 0;
+    WORD cueCount = 0;
+    if(!ReadXactWord(
+           soundBank->Data, soundBank->Size, 0x1E, &cueCount) ||
+       prepareData->dwCueIndex >= cueCount)
+    {
+        return E_INVALIDARG;
+    }
+    if(!ResolveSoundCuePcm(
+           soundBank,
+           prepareData->dwCueIndex,
+           &format,
+           &audioData,
+           &audioSize))
+    {
+        return E_NOTIMPL;
+    }
+
+    XTL::X_XACTSoundCue* cue =
+        new(std::nothrow) XTL::X_XACTSoundCue{};
+    if(cue == nullptr)
+    {
+        return E_OUTOFMEMORY;
+    }
+
+    HRESULT result = XTL::EmuDSoundCreateHostBuffer(
+        &format, audioData, audioSize, &cue->HostBuffer);
+    if(SUCCEEDED(result) && play)
+    {
+        result = cue->HostBuffer->SetCurrentPosition(0);
+        if(SUCCEEDED(result))
+        {
+            result = cue->HostBuffer->Play(0, 0, 0);
+        }
+    }
+    if(FAILED(result))
+    {
+        DestroyXactCue(cue);
+        return result;
+    }
+
+    cue->SoundBank = soundBank;
+    cue->CueIndex = prepareData->dwCueIndex;
+    cue->Flags = prepareData->dwFlags;
+    cue->Next = soundBank->Cues;
+    soundBank->Cues = cue;
+    if(soundCue != nullptr)
+    {
+        *soundCue = cue;
+    }
+    return S_OK;
 }
 } // namespace
 
@@ -639,6 +953,7 @@ ULONG WINAPI XTL::EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank)
 
     ULONG referenceCount = 0;
     X_XACTSoundBank* releasedSoundBank = nullptr;
+    X_XACTSoundCue* releasedCues = nullptr;
     X_XACTEngine* releasedEngine = nullptr;
     {
         const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
@@ -660,6 +975,8 @@ ULONG WINAPI XTL::EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank)
                 if(*link != nullptr)
                 {
                     *link = soundBank->Next;
+                    releasedCues = soundBank->Cues;
+                    soundBank->Cues = nullptr;
                     releasedSoundBank = soundBank;
                     ULONG engineReferenceCount = 0;
                     releasedEngine = ReleaseXactEngineReferenceLocked(
@@ -669,6 +986,7 @@ ULONG WINAPI XTL::EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank)
         }
     }
 
+    DestroyXactCueList(releasedCues);
     delete releasedSoundBank;
     delete releasedEngine;
     EmuSwapFS(); // Xbox FS
@@ -731,6 +1049,128 @@ HRESULT WINAPI XTL::EmuIXACTSoundBank_GetSoundCueIndexFromFriendlyName(
         }
     }
 
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+HRESULT WINAPI XTL::EmuIXACTSoundBank_PrepareEx(
+    X_XACTSoundBank* pSoundBank,
+    const X_XACT_PREPARE_SOUNDCUE* pPrepareData,
+    X_XACTSoundCue** ppSoundCue)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(ppSoundCue == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_POINTER;
+    }
+    *ppSoundCue = nullptr;
+    if(pPrepareData == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_INVALIDARG;
+    }
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTSoundBank* soundBank = FindXactSoundBank(pSoundBank);
+        if(soundBank != nullptr)
+        {
+            result = CreateXactCueLocked(
+                soundBank, pPrepareData, false, ppSoundCue);
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+HRESULT WINAPI XTL::EmuIXACTSoundBank_PlayEx(
+    X_XACTSoundBank* pSoundBank,
+    const X_XACT_PREPARE_SOUNDCUE* pPrepareData,
+    X_XACTSoundCue** ppSoundCue)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(ppSoundCue != nullptr)
+    {
+        *ppSoundCue = nullptr;
+    }
+    if(pPrepareData == nullptr ||
+       (ppSoundCue == nullptr &&
+        (pPrepareData->dwFlags & XactSoundCueAutoReleaseFlag) == 0))
+    {
+        EmuSwapFS(); // Xbox FS
+        return pPrepareData == nullptr ? E_INVALIDARG : E_POINTER;
+    }
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTSoundBank* soundBank = FindXactSoundBank(pSoundBank);
+        if(soundBank != nullptr)
+        {
+            result = CreateXactCueLocked(
+                soundBank, pPrepareData, true, ppSoundCue);
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+HRESULT WINAPI XTL::EmuIXACTSoundBank_Stop(
+    X_XACTSoundBank* pSoundBank,
+    DWORD dwSoundCueIndex,
+    DWORD dwFlags,
+    X_XACTSoundCue* pSoundCue)
+{
+    EmuSwapFS(); // Win2k/XP FS
+    (void)dwFlags;
+
+    HRESULT result = E_INVALIDARG;
+    X_XACTSoundCue* releasedCues = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTSoundBank* soundBank = FindXactSoundBank(pSoundBank);
+        if(soundBank != nullptr)
+        {
+            result = S_OK;
+            X_XACTSoundCue** link = &soundBank->Cues;
+            while(*link != nullptr)
+            {
+                X_XACTSoundCue* cue = *link;
+                const bool matches = pSoundCue != nullptr
+                                         ? cue == pSoundCue
+                                         : dwSoundCueIndex ==
+                                                   XactSoundBankInvalidCueIndex ||
+                                               cue->CueIndex ==
+                                                   dwSoundCueIndex;
+                if(matches)
+                {
+                    *link = cue->Next;
+                    cue->Next = releasedCues;
+                    releasedCues = cue;
+                    if(pSoundCue != nullptr)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    link = &cue->Next;
+                }
+            }
+            if(pSoundCue != nullptr && releasedCues == nullptr)
+            {
+                result = E_INVALIDARG;
+            }
+        }
+    }
+
+    DestroyXactCueList(releasedCues);
     EmuSwapFS(); // Xbox FS
     return result;
 }

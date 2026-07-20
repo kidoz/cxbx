@@ -228,6 +228,65 @@ SOOVPA<13> IXACTEngine_UnRegisterWaveBank_1_0_5849 =
     }
 };
 
+// ?Prepare@CSoundBank@XACT@@QAGJPBU_XACT_PREPARE_SOUNDCUE@@PAPAUIXACTSoundCue@@@Z
+SOOVPA<8> XACTSoundBank_PrepareInternal_1_0_5849 =
+{
+    0, 8, XREF_XACT5849_SOUNDBANK_PREPARE, 0,
+    {
+        { 0x00, 0xFF }, { 0x03, 0x0C }, { 0x06, 0x24 },
+        { 0x09, 0x00 }, { 0x0C, 0x24 }, { 0x0E, 0xE8 },
+        { 0x13, 0xC2 }, { 0x15, 0x00 }
+    }
+};
+
+// _IXACTSoundBank_PrepareEx@12
+// call@0x17 -> XREF_XACT5849_SOUNDBANK_PREPARE
+SOOVPA<9> IXACTSoundBank_PrepareEx_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x17, XREF_XACT5849_SOUNDBANK_PREPARE },
+        { 0x00, 0x56 }, { 0x07, 0xFF }, { 0x0E, 0xFF },
+        { 0x15, 0x14 }, { 0x1C, 0xF6 }, { 0x21, 0x68 },
+        { 0x2C, 0x8B }, { 0x32, 0x00 }
+    }
+};
+
+// ?Play@CSoundBank@XACT@@QAGJPBU_XACT_PREPARE_SOUNDCUE@@PAPAUIXACTSoundCue@@@Z
+SOOVPA<8> XACTSoundBank_PlayInternal_1_0_5849 =
+{
+    0, 8, XREF_XACT5849_SOUNDBANK_PLAY, 0,
+    {
+        { 0x00, 0x55 }, { 0x22, 0xE8 }, { 0x48, 0x0C },
+        { 0x6D, 0xF4 }, { 0x91, 0x08 }, { 0xB6, 0xFF },
+        { 0xDC, 0xEB }, { 0xFF, 0x3B }
+    }
+};
+
+// _IXACTSoundBank_PlayEx@12
+// call@0x17 -> XREF_XACT5849_SOUNDBANK_PLAY
+SOOVPA<9> IXACTSoundBank_PlayEx_1_0_5849 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x17, XREF_XACT5849_SOUNDBANK_PLAY },
+        { 0x00, 0x56 }, { 0x07, 0xFF }, { 0x0E, 0xFF },
+        { 0x15, 0x14 }, { 0x1C, 0xF6 }, { 0x21, 0x68 },
+        { 0x2C, 0x8B }, { 0x32, 0x00 }
+    }
+};
+
+// _IXACTSoundBank_Stop@16
+SOOVPA<8> IXACTSoundBank_Stop_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 }, { 0x07, 0xFF }, { 0x0F, 0x74 },
+        { 0x17, 0x74 }, { 0x1F, 0x85 }, { 0x25, 0x68 },
+        { 0x30, 0x8B }, { 0x36, 0x00 }
+    }
+};
+
 OOVPATable XACTENG_1_0_5849[] =
 {
     {
@@ -340,6 +399,39 @@ OOVPATable XACTENG_1_0_5849[] =
         XTL::EmuIXACTSoundBank_Release,
         #ifdef _DEBUG_TRACE
         "EmuIXACTSoundBank_Release"
+        #endif
+    },
+    {
+        (OOVPA*)&XACTSoundBank_PrepareInternal_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "XACT::CSoundBank::Prepare (XREF)"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTSoundBank_PrepareEx_1_0_5849,
+        XTL::EmuIXACTSoundBank_PrepareEx,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTSoundBank_PrepareEx"
+        #endif
+    },
+    {
+        (OOVPA*)&XACTSoundBank_PlayInternal_1_0_5849, 0,
+        #ifdef _DEBUG_TRACE
+        "XACT::CSoundBank::Play (XREF)"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTSoundBank_PlayEx_1_0_5849,
+        XTL::EmuIXACTSoundBank_PlayEx,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTSoundBank_PlayEx"
+        #endif
+    },
+    {
+        (OOVPA*)&IXACTSoundBank_Stop_1_0_5849,
+        XTL::EmuIXACTSoundBank_Stop,
+        #ifdef _DEBUG_TRACE
+        "EmuIXACTSoundBank_Stop"
         #endif
     }
 };
