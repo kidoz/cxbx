@@ -143,6 +143,37 @@ cxbx_trace_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_hle_audio = static_library(
+  'cxbx_hle_audio',
+  'src/win32/CxbxKrnl/EmuDSound.cpp',
+  'src/win32/CxbxKrnl/EmuXact.cpp',
+  include_directories : cxbx_inc,
+  dependencies : [
+    cxbx_pcm_dep,
+    cxbx_platform_win32_dep,
+    cxbx_trace_dep,
+    cxbx_xbox_adpcm_dep,
+  ],
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_audio_dep = declare_dependency(
+  link_whole : cxbx_hle_audio,
+  dependencies : [
+    cxbx_guest_tls_win32_dep,
+    cxbx_pcm_dep,
+    cxbx_platform_win32_dep,
+    cxbx_trace_dep,
+    cxbx_xbox_adpcm_dep,
+  ],
+  link_args : '-ldsound',
+  include_directories : cxbx_inc,
+)
+
 cxbx_hle_kernel = static_library(
   'cxbx_hle_kernel',
   'src/win32/CxbxKrnl/EmuFile.cpp',
@@ -271,8 +302,6 @@ cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
-  'src/win32/CxbxKrnl/EmuDSound.cpp',
-  'src/win32/CxbxKrnl/EmuXact.cpp',
   'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
 )
 
@@ -300,7 +329,6 @@ cxbx_link_libs += [d3d8_import_lib]
 cxbx_link_args = [
   '-lddraw',
   '-ldinput8',
-  '-ldsound',
   '-ldxguid',
   '-lwinmm',
 ]
@@ -350,6 +378,7 @@ cxbx_runtime = shared_library(
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
   dependencies : [
+    cxbx_hle_audio_dep,
     cxbx_hle_dispatch_dep,
     cxbx_hle_kernel_dep,
     cxbx_hle_xapi_dep,
@@ -359,9 +388,7 @@ cxbx_runtime = shared_library(
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
-    cxbx_pcm_dep,
     cxbx_trace_dep,
-    cxbx_xbox_adpcm_dep,
     cxbx_yuy2_dep,
   ],
   link_with : cxbx_link_libs,
