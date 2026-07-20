@@ -168,6 +168,24 @@ cxbx_hle_xapi_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_hle_xonline = static_library(
+  'cxbx_hle_xonline',
+  'src/win32/CxbxKrnl/EmuXOnline.cpp',
+  include_directories : cxbx_inc,
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_xonline_dep = declare_dependency(
+  link_whole : cxbx_hle_xonline,
+  dependencies : cxbx_guest_tls_win32_dep,
+  link_args : '-lws2_32',
+  include_directories : cxbx_inc,
+)
+
 cxbx_hle_dispatch = static_library(
   'cxbx_hle_dispatch',
   'src/win32/CxbxKrnl/HLEDataBase.cpp',
@@ -221,7 +239,6 @@ cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/EmuXact.cpp',
   'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
   'src/win32/CxbxKrnl/EmuXG.cpp',
-  'src/win32/CxbxKrnl/EmuXOnline.cpp',
 )
 
 cxbx_link_libs = [
@@ -251,7 +268,6 @@ cxbx_link_args = [
   '-ldsound',
   '-ldxguid',
   '-lwinmm',
-  '-lws2_32',
 ]
 
 resource_compiler = find_program('llvm-rc')
@@ -302,6 +318,7 @@ cxbx_runtime = shared_library(
     cxbx_hle_dispatch_dep,
     cxbx_hle_kernel_dep,
     cxbx_hle_xapi_dep,
+    cxbx_hle_xonline_dep,
     cxbx_hle_input_dep,
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
