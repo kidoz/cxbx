@@ -26,3 +26,7 @@ kill_names = ["default.exe"]
 # xboxkrnl_def = "REPLACE_WITH_NXDK_DIR/lib/xboxkrnl/xboxkrnl.exe.def"
 # Optional. Defaults to tools/kernelaudit/xboxkrnl_ordinals.csv.
 ordinals_csv = "tools/kernelaudit/xboxkrnl_ordinals.csv"
+
+[xdkaudit]
+# Local Xbox XDK root containing xbox/lib and Samples/Xbox.
+xdk_root = "REPLACE_WITH_XDK_ROOT"
