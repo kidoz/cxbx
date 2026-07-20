@@ -20,6 +20,17 @@ cxbx_trace_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_yuy2 = static_library(
+  'cxbx_yuy2',
+  'src/core/Yuy2Converter.cpp',
+  include_directories : cxbx_inc,
+)
+
+cxbx_yuy2_dep = declare_dependency(
+  link_with : cxbx_yuy2,
+  include_directories : cxbx_inc,
+)
+
 cxbx_launcher_src = files(
   'src/win32/Cxbx/DlgControllerConfig.cpp',
   'src/win32/Cxbx/DlgVideoConfig.cpp',
@@ -35,7 +46,6 @@ cxbx_runtime_src = files(
   'src/core/nv2a_capture.cpp',
   'src/core/PcmConverter.cpp',
   'src/core/XboxAdpcmDecoder.cpp',
-  'src/core/Yuy2Converter.cpp',
   'src/win32/EmuShared.cpp',
   'src/win32/HostInput.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
@@ -133,7 +143,10 @@ cxbx_runtime = shared_library(
   cxbx_runtime_src,
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
-  dependencies : cxbx_trace_dep,
+  dependencies : [
+    cxbx_trace_dep,
+    cxbx_yuy2_dep,
+  ],
   link_with : cxbx_link_libs,
   link_args : cxbx_link_args + [
     '-Wl,/BASE:0x10000000',

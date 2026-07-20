@@ -10,8 +10,7 @@ test('host-input-translation', host_input_test)
 host_yuy2_test = executable(
   'host_yuy2_test',
   'yuy2_conversion.cpp',
-  '../../src/cxbx/src/core/Yuy2Converter.cpp',
-  include_directories : cxbx_inc,
+  dependencies : cxbx_yuy2_dep,
 )
 
 test('host-yuy2-conversion', host_yuy2_test)
