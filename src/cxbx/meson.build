@@ -16,6 +16,28 @@ cxbx_core_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_pcm = static_library(
+  'cxbx_pcm',
+  'src/core/PcmConverter.cpp',
+  include_directories : cxbx_inc,
+)
+
+cxbx_pcm_dep = declare_dependency(
+  link_with : cxbx_pcm,
+  include_directories : cxbx_inc,
+)
+
+cxbx_xbox_adpcm = static_library(
+  'cxbx_xbox_adpcm',
+  'src/core/XboxAdpcmDecoder.cpp',
+  include_directories : cxbx_inc,
+)
+
+cxbx_xbox_adpcm_dep = declare_dependency(
+  link_with : cxbx_xbox_adpcm,
+  include_directories : cxbx_inc,
+)
+
 cxbx_platform_win32 = static_library(
   'cxbx_platform_win32',
   'src/win32/Mutex.cpp',
@@ -246,8 +268,6 @@ cxbx_launcher_src = files(
 
 cxbx_runtime_src = files(
   'src/core/nv2a_capture.cpp',
-  'src/core/PcmConverter.cpp',
-  'src/core/XboxAdpcmDecoder.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
@@ -339,7 +359,9 @@ cxbx_runtime = shared_library(
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
+    cxbx_pcm_dep,
     cxbx_trace_dep,
+    cxbx_xbox_adpcm_dep,
     cxbx_yuy2_dep,
   ],
   link_with : cxbx_link_libs,

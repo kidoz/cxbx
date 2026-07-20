@@ -72,8 +72,7 @@ test('host-psh-translate', host_psh_translate_test)
 host_pcm_test = executable(
   'host_pcm_test',
   'pcm_conversion.cpp',
-  '../../src/cxbx/src/core/PcmConverter.cpp',
-  include_directories : cxbx_inc,
+  dependencies : cxbx_pcm_dep,
 )
 
 test('host-pcm-conversion', host_pcm_test)
@@ -81,8 +80,7 @@ test('host-pcm-conversion', host_pcm_test)
 host_xbox_adpcm_test = executable(
   'host_xbox_adpcm_test',
   'xbox_adpcm.cpp',
-  '../../src/cxbx/src/core/XboxAdpcmDecoder.cpp',
-  include_directories : cxbx_inc,
+  dependencies : cxbx_xbox_adpcm_dep,
 )
 
 test('host-xbox-adpcm', host_xbox_adpcm_test)
