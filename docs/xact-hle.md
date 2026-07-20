@@ -16,12 +16,17 @@ turn a clear missing hook into an opaque guest crash. The initial object model
 needs reference counting, parameter validation, deterministic teardown, and an
 explicit relationship to the existing DirectSound device.
 
-The engine lifecycle slice is implemented. The remaining order is:
+The engine lifecycle and in-memory wave-bank slices are implemented. Registered
+wave banks retain the guest buffer as borrowed data until explicit
+unregistration or engine teardown. Registration validates the version 3 bank
+header, segment bounds, metadata dimensions, entry formats, and wave-data
+regions before publishing an emulator-owned handle.
 
-1. In-memory wave-bank registration and unregistration.
-2. Sound-bank creation plus cue-name lookup.
-3. Cue prepare/play/stop with DirectSound-backed voices.
-4. Streaming wave banks, notifications, parameter controls, and WMA playlists,
+The remaining order is:
+
+1. Sound-bank creation plus cue-name lookup.
+2. Cue prepare/play/stop with DirectSound-backed voices.
+3. Streaming wave banks, notifications, parameter controls, and WMA playlists,
    each added only with its own probe or title trace.
 
 Every slice must add exact 5849 signatures, verify one match in its probe and

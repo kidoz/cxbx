@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xact_wavebank
+#result xact_wavebank verdict=PASS checks=12 fail=0
