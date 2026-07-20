@@ -206,6 +206,7 @@ after locking the backbuffer.
 | `ds_status`  | DSOUND HLE (buffer state) | GetStatus state machine (stopped → PLAYING+LOOPING → stopped → PLAYING-only) + Lock/Unlock write-readback |
 | `ds_stream`  | DSOUND HLE (stream packets) | XDK 4627 queue → pending → host playback completion/callback → flush → release lifecycle |
 | `xact_cue`   | XACT HLE (host audio) | XDK 5849 generated PCM banks; cue lookup, prepare/play/stop, natural autorelease, stop-notification polling, invalid-index rejection, and ownership teardown |
+| `xmv_decode` | XMV pass-through (media) | XDK 5849 file decode; exact video/audio descriptors, stream synchronization/ownership, timestamped YUY2 frame, reset, and decode-after-reset |
 | `xinput_state` | XAPI input HLE      | device enumeration + XInputGetState returns the CXBX_INPUT_STATE-injected pad state (headless input) |
 | `ds_nestopia`| DSOUND HLE (title pattern) | NestopiaX's soundNES.cpp lifecycle API-for-API: dual buffers, SetMixBins, Lock/Unlock ring updates, GetStatus |
 
