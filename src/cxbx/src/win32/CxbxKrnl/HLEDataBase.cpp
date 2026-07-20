@@ -72,6 +72,7 @@ namespace XTL
 #include "D3D8.1.0.3911.inl"
 #include "D3D8.1.0.5233.inl"
 #include "D3D8D.1.0.5849.inl"
+#include "D3D8I.1.0.5849.inl"
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
@@ -254,6 +255,13 @@ HLEData HLEDataBase[] =
         1, 0, 5849,
         D3D8D_1_0_5849,
         D3D8D_1_0_5849_SIZE
+    },
+    // D3D8 profile library Version 1.0.5849
+    {
+        "D3D8I",
+        1, 0, 5849,
+        D3D8I_1_0_5849,
+        D3D8I_1_0_5849_SIZE
     },
     // D3D8 Version 1.0.5933 (NestopiaX 1.3): adjacent build to 5849 -- reuse its
     // table; each OOVPA still has to byte-match, so only genuinely unchanged

@@ -1045,6 +1045,14 @@ DWORD WINAPI EmuIDirect3DDevice8_GetDebugMarker();
 VOID WINAPI EmuD3DPERF_Reset();
 
 // ******************************************************************
+// * D3D8 profile-library performance markers and pusher telemetry
+// ******************************************************************
+VOID WINAPI EmuD3DPERF_GetPushBufferInfo(PVOID pInfo);
+VOID __cdecl EmuD3DPERF_SetMarker(DWORD Color, const char* Name, ...);
+INT __cdecl EmuD3DPERF_BeginEvent(DWORD Color, const char* Name, ...);
+INT WINAPI EmuD3DPERF_EndEvent();
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_Present
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DDevice8_Present
