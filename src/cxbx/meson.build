@@ -308,6 +308,29 @@ cxbx_launcher_src = files(
   'src/win32/Cxbx/WndMain.cpp',
 )
 
+cxbx_frontend_win32 = static_library(
+  'cxbx_frontend_win32',
+  cxbx_launcher_src,
+  include_directories : cxbx_inc,
+  dependencies : [
+    cxbx_platform_win32_dep,
+    cxbx_core_dep,
+  ],
+  cpp_args : [
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_frontend_win32_dep = declare_dependency(
+  link_whole : cxbx_frontend_win32,
+  dependencies : [
+    cxbx_platform_win32_dep,
+    cxbx_core_dep,
+  ],
+  include_directories : cxbx_inc,
+)
+
 cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
@@ -417,13 +440,9 @@ cxbx_runtime = shared_library(
 
 executable(
   'cxbx',
-  cxbx_launcher_src,
   cxbx_launcher_resources,
   include_directories : cxbx_inc,
-  dependencies : [
-    cxbx_platform_win32_dep,
-    cxbx_core_dep,
-  ],
+  dependencies : cxbx_frontend_win32_dep,
   link_with : [
     cxbx_runtime,
     cxbx_link_libs,
