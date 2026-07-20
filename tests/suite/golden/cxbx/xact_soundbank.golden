@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xact_soundbank
+#result xact_soundbank verdict=PASS checks=16 fail=0

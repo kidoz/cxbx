@@ -16,6 +16,7 @@ static_assert(sizeof(X_XACT_RUNTIME_PARAMETERS) == 0x14,
 
 struct X_XACTEngine;
 struct X_XACTWaveBank;
+struct X_XACTSoundBank;
 
 HRESULT WINAPI EmuXACTEngineCreate(
     const X_XACT_RUNTIME_PARAMETERS* pParams,
@@ -31,5 +32,16 @@ HRESULT WINAPI EmuIXACTEngine_RegisterWaveBank(
 HRESULT WINAPI EmuIXACTEngine_UnRegisterWaveBank(
     X_XACTEngine* pEngine,
     X_XACTWaveBank* pWaveBank);
+HRESULT WINAPI EmuIXACTEngine_CreateSoundBank(
+    X_XACTEngine* pEngine,
+    PVOID pvData,
+    DWORD dwSize,
+    X_XACTSoundBank** ppSoundBank);
+ULONG WINAPI EmuIXACTSoundBank_AddRef(X_XACTSoundBank* pSoundBank);
+ULONG WINAPI EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank);
+HRESULT WINAPI EmuIXACTSoundBank_GetSoundCueIndexFromFriendlyName(
+    X_XACTSoundBank* pSoundBank,
+    PCSTR pFriendlyName,
+    PDWORD pdwSoundCueIndex);
 
 #endif

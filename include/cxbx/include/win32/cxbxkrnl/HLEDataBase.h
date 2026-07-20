@@ -284,7 +284,15 @@ enum XRefDataBaseOffset
     XREF_DS5933_BUF_SETFORMAT,
     // XDK 5849 XACT: the public engine Release thunk is distinguished by its
     // unique CEngine::Release call target.
-    XREF_XACT5849_ENGINE_RELEASE
+    XREF_XACT5849_ENGINE_RELEASE,
+    // XDK 5849 XACT bank-method thunks share their non-relocated bytes with
+    // sibling methods, so their class-method call targets identify them.
+    XREF_XACT5849_CREATE_SOUNDBANK,
+    XREF_XACT5849_REGISTER_WAVEBANK,
+    XREF_XACT5849_SOUNDBANK_ADDREF,
+    XREF_XACT5849_SOUNDBANK_DESTRUCTOR,
+    XREF_XACT5849_SOUNDBANK_DELETING_DESTRUCTOR,
+    XREF_XACT5849_SOUNDBANK_RELEASE
 };
 
 #endif

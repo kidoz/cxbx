@@ -20,6 +20,7 @@ struct XTL::X_XACTEngine
     X_XACT_RUNTIME_PARAMETERS Parameters;
     ULONG ReferenceCount;
     X_XACTWaveBank* WaveBanks;
+    X_XACTSoundBank* SoundBanks;
     X_XACTEngine* Next;
 };
 
@@ -29,6 +30,15 @@ struct XTL::X_XACTWaveBank
     const BYTE* Data;
     DWORD Size;
     X_XACTWaveBank* Next;
+};
+
+struct XTL::X_XACTSoundBank
+{
+    X_XACTEngine* Engine;
+    const BYTE* Data;
+    DWORD Size;
+    ULONG ReferenceCount;
+    X_XACTSoundBank* Next;
 };
 
 namespace
@@ -48,6 +58,12 @@ constexpr DWORD XactWaveBankTypeMask = 0x00000001;
 constexpr DWORD XactWaveBankEntryNamesFlag = 0x00010000;
 constexpr DWORD XactWaveBankCompactFlag = 0x00020000;
 constexpr DWORD XactWaveBankMinimumAlignment = 4;
+constexpr DWORD XactSoundBankSignature = 0x4B424453; // "SDBK" in guest memory.
+constexpr WORD XactSoundBankVersion = 11;
+constexpr DWORD XactSoundBankHeaderSize = 0x3C;
+constexpr DWORD XactSoundBankCueEntrySize = 0x14;
+constexpr DWORD XactSoundBankNamesUnavailableFlag = 0x00000001;
+constexpr DWORD XactSoundBankInvalidCueIndex = 0xFFFFFFFF;
 
 struct XactWaveBankRegion
 {
@@ -58,11 +74,26 @@ struct XactWaveBankRegion
 std::mutex g_XactEngineMutex;
 XTL::X_XACTEngine* g_XactEngines = nullptr;
 
-bool ReadWaveBankDword(
+bool ReadXactDword(
     const BYTE* data,
     DWORD size,
     DWORD offset,
     DWORD* value)
+{
+    if(offset > size || sizeof(*value) > size - offset)
+    {
+        return false;
+    }
+
+    std::memcpy(value, data + offset, sizeof(*value));
+    return true;
+}
+
+bool ReadXactWord(
+    const BYTE* data,
+    DWORD size,
+    DWORD offset,
+    WORD* value)
 {
     if(offset > size || sizeof(*value) > size - offset)
     {
@@ -80,8 +111,8 @@ bool ReadWaveBankRegion(
     XactWaveBankRegion* region)
 {
     const DWORD regionOffset = 8 + index * 8;
-    return ReadWaveBankDword(data, size, regionOffset, &region->Offset) &&
-           ReadWaveBankDword(data, size, regionOffset + 4, &region->Length);
+    return ReadXactDword(data, size, regionOffset, &region->Offset) &&
+           ReadXactDword(data, size, regionOffset + 4, &region->Length);
 }
 
 bool IsWaveBankRegionValid(const XactWaveBankRegion& region, DWORD size)
@@ -109,11 +140,11 @@ bool IsWaveBankEntryValid(
     DWORD playLength = 0;
     DWORD loopOffset = 0;
     DWORD loopLength = 0;
-    if(!ReadWaveBankDword(data, size, entryOffset + 4, &format) ||
-       !ReadWaveBankDword(data, size, entryOffset + 8, &playOffset) ||
-       !ReadWaveBankDword(data, size, entryOffset + 12, &playLength) ||
-       !ReadWaveBankDword(data, size, entryOffset + 16, &loopOffset) ||
-       !ReadWaveBankDword(data, size, entryOffset + 20, &loopLength))
+    if(!ReadXactDword(data, size, entryOffset + 4, &format) ||
+       !ReadXactDword(data, size, entryOffset + 8, &playOffset) ||
+       !ReadXactDword(data, size, entryOffset + 12, &playLength) ||
+       !ReadXactDword(data, size, entryOffset + 16, &loopOffset) ||
+       !ReadXactDword(data, size, entryOffset + 20, &loopLength))
     {
         return false;
     }
@@ -138,8 +169,8 @@ bool IsInMemoryWaveBankValid(const BYTE* data, DWORD size)
 
     DWORD signature = 0;
     DWORD version = 0;
-    if(!ReadWaveBankDword(data, size, 0, &signature) ||
-       !ReadWaveBankDword(data, size, 4, &version) ||
+    if(!ReadXactDword(data, size, 0, &signature) ||
+       !ReadXactDword(data, size, 4, &version) ||
        signature != XactWaveBankSignature || version != XactWaveBankVersion)
     {
         return false;
@@ -173,13 +204,13 @@ bool IsInMemoryWaveBankValid(const BYTE* data, DWORD size)
     DWORD metadataElementSize = 0;
     DWORD entryNameElementSize = 0;
     DWORD alignment = 0;
-    if(!ReadWaveBankDword(data, size, bankData.Offset, &flags) ||
-       !ReadWaveBankDword(data, size, bankData.Offset + 4, &entryCount) ||
-       !ReadWaveBankDword(
+    if(!ReadXactDword(data, size, bankData.Offset, &flags) ||
+       !ReadXactDword(data, size, bankData.Offset + 4, &entryCount) ||
+       !ReadXactDword(
            data, size, bankData.Offset + 24, &metadataElementSize) ||
-       !ReadWaveBankDword(
+       !ReadXactDword(
            data, size, bankData.Offset + 28, &entryNameElementSize) ||
-       !ReadWaveBankDword(data, size, bankData.Offset + 32, &alignment))
+       !ReadXactDword(data, size, bankData.Offset + 32, &alignment))
     {
         return false;
     }
@@ -208,7 +239,7 @@ bool IsInMemoryWaveBankValid(const BYTE* data, DWORD size)
     if(compact)
     {
         DWORD compactFormat = 0;
-        return ReadWaveBankDword(
+        return ReadXactDword(
                    data, size, bankData.Offset + 36, &compactFormat) &&
                IsWaveBankFormatValid(compactFormat);
     }
@@ -225,6 +256,55 @@ bool IsInMemoryWaveBankValid(const BYTE* data, DWORD size)
     return true;
 }
 
+bool GetSoundBankSize(const BYTE* data, DWORD size, DWORD* soundBankSize)
+{
+    if(data == nullptr || size < XactSoundBankHeaderSize)
+    {
+        return false;
+    }
+
+    DWORD signature = 0;
+    WORD version = 0;
+    DWORD declaredSize = 0;
+    DWORD flags = 0;
+    WORD cueCount = 0;
+    if(!ReadXactDword(data, size, 0x00, &signature) ||
+       !ReadXactWord(data, size, 0x04, &version) ||
+       !ReadXactDword(data, size, 0x14, &declaredSize) ||
+       !ReadXactDword(data, size, 0x18, &flags) ||
+       !ReadXactWord(data, size, 0x1E, &cueCount) ||
+       signature != XactSoundBankSignature ||
+       version != XactSoundBankVersion ||
+       declaredSize < XactSoundBankHeaderSize || declaredSize > size ||
+       cueCount >
+           (declaredSize - XactSoundBankHeaderSize) /
+               XactSoundBankCueEntrySize)
+    {
+        return false;
+    }
+
+    if((flags & XactSoundBankNamesUnavailableFlag) == 0)
+    {
+        for(DWORD index = 0; index < cueCount; ++index)
+        {
+            DWORD nameOffset = 0;
+            const DWORD cueOffset =
+                XactSoundBankHeaderSize + index * XactSoundBankCueEntrySize;
+            if(!ReadXactDword(data, declaredSize, cueOffset, &nameOffset) ||
+               nameOffset >= declaredSize ||
+               std::memchr(
+                   data + nameOffset, '\0', declaredSize - nameOffset) ==
+                   nullptr)
+            {
+                return false;
+            }
+        }
+    }
+
+    *soundBankSize = declaredSize;
+    return true;
+}
+
 XTL::X_XACTEngine* FindXactEngine(XTL::X_XACTEngine* engine)
 {
     for(XTL::X_XACTEngine* current = g_XactEngines;
@@ -237,6 +317,62 @@ XTL::X_XACTEngine* FindXactEngine(XTL::X_XACTEngine* engine)
         }
     }
     return nullptr;
+}
+
+XTL::X_XACTSoundBank* FindXactSoundBank(XTL::X_XACTSoundBank* soundBank)
+{
+    for(XTL::X_XACTEngine* engine = g_XactEngines;
+        engine != nullptr;
+        engine = engine->Next)
+    {
+        for(XTL::X_XACTSoundBank* current = engine->SoundBanks;
+            current != nullptr;
+            current = current->Next)
+        {
+            if(current == soundBank)
+            {
+                return current;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool AddXactEngineReferenceLocked(XTL::X_XACTEngine* engine)
+{
+    if(engine->ReferenceCount == (std::numeric_limits<ULONG>::max)())
+    {
+        return false;
+    }
+    ++engine->ReferenceCount;
+    return true;
+}
+
+XTL::X_XACTEngine* ReleaseXactEngineReferenceLocked(
+    XTL::X_XACTEngine* engine,
+    ULONG* referenceCount)
+{
+    if(engine->ReferenceCount > 1)
+    {
+        *referenceCount = --engine->ReferenceCount;
+        return nullptr;
+    }
+
+    XTL::X_XACTEngine** link = &g_XactEngines;
+    while(*link != nullptr && *link != engine)
+    {
+        link = &(*link)->Next;
+    }
+    if(*link == nullptr)
+    {
+        *referenceCount = 0;
+        return nullptr;
+    }
+
+    *link = engine->Next;
+    engine->ReferenceCount = 0;
+    *referenceCount = 0;
+    return engine;
 }
 } // namespace
 
@@ -300,10 +436,7 @@ ULONG WINAPI XTL::EmuIXACTEngine_AddRef(X_XACTEngine* pEngine)
         X_XACTEngine* engine = FindXactEngine(pEngine);
         if(engine != nullptr)
         {
-            if(engine->ReferenceCount < (std::numeric_limits<ULONG>::max)())
-            {
-                ++engine->ReferenceCount;
-            }
+            AddXactEngineReferenceLocked(engine);
             referenceCount = engine->ReferenceCount;
         }
     }
@@ -320,38 +453,15 @@ ULONG WINAPI XTL::EmuIXACTEngine_Release(X_XACTEngine* pEngine)
     X_XACTEngine* releasedEngine = nullptr;
     {
         const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
-        X_XACTEngine** link = &g_XactEngines;
-        while(*link != nullptr && *link != pEngine)
+        X_XACTEngine* engine = FindXactEngine(pEngine);
+        if(engine != nullptr)
         {
-            link = &(*link)->Next;
-        }
-
-        if(*link != nullptr)
-        {
-            X_XACTEngine* engine = *link;
-            if(engine->ReferenceCount > 1)
-            {
-                referenceCount = --engine->ReferenceCount;
-            }
-            else
-            {
-                *link = engine->Next;
-                releasedEngine = engine;
-            }
+            releasedEngine =
+                ReleaseXactEngineReferenceLocked(engine, &referenceCount);
         }
     }
 
-    if(releasedEngine != nullptr)
-    {
-        X_XACTWaveBank* waveBank = releasedEngine->WaveBanks;
-        while(waveBank != nullptr)
-        {
-            X_XACTWaveBank* next = waveBank->Next;
-            delete waveBank;
-            waveBank = next;
-        }
-        delete releasedEngine;
-    }
+    delete releasedEngine;
     EmuSwapFS(); // Xbox FS
     return referenceCount;
 }
@@ -389,7 +499,7 @@ HRESULT WINAPI XTL::EmuIXACTEngine_RegisterWaveBank(
     {
         const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
         X_XACTEngine* engine = FindXactEngine(pEngine);
-        if(engine != nullptr)
+        if(engine != nullptr && AddXactEngineReferenceLocked(engine))
         {
             waveBank->Engine = engine;
             waveBank->Data = data;
@@ -416,6 +526,7 @@ HRESULT WINAPI XTL::EmuIXACTEngine_UnRegisterWaveBank(
     EmuSwapFS(); // Win2k/XP FS
 
     X_XACTWaveBank* releasedWaveBank = nullptr;
+    X_XACTEngine* releasedEngine = nullptr;
     {
         const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
         X_XACTEngine* engine = FindXactEngine(pEngine);
@@ -430,12 +541,196 @@ HRESULT WINAPI XTL::EmuIXACTEngine_UnRegisterWaveBank(
             {
                 releasedWaveBank = *link;
                 *link = releasedWaveBank->Next;
+                ULONG referenceCount = 0;
+                releasedEngine = ReleaseXactEngineReferenceLocked(
+                    engine, &referenceCount);
             }
         }
     }
 
     const bool found = releasedWaveBank != nullptr;
     delete releasedWaveBank;
+    delete releasedEngine;
     EmuSwapFS(); // Xbox FS
     return found ? S_OK : E_INVALIDARG;
+}
+
+HRESULT WINAPI XTL::EmuIXACTEngine_CreateSoundBank(
+    X_XACTEngine* pEngine,
+    PVOID pvData,
+    DWORD dwSize,
+    X_XACTSoundBank** ppSoundBank)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(ppSoundBank == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_POINTER;
+    }
+    *ppSoundBank = nullptr;
+
+    const BYTE* data = static_cast<const BYTE*>(pvData);
+    DWORD soundBankSize = 0;
+    if(!GetSoundBankSize(data, dwSize, &soundBankSize))
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_INVALIDARG;
+    }
+
+    X_XACTSoundBank* soundBank = new(std::nothrow) X_XACTSoundBank{};
+    if(soundBank == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_OUTOFMEMORY;
+    }
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTEngine* engine = FindXactEngine(pEngine);
+        if(engine != nullptr && AddXactEngineReferenceLocked(engine))
+        {
+            soundBank->Engine = engine;
+            soundBank->Data = data;
+            soundBank->Size = soundBankSize;
+            soundBank->ReferenceCount = 1;
+            soundBank->Next = engine->SoundBanks;
+            engine->SoundBanks = soundBank;
+            *ppSoundBank = soundBank;
+            result = S_OK;
+        }
+    }
+
+    if(FAILED(result))
+    {
+        delete soundBank;
+    }
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+ULONG WINAPI XTL::EmuIXACTSoundBank_AddRef(X_XACTSoundBank* pSoundBank)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    ULONG referenceCount = 0;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTSoundBank* soundBank = FindXactSoundBank(pSoundBank);
+        if(soundBank != nullptr)
+        {
+            if(soundBank->ReferenceCount <
+               (std::numeric_limits<ULONG>::max)())
+            {
+                ++soundBank->ReferenceCount;
+            }
+            referenceCount = soundBank->ReferenceCount;
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return referenceCount;
+}
+
+ULONG WINAPI XTL::EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    ULONG referenceCount = 0;
+    X_XACTSoundBank* releasedSoundBank = nullptr;
+    X_XACTEngine* releasedEngine = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTSoundBank* soundBank = FindXactSoundBank(pSoundBank);
+        if(soundBank != nullptr)
+        {
+            if(soundBank->ReferenceCount > 1)
+            {
+                referenceCount = --soundBank->ReferenceCount;
+            }
+            else
+            {
+                X_XACTEngine* engine = soundBank->Engine;
+                X_XACTSoundBank** link = &engine->SoundBanks;
+                while(*link != nullptr && *link != soundBank)
+                {
+                    link = &(*link)->Next;
+                }
+                if(*link != nullptr)
+                {
+                    *link = soundBank->Next;
+                    releasedSoundBank = soundBank;
+                    ULONG engineReferenceCount = 0;
+                    releasedEngine = ReleaseXactEngineReferenceLocked(
+                        engine, &engineReferenceCount);
+                }
+            }
+        }
+    }
+
+    delete releasedSoundBank;
+    delete releasedEngine;
+    EmuSwapFS(); // Xbox FS
+    return referenceCount;
+}
+
+HRESULT WINAPI XTL::EmuIXACTSoundBank_GetSoundCueIndexFromFriendlyName(
+    X_XACTSoundBank* pSoundBank,
+    PCSTR pFriendlyName,
+    PDWORD pdwSoundCueIndex)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(pdwSoundCueIndex == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_POINTER;
+    }
+    *pdwSoundCueIndex = XactSoundBankInvalidCueIndex;
+    if(pFriendlyName == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_INVALIDARG;
+    }
+
+    HRESULT result = E_FAIL;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTSoundBank* soundBank = FindXactSoundBank(pSoundBank);
+        DWORD soundBankSize = 0;
+        DWORD flags = 0;
+        WORD cueCount = 0;
+        if(soundBank != nullptr &&
+           GetSoundBankSize(
+               soundBank->Data, soundBank->Size, &soundBankSize) &&
+           ReadXactDword(soundBank->Data, soundBankSize, 0x18, &flags) &&
+           ReadXactWord(soundBank->Data, soundBankSize, 0x1E, &cueCount) &&
+           (flags & XactSoundBankNamesUnavailableFlag) == 0)
+        {
+            for(DWORD index = 0; index < cueCount; ++index)
+            {
+                DWORD nameOffset = 0;
+                const DWORD cueOffset = XactSoundBankHeaderSize +
+                                        index * XactSoundBankCueEntrySize;
+                if(ReadXactDword(
+                       soundBank->Data,
+                       soundBankSize,
+                       cueOffset,
+                       &nameOffset) &&
+                   std::strcmp(
+                       reinterpret_cast<const char*>(
+                           soundBank->Data + nameOffset),
+                       pFriendlyName) == 0)
+                {
+                    *pdwSoundCueIndex = index;
+                    result = S_OK;
+                    break;
+                }
+            }
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return result;
 }

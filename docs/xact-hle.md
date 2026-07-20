@@ -16,17 +16,27 @@ turn a clear missing hook into an opaque guest crash. The initial object model
 needs reference counting, parameter validation, deterministic teardown, and an
 explicit relationship to the existing DirectSound device.
 
-The engine lifecycle and in-memory wave-bank slices are implemented. Registered
-wave banks retain the guest buffer as borrowed data until explicit
-unregistration or engine teardown. Registration validates the version 3 bank
+The engine lifecycle, in-memory wave-bank, and sound-bank metadata slices are
+implemented. Registered wave banks retain the guest buffer as borrowed data
+until explicit unregistration. Registration validates the version 3 bank
 header, segment bounds, metadata dimensions, entry formats, and wave-data
 regions before publishing an emulator-owned handle.
 
+Sound-bank creation validates the version 11 header, declared size, cue table,
+and every available friendly-name string before publishing an emulator-owned
+handle. Friendly-name lookup is exact and case-sensitive, returns the cue-table
+index, and leaves the output at `0xFFFFFFFF` when no cue matches. Playback data
+is intentionally outside this slice.
+
+Wave and sound banks hold an engine reference, matching the XACT object model.
+Releasing a caller's engine reference therefore leaves the engine alive while a
+bank exists; unregistering or finally releasing the last bank can complete
+engine teardown.
+
 The remaining order is:
 
-1. Sound-bank creation plus cue-name lookup.
-2. Cue prepare/play/stop with DirectSound-backed voices.
-3. Streaming wave banks, notifications, parameter controls, and WMA playlists,
+1. Cue prepare/play/stop with DirectSound-backed voices.
+2. Streaming wave banks, notifications, parameter controls, and WMA playlists,
    each added only with its own probe or title trace.
 
 Every slice must add exact 5849 signatures, verify one match in its probe and
