@@ -1,0 +1,110 @@
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install pinned build tools
+        run: python -m pip install --disable-pip-version-check meson==1.11.0 uv==0.11.29
+
+      - name: Verify native toolchain
+        run: |
+          $requiredTools = @(
+              'clang',
+              'clang++',
+              'clang-format',
+              'clang-tidy',
+              'git-clang-format',
+              'llvm-dlltool',
+              'llvm-lib',
+              'llvm-rc',
+              'ninja'
+          )
+          Get-Command $requiredTools -ErrorAction Stop | Select-Object Name, Source
+          meson --version
+          ninja --version
+          clang --version
+
+      - name: Select comparison base
+        id: comparison
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          $baseRevision = $env:PR_BASE
+          if ([string]::IsNullOrWhiteSpace($baseRevision)) {
+              $baseRevision = $env:PUSH_BASE
+          }
+          if ([string]::IsNullOrWhiteSpace($baseRevision) -or $baseRevision -match '^0+$') {
+              $baseRevision = 'HEAD^'
+          }
+          git rev-parse --verify "$baseRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Unable to resolve comparison base $baseRevision"
+          }
+          "base_revision=$baseRevision" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Check changed C/C++ formatting
+        env:
+          BASE_REVISION: ${{ steps.comparison.outputs.base_revision }}
+        run: |
+          $formatDiff = & git clang-format --diff $env:BASE_REVISION HEAD
+          if ($LASTEXITCODE -ne 0) {
+              throw "git clang-format failed with exit code $LASTEXITCODE"
+          }
+          $formatText = $formatDiff -join [Environment]::NewLine
+          if ($formatText) {
+              Write-Output $formatText
+          }
+          if ($formatText -match '(?m)^diff --git ') {
+              throw 'Changed C/C++ lines are not clang-formatted.'
+          }
+
+      - name: Configure canonical Win32 build
+        run: meson setup build-quality --cross-file cross/i686-windows-clang.ini
+
+      - name: Compile
+        run: meson compile -C build-quality
+
+      - name: Run host tests
+        run: meson test -C build-quality --print-errorlogs --no-suite performance
+
+      - name: Analyze changed C/C++ lines
+        env:
+          BASE_REVISION: ${{ steps.comparison.outputs.base_revision }}
+        run: .github/scripts/clang_tidy_diff.ps1 -BuildDirectory build-quality -BaseRevision $env:BASE_REVISION
+
+      - name: Lint Python developer tools
+        run: |
+          uv sync --locked --dev
+          uv run ruff check tools/xtest
