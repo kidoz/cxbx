@@ -65,6 +65,10 @@ cxbx_platform_win32 = static_library(
 cxbx_platform_win32_dep = declare_dependency(
   link_with : cxbx_platform_win32,
   dependencies : cxbx_core_dep,
+  link_args : [
+    '-ldinput8',
+    '-ldxguid',
+  ],
   include_directories : cxbx_inc,
 )
 
@@ -333,8 +337,6 @@ cxbx_frontend_win32_dep = declare_dependency(
 
 cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/Emu.cpp',
-  'src/win32/CxbxKrnl/EmuD3D8.cpp',
-  'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
   'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
 )
 
@@ -357,14 +359,41 @@ d3d8_import_lib = custom_target(
   output : 'd3d8.lib',
   command : [dlltool, '-m', 'i386', '-k', '-d', '@INPUT@', '-l', '@OUTPUT@'],
 )
-cxbx_link_libs += [d3d8_import_lib]
 
-cxbx_link_args = [
-  '-lddraw',
-  '-ldinput8',
-  '-ldxguid',
-  '-lwinmm',
-]
+cxbx_hle_d3d8 = static_library(
+  'cxbx_hle_d3d8',
+  'src/win32/CxbxKrnl/EmuD3D8.cpp',
+  'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
+  include_directories : cxbx_inc,
+  dependencies : [
+    cxbx_platform_win32_dep,
+    cxbx_trace_dep,
+    cxbx_yuy2_dep,
+  ],
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_d3d8_dep = declare_dependency(
+  link_whole : cxbx_hle_d3d8,
+  link_with : d3d8_import_lib,
+  dependencies : [
+    cxbx_guest_tls_win32_dep,
+    cxbx_hle_input_dep,
+    cxbx_hle_xg_dep,
+    cxbx_platform_win32_dep,
+    cxbx_trace_dep,
+    cxbx_yuy2_dep,
+  ],
+  link_args : [
+    '-lddraw',
+    '-lwinmm',
+  ],
+  include_directories : cxbx_inc,
+)
 
 resource_compiler = find_program('llvm-rc')
 resource_root = join_paths(meson.project_source_root(), 'Resource')
@@ -412,6 +441,7 @@ cxbx_runtime = shared_library(
   include_directories : cxbx_inc,
   dependencies : [
     cxbx_hle_audio_dep,
+    cxbx_hle_d3d8_dep,
     cxbx_hle_dispatch_dep,
     cxbx_hle_kernel_dep,
     cxbx_hle_xapi_dep,
@@ -426,7 +456,7 @@ cxbx_runtime = shared_library(
     cxbx_yuy2_dep,
   ],
   link_with : cxbx_link_libs,
-  link_args : cxbx_link_args + [
+  link_args : [
     '-Wl,/BASE:0x10000000',
     '-Wl,/DYNAMICBASE:NO',
   ],
@@ -445,9 +475,9 @@ executable(
   dependencies : cxbx_frontend_win32_dep,
   link_with : [
     cxbx_runtime,
+    d3d8_import_lib,
     cxbx_link_libs,
   ],
-  link_args : cxbx_link_args,
   cpp_args : [
     '-DXBOXKRNL_NO_EXTERN_C',
     '-Wno-c++11-narrowing',
