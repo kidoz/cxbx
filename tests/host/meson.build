@@ -44,8 +44,7 @@ test('host-nv2a-raster', host_nv2a_raster_test)
 host_nv2a_capture_test = executable(
   'host_nv2a_capture_test',
   'nv2a_capture.cpp',
-  '../../src/cxbx/src/core/nv2a_capture.cpp',
-  include_directories : cxbx_inc,
+  dependencies : cxbx_nv2a_capture_dep,
   install : false,
 )
 
