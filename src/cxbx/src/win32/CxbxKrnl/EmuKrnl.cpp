@@ -61,7 +61,6 @@ namespace NtDll
 };
 
 #include "Emu.h"
-#include "EmuDes.h"
 #include "EmuFS.h"
 #include "EmuFile.h"
 #include "core/trace.h"
@@ -2253,6 +2252,8 @@ extern "C" ULONG NTAPI EmuXcModExp(PULONG Output, PULONG Base, PULONG Exponent, 
     return 1;
 }
 
+static constexpr ULONG EmuDesEncryptMode = 1;
+
 static const UCHAR EmuDesInitialPermutation[64] = {
     58, 50, 42, 34, 26, 18, 10, 2,
     60, 52, 44, 36, 28, 20, 12, 4,
@@ -2572,7 +2573,7 @@ extern "C" VOID NTAPI EmuXcBlockCrypt(ULONG CipherSelector, PUCHAR Output, PUCHA
     if(Output == NULL || Input == NULL || KeyTable == NULL)
         return;
 
-    const bool EncryptBlock = CipherSelector == 0 ? Encrypt != 0 : Encrypt == MBEDTLS_DES_ENCRYPT;
+    const bool EncryptBlock = CipherSelector == 0 ? Encrypt != 0 : Encrypt == EmuDesEncryptMode;
     EmuXcDesCryptBlock(CipherSelector, Output, Input, KeyTable, EncryptBlock);
 }
 
@@ -2581,7 +2582,7 @@ extern "C" VOID NTAPI EmuXcBlockCryptCBC(ULONG CipherSelector, ULONG InputLength
     if(Output == NULL || Input == NULL || KeyTable == NULL || Feedback == NULL)
         return;
 
-    const bool EncryptBlock = Encrypt == MBEDTLS_DES_ENCRYPT;
+    const bool EncryptBlock = Encrypt == EmuDesEncryptMode;
     const ULONG CryptLength = (InputLength + 7) & ~7UL;
 
     for(ULONG Offset = 0; Offset < CryptLength; Offset += 8)
