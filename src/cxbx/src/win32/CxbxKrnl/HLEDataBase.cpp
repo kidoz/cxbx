@@ -444,8 +444,7 @@ extern uint32 HLEDataBaseSize = sizeof(HLEDataBase);
 // ******************************************************************
 // * XRefDataBase
 // ******************************************************************
-extern uint32 XRefDataBase[] = 
-{
+extern uint32 XRefDataBase[] = {
     -1, // XREF_XNINIT
     -1, // XREF_FCLOSEDEVICE
     -1, // XREF_CLEARSTATEBLOCKFLAGS
