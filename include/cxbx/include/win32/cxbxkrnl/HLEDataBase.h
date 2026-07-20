@@ -281,7 +281,10 @@ enum XRefDataBaseOffset
     XREF_DS5933_BUF_PLAYEX_T,
     XREF_DS5933_BUF_PLAYEX,
     XREF_DS5933_BUF_SETFORMAT_T,
-    XREF_DS5933_BUF_SETFORMAT
+    XREF_DS5933_BUF_SETFORMAT,
+    // XDK 5849 XACT: the public engine Release thunk is distinguished by its
+    // unique CEngine::Release call target.
+    XREF_XACT5849_ENGINE_RELEASE
 };
 
 #endif

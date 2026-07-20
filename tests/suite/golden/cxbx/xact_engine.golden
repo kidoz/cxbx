@@ -1,3 +1,3 @@
 #suite xbox-conformance v1
 #probe xact_engine
-#result xact_engine verdict=FAIL checks=1 fail=1
+#result xact_engine verdict=PASS checks=11 fail=0
