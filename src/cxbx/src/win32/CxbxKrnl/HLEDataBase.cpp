@@ -84,6 +84,7 @@ namespace XTL
 #include "DSound.1.0.5659.inl"
 #include "DSound.1.0.5788.inl"
 #include "DSound.1.0.3911.inl"
+#include "Xact.1.0.5849.inl"
 #include "XG.1.0.4361.inl"
 #include "XG.1.0.4627.inl"
 #include "XG.1.0.5659.inl"
@@ -352,6 +353,13 @@ HLEData HLEDataBase[] =
         DSound_1_0_5933,
         DSound_1_0_5933_SIZE
     },
+    // XACT engine Version 1.0.5849
+    {
+        "XACTENG",
+        1, 0, 5849,
+        XACTENG_1_0_5849,
+        XACTENG_1_0_5849_SIZE
+    },
     // XG Version 1.0.4361
     {
         "XGRAPHC",
@@ -605,6 +613,7 @@ extern uint32 XRefDataBase[] =
     -1, // XREF_DS5933_BUF_PLAYEX
     -1, // XREF_DS5933_BUF_SETFORMAT_T
     -1, // XREF_DS5933_BUF_SETFORMAT
+    -1, // XREF_XACT5849_ENGINE_RELEASE
 };
 
 // ******************************************************************

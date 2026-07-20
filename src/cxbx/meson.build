@@ -44,6 +44,7 @@ cxbx_runtime_src = files(
   'src/win32/CxbxKrnl/EmuDes.cpp',
   'src/win32/CxbxKrnl/EmuDInput.cpp',
   'src/win32/CxbxKrnl/EmuDSound.cpp',
+  'src/win32/CxbxKrnl/EmuXact.cpp',
   'src/win32/CxbxKrnl/EmuFS.cpp',
   'src/win32/CxbxKrnl/EmuFile.cpp',
   'src/win32/CxbxKrnl/EmuKrnl.cpp',

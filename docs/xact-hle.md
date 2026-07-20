@@ -1,10 +1,11 @@
 # XACT 5849 HLE bring-up
 
 The first integration target is the engine lifecycle, not cue playback. The
-`xact_engine` conformance probe links the 5849 `xacteng.lib` and verifies that
-`XACTEngineCreate` was replaced by HLE. It deliberately stops before invoking
-the native body. It remains a red probe until create and release can be
-implemented together; semantic lifecycle checks are added in that same change.
+`xact_engine` conformance probe links the 5849 `xacteng.lib` and verifies engine
+creation, reference counting, `XACTEngineDoWork`, deterministic teardown, and
+recreation. Its four public entry points are HLE-patched together so a title
+cannot receive an emulator-owned engine and then fall through to a native XACT
+method for lifecycle management.
 
 ## Boundary
 
@@ -15,13 +16,12 @@ turn a clear missing hook into an opaque guest crash. The initial object model
 needs reference counting, parameter validation, deterministic teardown, and an
 explicit relationship to the existing DirectSound device.
 
-The implementation order is:
+The engine lifecycle slice is implemented. The remaining order is:
 
-1. Engine create, add-ref, release, and `XACTEngineDoWork`.
-2. In-memory wave-bank registration and unregistration.
-3. Sound-bank creation plus cue-name lookup.
-4. Cue prepare/play/stop with DirectSound-backed voices.
-5. Streaming wave banks, notifications, parameter controls, and WMA playlists,
+1. In-memory wave-bank registration and unregistration.
+2. Sound-bank creation plus cue-name lookup.
+3. Cue prepare/play/stop with DirectSound-backed voices.
+4. Streaming wave banks, notifications, parameter controls, and WMA playlists,
    each added only with its own probe or title trace.
 
 Every slice must add exact 5849 signatures, verify one match in its probe and

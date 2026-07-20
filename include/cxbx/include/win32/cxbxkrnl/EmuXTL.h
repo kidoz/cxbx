@@ -38,6 +38,7 @@
 #include "EmuD3D8.h"
 #include "EmuDInput.h"
 #include "EmuDSound.h"
+#include "EmuXact.h"
 #include "EmuXOnline.h"
 #include "EmuXG.h"
 
