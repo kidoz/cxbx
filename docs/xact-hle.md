@@ -32,8 +32,15 @@ registered in-memory wave bank and copy its PCM play region into an
 emulator-owned DirectSound buffer. Prepared and playing cue instances are owned
 by their sound bank. `Stop` can release one instance, every instance for a cue
 index, or every instance in the bank; final sound-bank release also destroys
-all remaining voices. Autorelease calls with no output handle are accepted, but
-the voice remains bank-owned until an explicit stop or bank release.
+all remaining voices. `XACTEngineDoWork` detects naturally completed voices and
+reaps autorelease cue instances.
+
+Stop notifications support persistent and one-shot registrations filtered by
+sound bank/cue index or cue instance. Natural completion and explicit stop both
+queue notifications; autoreleased notifications carry the cue-destroyed flag.
+The engine honors its notification queue limit and supports polling, flushing,
+and unregistering. Other notification types, wave-bank filters, and event-backed
+delivery remain unsupported until a probe or title requires them.
 
 This first playback boundary intentionally rejects compact wave banks,
 streaming banks, ADPCM/WMA entries, multi-track and variation sounds, explicit
@@ -47,8 +54,8 @@ engine teardown.
 
 The remaining order is:
 
-1. Streaming wave banks, notifications, parameter controls, and WMA playlists,
-   each added only with its own probe or title trace.
+1. Streaming wave banks, parameter controls, and WMA playlists, each added only
+   with its own probe or title trace.
 
 Every slice must add exact 5849 signatures, verify one match in its probe and
 at most one across the XBE corpus, and retain a fail-before/pass-after golden.

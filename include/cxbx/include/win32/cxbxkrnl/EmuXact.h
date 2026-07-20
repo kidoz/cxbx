@@ -30,6 +30,34 @@ struct X_XACT_PREPARE_SOUNDCUE
 static_assert(sizeof(X_XACT_PREPARE_SOUNDCUE) == 0x10,
               "Xbox XACT_PREPARE_SOUNDCUE ABI size changed");
 
+struct X_XACT_NOTIFICATION_DESCRIPTION
+{
+    WORD wType;
+    WORD wFlags;
+    union
+    {
+        X_XACTSoundBank* pSoundBank;
+        X_XACTWaveBank* pWaveBank;
+    } u;
+    DWORD dwSoundCueIndex;
+    X_XACTSoundCue* pSoundCue;
+    PVOID pvContext;
+    HANDLE hEvent;
+};
+
+static_assert(sizeof(X_XACT_NOTIFICATION_DESCRIPTION) == 0x18,
+              "Xbox XACT_NOTIFICATION_DESCRIPTION ABI size changed");
+
+struct X_XACT_NOTIFICATION
+{
+    X_XACT_NOTIFICATION_DESCRIPTION Header;
+    DWORD MarkerData;
+    LONGLONG rtTimeStamp;
+};
+
+static_assert(sizeof(X_XACT_NOTIFICATION) == 0x28,
+              "Xbox XACT_NOTIFICATION ABI size changed");
+
 HRESULT WINAPI EmuXACTEngineCreate(
     const X_XACT_RUNTIME_PARAMETERS* pParams,
     X_XACTEngine** ppEngine);
@@ -49,6 +77,19 @@ HRESULT WINAPI EmuIXACTEngine_CreateSoundBank(
     PVOID pvData,
     DWORD dwSize,
     X_XACTSoundBank** ppSoundBank);
+HRESULT WINAPI EmuIXACTEngine_RegisterNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc);
+HRESULT WINAPI EmuIXACTEngine_UnRegisterNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc);
+HRESULT WINAPI EmuIXACTEngine_GetNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc,
+    X_XACT_NOTIFICATION* pNotification);
+HRESULT WINAPI EmuIXACTEngine_FlushNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc);
 ULONG WINAPI EmuIXACTSoundBank_AddRef(X_XACTSoundBank* pSoundBank);
 ULONG WINAPI EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank);
 HRESULT WINAPI EmuIXACTSoundBank_GetSoundCueIndexFromFriendlyName(

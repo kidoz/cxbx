@@ -1,3 +1,3 @@
 #suite xbox-conformance v1
 #probe xact_cue
-#result xact_cue verdict=PASS checks=23 fail=0
+#result xact_cue verdict=PASS checks=37 fail=0

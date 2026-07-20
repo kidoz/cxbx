@@ -14,10 +14,26 @@ void __cdecl main()
         xt_is_hle_patched((const void*)IXACTSoundBank_PlayEx);
     const int stop_patched =
         xt_is_hle_patched((const void*)IXACTSoundBank_Stop);
+    const int register_notification_patched =
+        xt_is_hle_patched((const void*)IXACTEngine_RegisterNotification);
+    const int unregister_notification_patched =
+        xt_is_hle_patched((const void*)IXACTEngine_UnRegisterNotification);
+    const int get_notification_patched =
+        xt_is_hle_patched((const void*)IXACTEngine_GetNotification);
+    const int flush_notification_patched =
+        xt_is_hle_patched((const void*)IXACTEngine_FlushNotification);
     xt_chk("xact.cue_prepare_hle", 1, prepare_patched);
     xt_chk("xact.cue_play_hle", 1, play_patched);
     xt_chk("xact.cue_stop_hle", 1, stop_patched);
-    if(!prepare_patched || !play_patched || !stop_patched)
+    xt_chk("xact.notification_register_hle", 1,
+           register_notification_patched);
+    xt_chk("xact.notification_unregister_hle", 1,
+           unregister_notification_patched);
+    xt_chk("xact.notification_get_hle", 1, get_notification_patched);
+    xt_chk("xact.notification_flush_hle", 1, flush_notification_patched);
+    if(!prepare_patched || !play_patched || !stop_patched ||
+       !register_notification_patched || !unregister_notification_patched ||
+       !get_notification_patched || !flush_notification_patched)
     {
         xt_emit("NOTE XACTENG 1.0.5849 cue lifecycle is not fully HLE-patched");
         xt_end_and_exit();
@@ -28,6 +44,7 @@ void __cdecl main()
     params.dwMax2DHwVoices = 64;
     params.dwMax3DHwVoices = 32;
     params.dwMaxConcurrentStreams = 4;
+    params.dwMaxNotifications = 8;
 
     IXACTEngine* engine = NULL;
     HRESULT result = XACTEngineCreate(&params, &engine);
@@ -101,11 +118,52 @@ void __cdecl main()
     result = IXACTSoundBank_Stop(sound_bank, cue_index, 0, NULL);
     xt_chk("xact.cue_stop_index", 1, SUCCEEDED(result));
 
+    XACT_NOTIFICATION_DESCRIPTION notification_desc;
+    ZeroMemory(&notification_desc, sizeof(notification_desc));
+    notification_desc.wType = eXACTNotification_Stop;
+    notification_desc.wFlags = XACT_FLAG_NOTIFICATION_PERSIST |
+                               XACT_FLAG_NOTIFICATION_USE_SOUNDCUE_INDEX;
+    notification_desc.u.pSoundBank = sound_bank;
+    notification_desc.dwSoundCueIndex = cue_index;
+    notification_desc.pvContext = (PVOID)0x12345678;
+    result = IXACTEngine_RegisterNotification(engine, &notification_desc);
+    xt_chk_u32("xact.notification_register", S_OK, result);
+
+    XACT_NOTIFICATION notification;
+    ZeroMemory(&notification, sizeof(notification));
+    result = IXACTEngine_GetNotification(
+        engine, &notification_desc, &notification);
+    xt_chk("xact.notification_initially_empty", 1, result != S_OK);
+
     result = IXACTSoundBank_Play(
         sound_bank, cue_index, NULL, XACT_FLAG_SOUNDCUE_AUTORELEASE, NULL);
     xt_chk("xact.cue_autorelease_play", 1, SUCCEEDED(result));
-    result = IXACTSoundBank_Stop(sound_bank, cue_index, 0, NULL);
-    xt_chk("xact.cue_autorelease_stop", 1, SUCCEEDED(result));
+    Sleep(50);
+    XACTEngineDoWork();
+
+    result = IXACTEngine_GetNotification(
+        engine, &notification_desc, &notification);
+    xt_chk_u32("xact.notification_get_stop", S_OK, result);
+    xt_chk_u32("xact.notification_type", eXACTNotification_Stop,
+               notification.Header.wType);
+    xt_chk("xact.notification_soundbank", 1,
+           notification.Header.u.pSoundBank == sound_bank);
+    xt_chk_u32("xact.notification_cue_index", cue_index,
+               notification.Header.dwSoundCueIndex);
+    xt_chk("xact.notification_cue_destroyed", 1,
+           (notification.Header.wFlags &
+            XACT_FLAG_NOTIFICATION_SOUNDCUE_DESTROYED) != 0);
+    xt_chk("xact.notification_context", 1,
+           notification.Header.pvContext == (PVOID)0x12345678);
+
+    ZeroMemory(&notification, sizeof(notification));
+    result = IXACTEngine_GetNotification(
+        engine, &notification_desc, &notification);
+    xt_chk("xact.notification_consumed", 1, result != S_OK);
+    xt_chk_u32("xact.notification_flush", S_OK,
+               IXACTEngine_FlushNotification(engine, &notification_desc));
+    xt_chk_u32("xact.notification_unregister", S_OK,
+               IXACTEngine_UnRegisterNotification(engine, &notification_desc));
 
     cue = (IXACTSoundCue*)1;
     result = IXACTSoundBank_Play(sound_bank, 1, NULL, 0, &cue);

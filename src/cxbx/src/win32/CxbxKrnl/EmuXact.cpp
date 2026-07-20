@@ -15,12 +15,19 @@ namespace XTL
 #include "EmuXTL.h"
 };
 
+struct XactNotificationRegistration;
+struct XactQueuedNotification;
+
 struct XTL::X_XACTEngine
 {
     X_XACT_RUNTIME_PARAMETERS Parameters;
     ULONG ReferenceCount;
     X_XACTWaveBank* WaveBanks;
     X_XACTSoundBank* SoundBanks;
+    XactNotificationRegistration* NotificationRegistrations;
+    XactQueuedNotification* NotificationHead;
+    XactQueuedNotification* NotificationTail;
+    DWORD NotificationCount;
     X_XACTEngine* Next;
 };
 
@@ -48,7 +55,20 @@ struct XTL::X_XACTSoundCue
     DWORD CueIndex;
     DWORD Flags;
     IDirectSoundBuffer* HostBuffer;
+    bool Playing;
     X_XACTSoundCue* Next;
+};
+
+struct XactNotificationRegistration
+{
+    XTL::X_XACT_NOTIFICATION_DESCRIPTION Description;
+    XactNotificationRegistration* Next;
+};
+
+struct XactQueuedNotification
+{
+    XTL::X_XACT_NOTIFICATION Notification;
+    XactQueuedNotification* Next;
 };
 
 namespace
@@ -79,6 +99,14 @@ constexpr DWORD XactSoundBankWaveBankNameSize = 0x10;
 constexpr DWORD XactSoundBankDirectSoundFlag = 0x08;
 constexpr DWORD XactSoundBankSoundFlagMask = 0x18;
 constexpr DWORD XactSoundCueAutoReleaseFlag = 0x0001;
+constexpr WORD XactNotificationStop = 1;
+constexpr WORD XactNotificationPersistentFlag = 0x8000;
+constexpr WORD XactNotificationUseWaveBankFlag = 0x0001;
+constexpr WORD XactNotificationUseSoundCueIndexFlag = 0x0002;
+constexpr WORD XactNotificationUseSoundCueInstanceFlag = 0x0004;
+constexpr WORD XactNotificationFilterMask = 0x0007;
+constexpr WORD XactNotificationSoundCueDestroyedFlag = 0x0008;
+constexpr DWORD XactDefaultNotificationCapacity = 64;
 
 struct XactWaveBankRegion
 {
@@ -564,6 +592,225 @@ XTL::X_XACTSoundBank* FindXactSoundBank(XTL::X_XACTSoundBank* soundBank)
     return nullptr;
 }
 
+XTL::X_XACTSoundCue* FindXactSoundCue(XTL::X_XACTSoundCue* soundCue)
+{
+    for(XTL::X_XACTEngine* engine = g_XactEngines;
+        engine != nullptr;
+        engine = engine->Next)
+    {
+        for(XTL::X_XACTSoundBank* soundBank = engine->SoundBanks;
+            soundBank != nullptr;
+            soundBank = soundBank->Next)
+        {
+            for(XTL::X_XACTSoundCue* cue = soundBank->Cues;
+                cue != nullptr;
+                cue = cue->Next)
+            {
+                if(cue == soundCue)
+                {
+                    return cue;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool IsNotificationDescriptionEqual(
+    const XTL::X_XACT_NOTIFICATION_DESCRIPTION& left,
+    const XTL::X_XACT_NOTIFICATION_DESCRIPTION& right)
+{
+    return left.wType == right.wType && left.wFlags == right.wFlags &&
+           left.u.pSoundBank == right.u.pSoundBank &&
+           left.dwSoundCueIndex == right.dwSoundCueIndex &&
+           left.pSoundCue == right.pSoundCue &&
+           left.pvContext == right.pvContext &&
+           left.hEvent == right.hEvent;
+}
+
+bool DoesNotificationMatchDescription(
+    const XTL::X_XACT_NOTIFICATION& notification,
+    const XTL::X_XACT_NOTIFICATION_DESCRIPTION* description)
+{
+    if(description == nullptr)
+    {
+        return true;
+    }
+    if(notification.Header.wType != description->wType)
+    {
+        return false;
+    }
+
+    const WORD filters = description->wFlags & XactNotificationFilterMask;
+    if((filters & XactNotificationUseWaveBankFlag) != 0 &&
+       notification.Header.u.pWaveBank != description->u.pWaveBank)
+    {
+        return false;
+    }
+    if((filters & XactNotificationUseSoundCueIndexFlag) != 0 &&
+       (notification.Header.u.pSoundBank != description->u.pSoundBank ||
+        notification.Header.dwSoundCueIndex !=
+            description->dwSoundCueIndex))
+    {
+        return false;
+    }
+    return (filters & XactNotificationUseSoundCueInstanceFlag) == 0 ||
+           notification.Header.pSoundCue == description->pSoundCue;
+}
+
+bool DoesRegistrationMatchCue(
+    const XactNotificationRegistration& registration,
+    const XTL::X_XACTSoundCue& cue)
+{
+    const XTL::X_XACT_NOTIFICATION_DESCRIPTION& description =
+        registration.Description;
+    if(description.wType != XactNotificationStop)
+    {
+        return false;
+    }
+
+    const WORD filters = description.wFlags & XactNotificationFilterMask;
+    if((filters & XactNotificationUseSoundCueIndexFlag) != 0 &&
+       (description.u.pSoundBank != cue.SoundBank ||
+        description.dwSoundCueIndex != cue.CueIndex))
+    {
+        return false;
+    }
+    return (filters & XactNotificationUseSoundCueInstanceFlag) == 0 ||
+           description.pSoundCue == &cue;
+}
+
+DWORD GetNotificationCapacity(const XTL::X_XACTEngine& engine)
+{
+    return engine.Parameters.dwMaxNotifications == 0
+               ? XactDefaultNotificationCapacity
+               : engine.Parameters.dwMaxNotifications;
+}
+
+void AppendNotificationLocked(
+    XTL::X_XACTEngine* engine,
+    XactQueuedNotification* queued)
+{
+    if(engine->NotificationTail != nullptr)
+    {
+        engine->NotificationTail->Next = queued;
+    }
+    else
+    {
+        engine->NotificationHead = queued;
+    }
+    engine->NotificationTail = queued;
+    ++engine->NotificationCount;
+}
+
+void QueueStopNotificationsLocked(
+    XTL::X_XACTSoundCue* cue,
+    bool destroyed)
+{
+    XTL::X_XACTEngine* engine = cue->SoundBank->Engine;
+    XactNotificationRegistration** link =
+        &engine->NotificationRegistrations;
+    while(*link != nullptr)
+    {
+        XactNotificationRegistration* registration = *link;
+        if(!DoesRegistrationMatchCue(*registration, *cue))
+        {
+            link = &registration->Next;
+            continue;
+        }
+
+        if(engine->NotificationCount >= GetNotificationCapacity(*engine))
+        {
+            link = &registration->Next;
+            continue;
+        }
+
+        XactQueuedNotification* queued =
+            new(std::nothrow) XactQueuedNotification{};
+        if(queued == nullptr)
+        {
+            link = &registration->Next;
+            continue;
+        }
+
+        queued->Notification.Header = registration->Description;
+        queued->Notification.Header.u.pSoundBank = cue->SoundBank;
+        queued->Notification.Header.dwSoundCueIndex = cue->CueIndex;
+        queued->Notification.Header.pSoundCue = cue;
+        if(destroyed)
+        {
+            queued->Notification.Header.wFlags |=
+                XactNotificationSoundCueDestroyedFlag;
+        }
+        AppendNotificationLocked(engine, queued);
+
+        if((registration->Description.wFlags &
+            XactNotificationPersistentFlag) == 0)
+        {
+            *link = registration->Next;
+            delete registration;
+        }
+        else
+        {
+            link = &registration->Next;
+        }
+    }
+}
+
+void RemoveQueuedNotificationLocked(
+    XTL::X_XACTEngine* engine,
+    XactQueuedNotification** link)
+{
+    XactQueuedNotification* removed = *link;
+    *link = removed->Next;
+    if(engine->NotificationTail == removed)
+    {
+        engine->NotificationTail = nullptr;
+        for(XactQueuedNotification* current = engine->NotificationHead;
+            current != nullptr;
+            current = current->Next)
+        {
+            engine->NotificationTail = current;
+        }
+    }
+    --engine->NotificationCount;
+    delete removed;
+}
+
+void RemoveSoundBankNotificationsLocked(
+    XTL::X_XACTEngine* engine,
+    XTL::X_XACTSoundBank* soundBank)
+{
+    XactNotificationRegistration** registrationLink =
+        &engine->NotificationRegistrations;
+    while(*registrationLink != nullptr)
+    {
+        XactNotificationRegistration* registration = *registrationLink;
+        if(registration->Description.u.pSoundBank == soundBank)
+        {
+            *registrationLink = registration->Next;
+            delete registration;
+        }
+        else
+        {
+            registrationLink = &registration->Next;
+        }
+    }
+
+    XactQueuedNotification** queuedLink = &engine->NotificationHead;
+    while(*queuedLink != nullptr)
+    {
+        if((*queuedLink)->Notification.Header.u.pSoundBank == soundBank)
+        {
+            RemoveQueuedNotificationLocked(engine, queuedLink);
+        }
+        else
+        {
+            queuedLink = &(*queuedLink)->Next;
+        }
+    }
+}
+
 bool AddXactEngineReferenceLocked(XTL::X_XACTEngine* engine)
 {
     if(engine->ReferenceCount == (std::numeric_limits<ULONG>::max)())
@@ -599,6 +846,29 @@ XTL::X_XACTEngine* ReleaseXactEngineReferenceLocked(
     engine->ReferenceCount = 0;
     *referenceCount = 0;
     return engine;
+}
+
+void DestroyXactEngine(XTL::X_XACTEngine* engine)
+{
+    if(engine == nullptr)
+    {
+        return;
+    }
+
+    while(engine->NotificationRegistrations != nullptr)
+    {
+        XactNotificationRegistration* registration =
+            engine->NotificationRegistrations;
+        engine->NotificationRegistrations = registration->Next;
+        delete registration;
+    }
+    while(engine->NotificationHead != nullptr)
+    {
+        XactQueuedNotification* queued = engine->NotificationHead;
+        engine->NotificationHead = queued->Next;
+        delete queued;
+    }
+    delete engine;
 }
 
 void DestroyXactCue(XTL::X_XACTSoundCue* cue)
@@ -680,6 +950,7 @@ HRESULT CreateXactCueLocked(
     cue->SoundBank = soundBank;
     cue->CueIndex = prepareData->dwCueIndex;
     cue->Flags = prepareData->dwFlags;
+    cue->Playing = play;
     cue->Next = soundBank->Cues;
     soundBank->Cues = cue;
     if(soundCue != nullptr)
@@ -738,6 +1009,52 @@ VOID WINAPI XTL::EmuXACTEngineDoWork()
     // DirectSound owns stream progress. Its wrapper performs and balances the
     // required FS transitions itself.
     EmuDirectSoundDoWork();
+
+    EmuSwapFS(); // Win2k/XP FS
+    X_XACTSoundCue* releasedCues = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        for(X_XACTEngine* engine = g_XactEngines;
+            engine != nullptr;
+            engine = engine->Next)
+        {
+            for(X_XACTSoundBank* soundBank = engine->SoundBanks;
+                soundBank != nullptr;
+                soundBank = soundBank->Next)
+            {
+                X_XACTSoundCue** link = &soundBank->Cues;
+                while(*link != nullptr)
+                {
+                    X_XACTSoundCue* cue = *link;
+                    DWORD status = 0;
+                    if(!cue->Playing || cue->HostBuffer == nullptr ||
+                       FAILED(cue->HostBuffer->GetStatus(&status)) ||
+                       (status & DSBSTATUS_PLAYING) != 0)
+                    {
+                        link = &cue->Next;
+                        continue;
+                    }
+
+                    cue->Playing = false;
+                    const bool autorelease =
+                        (cue->Flags & XactSoundCueAutoReleaseFlag) != 0;
+                    QueueStopNotificationsLocked(cue, autorelease);
+                    if(autorelease)
+                    {
+                        *link = cue->Next;
+                        cue->Next = releasedCues;
+                        releasedCues = cue;
+                    }
+                    else
+                    {
+                        link = &cue->Next;
+                    }
+                }
+            }
+        }
+    }
+    DestroyXactCueList(releasedCues);
+    EmuSwapFS(); // Xbox FS
 }
 
 ULONG WINAPI XTL::EmuIXACTEngine_AddRef(X_XACTEngine* pEngine)
@@ -775,7 +1092,7 @@ ULONG WINAPI XTL::EmuIXACTEngine_Release(X_XACTEngine* pEngine)
         }
     }
 
-    delete releasedEngine;
+    DestroyXactEngine(releasedEngine);
     EmuSwapFS(); // Xbox FS
     return referenceCount;
 }
@@ -864,7 +1181,7 @@ HRESULT WINAPI XTL::EmuIXACTEngine_UnRegisterWaveBank(
 
     const bool found = releasedWaveBank != nullptr;
     delete releasedWaveBank;
-    delete releasedEngine;
+    DestroyXactEngine(releasedEngine);
     EmuSwapFS(); // Xbox FS
     return found ? S_OK : E_INVALIDARG;
 }
@@ -924,6 +1241,194 @@ HRESULT WINAPI XTL::EmuIXACTEngine_CreateSoundBank(
     return result;
 }
 
+HRESULT WINAPI XTL::EmuIXACTEngine_RegisterNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(pNotificationDesc == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_INVALIDARG;
+    }
+    if(pNotificationDesc->wType != XactNotificationStop ||
+       (pNotificationDesc->wFlags & XactNotificationUseWaveBankFlag) != 0 ||
+       (pNotificationDesc->wFlags &
+        ~(XactNotificationPersistentFlag | XactNotificationFilterMask)) != 0 ||
+       pNotificationDesc->hEvent != nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_NOTIMPL;
+    }
+
+    XactNotificationRegistration* registration =
+        new(std::nothrow) XactNotificationRegistration{};
+    if(registration == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_OUTOFMEMORY;
+    }
+    registration->Description = *pNotificationDesc;
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTEngine* engine = FindXactEngine(pEngine);
+        bool valid = engine != nullptr;
+        if(valid &&
+           (pNotificationDesc->wFlags &
+            XactNotificationUseSoundCueIndexFlag) != 0)
+        {
+            X_XACTSoundBank* soundBank =
+                FindXactSoundBank(pNotificationDesc->u.pSoundBank);
+            WORD cueCount = 0;
+            valid = soundBank != nullptr && soundBank->Engine == engine &&
+                    ReadXactWord(
+                        soundBank->Data,
+                        soundBank->Size,
+                        0x1E,
+                        &cueCount) &&
+                    pNotificationDesc->dwSoundCueIndex < cueCount;
+        }
+        if(valid &&
+           (pNotificationDesc->wFlags &
+            XactNotificationUseSoundCueInstanceFlag) != 0)
+        {
+            X_XACTSoundCue* cue =
+                FindXactSoundCue(pNotificationDesc->pSoundCue);
+            valid = cue != nullptr && cue->SoundBank->Engine == engine;
+        }
+        if(valid)
+        {
+            registration->Next = engine->NotificationRegistrations;
+            engine->NotificationRegistrations = registration;
+            registration = nullptr;
+            result = S_OK;
+        }
+    }
+
+    delete registration;
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+HRESULT WINAPI XTL::EmuIXACTEngine_UnRegisterNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(pNotificationDesc == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_INVALIDARG;
+    }
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTEngine* engine = FindXactEngine(pEngine);
+        if(engine != nullptr)
+        {
+            result = E_FAIL;
+            XactNotificationRegistration** link =
+                &engine->NotificationRegistrations;
+            while(*link != nullptr)
+            {
+                XactNotificationRegistration* registration = *link;
+                if(IsNotificationDescriptionEqual(
+                       registration->Description,
+                       *pNotificationDesc))
+                {
+                    *link = registration->Next;
+                    delete registration;
+                    result = S_OK;
+                    break;
+                }
+                link = &registration->Next;
+            }
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+HRESULT WINAPI XTL::EmuIXACTEngine_GetNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc,
+    X_XACT_NOTIFICATION* pNotification)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    if(pNotification == nullptr)
+    {
+        EmuSwapFS(); // Xbox FS
+        return E_POINTER;
+    }
+    *pNotification = {};
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTEngine* engine = FindXactEngine(pEngine);
+        if(engine != nullptr)
+        {
+            result = S_FALSE;
+            XactQueuedNotification** link = &engine->NotificationHead;
+            while(*link != nullptr)
+            {
+                if(DoesNotificationMatchDescription(
+                       (*link)->Notification, pNotificationDesc))
+                {
+                    *pNotification = (*link)->Notification;
+                    RemoveQueuedNotificationLocked(engine, link);
+                    result = S_OK;
+                    break;
+                }
+                link = &(*link)->Next;
+            }
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
+HRESULT WINAPI XTL::EmuIXACTEngine_FlushNotification(
+    X_XACTEngine* pEngine,
+    const X_XACT_NOTIFICATION_DESCRIPTION* pNotificationDesc)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+    HRESULT result = E_INVALIDARG;
+    {
+        const std::lock_guard<std::mutex> lock(g_XactEngineMutex);
+        X_XACTEngine* engine = FindXactEngine(pEngine);
+        if(engine != nullptr)
+        {
+            XactQueuedNotification** link = &engine->NotificationHead;
+            while(*link != nullptr)
+            {
+                if(DoesNotificationMatchDescription(
+                       (*link)->Notification, pNotificationDesc))
+                {
+                    RemoveQueuedNotificationLocked(engine, link);
+                }
+                else
+                {
+                    link = &(*link)->Next;
+                }
+            }
+            result = S_OK;
+        }
+    }
+
+    EmuSwapFS(); // Xbox FS
+    return result;
+}
+
 ULONG WINAPI XTL::EmuIXACTSoundBank_AddRef(X_XACTSoundBank* pSoundBank)
 {
     EmuSwapFS(); // Win2k/XP FS
@@ -975,6 +1480,7 @@ ULONG WINAPI XTL::EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank)
                 if(*link != nullptr)
                 {
                     *link = soundBank->Next;
+                    RemoveSoundBankNotificationsLocked(engine, soundBank);
                     releasedCues = soundBank->Cues;
                     soundBank->Cues = nullptr;
                     releasedSoundBank = soundBank;
@@ -988,7 +1494,7 @@ ULONG WINAPI XTL::EmuIXACTSoundBank_Release(X_XACTSoundBank* pSoundBank)
 
     DestroyXactCueList(releasedCues);
     delete releasedSoundBank;
-    delete releasedEngine;
+    DestroyXactEngine(releasedEngine);
     EmuSwapFS(); // Xbox FS
     return referenceCount;
 }
@@ -1150,6 +1656,8 @@ HRESULT WINAPI XTL::EmuIXACTSoundBank_Stop(
                                                    dwSoundCueIndex;
                 if(matches)
                 {
+                    cue->Playing = false;
+                    QueueStopNotificationsLocked(cue, true);
                     *link = cue->Next;
                     cue->Next = releasedCues;
                     releasedCues = cue;
