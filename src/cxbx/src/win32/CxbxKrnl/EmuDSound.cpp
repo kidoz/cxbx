@@ -608,6 +608,69 @@ HRESULT CreateHostStream(const XTL::X_DSSTREAMDESC* descriptor, XTL::X_CDirectSo
 }
 } // namespace
 
+HRESULT XTL::EmuDSoundCreateHostBuffer(
+    const WAVEFORMATEX* pFormat,
+    const BYTE* pData,
+    DWORD dwSize,
+    IDirectSoundBuffer** ppBuffer)
+{
+    if(ppBuffer == NULL)
+    {
+        return E_POINTER;
+    }
+    *ppBuffer = NULL;
+    if(pFormat == NULL || pData == NULL || dwSize == 0 ||
+       pFormat->wFormatTag != WAVE_FORMAT_PCM)
+    {
+        return E_INVALIDARG;
+    }
+
+    HRESULT result = EnsureDirectSoundDevice();
+    if(FAILED(result))
+    {
+        return result;
+    }
+
+    DSBUFFERDESC descriptor = {};
+    descriptor.dwSize = sizeof(descriptor);
+    descriptor.dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLFREQUENCY |
+                         DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_GLOBALFOCUS;
+    descriptor.dwBufferBytes = dwSize;
+    descriptor.lpwfxFormat = const_cast<WAVEFORMATEX*>(pFormat);
+
+    IDirectSoundBuffer* buffer = NULL;
+    result = g_pDSound8->CreateSoundBuffer(&descriptor, &buffer, NULL);
+    if(FAILED(result))
+    {
+        return result;
+    }
+
+    LPVOID first = NULL;
+    LPVOID second = NULL;
+    DWORD firstSize = 0;
+    DWORD secondSize = 0;
+    result = buffer->Lock(
+        0, dwSize, &first, &firstSize, &second, &secondSize,
+        DSBLOCK_ENTIREBUFFER);
+    if(SUCCEEDED(result))
+    {
+        std::memcpy(first, pData, firstSize);
+        if(second != NULL)
+        {
+            std::memcpy(second, pData + firstSize, secondSize);
+        }
+        result = buffer->Unlock(first, firstSize, second, secondSize);
+    }
+    if(FAILED(result))
+    {
+        buffer->Release();
+        return result;
+    }
+
+    *ppBuffer = buffer;
+    return DS_OK;
+}
+
 // ******************************************************************
 // * EmuStatic Variable(s)
 // ******************************************************************
