@@ -16,10 +16,23 @@ cxbx_core_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
-cxbx_shared_win32_src = files(
+cxbx_platform_win32 = static_library(
+  'cxbx_platform_win32',
   'src/win32/Mutex.cpp',
   'src/win32/XBController.cpp',
   'src/win32/XBVideo.cpp',
+  include_directories : cxbx_inc,
+  dependencies : cxbx_core_dep,
+  cpp_args : [
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_platform_win32_dep = declare_dependency(
+  link_with : cxbx_platform_win32,
+  dependencies : cxbx_core_dep,
+  include_directories : cxbx_inc,
 )
 
 cxbx_trace = static_library(
@@ -153,11 +166,11 @@ cxbx_launcher_resources = custom_target(
 
 cxbx_runtime = shared_library(
   'Cxbx',
-  cxbx_shared_win32_src,
   cxbx_runtime_src,
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
   dependencies : [
+    cxbx_platform_win32_dep,
     cxbx_core_dep,
     cxbx_trace_dep,
     cxbx_yuy2_dep,
@@ -177,11 +190,13 @@ cxbx_runtime = shared_library(
 
 executable(
   'cxbx',
-  cxbx_shared_win32_src,
   cxbx_launcher_src,
   cxbx_launcher_resources,
   include_directories : cxbx_inc,
-  dependencies : cxbx_core_dep,
+  dependencies : [
+    cxbx_platform_win32_dep,
+    cxbx_core_dep,
+  ],
   link_with : [
     cxbx_runtime,
     cxbx_link_libs,
