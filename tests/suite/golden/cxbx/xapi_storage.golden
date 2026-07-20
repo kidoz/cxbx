@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xapi_storage
+#result xapi_storage verdict=PASS checks=10 fail=0

@@ -138,6 +138,45 @@ SOOVPA<9> XInputClose_1_0_5849 =
     }
 };
 
+// _QueryPerformanceCounter@4 (xapilib.lib, 17 bytes)
+SOOVPA<13> QueryPerformanceCounter_1_0_5849 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0x8B }, { 0x01, 0x4C }, { 0x02, 0x24 },
+        { 0x04, 0x0F }, { 0x05, 0x31 }, { 0x06, 0x89 },
+        { 0x08, 0x89 }, { 0x09, 0x51 }, { 0x0A, 0x04 },
+        { 0x0C, 0xC0 }, { 0x0D, 0x40 }, { 0x0E, 0xC2 },
+        { 0x10, 0x00 }
+    }
+};
+
+// _QueryPerformanceFrequency@4 (xapilib.lib, 20 bytes)
+SOOVPA<13> QueryPerformanceFrequency_1_0_5849 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0x8B }, { 0x01, 0x44 }, { 0x03, 0x04 },
+        { 0x04, 0x83 }, { 0x06, 0x04 }, { 0x07, 0x00 },
+        { 0x09, 0x00 }, { 0x0B, 0xC7 }, { 0x0C, 0xB5 },
+        { 0x0E, 0x33 }, { 0x0F, 0xC0 }, { 0x11, 0xC2 },
+        { 0x13, 0x00 }
+    }
+};
+
+// _XMountUtilityDrive@4 (xapilib.lib, 261 bytes)
+SOOVPA<13> XMountUtilityDrive_1_0_5849 =
+{
+    0, 13, -1, 0,
+    {
+        { 0x00, 0x55 }, { 0x15, 0x75 }, { 0x2A, 0x08 },
+        { 0x3F, 0x24 }, { 0x55, 0x00 }, { 0x6A, 0xC4 },
+        { 0x7F, 0x50 }, { 0x94, 0xE8 }, { 0xAA, 0xD8 },
+        { 0xBF, 0x85 }, { 0xD4, 0x45 }, { 0xE9, 0x9D },
+        { 0xFF, 0x5E }
+    }
+};
+
 OOVPATable XAPI_1_0_5849[] =
 {
     // XGetDevices
@@ -201,6 +240,30 @@ OOVPATable XAPI_1_0_5849[] =
         XTL::EmuXInputClose,
         #ifdef _DEBUG_TRACE
         "EmuXInputClose"
+        #endif
+    },
+    // QueryPerformanceCounter
+    {
+        (OOVPA*)&QueryPerformanceCounter_1_0_5849,
+        XTL::EmuQueryPerformanceCounter,
+        #ifdef _DEBUG_TRACE
+        "EmuQueryPerformanceCounter"
+        #endif
+    },
+    // QueryPerformanceFrequency
+    {
+        (OOVPA*)&QueryPerformanceFrequency_1_0_5849,
+        XTL::EmuQueryPerformanceFrequency,
+        #ifdef _DEBUG_TRACE
+        "EmuQueryPerformanceFrequency"
+        #endif
+    },
+    // XMountUtilityDrive
+    {
+        (OOVPA*)&XMountUtilityDrive_1_0_5849,
+        XTL::EmuXMountUtilityDrive,
+        #ifdef _DEBUG_TRACE
+        "EmuXMountUtilityDrive"
         #endif
     },
 };
