@@ -47,6 +47,7 @@ void __cdecl main()
     xt_chk("perf.names_ok", 1, names != NULL);
     if(perf == NULL)
         xt_end_and_exit();
+    xt_emitf("EV   perf_api_offset=0x%08X", (DWORD)((BYTE*)&perf->m_APICounters - (BYTE*)perf));
 
     D3DPERF_Reset();
     xt_chk_u32("perf.clear_reset", 0,

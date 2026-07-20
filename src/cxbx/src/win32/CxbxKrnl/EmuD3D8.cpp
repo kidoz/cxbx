@@ -133,6 +133,23 @@ static uint08                      *g_pD3DPerfStatistics = NULL;
 static volatile DWORD              *g_pD3DSingleStepPusher = NULL;
 static bool                         g_bD3DDebugGlobalsScanned = false;
 
+struct EmuD3DPushBufferInfo
+{
+    DWORD PushBufferSize;
+    DWORD PushSegmentSize;
+    DWORD PushSegmentCount;
+    DWORD *pPushBase;
+    DWORD *pPushLimit;
+    ULONGLONG PushBufferBytesWritten;
+};
+
+static_assert(sizeof(EmuD3DPushBufferInfo) == 32,
+              "D3DPUSHBUFFERINFO must retain the Xbox ABI layout");
+
+static std::array<DWORD, 16>        g_D3DPerfPushBuffer = {};
+static ULONGLONG                    g_D3DPerfPushBufferBytesWritten = 0;
+static INT                          g_D3DPerfEventDepth = 0;
+
 // Last D3D wrapper entered -- a lightweight (single store) entry trace so the
 // vectored-exception dump can name the HLE wrapper that was on the call path
 // when host d3d8 throws (e.g. the 0xE06D7363/D3DERR_NOTAVAILABLE storm on the
@@ -520,10 +537,12 @@ static DWORD *EmuD3DPerfApiCounters()
 }
 
 // Locate the two debug-runtime globals without depending on title link
-// addresses. D3DPERF_GetStatistics is a stable aligned accessor
-// (mov eax, <static D3DPERF>; ret), while the single-step reference is
-// identified by the surrounding pusher validation sequence. Relocated
-// operands are deliberately decoded rather than embedded in OOVPAs.
+// addresses. D3DPERF_GetStatistics and D3DPERF_GetNames are consecutive,
+// 16-byte-aligned accessors (mov eax, <static>; ret). Requiring the pair
+// prevents unrelated accessors from being mistaken for the statistics block.
+// The single-step reference is identified by its surrounding pusher validation
+// sequence. Relocated operands are deliberately decoded rather than embedded
+// in OOVPAs.
 static void EmuLocateD3DDebugGlobals()
 {
     if(g_bD3DDebugGlobalsScanned || g_XbeHeader == NULL)
@@ -541,18 +560,19 @@ static void EmuLocateD3DDebugGlobals()
 
     Xbe::SectionHeader *pSections =
         (Xbe::SectionHeader*)((uint08*)g_XbeHeader + SectionOffset);
+    uint08 *pDebugStatisticsCandidate = NULL;
 
     for(uint32 SectionIndex = 0; SectionIndex < g_XbeHeader->dwSections; SectionIndex++)
     {
         Xbe::SectionHeader *pSection = &pSections[SectionIndex];
-        if(!pSection->dwFlags.bExecutable || pSection->dwVirtualSize < 20 ||
+        if(!pSection->dwFlags.bExecutable || pSection->dwVirtualSize < 22 ||
            pSection->dwVirtualAddr < ImageBase ||
            pSection->dwVirtualAddr > ImageEnd ||
            pSection->dwVirtualSize > ImageEnd - pSection->dwVirtualAddr)
             continue;
 
         uint08 *pCode = (uint08*)pSection->dwVirtualAddr;
-        const uint32 ScanSize = pSection->dwVirtualSize - 19;
+        const uint32 ScanSize = pSection->dwVirtualSize - 21;
         for(uint32 Offset = 0; Offset < ScanSize; Offset++)
         {
             uint08 *p = pCode + Offset;
@@ -562,13 +582,36 @@ static void EmuLocateD3DDebugGlobals()
                p[6] == 0xCC && p[7] == 0xCC && p[8] == 0xCC &&
                p[9] == 0xCC && p[10] == 0xCC && p[11] == 0xCC &&
                p[12] == 0xCC && p[13] == 0xCC && p[14] == 0xCC &&
-               p[15] == 0xCC && p[16] == 0x55 && p[17] == 0x8B && p[18] == 0xEC)
+               p[15] == 0xCC && p[16] == 0xB8 && p[21] == 0xC3)
             {
                 const uint32 Statistics = *(uint32*)(p + 1);
                 if(Statistics >= ImageBase &&
                    Statistics <= ImageEnd &&
                    EMU_D3DPERF_REQUIRED_SIZE <= ImageEnd - Statistics)
+                {
                     g_pD3DPerfStatistics = (uint08*)Statistics;
+                }
+            }
+
+            // The debug library places a regular function after the accessor
+            // rather than GetNames. Retain that candidate, but prefer the
+            // profile library's accessor pair if one appears later.
+            if(g_pD3DPerfStatistics == NULL &&
+               pDebugStatisticsCandidate == NULL &&
+               p[0] == 0xB8 && p[5] == 0xC3 &&
+               p[6] == 0xCC && p[7] == 0xCC && p[8] == 0xCC &&
+               p[9] == 0xCC && p[10] == 0xCC && p[11] == 0xCC &&
+               p[12] == 0xCC && p[13] == 0xCC && p[14] == 0xCC &&
+               p[15] == 0xCC && p[16] == 0x55 && p[17] == 0x8B &&
+               p[18] == 0xEC)
+            {
+                const uint32 Statistics = *(uint32*)(p + 1);
+                if(Statistics >= ImageBase &&
+                   Statistics <= ImageEnd &&
+                   EMU_D3DPERF_REQUIRED_SIZE <= ImageEnd - Statistics)
+                {
+                    pDebugStatisticsCandidate = (uint08*)Statistics;
+                }
             }
 
             if(g_pD3DSingleStepPusher == NULL &&
@@ -584,6 +627,11 @@ static void EmuLocateD3DDebugGlobals()
             if(g_pD3DPerfStatistics != NULL && g_pD3DSingleStepPusher != NULL)
                 return;
         }
+    }
+
+    if(g_pD3DPerfStatistics == NULL)
+    {
+        g_pD3DPerfStatistics = pDebugStatisticsCandidate;
     }
 }
 
@@ -6363,7 +6411,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear
     EmuLocateD3DDebugGlobals();
     DWORD *pApiCounters = EmuD3DPerfApiCounters();
     if(pApiCounters != NULL)
+    {
         pApiCounters[EMU_API_D3DDEVICE_CLEAR]++;
+    }
+    g_D3DPerfPushBufferBytesWritten += sizeof(DWORD);
 
     EmuFlushTiledSurfaceLocks();
 
@@ -6507,7 +6558,64 @@ VOID WINAPI XTL::EmuD3DPERF_Reset()
         memset(g_pD3DPerfStatistics + EMU_D3DPERF_TEXTURE_COUNTER_OFFSET, 0,
                EMU_D3DPERF_TEXTURE_COUNTER_DWORDS * sizeof(DWORD));
     }
+    g_D3DPerfPushBufferBytesWritten = 0;
+    g_D3DPerfEventDepth = 0;
     EmuSwapFS(); // XBox FS
+}
+
+VOID WINAPI XTL::EmuD3DPERF_GetPushBufferInfo(PVOID pInfo)
+{
+    D3D_TRACE("D3DPERF_GetPushBufferInfo");
+    EmuSwapFS();   // Win2k/XP FS
+
+    EmuD3DPushBufferInfo *pPushBufferInfo =
+        static_cast<EmuD3DPushBufferInfo*>(pInfo);
+    if(pPushBufferInfo != NULL)
+    {
+        pPushBufferInfo->PushBufferSize = sizeof(g_D3DPerfPushBuffer);
+        pPushBufferInfo->PushSegmentSize = sizeof(g_D3DPerfPushBuffer);
+        pPushBufferInfo->PushSegmentCount = 1;
+        pPushBufferInfo->pPushBase = g_D3DPerfPushBuffer.data();
+        pPushBufferInfo->pPushLimit =
+            g_D3DPerfPushBuffer.data() + g_D3DPerfPushBuffer.size();
+        pPushBufferInfo->PushBufferBytesWritten =
+            g_D3DPerfPushBufferBytesWritten;
+    }
+
+    EmuSwapFS();   // XBox FS
+}
+
+VOID __cdecl XTL::EmuD3DPERF_SetMarker(DWORD Color, const char* Name, ...)
+{
+    (void)Color;
+    (void)Name;
+    D3D_TRACE("D3DPERF_SetMarker");
+    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS();   // XBox FS
+}
+
+INT __cdecl XTL::EmuD3DPERF_BeginEvent(DWORD Color, const char* Name, ...)
+{
+    (void)Color;
+    (void)Name;
+    D3D_TRACE("D3DPERF_BeginEvent");
+    EmuSwapFS();   // Win2k/XP FS
+    const INT EventLevel = g_D3DPerfEventDepth++;
+    EmuSwapFS();   // XBox FS
+    return EventLevel;
+}
+
+INT WINAPI XTL::EmuD3DPERF_EndEvent()
+{
+    D3D_TRACE("D3DPERF_EndEvent");
+    EmuSwapFS();   // Win2k/XP FS
+    if(g_D3DPerfEventDepth > 0)
+    {
+        --g_D3DPerfEventDepth;
+    }
+    const INT EventLevel = g_D3DPerfEventDepth;
+    EmuSwapFS();   // XBox FS
+    return EventLevel;
 }
 
 // Mirror the presented frame to the emulator's GDI window (Emu.cpp).
