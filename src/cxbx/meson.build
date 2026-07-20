@@ -35,6 +35,24 @@ cxbx_platform_win32_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_runtime_win32 = static_library(
+  'cxbx_runtime_win32',
+  'src/win32/EmuShared.cpp',
+  include_directories : cxbx_inc,
+  dependencies : cxbx_platform_win32_dep,
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_runtime_win32_dep = declare_dependency(
+  link_whole : cxbx_runtime_win32,
+  dependencies : cxbx_platform_win32_dep,
+  include_directories : cxbx_inc,
+)
+
 cxbx_trace = static_library(
   'cxbx_trace',
   'src/core/trace/trace.cpp',
@@ -73,7 +91,6 @@ cxbx_runtime_src = files(
   'src/core/nv2a_capture.cpp',
   'src/core/PcmConverter.cpp',
   'src/core/XboxAdpcmDecoder.cpp',
-  'src/win32/EmuShared.cpp',
   'src/win32/HostInput.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
@@ -170,6 +187,7 @@ cxbx_runtime = shared_library(
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
   dependencies : [
+    cxbx_runtime_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
     cxbx_trace_dep,
