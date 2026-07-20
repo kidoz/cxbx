@@ -1,6 +1,5 @@
-# Requires XMV (Xbox Media Video) decode support. This Cxbx has no XMV OOVPA
-# ("XMV 1.0.5933 Skipped"), so the capability is absent and the probe is skipped
-# here; it documents the requirement and runs on a target that implements XMV.
+# Exercises the native XMV library through Cxbx's filesystem, D3D/YUY2,
+# DirectSound, and timing boundaries. See docs/xmv-architecture.md.
 tags = ["xmv", "xdk"]
 
 [env]
