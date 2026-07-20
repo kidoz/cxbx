@@ -89,6 +89,7 @@ namespace XTL
 #include "XG.1.0.5849.inl"
 #include "XNet.1.0.3911.inl"
 #include "XOnline.1.0.4361.inl"
+#include "XOnline.1.0.5849.inl"
 
 // ******************************************************************
 // * HLEDataBase
@@ -401,6 +402,21 @@ HLEData HLEDataBase[] =
         1, 0, 4361,
         XOnline_1_0_4361,
         XOnline_1_0_4361_SIZE
+    },
+    // XOnline Version 1.0.5849
+    {
+        "XONLINE",
+        1, 0, 5849,
+        XOnline_1_0_5849,
+        XOnline_1_0_5849_SIZE
+    },
+    // Secure XOnline Version 1.0.5849. XNetStartup and WSAStartup have the
+    // same bodies in the secure and non-secure archives for this build.
+    {
+        "XONLINES",
+        1, 0, 5849,
+        XOnline_1_0_5849,
+        XOnline_1_0_5849_SIZE
     },
 };
 

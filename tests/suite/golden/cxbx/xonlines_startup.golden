@@ -1,0 +1,3 @@
+#suite xbox-conformance v1
+#probe xonlines_startup
+#result xonlines_startup verdict=PASS checks=5 fail=0
