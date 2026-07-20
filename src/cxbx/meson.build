@@ -35,6 +35,17 @@ cxbx_platform_win32_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
+cxbx_host_input_win32 = static_library(
+  'cxbx_host_input_win32',
+  'src/win32/HostInput.cpp',
+  include_directories : cxbx_inc,
+)
+
+cxbx_host_input_win32_dep = declare_dependency(
+  link_with : cxbx_host_input_win32,
+  include_directories : cxbx_inc,
+)
+
 cxbx_runtime_win32 = static_library(
   'cxbx_runtime_win32',
   'src/win32/EmuShared.cpp',
@@ -70,6 +81,31 @@ cxbx_guest_tls_win32 = static_library(
 cxbx_guest_tls_win32_dep = declare_dependency(
   link_whole : cxbx_guest_tls_win32,
   dependencies : cxbx_runtime_win32_dep,
+  include_directories : cxbx_inc,
+)
+
+cxbx_hle_input = static_library(
+  'cxbx_hle_input',
+  'src/win32/CxbxKrnl/EmuDInput.cpp',
+  include_directories : cxbx_inc,
+  dependencies : [
+    cxbx_host_input_win32_dep,
+    cxbx_platform_win32_dep,
+  ],
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_hle_input_dep = declare_dependency(
+  link_whole : cxbx_hle_input,
+  dependencies : [
+    cxbx_host_input_win32_dep,
+    cxbx_runtime_win32_dep,
+    cxbx_platform_win32_dep,
+  ],
   include_directories : cxbx_inc,
 )
 
@@ -111,7 +147,10 @@ cxbx_hle_xapi = static_library(
   'cxbx_hle_xapi',
   'src/win32/CxbxKrnl/EmuXapi.cpp',
   include_directories : cxbx_inc,
-  dependencies : cxbx_platform_win32_dep,
+  dependencies : [
+    cxbx_host_input_win32_dep,
+    cxbx_platform_win32_dep,
+  ],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
@@ -123,6 +162,7 @@ cxbx_hle_xapi_dep = declare_dependency(
   link_whole : cxbx_hle_xapi,
   dependencies : [
     cxbx_guest_tls_win32_dep,
+    cxbx_hle_input_dep,
     cxbx_platform_win32_dep,
   ],
   include_directories : cxbx_inc,
@@ -173,12 +213,10 @@ cxbx_runtime_src = files(
   'src/core/nv2a_capture.cpp',
   'src/core/PcmConverter.cpp',
   'src/core/XboxAdpcmDecoder.cpp',
-  'src/win32/HostInput.cpp',
   'src/win32/CxbxKrnl/Emu.cpp',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
   'src/win32/CxbxKrnl/EmuDes.cpp',
-  'src/win32/CxbxKrnl/EmuDInput.cpp',
   'src/win32/CxbxKrnl/EmuDSound.cpp',
   'src/win32/CxbxKrnl/EmuXact.cpp',
   'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
@@ -264,6 +302,7 @@ cxbx_runtime = shared_library(
     cxbx_hle_dispatch_dep,
     cxbx_hle_kernel_dep,
     cxbx_hle_xapi_dep,
+    cxbx_hle_input_dep,
     cxbx_guest_tls_win32_dep,
     cxbx_platform_win32_dep,
     cxbx_core_dep,
