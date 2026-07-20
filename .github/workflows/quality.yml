@@ -94,7 +94,20 @@ jobs:
         run: meson setup build-quality --cross-file cross/i686-windows-clang.ini
 
       - name: Compile
-        run: meson compile -C build-quality
+        run: |
+          $compileOutput = & meson compile -C build-quality 2>&1
+          $compileExitCode = $LASTEXITCODE
+          $compileOutput | ForEach-Object { Write-Output $_ }
+          if ($compileExitCode -ne 0) {
+              $diagnostics = $compileOutput |
+                  Where-Object { "$_" -match '(?i)(FAILED:|fatal error:| error:|LNK\d{4}|undefined symbol)' } |
+                  Select-Object -Last 20
+              foreach ($diagnostic in $diagnostics) {
+                  $message = "$diagnostic" -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+                  Write-Output "::error::$message"
+              }
+              throw "Meson compile failed with exit code $compileExitCode"
+          }
 
       - name: Run host tests
         run: meson test -C build-quality --print-errorlogs --no-suite performance
