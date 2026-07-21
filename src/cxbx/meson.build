@@ -315,7 +315,7 @@ cxbx_launcher_src = files(
   'src/win32/Cxbx/EmuExe.cpp',
   'src/win32/Cxbx/Prolog.cpp',
   'src/win32/Cxbx/WinMain.cpp',
-  'src/win32/Cxbx/Wnd.cpp',
+  'src/win32/Cxbx/window.cpp',
   'src/win32/Cxbx/about_window.cpp',
   'src/win32/Cxbx/WndMain.cpp',
 )

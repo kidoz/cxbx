@@ -34,7 +34,7 @@
 #ifndef WNDABOUT_H
 #define WNDABOUT_H
 
-#include "Wnd.h"
+#include "window.h"
 
 // ******************************************************************
 // * class : WndAbout
