@@ -3138,14 +3138,6 @@ extern "C" VOID NTAPI EmuRtlInitUnicodeString(xboxkrnl::PUNICODE_STRING Destinat
     DestinationString->MaximumLength = Length + sizeof(USHORT);
 }
 
-// ******************************************************************
-// * prevent name collisions
-// ******************************************************************
-namespace XTL
-{
-    #include "EmuXTL.h"
-};
-
 static PVOID g_pAvSavedDataAddress = NULL;
 
 struct EmuSystemMemoryAllocation
