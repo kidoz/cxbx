@@ -50,7 +50,9 @@ namespace xboxkrnl
 #include "EmuVshShaderCreation.h"
 #include "EmuVshShaderRegistry.h"
 #include "EmuFS.h"
-#include "EmuShared.h"
+#include "XBVideo.h"
+#include "host_input_lifecycle.h"
+#include "shared_video_config.h"
 #include "core/d3d_push_buffer.h"
 #include "core/d3d_pixel_shader.h"
 #include "core/d3d_pixel_shader_translate.h"
@@ -1123,10 +1125,10 @@ DWORD *XTL::EmuD3DDeferredTextureState;
 // ******************************************************************
 struct EmuD3D8CreateDeviceProxyData
 {
-    XTL::UINT                        Adapter;
+    UINT                             Adapter;
     XTL::D3DDEVTYPE                  DeviceType;
     HWND                             hFocusWindow;
-    XTL::DWORD                       BehaviorFlags;
+    DWORD                            BehaviorFlags;
     XTL::X_D3DPRESENT_PARAMETERS    *pPresentationParameters;
     XTL::IDirect3DDevice8          **ppReturnedDeviceInterface;
     volatile bool                    bReady;
@@ -1139,7 +1141,7 @@ g_EmuD3D8CreateDeviceProxyData = {0};
 // ******************************************************************
 VOID XTL::EmuD3DInit(Xbe::Header *XbeHeader, uint32 XbeHeaderSize)
 {
-    g_EmuShared->GetXBVideo(&g_XBVideo);
+    cxbx::platform::GetSharedVideoConfig(g_XBVideo);
 
     // ******************************************************************
     // * store XbeHeader and XbeHeaderSize for further use
@@ -1245,7 +1247,7 @@ VOID XTL::EmuD3DInit(Xbe::Header *XbeHeader, uint32 XbeHeaderSize)
 // ******************************************************************
 VOID XTL::EmuD3DCleanup()
 {
-    XTL::EmuDInputCleanup();
+    cxbx::platform::ShutdownHostInput();
 
     return;
 }
@@ -1349,7 +1351,7 @@ static DWORD WINAPI EmuRenderWindow(LPVOID)
     // ******************************************************************
     // * initialize direct input
     // ******************************************************************
-    if(!XTL::EmuDInputInit())
+    if(!cxbx::platform::InitializeHostInput())
         EmuCleanup("Could not initialize DirectInput!");
 
     printf("EmuD3D8 (0x%X): Message-Pump thread is running.\n", GetCurrentThreadId());
@@ -1406,7 +1408,7 @@ static LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
             return 0;
 
         case WM_INPUT_DEVICE_CHANGE:
-            XTL::EmuDInputNotifyDeviceChange();
+            cxbx::platform::NotifyHostInputDeviceChange();
             return 0;
 
         case WM_KEYDOWN:
