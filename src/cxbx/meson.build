@@ -317,7 +317,7 @@ cxbx_launcher_src = files(
   'src/win32/Cxbx/WinMain.cpp',
   'src/win32/Cxbx/window.cpp',
   'src/win32/Cxbx/about_window.cpp',
-  'src/win32/Cxbx/WndMain.cpp',
+  'src/win32/Cxbx/main_window.cpp',
 )
 
 cxbx_frontend_win32 = static_library(
