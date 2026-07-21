@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuD3D8.cpp
+// *   cxbx->win32->cxbxkrnl->d3d8_emulation.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -66,7 +66,7 @@ namespace xboxkrnl
 // ******************************************************************
 namespace XTL
 {
-    #include "EmuD3D8.h"
+    #include "d3d8_emulation.h"
     #include "xg_emulation.h"
 };
 

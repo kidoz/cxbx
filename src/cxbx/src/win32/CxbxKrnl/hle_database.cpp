@@ -47,7 +47,7 @@
 namespace XTL
 {
 #include "xapi_emulation.h"
-#include "EmuD3D8.h"
+#include "d3d8_emulation.h"
 #include "dsound_emulation.h"
 #include "xact_emulation.h"
 #include "xonline_emulation.h"

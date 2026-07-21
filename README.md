@@ -217,8 +217,8 @@ in the guest image, and route it to a host `Emu*` wrapper. The workflow:
 
 2. **Add the OOVPA definition + registration entry** to the appropriate
    version-specific `.inl` file (e.g. `src/cxbx/src/win32/CxbxKrnl/D3D8.1.0.4627.inl`),
-   routed to an existing or new `Emu*` wrapper in `EmuD3D8.cpp` /
-   `include/.../EmuD3D8.h`.
+   routed to an existing or new `Emu*` wrapper in `d3d8_emulation.cpp` /
+   `include/.../d3d8_emulation.h`.
 
 3. **Verify the patch address** — build a `_DEBUG_TRACE` variant and confirm
    the patch lands at the address reported by an independent symbol or
