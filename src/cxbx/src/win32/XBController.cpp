@@ -33,14 +33,6 @@
 // ******************************************************************
 #include "XBController.h"
 
-// ******************************************************************
-// * prevent name collisions
-// ******************************************************************
-namespace XTL
-{
-    #include "EmuXTL.h"
-};
-
 // This is ridiculous
 #define FIELD_OFFSET(type,field)  ((ULONG)&(((type *)0)->field))
 
