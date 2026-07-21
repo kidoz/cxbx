@@ -104,9 +104,9 @@ static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader);
-extern "C" void EmuAciStartDmaThread();   // EmuKrnl.cpp: AC97 DMA delivery thread
-extern "C" void EmuApuStartVoiceThread(bool EnableByDefault);  // EmuKrnl.cpp: APU voice-event delivery thread
-extern "C" void EmuStartTimerDpcThread();  // EmuKrnl.cpp: due-time KeSetTimer DPC dispatch
+extern "C" void EmuAciStartDmaThread();                       // kernel_emulation.cpp: AC97 DMA delivery thread
+extern "C" void EmuApuStartVoiceThread(bool EnableByDefault); // kernel_emulation.cpp: APU voice-event delivery thread
+extern "C" void EmuStartTimerDpcThread();                     // kernel_emulation.cpp: due-time KeSetTimer DPC dispatch
 extern "C" PVOID EmuAllocateContiguousMemoryHost(ULONG NumberOfBytes, ULONG Alignment);
 extern "C" ULONG g_EmuDsoundApuContextTable;
 static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
@@ -1303,7 +1303,7 @@ static void EmuAciWriteRegister32(ULONG Address, ULONG Value)
 // Codec0Ready bit set it treats every synthesized interrupt as spurious and never
 // services audio. Set bit 0x40 (a masked status bit) so the ISR processes; the
 // guest clears it write-1-to-clear afterwards. Called from the audio delivery
-// thread (EmuKrnl.cpp) just before it fires the ISR.
+// thread (kernel_emulation.cpp) just before it fires the ISR.
 extern "C" void EmuAciSignalAudioInterrupt()
 {
     ULONG Address = EmuAciMmioBase + EmuAciGlobSta;
@@ -1548,7 +1548,7 @@ static ULONG EmuNv2aPendingPmcInterrupts()
 }
 
 // Raise the CRTC vertical-blank interrupt in the NV2A model. The vblank thread
-// (EmuKrnl.cpp) calls this ~60x/second, then invokes the guest's connected
+// (kernel_emulation.cpp) calls this ~60x/second, then invokes the guest's connected
 // display ISR, which reads these pending bits, acks them, and queues the DPC
 // that unblocks D3D's BlockUntilVerticalBlank -- letting a natively-running XDK
 // title (e.g. NestopiaX 1.3) advance from render-state init into its frame loop.
@@ -1788,7 +1788,7 @@ static void EmuNv2aFinishCaptureFrame(ULONG Frame)
 static ULONG g_EmuNv2aScanoutAddress = 0;
 
 // Bytes/scanline of the displayed surface, published by the video HAL's
-// AvSetDisplayMode (EmuKrnl.cpp). Lets the scanout capture recover the width
+// AvSetDisplayMode (kernel_emulation.cpp). Lets the scanout capture recover the width
 // (pitch/4 at 32bpp); 0 until a mode is set, in which case a 640-wide default
 // is assumed. See EmuNv2aDumpScanout.
 extern "C" ULONG g_EmuDisplayPitch = 0;
@@ -3710,7 +3710,7 @@ static bool EmuCopyToPhysicalMapRepeated(ULONG DestinationAddress, ULONG SourceA
     return true;
 }
 
-// Bridges into the kernel's contiguous-memory tracker (defined in EmuKrnl.cpp).
+// Bridges into the kernel's contiguous-memory tracker (defined in kernel_emulation.cpp).
 // Used to reach guest data the NV2A references by raw host pointer.
 extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize);
 extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
