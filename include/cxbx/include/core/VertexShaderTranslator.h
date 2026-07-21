@@ -10,6 +10,10 @@
 
 namespace XTL::VshDiagnostics
 {
+// Receives printf-style translator warnings. Recompilation adapters provide a
+// non-null sink for their runtime environment.
+using DiagnosticSink = void (*)(const char* format, ...);
+
 enum class XboxFunctionDisposition
 {
     TranslateToHost,

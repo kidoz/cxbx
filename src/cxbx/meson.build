@@ -357,7 +357,10 @@ d3d8_import_lib = custom_target(
 
 cxbx_vsh_runtime = static_library(
   'cxbx_vsh_runtime',
-  'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+  files(
+    'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+    'src/win32/CxbxKrnl/EmuVshDecoderRuntime.cpp',
+  ),
   include_directories : cxbx_inc,
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
@@ -373,7 +376,10 @@ cxbx_vsh_runtime_dep = declare_dependency(
 
 cxbx_vsh_host = static_library(
   'cxbx_vsh_host',
-  'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+  files(
+    'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+    'src/win32/CxbxKrnl/EmuVshDecoderHost.cpp',
+  ),
   include_directories : cxbx_inc,
   cpp_args : '-DCXBX_VSH_HOST_TEST',
 )

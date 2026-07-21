@@ -21,39 +21,14 @@
 
 #include "core/VertexShaderTranslator.h"
 
-#define _CXBXKRNL_INTERNAL
-#define _XBOXKRNL_LOCAL_
-
 #if !defined(CXBX_VSH_HOST_TEST)
-// ******************************************************************
-// * prevent name collisions
-// ******************************************************************
-namespace xboxkrnl
-{
-#include <xboxkrnl/xboxkrnl.h>
-};
-
-#include "Emu.h"
-
-#undef FIELD_OFFSET // prevent macro redefinition warnings
-#include <windows.h>
-#else
-#include <cstdarg>
-#include <cstdio>
-
-#define FALSE 0
-
-static void EmuWarning(const char* format, ...)
-{
-    va_list arguments;
-    va_start(arguments, format);
-    std::vfprintf(stderr, format, arguments);
-    std::fputc('\n', stderr);
-    va_end(arguments);
-}
+using DWORD = unsigned long;
+static_assert(sizeof(DWORD) == sizeof(std::uint32_t));
 #endif
 
-#include "EmuVshDecoder.h"
+#include "EmuVshDecoderInternal.h"
+
+constexpr DWORD FALSE = 0;
 
 #include <algorithm>
 #include <array>
@@ -828,7 +803,8 @@ static DWORD VshMapTemp(DWORD R, DWORD PositionScratch)
 
 // Emit a PC source token for a decoded operand. Constants live at hardware
 // index (API register + 96) in the microcode, so unbias them here.
-static DWORD VshEmitSrc(const DWORD* I, const VshSrc* Src, bool Relative, DWORD PositionScratch)
+static DWORD VshEmitSrc(XTL::VshDiagnostics::DiagnosticSink diagnosticSink, const DWORD* I,
+                        const VshSrc* Src, bool Relative, DWORD PositionScratch)
 {
     switch(Src->Mux)
     {
@@ -841,13 +817,13 @@ static DWORD VshEmitSrc(const DWORD* I, const VshSrc* Src, bool Relative, DWORD 
             int Reg = (int)VshGetField(I, FLD_CONST) - 96;
             if(Reg < 0)
             {
-                EmuWarning("VshDecoder: negative constant register c%d clamped to 0", Reg);
+                diagnosticSink("VshDecoder: negative constant register c%d clamped to 0", Reg);
                 Reg = 0;
             }
             return VshSrcToken(SPR_CONST, (DWORD)Reg, Src->Swz, Src->Neg, Relative);
         }
         default:
-            EmuWarning("VshDecoder: unknown source mux %lu", Src->Mux);
+            diagnosticSink("VshDecoder: unknown source mux %lu", Src->Mux);
             return VshSrcToken(SPR_TEMP, 0, Src->Swz, Src->Neg, FALSE);
     }
 }
@@ -2043,16 +2019,20 @@ void XTL::VshDiagnostics::DumpReplayCapture(FILE* stream,
 }
 
 // ******************************************************************
-// * EmuVshRecompileXboxFunction
+// * VshInternal::RecompileXboxFunction
 // ******************************************************************
 // * Translate an Xbox CreateVertexShader function blob (0x2078 version
 // * token + NV2A microcode) into freshly-allocated vs.1.1 bytecode.
 // * Returns NULL on failure. Caller delete[]s the result.
 // ******************************************************************
-DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
+DWORD* XTL::VshInternal::RecompileXboxFunction(
+    const DWORD* pXboxFunction, XTL::VshDiagnostics::DiagnosticSink diagnosticSink)
 {
-    if(pXboxFunction == NULL || (pXboxFunction[0] & 0xFFFF) != 0x2078)
+    if(diagnosticSink == nullptr || pXboxFunction == NULL ||
+       (pXboxFunction[0] & 0xFFFF) != 0x2078)
+    {
         return NULL;
+    }
 
     std::string dispositionReason;
     const VshDiagnostics::XboxFunctionDisposition disposition =
@@ -2062,7 +2042,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
         const char* mode =
             disposition == VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu ? "CPU fallback"
                                                                                  : "rejection";
-        EmuWarning("VshDecoder: function requires %s (%s)", mode, dispositionReason.c_str());
+        diagnosticSink("VshDecoder: function requires %s (%s)", mode,
+                       dispositionReason.c_str());
         return NULL;
     }
 
@@ -2148,7 +2129,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
             // overwrite its temporary, R12 alias, or relative-address base.
             VshEmit(Out, &n, SIO_MOV);
             VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.pairedIlu, 0xF));
-            VshEmit(Out, &n, VshEmitSrc(I, &SrcC, A0x, ScratchPlan.position));
+            VshEmit(Out, &n,
+                    VshEmitSrc(diagnosticSink, I, &SrcC, A0x, ScratchPlan.position));
         }
 
         if(Mac != MAC_NOP)
@@ -2179,12 +2161,20 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     Bwwww.Swz[3] = SrcB.Swz[3];
                     VshEmit(Out, &n, SIO_DP3);
                     VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.dph, 0xF));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, A0x, ScratchPlan.position));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcB, A0x, ScratchPlan.position));
+                    VshEmit(Out, &n,
+                            VshEmitSrc(diagnosticSink, I, &SrcA, A0x,
+                                       ScratchPlan.position));
+                    VshEmit(Out, &n,
+                            VshEmitSrc(diagnosticSink, I, &SrcB, A0x,
+                                       ScratchPlan.position));
                     VshEmit(Out, &n, SIO_ADD);
                     VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.dph, 0xF));
-                    VshEmit(Out, &n, VshEmitSrc(I, &DphResult, false, ScratchPlan.position));
-                    VshEmit(Out, &n, VshEmitSrc(I, &Bwwww, A0x, ScratchPlan.position));
+                    VshEmit(Out, &n,
+                            VshEmitSrc(diagnosticSink, I, &DphResult, false,
+                                       ScratchPlan.position));
+                    VshEmit(Out, &n,
+                            VshEmitSrc(diagnosticSink, I, &Bwwww, A0x,
+                                       ScratchPlan.position));
                     Opcode = SIO_MOV;
                     Srcs[0] = &DphResult;
                     SrcCount = 1;
@@ -2199,11 +2189,13 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     // mov a0.x, srcA
                     VshEmit(Out, &n, SIO_MOV);
                     VshEmit(Out, &n, VshDstToken(SPR_ADDR, 0, 0x1));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcA, false, ScratchPlan.position));
+                    VshEmit(Out, &n,
+                            VshEmitSrc(diagnosticSink, I, &SrcA, false,
+                                       ScratchPlan.position));
                     Opcode = 0;
                     break;
                 default:
-                    EmuWarning("VshDecoder: unknown MAC opcode %lu", Mac);
+                    diagnosticSink("VshDecoder: unknown MAC opcode %lu", Mac);
                     Opcode = 0;
                     break;
             }
@@ -2217,7 +2209,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                 for(int source = 0; source < SrcCount; ++source)
                 {
                     VshEmit(Out, &n,
-                            VshEmitSrc(I, Srcs[source], A0x, ScratchPlan.position));
+                            VshEmitSrc(diagnosticSink, I, Srcs[source], A0x,
+                                       ScratchPlan.position));
                 }
                 Opcode = SIO_MOV;
                 Srcs[0] = &StagedDualDestination;
@@ -2246,7 +2239,9 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, VshPcMask(OMask)));
                         for(int source = 0; source < SrcCount; ++source)
                         {
-                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[source], A0x, ScratchPlan.position));
+                            VshEmit(Out, &n,
+                                    VshEmitSrc(diagnosticSink, I, Srcs[source], A0x,
+                                               ScratchPlan.position));
                         }
                     }
                     else if(Orb == OUTPUT_O && VshMapOutput(OutAddr, &RegType, &RegNum))
@@ -2255,23 +2250,33 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         VshEmit(Out, &n, VshDstToken(RegType, RegNum, VshPcMask(OMask)));
                         for(int source = 0; source < SrcCount; ++source)
                         {
-                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[source], A0x, ScratchPlan.position));
+                            VshEmit(Out, &n,
+                                    VshEmitSrc(diagnosticSink, I, Srcs[source], A0x,
+                                               ScratchPlan.position));
                         }
                     }
                     else
                     {
-                        EmuWarning("VshDecoder: unsupported MAC output (orb=%lu, addr=%lu) skipped", Orb, OutAddr);
+                        diagnosticSink(
+                            "VshDecoder: unsupported MAC output (orb=%lu, addr=%lu) skipped",
+                            Orb, OutAddr);
                     }
                 }
                 // Temp-register destination (R12 = the readable oPos alias)
                 if(MacMask != 0)
                 {
                     if(OutR == 12)
+                    {
                         NeedsPosEpilogue = true;
+                    }
                     VshEmit(Out, &n, Opcode);
                     VshEmit(Out, &n, VshDstToken(SPR_TEMP, VshMapTemp(OutR, ScratchPlan.position), VshPcMask(MacMask)));
                     for(int s = 0; s < SrcCount; s++)
-                        VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x, ScratchPlan.position));
+                    {
+                        VshEmit(Out, &n,
+                                VshEmitSrc(diagnosticSink, I, Srcs[s], A0x,
+                                           ScratchPlan.position));
+                    }
                 }
                 // Output-register destination
                 if(OMask != 0 && OutMux == OMUX_MAC && !MacOutputFirst)
@@ -2287,7 +2292,9 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, VshPcMask(OMask)));
                         for(int s = 0; s < SrcCount; s++)
                         {
-                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x, ScratchPlan.position));
+                            VshEmit(Out, &n,
+                                    VshEmitSrc(diagnosticSink, I, Srcs[s], A0x,
+                                               ScratchPlan.position));
                         }
                     }
                     else if(Orb == OUTPUT_O && VshMapOutput(OutAddr, &RegType, &RegNum))
@@ -2296,12 +2303,16 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         VshEmit(Out, &n, VshDstToken(RegType, RegNum, VshPcMask(OMask)));
                         for(int s = 0; s < SrcCount; s++)
                         {
-                            VshEmit(Out, &n, VshEmitSrc(I, Srcs[s], A0x, ScratchPlan.position));
+                            VshEmit(Out, &n,
+                                    VshEmitSrc(diagnosticSink, I, Srcs[s], A0x,
+                                               ScratchPlan.position));
                         }
                     }
                     else
                     {
-                        EmuWarning("VshDecoder: unsupported MAC output (orb=%lu, addr=%lu) skipped", Orb, OutAddr);
+                        diagnosticSink(
+                            "VshDecoder: unsupported MAC output (orb=%lu, addr=%lu) skipped",
+                            Orb, OutAddr);
                     }
                 }
             }
@@ -2320,7 +2331,7 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                 case ILU_LOG: Opcode = SIO_LOG; break;
                 case ILU_LIT: Opcode = SIO_LIT; break;
                 default:
-                    EmuWarning("VshDecoder: unknown ILU opcode %lu", Ilu);
+                    diagnosticSink("VshDecoder: unknown ILU opcode %lu", Ilu);
                     break;
             }
 
@@ -2341,7 +2352,8 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                     VshEmit(Out, &n,
                             VshDstToken(SPR_TEMP, ScratchPlan.dualDestination, 0xF));
                     VshEmit(Out, &n,
-                            VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
+                            VshEmitSrc(diagnosticSink, I, &SrcIlu, A0x,
+                                       ScratchPlan.position));
                     Opcode = SIO_MOV;
                     SrcIlu = StagedDualDestination;
                 }
@@ -2359,17 +2371,23 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         NeedsPosEpilogue = true;
                         VshEmit(Out, &n, Opcode);
                         VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, VshPcMask(OMask)));
-                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
+                        VshEmit(Out, &n,
+                                VshEmitSrc(diagnosticSink, I, &SrcIlu, A0x,
+                                           ScratchPlan.position));
                     }
                     else if(Orb == OUTPUT_O && VshMapOutput(OutAddr, &RegType, &RegNum))
                     {
                         VshEmit(Out, &n, Opcode);
                         VshEmit(Out, &n, VshDstToken(RegType, RegNum, VshPcMask(OMask)));
-                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
+                        VshEmit(Out, &n,
+                                VshEmitSrc(diagnosticSink, I, &SrcIlu, A0x,
+                                           ScratchPlan.position));
                     }
                     else
                     {
-                        EmuWarning("VshDecoder: unsupported ILU output (orb=%lu, addr=%lu) skipped", Orb, OutAddr);
+                        diagnosticSink(
+                            "VshDecoder: unsupported ILU output (orb=%lu, addr=%lu) skipped",
+                            Orb, OutAddr);
                     }
                 }
                 // Temp-register destination. When paired with an active MAC
@@ -2381,7 +2399,9 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         NeedsPosEpilogue = true;
                     VshEmit(Out, &n, Opcode);
                     VshEmit(Out, &n, VshDstToken(SPR_TEMP, VshMapTemp(IluR, ScratchPlan.position), VshPcMask(IluMask)));
-                    VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
+                    VshEmit(Out, &n,
+                            VshEmitSrc(diagnosticSink, I, &SrcIlu, A0x,
+                                       ScratchPlan.position));
                 }
                 // Output-register destination
                 if(OMask != 0 && OutMux == OMUX_ILU && !IluOutputFirst)
@@ -2392,17 +2412,23 @@ DWORD *XTL::EmuVshRecompileXboxFunction(const DWORD *pXboxFunction)
                         NeedsPosEpilogue = true;
                         VshEmit(Out, &n, Opcode);
                         VshEmit(Out, &n, VshDstToken(SPR_TEMP, ScratchPlan.position, VshPcMask(OMask)));
-                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
+                        VshEmit(Out, &n,
+                                VshEmitSrc(diagnosticSink, I, &SrcIlu, A0x,
+                                           ScratchPlan.position));
                     }
                     else if(Orb == OUTPUT_O && VshMapOutput(OutAddr, &RegType, &RegNum))
                     {
                         VshEmit(Out, &n, Opcode);
                         VshEmit(Out, &n, VshDstToken(RegType, RegNum, VshPcMask(OMask)));
-                        VshEmit(Out, &n, VshEmitSrc(I, &SrcIlu, A0x, ScratchPlan.position));
+                        VshEmit(Out, &n,
+                                VshEmitSrc(diagnosticSink, I, &SrcIlu, A0x,
+                                           ScratchPlan.position));
                     }
                     else
                     {
-                        EmuWarning("VshDecoder: unsupported ILU output (orb=%lu, addr=%lu) skipped", Orb, OutAddr);
+                        diagnosticSink(
+                            "VshDecoder: unsupported ILU output (orb=%lu, addr=%lu) skipped",
+                            Orb, OutAddr);
                     }
                 }
             }
