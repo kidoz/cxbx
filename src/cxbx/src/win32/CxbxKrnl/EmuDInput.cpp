@@ -45,7 +45,8 @@ namespace XTL
     #include "EmuXTL.h"
 };
 
-#include "EmuShared.h"
+#include "XBController.h"
+#include "shared_controller_config.h"
 
 #include <cstring>
 #include <mutex>
@@ -64,7 +65,7 @@ static std::mutex g_DirectInputMutex;
 
 static void EmuDInputStartLegacyUnlocked()
 {
-    g_EmuShared->GetXBController(&g_XBController);
+    cxbx::platform::GetSharedControllerConfig(g_XBController);
     g_XBController.ListenBegin(XTL::g_hEmuWindow);
 
     if (g_XBController.GetError()) {
