@@ -33,7 +33,7 @@
 // ******************************************************************
 #include "DlgControllerConfig.h"
 #include "ResCxbx.h"
-#include "XBController.h"
+#include "xbox_controller.h"
 #include "shared_controller_config.h"
 
 #define DIRECTINPUT_VERSION 0x0800
