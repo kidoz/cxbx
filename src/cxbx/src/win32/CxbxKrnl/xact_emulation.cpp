@@ -12,7 +12,7 @@
 
 namespace XTL
 {
-#include "EmuXact.h"
+#include "xact_emulation.h"
 #include "EmuDSound.h"
 };
 
