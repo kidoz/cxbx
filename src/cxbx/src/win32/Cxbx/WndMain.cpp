@@ -34,7 +34,7 @@
 #include "WndMain.h"
 #include "WndAbout.h"
 #include "controller_config_dialog.h"
-#include "DlgVideoConfig.h"
+#include "video_config_dialog.h"
 #include "ResCxbx.h"
 #include "EmuExe.h"
 #include "shared_runtime_state.h"
