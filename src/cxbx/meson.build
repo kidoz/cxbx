@@ -313,7 +313,7 @@ cxbx_launcher_src = files(
   'src/win32/Cxbx/controller_config_dialog.cpp',
   'src/win32/Cxbx/video_config_dialog.cpp',
   'src/win32/Cxbx/EmuExe.cpp',
-  'src/win32/Cxbx/Prolog.cpp',
+  'src/win32/Cxbx/executable_prolog.cpp',
   'src/win32/Cxbx/win_main.cpp',
   'src/win32/Cxbx/window.cpp',
   'src/win32/Cxbx/about_window.cpp',
