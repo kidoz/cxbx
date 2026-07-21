@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbx->DlgControllerConfig.h
+// *   cxbx->win32->cxbx->controller_config_dialog.h
 // *
 // *  This file is part of the cxbx project.
 // *

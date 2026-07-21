@@ -33,7 +33,7 @@
 // ******************************************************************
 #include "WndMain.h"
 #include "WndAbout.h"
-#include "DlgControllerConfig.h"
+#include "controller_config_dialog.h"
 #include "DlgVideoConfig.h"
 #include "ResCxbx.h"
 #include "EmuExe.h"
