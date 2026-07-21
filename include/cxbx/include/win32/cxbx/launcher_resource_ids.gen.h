@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Developer Studio generated include file.
-// Used by D:\Projects\cxbx\Resource\cxbx.rc
+// Used by D:\Projects\cxbx\Resource\launcher_resources.rc
 //
 #define IDI_CXBX                        101
 #define IDB_SPLASH                      102
