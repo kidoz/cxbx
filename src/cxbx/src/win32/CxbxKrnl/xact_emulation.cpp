@@ -3,7 +3,7 @@
 #define _XBOXKRNL_LOCAL_
 
 #include "Emu.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 
 #include <cstring>
 #include <limits>

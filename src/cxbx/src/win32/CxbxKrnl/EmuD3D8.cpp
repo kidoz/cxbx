@@ -49,7 +49,7 @@ namespace xboxkrnl
 #include "EmuVshCpuDeviceState.h"
 #include "EmuVshShaderCreation.h"
 #include "EmuVshShaderRegistry.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 #include "xbox_video.h"
 #include "host_input_lifecycle.h"
 #include "shared_video_config.h"

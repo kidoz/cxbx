@@ -42,7 +42,7 @@
 #include <vector>
 
 #include "Emu.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 
 // ******************************************************************
 // * prevent name collisions

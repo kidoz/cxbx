@@ -43,7 +43,7 @@ namespace xboxkrnl
 };
 
 #include "Emu.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 #include "EmuNV2ALogging.h"
 #include "core/d3d_push_buffer.h"
 #include "core/nv2a_capture.h"

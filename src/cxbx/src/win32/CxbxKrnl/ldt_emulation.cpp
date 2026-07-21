@@ -37,7 +37,7 @@
 #include "Cxbx.h"
 
 #include "Emu.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>

@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->Win32->cxbxkrnl->EmuFS.cpp
+// *   cxbx->win32->cxbxkrnl->fs_emulation.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -43,7 +43,7 @@ namespace xboxkrnl
 };
 
 #include "Emu.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 #include "ldt_emulation.h"
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
