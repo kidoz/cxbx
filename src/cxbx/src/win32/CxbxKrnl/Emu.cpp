@@ -58,7 +58,7 @@ namespace xboxkrnl
 namespace XTL
 {
 #include "xapi_emulation.h"
-#include "EmuD3D8.h"
+#include "d3d8_emulation.h"
 };
 
 #include <clocale>
@@ -114,7 +114,7 @@ static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
 static bool  EmuLooksLikeReturnAddress(ULONG Address);
 static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, size_t BufferSize);
 static bool  EmuIsReadableRange(ULONG Address, ULONG Bytes);
-// Optional D3D wrapper entry trace (EmuD3D8.cpp); NULL when the trace is off.
+// Optional D3D wrapper entry trace (d3d8_emulation.cpp); NULL when the trace is off.
 extern "C" const char *EmuGetLastD3DCall(void);
 static void  EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader);
 static void  EmuInstallFakeKernelImage();
@@ -4702,7 +4702,7 @@ static void EmuNv2aBlitToWindow(const ULONG* Pixels, ULONG Width, ULONG Height)
     EmuBlitPixelsToWindow(g_hEmuNv2aWindow, Pixels, Width, Height);
 }
 
-// Exposed for the D3D8-HLE present path (EmuD3D8.cpp). Draw the captured host
+// Exposed for the D3D8-HLE present path (d3d8_emulation.cpp). Draw the captured host
 // backbuffer over the actual HLE render window after Direct3D Present returns.
 // The separate NV2A window remains only as a fallback for raw-GPU paths that do
 // not create an HLE window.
@@ -4781,7 +4781,7 @@ extern "C" void EmuNv2aBlitResolvedFrame()
 // * NV2A draw-level debugging aids (all opt-in via environment variables)
 // ******************************************************************
 // The raw-pushbuffer rasterizer mirrors the D3D8 HLE draw-debug set in
-// EmuD3D8.cpp: per-draw trace, bisection skip, and post-draw surface dumps,
+// d3d8_emulation.cpp: per-draw trace, bisection skip, and post-draw surface dumps,
 // keyed by the per-frame draw index. Clears count as draws so a
 // composited-then-cleared frame can be bisected too. A frame boundary is the
 // FLIP_STALL present.

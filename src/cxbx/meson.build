@@ -430,7 +430,7 @@ cxbx_d3d8_public_inc = [
 
 cxbx_hle_d3d8 = static_library(
   'cxbx_hle_d3d8',
-  'src/win32/CxbxKrnl/EmuD3D8.cpp',
+  'src/win32/CxbxKrnl/d3d8_emulation.cpp',
   'src/win32/CxbxKrnl/d3d8_conversion.cpp',
   include_directories : cxbx_d3d8_public_inc + [openxdk_inc],
   cpp_args : [

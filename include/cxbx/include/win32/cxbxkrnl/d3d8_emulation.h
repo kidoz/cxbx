@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuD3D8.h
+// *   cxbx->win32->cxbxkrnl->d3d8_emulation.h
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -1418,7 +1418,7 @@ VOID WINAPI EmuIDirect3DDevice8_SetRenderState_CullControl(DWORD Value);
 
 // Xbox-extension render-state wrappers (no PC D3DRS equivalent -> no-op);
 // MultiSampleMask forwards to the host device; SetRenderStateNotInline is the
-// generic dispatcher (see EmuD3D8.cpp).
+// generic dispatcher (see d3d8_emulation.cpp).
 VOID WINAPI EmuIDirect3DDevice8_SetRenderState_FrontFace(DWORD Value);
 VOID WINAPI EmuIDirect3DDevice8_SetRenderState_LineWidth(DWORD Value);
 VOID WINAPI EmuIDirect3DDevice8_SetRenderState_LogicOp(DWORD Value);
@@ -1497,7 +1497,7 @@ VOID WINAPI EmuIDirect3DDevice8_SetVertexShader
     DWORD            Handle
 );
 
-// Xbox vertex-shader lifecycle extensions (see EmuD3D8.cpp).
+// Xbox vertex-shader lifecycle extensions (see d3d8_emulation.cpp).
 VOID WINAPI EmuIDirect3DDevice8_LoadVertexShader(DWORD Handle, DWORD Address);
 VOID WINAPI EmuIDirect3DDevice8_SelectVertexShader(DWORD Handle, DWORD Address);
 VOID WINAPI EmuIDirect3DDevice8_DeleteVertexShader(DWORD Handle);
