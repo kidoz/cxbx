@@ -46,7 +46,7 @@
 // ******************************************************************
 namespace XTL
 {
-#include "EmuXapi.h"
+#include "xapi_emulation.h"
 #include "EmuD3D8.h"
 #include "EmuDSound.h"
 #include "xact_emulation.h"
