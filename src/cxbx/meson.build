@@ -85,6 +85,7 @@ cxbx_host_input_win32_dep = declare_dependency(
 
 cxbx_runtime_win32 = static_library(
   'cxbx_runtime_win32',
+  'src/platform/win32/shared_video_config.cpp',
   'src/win32/EmuShared.cpp',
   'src/win32/CxbxKrnl/EmuNtDll.cpp',
   include_directories : cxbx_inc,
@@ -123,6 +124,7 @@ cxbx_guest_tls_win32_dep = declare_dependency(
 
 cxbx_hle_input = static_library(
   'cxbx_hle_input',
+  'src/platform/win32/host_input_lifecycle.cpp',
   'src/win32/CxbxKrnl/EmuDInput.cpp',
   include_directories : cxbx_inc,
   dependencies : [
