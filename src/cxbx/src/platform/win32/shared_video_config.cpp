@@ -11,4 +11,9 @@ void GetSharedVideoConfig(XBVideo& video)
     g_EmuShared->GetXBVideo(&video);
 }
 
+void SetSharedVideoConfig(const XBVideo& video)
+{
+    g_EmuShared->SetXBVideo(&video);
+}
+
 } // namespace cxbx::platform

@@ -33,8 +33,9 @@
 // ******************************************************************
 #include "DlgVideoConfig.h"
 #include "ResCxbx.h"
-#include "EmuShared.h"
 #include "Emu.h"
+#include "XBVideo.h"
+#include "shared_video_config.h"
 
 #include <cstdio>
 
@@ -76,7 +77,7 @@ void ShowVideoConfig(HWND hwnd)
 {
 	g_bHasChanges = FALSE;
 
-    g_EmuShared->GetXBVideo(&g_XBVideo);
+    cxbx::platform::GetSharedVideoConfig(g_XBVideo);
 
     // ******************************************************************
     // * Display Window
@@ -190,7 +191,7 @@ INT_PTR CALLBACK DlgVideoConfigProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPAR
                         g_XBVideo.SetVSync(lRet == BST_CHECKED);
                     }
 
-                    g_EmuShared->SetXBVideo(&g_XBVideo);
+                    cxbx::platform::SetSharedVideoConfig(g_XBVideo);
 
                     EndDialog(hWndDlg, wParam);
                 }
