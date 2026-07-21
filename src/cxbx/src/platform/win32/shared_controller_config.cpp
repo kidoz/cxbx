@@ -1,7 +1,7 @@
 // Shared controller-configuration access for runtime consumers.
 #include "shared_controller_config.h"
 
-#include "EmuShared.h"
+#include "shared_runtime_storage.h"
 
 namespace cxbx::platform
 {

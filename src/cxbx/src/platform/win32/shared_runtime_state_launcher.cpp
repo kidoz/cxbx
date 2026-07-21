@@ -1,7 +1,7 @@
 // Launcher-local shared-runtime access through the legacy exported storage ABI.
 #include "shared_runtime_state.h"
 
-#include "EmuShared.h"
+#include "shared_runtime_storage.h"
 
 namespace cxbx::platform
 {

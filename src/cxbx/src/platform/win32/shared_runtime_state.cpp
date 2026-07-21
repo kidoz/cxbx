@@ -1,7 +1,7 @@
 // Process-level shared-runtime access without exposing stored configuration types.
 #include "shared_runtime_state.h"
 
-#include "EmuShared.h"
+#include "shared_runtime_storage.h"
 
 namespace cxbx::platform
 {
