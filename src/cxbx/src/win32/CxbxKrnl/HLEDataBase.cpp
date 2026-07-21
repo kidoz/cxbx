@@ -50,7 +50,7 @@ namespace XTL
 #include "EmuD3D8.h"
 #include "EmuDSound.h"
 #include "xact_emulation.h"
-#include "EmuXOnline.h"
+#include "xonline_emulation.h"
 #include "EmuXG.h"
 };
 

@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   Cxbx->Win32->cxbxkrnl->EmuXOnline.cpp
+// *   Cxbx->Win32->cxbxkrnl->xonline_emulation.cpp
 // *
 // *  This file is part of the Cxbx project.
 // *
@@ -50,7 +50,7 @@ namespace NtDll
 // ******************************************************************
 namespace XTL
 {
-#include "EmuXOnline.h"
+#include "xonline_emulation.h"
 };
 
 // ******************************************************************
