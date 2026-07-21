@@ -56,7 +56,8 @@ namespace xboxkrnl
 // ******************************************************************
 namespace XTL
 {
-    #include "EmuXTL.h"
+#include "EmuXapi.h"
+#include "EmuD3D8.h"
 };
 
 #include <clocale>
