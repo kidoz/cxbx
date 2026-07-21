@@ -3,7 +3,7 @@
 // EmuKrnlLogging.h - standardized, parseable kernel-HLE trace helpers.
 //
 // KTRACE() unifies the ad-hoc "#ifdef _DEBUG_TRACE printf(...)" pattern used
-// throughout EmuKrnl.cpp into a single line with a stable "KTRACE|" prefix, so
+// throughout kernel_emulation.cpp into a single line with a stable "KTRACE|" prefix, so
 // host-side tooling (e.g. tools/xtest) can extract kernel traces from an
 // emulator log the same way it extracts guest "XT|" trace lines.
 //
