@@ -62,7 +62,7 @@ EmuExe::EmuExe(Xbe *x_Xbe, DebugMode x_debug_mode, char *x_debug_filename) : Exe
         // backs parts of the Xbox physical window at 0x80000000+ with real
         // mappings (see EmuInit's page-0 window), which the OS only grants to
         // large-address-aware processes. The launcher reserves the trap
-        // apertures before the heap can claim them (see WinMain.cpp).
+        // apertures before the heap can claim them (see win_main.cpp).
         m_Header.m_characteristics          = 0x012F;
 
         printf("OK\n");

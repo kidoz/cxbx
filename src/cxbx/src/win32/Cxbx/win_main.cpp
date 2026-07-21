@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbx->WinMain.cpp
+// *   cxbx->win32->cxbx->win_main.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
