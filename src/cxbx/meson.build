@@ -359,6 +359,7 @@ cxbx_vsh_runtime = static_library(
   'cxbx_vsh_runtime',
   files(
     'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+    'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderRuntime.cpp',
   ),
   include_directories : cxbx_inc,
@@ -378,6 +379,7 @@ cxbx_vsh_host = static_library(
   'cxbx_vsh_host',
   files(
     'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+    'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderHost.cpp',
   ),
   include_directories : cxbx_inc,

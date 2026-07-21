@@ -36,6 +36,12 @@ struct OptimizationResult
     std::size_t tokenCount = 0;
 };
 
+struct FunctionTranslationResult
+{
+    // Empty when the function cannot be translated to host bytecode.
+    std::vector<std::uint32_t> tokens;
+};
+
 struct DeclarationTranslationResult
 {
     XboxFunctionDisposition disposition = XboxFunctionDisposition::Reject;
@@ -75,6 +81,8 @@ struct TranslationCapture
 };
 
 std::uint32_t HashXboxFunction(const void* xboxFunction);
+FunctionTranslationResult TranslateXboxFunction(const void* xboxFunction,
+                                                DiagnosticSink diagnosticSink);
 OptimizationResult OptimizeD3D8Function(void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTokens);
 ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);

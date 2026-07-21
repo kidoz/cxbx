@@ -24,9 +24,9 @@
 #if !defined(CXBX_VSH_HOST_TEST)
 using DWORD = unsigned long;
 static_assert(sizeof(DWORD) == sizeof(std::uint32_t));
+#else
+using DWORD = std::uint32_t;
 #endif
-
-#include "EmuVshDecoderInternal.h"
 
 constexpr DWORD FALSE = 0;
 
@@ -856,9 +856,10 @@ static bool VshMapOutput(DWORD Address, DWORD *RegType, DWORD *RegNum)
     }
 }
 
-static void VshEmit(DWORD* Out, int* n, DWORD Token)
+static void VshEmit(std::vector<DWORD>& Out, int* n, DWORD Token)
 {
-    Out[(*n)++] = Token;
+    Out.push_back(Token);
+    ++(*n);
 }
 
 namespace
@@ -2019,19 +2020,20 @@ void XTL::VshDiagnostics::DumpReplayCapture(FILE* stream,
 }
 
 // ******************************************************************
-// * VshInternal::RecompileXboxFunction
+// * VshDiagnostics::TranslateXboxFunction
 // ******************************************************************
 // * Translate an Xbox CreateVertexShader function blob (0x2078 version
-// * token + NV2A microcode) into freshly-allocated vs.1.1 bytecode.
-// * Returns NULL on failure. Caller delete[]s the result.
+// * token + NV2A microcode) into owned vs.1.1 bytecode.
+// * Returns an empty token vector on failure.
 // ******************************************************************
-DWORD* XTL::VshInternal::RecompileXboxFunction(
-    const DWORD* pXboxFunction, XTL::VshDiagnostics::DiagnosticSink diagnosticSink)
+XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXboxFunction(
+    const void* xboxFunctionData, DiagnosticSink diagnosticSink)
 {
+    const DWORD* pXboxFunction = static_cast<const DWORD*>(xboxFunctionData);
     if(diagnosticSink == nullptr || pXboxFunction == NULL ||
        (pXboxFunction[0] & 0xFFFF) != 0x2078)
     {
-        return NULL;
+        return {};
     }
 
     std::string dispositionReason;
@@ -2044,7 +2046,7 @@ DWORD* XTL::VshInternal::RecompileXboxFunction(
                                                                                  : "rejection";
         diagnosticSink("VshDecoder: function requires %s (%s)", mode,
                        dispositionReason.c_str());
-        return NULL;
+        return {};
     }
 
     const DWORD InstrCount = static_cast<DWORD>(VshXboxInstructionCount(pXboxFunction));
@@ -2057,8 +2059,8 @@ DWORD* XTL::VshInternal::RecompileXboxFunction(
     const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction);
 
     // Paired DPH+ILU can require staged source and dual-destination results.
-    DWORD* Out =
-        new DWORD[16 + InstrCount * VSH_MAX_D3D8_TOKENS_PER_XBOX_INSTRUCTION];
+    std::vector<DWORD> Out;
+    Out.reserve(16 + InstrCount * VSH_MAX_D3D8_TOKENS_PER_XBOX_INSTRUCTION);
     int n = 0;
     bool NeedsPosEpilogue = false;
     VshEmit(Out, &n, 0xFFFE0101);   // vs.1.1
@@ -2451,7 +2453,7 @@ DWORD* XTL::VshInternal::RecompileXboxFunction(
     VshEmit(Out, &n, 0x0000FFFF); // end
 
     const VshDiagnostics::OptimizationResult optimization =
-        VshDiagnostics::OptimizeD3D8Function(Out, static_cast<std::size_t>(n));
+        VshDiagnostics::OptimizeD3D8Function(Out.data(), static_cast<std::size_t>(n));
     if(optimization.valid)
     {
         n = static_cast<int>(optimization.tokenCount);
@@ -2463,7 +2465,14 @@ DWORD* XTL::VshInternal::RecompileXboxFunction(
            optimization.afterInstructionCount, n);
     fflush(stdout);
 
-    return Out;
+    Out.resize(static_cast<std::size_t>(n));
+    FunctionTranslationResult result;
+    result.tokens.reserve(Out.size());
+    for(const DWORD token : Out)
+    {
+        result.tokens.push_back(static_cast<std::uint32_t>(token));
+    }
+    return result;
 }
 
 // ******************************************************************
@@ -2665,20 +2674,6 @@ XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
     result.tokenCount = 0;
     result.reason = "declaration_missing_end";
     return result;
-}
-
-int XTL::EmuVshTranslateXboxDeclaration(const DWORD* pXboxDecl, DWORD* pPcDecl, int MaxTokens)
-{
-    if(MaxTokens <= 0)
-    {
-        return 0;
-    }
-    const VshDiagnostics::DeclarationTranslationResult result =
-        VshDiagnostics::TranslateXboxDeclaration(pXboxDecl, pPcDecl,
-                                                 static_cast<std::size_t>(MaxTokens));
-    return result.disposition == VshDiagnostics::XboxFunctionDisposition::Reject
-               ? 0
-               : static_cast<int>(result.tokenCount);
 }
 
 bool XTL::VshDiagnostics::ApplyXboxDeclarationConstants(const void* xboxDeclarationData,

@@ -7,6 +7,7 @@
 
 namespace XTL::VshInternal
 {
+// Copies the owned fixed-width translation into the historical delete[] API.
 DWORD* RecompileXboxFunction(const DWORD* xboxFunction,
                              VshDiagnostics::DiagnosticSink diagnosticSink);
 } // namespace XTL::VshInternal
