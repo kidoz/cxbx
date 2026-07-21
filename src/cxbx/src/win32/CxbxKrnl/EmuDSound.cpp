@@ -50,8 +50,8 @@ namespace xboxkrnl
 #include "Emu.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
-#include "core/PcmConverter.h"
-#include "core/XboxAdpcmDecoder.h"
+#include "core/pcm_converter.h"
+#include "core/xbox_adpcm_decoder.h"
 #include "core/trace.h"
 
 // ******************************************************************

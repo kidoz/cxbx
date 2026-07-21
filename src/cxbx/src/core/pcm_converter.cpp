@@ -1,6 +1,6 @@
 // PCM channel conversion helpers.
 
-#include "core/PcmConverter.h"
+#include "core/pcm_converter.h"
 
 #include <climits>
 #include <cstring>

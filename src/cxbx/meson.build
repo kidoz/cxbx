@@ -18,7 +18,7 @@ cxbx_core_dep = declare_dependency(
 
 cxbx_pcm = static_library(
   'cxbx_pcm',
-  'src/core/PcmConverter.cpp',
+  'src/core/pcm_converter.cpp',
   include_directories : cxbx_inc,
 )
 
@@ -29,7 +29,7 @@ cxbx_pcm_dep = declare_dependency(
 
 cxbx_xbox_adpcm = static_library(
   'cxbx_xbox_adpcm',
-  'src/core/XboxAdpcmDecoder.cpp',
+  'src/core/xbox_adpcm_decoder.cpp',
   include_directories : cxbx_inc,
 )
 
@@ -292,7 +292,7 @@ cxbx_hle_dispatch_dep = declare_dependency(
 
 cxbx_yuy2 = static_library(
   'cxbx_yuy2',
-  'src/core/Yuy2Converter.cpp',
+  'src/core/yuy2_converter.cpp',
   include_directories : cxbx_inc,
 )
 

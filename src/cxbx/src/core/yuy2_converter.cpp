@@ -1,4 +1,4 @@
-#include "core/Yuy2Converter.h"
+#include "core/yuy2_converter.h"
 
 #include <limits>
 
