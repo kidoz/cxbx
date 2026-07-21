@@ -47,6 +47,7 @@ namespace xboxkrnl
 #include "EmuVshDecoder.h"
 #include "EmuVshDecoderInternal.h"
 #include "EmuVshCpuDeviceState.h"
+#include "EmuVshShaderCreation.h"
 #include "EmuVshShaderRegistry.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
@@ -3019,54 +3020,39 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     const std::vector<std::uint32_t> fixedDeclaration =
         pDeclaration != nullptr ? VshInternal::CopyXboxDeclaration(pDeclaration)
                                 : std::vector<std::uint32_t>{};
-    std::vector<std::uint32_t> translatedFunction;
-    std::vector<DWORD> hostTranslatedFunction;
-    const DWORD* pHostFunction = pFunction;
-    bool cpuFallback = false;
-    std::string cpuFallbackReason;
-    bool rejectShader = false;
-    std::string rejectionReason;
-    if(isXboxFunction)
+    const XTL::VshShaderCreation::Plan creationPlan =
+        XTL::VshShaderCreation::BuildPlan({
+            fixedFunction,
+            fixedDeclaration,
+            isXboxFunction,
+            pDeclaration != nullptr,
+            EmuWarning,
+        });
+    std::vector<DWORD> hostTranslatedFunction(creationPlan.translatedFunction.size());
+    std::transform(creationPlan.translatedFunction.begin(),
+                   creationPlan.translatedFunction.end(), hostTranslatedFunction.begin(),
+                   [](std::uint32_t word)
+                   { return static_cast<DWORD>(word); });
+    std::array<DWORD, 128> hostTranslatedDeclaration{};
+    for(std::size_t tokenIndex = 0;
+        tokenIndex < creationPlan.declarationTokenCount; ++tokenIndex)
     {
-        const XTL::VshDiagnostics::XboxFunctionDisposition disposition =
-            XTL::VshDiagnostics::ClassifyXboxFunction(fixedFunction, rejectionReason);
-        rejectShader = disposition == XTL::VshDiagnostics::XboxFunctionDisposition::Reject;
-        cpuFallback =
-            disposition == XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu;
-        if(cpuFallback && pDeclaration == nullptr)
-        {
-            rejectShader = true;
-            cpuFallback = false;
-            rejectionReason = "cpu_fallback_requires_declaration";
-        }
-        else if(cpuFallback)
-        {
-            cpuFallbackReason = rejectionReason;
-            pHostFunction = nullptr;
-        }
-        else if(!rejectShader)
-        {
-            XTL::VshDiagnostics::FunctionTranslationResult translation =
-                XTL::VshDiagnostics::TranslateXboxFunction(fixedFunction, EmuWarning);
-            translatedFunction = std::move(translation.tokens);
-            hostTranslatedFunction.resize(translatedFunction.size());
-            std::transform(translatedFunction.begin(), translatedFunction.end(),
-                           hostTranslatedFunction.begin(),
-                           [](std::uint32_t word)
-                           { return static_cast<DWORD>(word); });
-            pHostFunction = hostTranslatedFunction.data();
-            if(translatedFunction.empty())
-            {
-                rejectShader = true;
-                rejectionReason = "recompilation_failed";
-            }
-        }
+        hostTranslatedDeclaration[tokenIndex] =
+            static_cast<DWORD>(creationPlan.translatedDeclaration[tokenIndex]);
     }
+    const XTL::VshDiagnostics::ShaderWordView translatedDeclaration =
+        creationPlan.translatedDeclarationAvailable
+            ? XTL::VshDiagnostics::ShaderWordView{
+                  creationPlan.translatedDeclaration.data(),
+                  creationPlan.declarationTokenCount,
+              }
+            : XTL::VshDiagnostics::ShaderWordView{};
 
-    if(rejectShader)
+    if(creationPlan.disposition == XTL::VshShaderCreation::Disposition::Reject)
     {
-        EmuVshDumpRejectedShader(fixedFunction, translatedFunction, fixedDeclaration, {},
-                                 rejectionReason.c_str());
+        EmuVshDumpRejectedShader(fixedFunction, creationPlan.translatedFunction,
+                                 fixedDeclaration, translatedDeclaration,
+                                 creationPlan.reason.c_str());
         if(pHandle != nullptr)
         {
             *pHandle = 0;
@@ -3075,171 +3061,45 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
         EmuSwapFS(); // XBox FS
         return D3DERR_INVALIDCALL;
     }
-
-    std::array<std::uint32_t, 128> translatedDeclaration{};
-    DWORD TranslatedDecl[128] = {};
-    const DWORD* pHostDeclaration = pDeclaration;
-    std::size_t declarationTokenCount = 0;
-    bool declarationCpuCompatible = true;
-    bool translatedDeclarationAvailable = false;
-    std::string declarationCpuIncompatibilityReason;
-    if(pDeclaration != NULL)
-    {
-        const XTL::VshDiagnostics::DeclarationTranslationResult declarationResult =
-            XTL::VshDiagnostics::TranslateXboxDeclaration(fixedDeclaration,
-                                                          translatedDeclaration);
-        declarationTokenCount = declarationResult.tokenCount;
-        declarationCpuCompatible = declarationResult.cpuCompatible;
-        translatedDeclarationAvailable =
-            declarationResult.disposition !=
-                XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
-            declarationResult.tokenCount != 0;
-        declarationCpuIncompatibilityReason = declarationResult.cpuIncompatibilityReason;
-        for(std::size_t tokenIndex = 0; tokenIndex < declarationResult.tokenCount;
-            ++tokenIndex)
-        {
-            TranslatedDecl[tokenIndex] =
-                static_cast<DWORD>(translatedDeclaration[tokenIndex]);
-        }
-        if(cpuFallback && !declarationResult.cpuCompatible)
-        {
-            rejectShader = true;
-            rejectionReason = declarationResult.cpuIncompatibilityReason;
-        }
-        else if(declarationResult.disposition ==
-                XTL::VshDiagnostics::XboxFunctionDisposition::Reject)
-        {
-            rejectShader = true;
-            rejectionReason = declarationResult.reason;
-        }
-        else if(declarationResult.disposition ==
-                XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu)
-        {
-            if(!isXboxFunction)
-            {
-                rejectShader = true;
-                rejectionReason = "cpu_declaration_requires_xbox_function";
-            }
-            else
-            {
-                cpuFallback = true;
-                cpuFallbackReason = declarationResult.reason;
-                translatedFunction.clear();
-                hostTranslatedFunction.clear();
-                pHostFunction = nullptr;
-            }
-        }
-        else
-        {
-            pHostDeclaration = TranslatedDecl;
-        }
-    }
-
-    if(rejectShader)
-    {
-        EmuVshDumpRejectedShader(
-            fixedFunction, translatedFunction, fixedDeclaration,
-            translatedDeclarationAvailable
-                ? XTL::VshDiagnostics::ShaderWordView{ translatedDeclaration.data(),
-                                                       declarationTokenCount }
-                : XTL::VshDiagnostics::ShaderWordView{},
-            rejectionReason.c_str());
-        if(pHandle != nullptr)
-        {
-            *pHandle = 0;
-        }
-        delete pD3DVertexShader;
-        EmuSwapFS(); // XBox FS
-        return D3DERR_INVALIDCALL;
-    }
-    const bool wasRecompiled = !translatedFunction.empty();
+    const bool cpuFallback =
+        creationPlan.disposition == XTL::VshShaderCreation::Disposition::ExecuteOnCpu;
+    const bool wasRecompiled = !creationPlan.translatedFunction.empty();
+    const DWORD* pHostFunction =
+        cpuFallback
+            ? nullptr
+            : (hostTranslatedFunction.empty() ? pFunction
+                                              : hostTranslatedFunction.data());
+    const DWORD* pHostDeclaration =
+        pDeclaration != nullptr && !cpuFallback ? hostTranslatedDeclaration.data()
+                                                : pDeclaration;
 
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
     HRESULT hRet = D3D_OK;
     bool hostCallAttempted = false;
-    bool translationRejected = false;
-    if(!translatedFunction.empty())
-    {
-        try
-        {
-            const XTL::VshDiagnostics::ValidationResult validation =
-                XTL::VshDiagnostics::ValidateD3D8Translation(fixedFunction,
-                                                             translatedFunction);
-            if(!validation.valid)
-            {
-                const bool exceedsHostLimit =
-                    validation.message == "instruction count exceeds the vs.1.1 limit of 128";
-                if(exceedsHostLimit && pDeclaration != nullptr)
-                {
-                    if(declarationCpuCompatible)
-                    {
-                        cpuFallback = true;
-                        cpuFallbackReason = "host_instruction_limit";
-                    }
-                    else
-                    {
-                        hRet = D3DERR_INVALIDCALL;
-                        translationRejected = true;
-                        rejectionReason = declarationCpuIncompatibilityReason;
-                    }
-                }
-                else
-                {
-                    hRet = D3DERR_INVALIDCALL;
-                    translationRejected = true;
-                    rejectionReason = validation.message;
-                }
-            }
-        }
-        catch(...)
-        {
-            EmuWarning("VshDecoder: validation raised a host exception");
-            hRet = D3DERR_INVALIDCALL;
-            translationRejected = true;
-            rejectionReason = "translation_validation_exception";
-        }
-    }
-
-    if(SUCCEEDED(hRet) && !cpuFallback)
+    if(!cpuFallback)
     {
         hostCallAttempted = true;
         hRet = EmuVshCreateHostShader(pHostDeclaration, pHostFunction,
                                       &pD3DVertexShader->Handle, g_dwVertexShaderUsage);
     }
 
-    if(FAILED(hRet) && !translatedFunction.empty())
+    if(FAILED(hRet) && !creationPlan.translatedFunction.empty())
     {
-        const char* diagnosticReason = rejectionReason.empty()
-                                           ? (hostCallAttempted ? "host_create_failed"
-                                                                : "translation_validation_failed")
-                                           : rejectionReason.c_str();
-        EmuVshDumpRejectedShader(
-            fixedFunction, translatedFunction, fixedDeclaration,
-            translatedDeclarationAvailable
-                ? XTL::VshDiagnostics::ShaderWordView{ translatedDeclaration.data(),
-                                                       declarationTokenCount }
-                : XTL::VshDiagnostics::ShaderWordView{},
-            diagnosticReason);
-    }
-
-    if(translationRejected)
-    {
-        if(pHandle != nullptr)
-        {
-            *pHandle = 0;
-        }
-        delete pD3DVertexShader;
-        EmuSwapFS(); // XBox FS
-        return D3DERR_INVALIDCALL;
+        const char* diagnosticReason = creationPlan.reason.empty()
+                                           ? "host_create_failed"
+                                           : creationPlan.reason.c_str();
+        EmuVshDumpRejectedShader(fixedFunction, creationPlan.translatedFunction,
+                                 fixedDeclaration, translatedDeclaration,
+                                 diagnosticReason);
     }
 
     const XTL::VshDiagnostics::ShaderWordView ownedDeclaration =
         fixedDeclaration.empty()
             ? XTL::VshDiagnostics::ShaderWordView{}
             : XTL::VshDiagnostics::ShaderWordView{ fixedDeclaration.data(),
-                                                   declarationTokenCount };
+                                                   creationPlan.declarationTokenCount };
     if(!XTL::VshShaderRegistry::Register(pD3DVertexShader, cpuFallback, fixedFunction,
                                          ownedDeclaration))
     {
@@ -3267,7 +3127,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     {
         printf("VSH| fallback hash=%08X mode=cpu reason=%s\n",
                static_cast<unsigned int>(XTL::VshDiagnostics::HashXboxFunction(fixedFunction)),
-               cpuFallbackReason.c_str());
+               creationPlan.reason.c_str());
         fflush(stdout);
     }
     else if(wasRecompiled)
