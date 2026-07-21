@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuFile.cpp
+// *   cxbx->win32->cxbxkrnl->file_emulation.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -34,7 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#include "EmuFile.h"
+#include "file_emulation.h"
 
 // Array of EmuHandles in the system
 EmuHandle EmuHandle::Handles[EMU_MAX_HANDLES];
