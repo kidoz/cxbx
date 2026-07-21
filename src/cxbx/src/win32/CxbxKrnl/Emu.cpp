@@ -73,7 +73,7 @@ namespace XTL
 #include <crtdbg.h>
 #endif
 
-#include "HLEDataBase.h"
+#include "hle_database.h"
 
 // Forward-declare HostInput::Initialize to avoid pulling STL headers into the
 // XTL namespace scope (HostInput.h includes <array>/<cstdint> which conflict

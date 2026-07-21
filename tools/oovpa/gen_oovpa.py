@@ -660,7 +660,7 @@ def main() -> int:
                 + render(wrapsig, wrap_pairs, xref_pairs=[(xref_off, xref_enum)]))
 
     if all_chain_enums:
-        print("\nREQUIRED XREF ENUM ENTRIES (add to HLEDataBase.h + .cpp array):")
+        print("\nREQUIRED XREF ENUM ENTRIES (add to hle_database.h + .cpp array):")
         for e in all_chain_enums:
             print(f"    {e}")
 
