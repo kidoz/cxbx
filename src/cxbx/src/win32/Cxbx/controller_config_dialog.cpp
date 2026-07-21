@@ -32,7 +32,7 @@
 // *
 // ******************************************************************
 #include "controller_config_dialog.h"
-#include "ResCxbx.h"
+#include "launcher_resource_ids.gen.h"
 #include "xbox_controller.h"
 #include "shared_controller_config.h"
 
