@@ -51,7 +51,7 @@ cxbx_nv2a_capture_dep = declare_dependency(
 
 cxbx_platform_win32 = static_library(
   'cxbx_platform_win32',
-  'src/win32/Mutex.cpp',
+  'src/win32/mutex.cpp',
   'src/win32/xbox_controller.cpp',
   'src/win32/xbox_video.cpp',
   include_directories : cxbx_inc,
