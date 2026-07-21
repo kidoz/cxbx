@@ -355,6 +355,21 @@ d3d8_import_lib = custom_target(
   command : [dlltool, '-m', 'i386', '-k', '-d', '@INPUT@', '-l', '@OUTPUT@'],
 )
 
+cxbx_vsh_components = static_library(
+  'cxbx_vsh_components',
+  files(
+    'src/win32/CxbxKrnl/EmuVshCpuDeviceState.cpp',
+    'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
+    'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
+  ),
+  include_directories : cxbx_inc,
+)
+
+cxbx_vsh_components_dep = declare_dependency(
+  link_with : cxbx_vsh_components,
+  include_directories : cxbx_inc,
+)
+
 cxbx_vsh_runtime = static_library(
   'cxbx_vsh_runtime',
   files(
@@ -381,9 +396,6 @@ cxbx_vsh_host = static_library(
     'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderHost.cpp',
-    'src/win32/CxbxKrnl/EmuVshCpuDeviceState.cpp',
-    'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
-    'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   ),
   include_directories : cxbx_inc,
   cpp_args : '-DCXBX_VSH_HOST_TEST',
@@ -392,6 +404,7 @@ cxbx_vsh_host = static_library(
 cxbx_vsh_host_dep = declare_dependency(
   link_with : cxbx_vsh_host,
   compile_args : '-DCXBX_VSH_HOST_TEST',
+  dependencies : cxbx_vsh_components_dep,
   include_directories : cxbx_inc,
 )
 
@@ -399,9 +412,6 @@ cxbx_hle_d3d8 = static_library(
   'cxbx_hle_d3d8',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
-  'src/win32/CxbxKrnl/EmuVshCpuDeviceState.cpp',
-  'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
-  'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   include_directories : cxbx_inc,
   dependencies : [
     cxbx_platform_win32_dep,
@@ -424,6 +434,7 @@ cxbx_hle_d3d8_dep = declare_dependency(
     cxbx_hle_xg_dep,
     cxbx_platform_win32_dep,
     cxbx_trace_dep,
+    cxbx_vsh_components_dep,
     cxbx_vsh_runtime_dep,
     cxbx_yuy2_dep,
   ],
