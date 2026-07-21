@@ -35,9 +35,9 @@
 #include "WndAbout.h"
 #include "DlgControllerConfig.h"
 #include "DlgVideoConfig.h"
-#include "EmuShared.h"
 #include "ResCxbx.h"
 #include "EmuExe.h"
+#include "shared_runtime_state.h"
 
 #include <io.h>
 
@@ -1875,7 +1875,7 @@ void WndMain::StartEmulation(EnumAutoConvert x_AutoConvert, bool x_bWaitForExit)
     // ******************************************************************
     // * register xbe path with cxbx.dll
     // ******************************************************************
-    g_EmuShared->SetXbePath(m_Xbe->m_szPath);
+    cxbx::platform::SetSharedXbePath(m_Xbe->m_szPath);
 
     // ******************************************************************
 	// * shell exe
