@@ -59,7 +59,8 @@ namespace NtDll
 // ******************************************************************
 namespace XTL
 {
-    #include "EmuXTL.h"
+#include "EmuXapi.h"
+#include "EmuDInput.h"
 };
 
 static bool EmuHeapTraceEnabled()
