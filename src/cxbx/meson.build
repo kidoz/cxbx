@@ -362,12 +362,12 @@ cxbx_vsh_components = static_library(
     'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
     'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   ),
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_vsh_components_dep = declare_dependency(
   link_with : cxbx_vsh_components,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_vsh_runtime = static_library(
@@ -377,7 +377,12 @@ cxbx_vsh_runtime = static_library(
     'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderRuntime.cpp',
   ),
-  include_directories : cxbx_inc,
+  include_directories : [
+    cxbx_public_inc,
+    cxbx_win32_inc,
+    cxbx_krnl_inc,
+    openxdk_inc,
+  ],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
@@ -387,7 +392,7 @@ cxbx_vsh_runtime = static_library(
 
 cxbx_vsh_runtime_dep = declare_dependency(
   link_whole : cxbx_vsh_runtime,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_vsh_host = static_library(
@@ -397,7 +402,7 @@ cxbx_vsh_host = static_library(
     'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderHost.cpp',
   ),
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   cpp_args : '-DCXBX_VSH_HOST_TEST',
 )
 
@@ -405,7 +410,7 @@ cxbx_vsh_host_dep = declare_dependency(
   link_with : cxbx_vsh_host,
   compile_args : '-DCXBX_VSH_HOST_TEST',
   dependencies : cxbx_vsh_components_dep,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_hle_d3d8 = static_library(
