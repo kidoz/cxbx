@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,8 @@ namespace XTL::VshDiagnostics
 // Receives printf-style translator warnings. Recompilation adapters provide a
 // non-null sink for their runtime environment.
 using DiagnosticSink = void (*)(const char* format, ...);
+using ShaderWordView = std::span<const std::uint32_t>;
+using MutableShaderWordView = std::span<std::uint32_t>;
 
 enum class XboxFunctionDisposition
 {
@@ -68,10 +71,10 @@ struct RasterOutputs
 
 struct TranslationCapture
 {
-    const void* xboxFunction = nullptr;
-    const void* d3dFunction = nullptr;
-    const void* xboxDeclaration = nullptr;
-    const void* d3dDeclaration = nullptr;
+    ShaderWordView xboxFunction;
+    ShaderWordView d3dFunction;
+    ShaderWordView xboxDeclaration;
+    ShaderWordView d3dDeclaration;
     const char* rejectionReason = nullptr;
     const float* constants = nullptr;
     std::size_t constantFloatCount = 0;
@@ -80,18 +83,19 @@ struct TranslationCapture
     const char* inputSource = nullptr;
 };
 
-std::uint32_t HashXboxFunction(const void* xboxFunction);
-FunctionTranslationResult TranslateXboxFunction(const void* xboxFunction,
+std::uint32_t HashXboxFunction(ShaderWordView xboxFunction);
+FunctionTranslationResult TranslateXboxFunction(ShaderWordView xboxFunction,
                                                 DiagnosticSink diagnosticSink);
-OptimizationResult OptimizeD3D8Function(void* d3dFunction, std::size_t maxTokens);
-ValidationResult ValidateD3D8Function(const void* d3dFunction, std::size_t maxTokens);
-ValidationResult ValidateD3D8Translation(const void* xboxFunction, const void* d3dFunction);
-XboxFunctionDisposition ClassifyXboxFunction(const void* xboxFunction, std::string& reason);
-bool RequiresCpuFallback(const void* xboxFunction, std::string& reason);
-DeclarationTranslationResult TranslateXboxDeclaration(const void* xboxDeclaration,
-                                                      void* d3dDeclaration,
-                                                      std::size_t maxTokens);
-bool ApplyXboxDeclarationConstants(const void* xboxDeclaration, const float* baseConstants,
+OptimizationResult OptimizeD3D8Function(MutableShaderWordView d3dFunction);
+ValidationResult ValidateD3D8Function(ShaderWordView d3dFunction);
+ValidationResult ValidateD3D8Translation(ShaderWordView xboxFunction,
+                                         ShaderWordView d3dFunction);
+XboxFunctionDisposition ClassifyXboxFunction(ShaderWordView xboxFunction,
+                                             std::string& reason);
+bool RequiresCpuFallback(ShaderWordView xboxFunction, std::string& reason);
+DeclarationTranslationResult TranslateXboxDeclaration(ShaderWordView xboxDeclaration,
+                                                      MutableShaderWordView d3dDeclaration);
+bool ApplyXboxDeclarationConstants(ShaderWordView xboxDeclaration, const float* baseConstants,
                                    float* outputConstants, std::size_t constantFloatCount);
 bool ExpandQuadListIndices(const std::uint32_t* sourceIndices, std::size_t sourceIndexCount,
                            std::vector<std::uint32_t>& expandedIndices);
@@ -99,18 +103,17 @@ float SelectRasterOutput(const float values[4], std::uint8_t writeMask, float fa
 float ClampPointSize(float pointSize, float fallback, float maximum);
 std::uint32_t PackD3DColor(const float color[4]);
 std::uint32_t PackD3DSpecularFog(const float specular[4], const RasterOutputs& rasterOutputs);
-bool DecodeXboxVertex(const void* xboxDeclaration, const VertexStreamView* streams,
+bool DecodeXboxVertex(ShaderWordView xboxDeclaration, const VertexStreamView* streams,
                       std::size_t streamCount, std::size_t vertexIndex,
                       float* inputRegisters, std::size_t inputFloatCount);
-bool ExecuteXboxVertexShader(const void* xboxFunction, const float* constants,
+bool ExecuteXboxVertexShader(ShaderWordView xboxFunction, const float* constants,
                              const float* inputRegisters, float* outputPosition,
                              float* outputColors, std::size_t outputColorFloatCount,
                              float* outputTexCoords, std::size_t outputTexCoordFloatCount,
                              RasterOutputs* outputRaster = nullptr);
-std::vector<std::string> DecodeXboxFunction(const void* xboxFunction);
-std::vector<std::string> DecodeD3D8Function(const void* d3dFunction, std::size_t maxTokens);
-std::vector<std::string> DecodeVertexDeclaration(const void* declaration,
-                                                 std::size_t maxTokens);
+std::vector<std::string> DecodeXboxFunction(ShaderWordView xboxFunction);
+std::vector<std::string> DecodeD3D8Function(ShaderWordView d3dFunction);
+std::vector<std::string> DecodeVertexDeclaration(ShaderWordView declaration);
 void DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture);
 void DumpReplayCapture(FILE* stream, const TranslationCapture& capture);
 } // namespace XTL::VshDiagnostics
