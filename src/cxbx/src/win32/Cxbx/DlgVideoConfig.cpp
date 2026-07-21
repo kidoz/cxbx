@@ -37,7 +37,11 @@
 #include "Emu.h"
 
 #include <cstdio>
-#include <d3d8.h>
+
+namespace XTL
+{
+    #include <d3d8.h>
+};
 
 // ******************************************************************
 // * Global(s)
