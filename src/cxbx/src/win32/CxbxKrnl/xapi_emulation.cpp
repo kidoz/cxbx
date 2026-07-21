@@ -43,7 +43,7 @@
 #include <limits>
 
 #include "Emu.h"
-#include "EmuFS.h"
+#include "fs_emulation.h"
 #include "HostInput.h"
 
 // ******************************************************************
