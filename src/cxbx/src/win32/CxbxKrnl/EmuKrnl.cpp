@@ -57,7 +57,7 @@ namespace xboxkrnl
 // ******************************************************************
 namespace NtDll
 {
-    #include "EmuNtDll.h"
+    #include "ntdll_emulation.h"
 };
 
 #include "Emu.h"

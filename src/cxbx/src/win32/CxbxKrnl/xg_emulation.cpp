@@ -49,7 +49,7 @@
 // ******************************************************************
 namespace NtDll
 {
-    #include "EmuNtDll.h"
+    #include "ntdll_emulation.h"
 };
 
 using VOID = void;

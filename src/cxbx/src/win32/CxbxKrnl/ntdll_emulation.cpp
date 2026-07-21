@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   Cxbx->win32->cxbxkrnl->EmuNtDll.cpp
+// *   Cxbx->win32->cxbxkrnl->ntdll_emulation.cpp
 // *
 // *  This file is part of the Cxbx project.
 // *
@@ -42,7 +42,7 @@
 // ******************************************************************
 namespace NtDll
 {
-    #include "EmuNtDll.h"
+    #include "ntdll_emulation.h"
 };
 
 // ******************************************************************
