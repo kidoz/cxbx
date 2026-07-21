@@ -32,7 +32,7 @@
 // *
 // ******************************************************************
 #include "Emu.h"
-#include "WndMain.h"
+#include "main_window.h"
 #include "EmuExe.h"
 #include "core/Xbe.h"
 #include "shared_runtime_state.h"
