@@ -87,9 +87,7 @@ test('host-xbox-adpcm', host_xbox_adpcm_test)
 host_vsh_recompiler_test = executable(
   'host_vsh_recompiler_test',
   'vsh_recompiler.cpp',
-  '../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.cpp',
-  include_directories : cxbx_inc,
-  cpp_args : '-DCXBX_VSH_HOST_TEST',
+  dependencies : cxbx_vsh_host_dep,
 )
 
 test('host-vsh-recompiler', host_vsh_recompiler_test)

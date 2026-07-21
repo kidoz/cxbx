@@ -335,10 +335,6 @@ cxbx_frontend_win32_dep = declare_dependency(
   include_directories : cxbx_inc,
 )
 
-cxbx_runtime_src = files(
-  'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
-)
-
 cxbx_link_libs = [
   libxboxkrnl,
   libxgfx2d,
@@ -357,6 +353,35 @@ d3d8_import_lib = custom_target(
   input : 'd3d8.def',
   output : 'd3d8.lib',
   command : [dlltool, '-m', 'i386', '-k', '-d', '@INPUT@', '-l', '@OUTPUT@'],
+)
+
+cxbx_vsh_runtime = static_library(
+  'cxbx_vsh_runtime',
+  'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+  include_directories : cxbx_inc,
+  cpp_args : [
+    '-D_CXBXKRNL_INTERNAL',
+    '-DXBOXKRNL_NO_EXTERN_C',
+    '-Wno-c++11-narrowing',
+  ],
+)
+
+cxbx_vsh_runtime_dep = declare_dependency(
+  link_whole : cxbx_vsh_runtime,
+  include_directories : cxbx_inc,
+)
+
+cxbx_vsh_host = static_library(
+  'cxbx_vsh_host',
+  'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+  include_directories : cxbx_inc,
+  cpp_args : '-DCXBX_VSH_HOST_TEST',
+)
+
+cxbx_vsh_host_dep = declare_dependency(
+  link_with : cxbx_vsh_host,
+  compile_args : '-DCXBX_VSH_HOST_TEST',
+  include_directories : cxbx_inc,
 )
 
 cxbx_hle_d3d8 = static_library(
@@ -385,6 +410,7 @@ cxbx_hle_d3d8_dep = declare_dependency(
     cxbx_hle_xg_dep,
     cxbx_platform_win32_dep,
     cxbx_trace_dep,
+    cxbx_vsh_runtime_dep,
     cxbx_yuy2_dep,
   ],
   link_args : [
@@ -425,6 +451,7 @@ cxbx_hle_runtime_dep = declare_dependency(
     cxbx_nv2a_capture_dep,
     cxbx_platform_win32_dep,
     cxbx_trace_dep,
+    cxbx_vsh_runtime_dep,
   ],
   include_directories : cxbx_inc,
 )
@@ -470,7 +497,6 @@ cxbx_launcher_resources = custom_target(
 
 cxbx_runtime = shared_library(
   'Cxbx',
-  cxbx_runtime_src,
   cxbx_runtime_resources,
   include_directories : cxbx_inc,
   dependencies : [
@@ -488,6 +514,7 @@ cxbx_runtime = shared_library(
     cxbx_core_dep,
     cxbx_nv2a_capture_dep,
     cxbx_trace_dep,
+    cxbx_vsh_runtime_dep,
     cxbx_yuy2_dep,
   ],
   link_with : cxbx_link_libs,
