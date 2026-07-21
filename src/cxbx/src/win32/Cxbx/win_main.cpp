@@ -33,7 +33,7 @@
 // ******************************************************************
 #include "Emu.h"
 #include "main_window.h"
-#include "EmuExe.h"
+#include "xbe_to_pe_converter.h"
 #include "core/Xbe.h"
 #include "shared_runtime_state.h"
 

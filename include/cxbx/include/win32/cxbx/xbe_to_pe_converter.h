@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbx->EmuExe.h
+// *   cxbx->win32->cxbx->xbe_to_pe_converter.h
 // *
 // *  This file is part of the cxbx project.
 // *
