@@ -62,7 +62,7 @@ namespace NtDll
 
 #include "Emu.h"
 #include "EmuFS.h"
-#include "EmuFile.h"
+#include "file_emulation.h"
 #include "core/trace.h"
 #include "core/xbox_memory.h"
 
