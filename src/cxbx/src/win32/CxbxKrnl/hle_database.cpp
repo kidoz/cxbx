@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->HLEDataBase.cpp
+// *   cxbx->win32->cxbxkrnl->hle_database.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -54,7 +54,7 @@ namespace XTL
 #include "xg_emulation.h"
 };
 
-#include "HLEDataBase.h"
+#include "hle_database.h"
 
 #include "Xapi.1.0.3911.inl"
 #include "Xapi.1.0.4034.inl"

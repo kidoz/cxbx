@@ -53,7 +53,7 @@ class XdkAuditTests(unittest.TestCase):
                 "</VisualStudioProject>",
                 encoding="utf-8",
             )
-            (repo / "src/cxbx/src/win32/CxbxKrnl/HLEDataBase.cpp").write_text(
+            (repo / "src/cxbx/src/win32/CxbxKrnl/hle_database.cpp").write_text(
                 '{ "D3D8", 1, 0, 5849, D3D8_1_0_5849, D3D8_1_0_5849_SIZE },',
                 encoding="utf-8",
             )
