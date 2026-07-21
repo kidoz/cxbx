@@ -49,17 +49,17 @@ namespace xboxkrnl
 
 #include "Emu.h"
 #include "EmuFS.h"
-#include "EmuShared.h"
 #include "core/pcm_converter.h"
 #include "core/xbox_adpcm_decoder.h"
 #include "core/trace.h"
+#include "emulation_window_access.h"
 
 // ******************************************************************
 // * prevent name collisions
 // ******************************************************************
 namespace XTL
 {
-    #include "EmuXTL.h"
+#include "EmuDSound.h"
 };
 
 #include "ResCxbxDll.h"
@@ -211,7 +211,8 @@ HRESULT EnsureDirectSoundDevice()
     HRESULT result = DirectSoundCreate8(NULL, &g_pDSound8, NULL);
     if(SUCCEEDED(result) && g_pDSound8 != NULL)
     {
-        result = g_pDSound8->SetCooperativeLevel(XTL::g_hEmuWindow, DSSCL_PRIORITY);
+        result = g_pDSound8->SetCooperativeLevel(
+            static_cast<HWND>(cxbx::platform::GetEmulationWindow()), DSSCL_PRIORITY);
     }
 
     return result;
@@ -722,7 +723,10 @@ HRESULT WINAPI XTL::EmuDirectSoundCreate
         hRet = DirectSoundCreate8(NULL, &g_pDSound8, NULL);
 
         if(SUCCEEDED(hRet) && g_pDSound8 != NULL)
-            hRet = g_pDSound8->SetCooperativeLevel(g_hEmuWindow, DSSCL_PRIORITY);
+        {
+            hRet = g_pDSound8->SetCooperativeLevel(
+                static_cast<HWND>(cxbx::platform::GetEmulationWindow()), DSSCL_PRIORITY);
+        }
     }
     else
     {
