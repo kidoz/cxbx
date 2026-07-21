@@ -52,12 +52,16 @@ namespace NtDll
     #include "EmuNtDll.h"
 };
 
+using VOID = void;
+
 // ******************************************************************
 // * prevent name collisions
 // ******************************************************************
 namespace XTL
 {
-    #include "EmuXTL.h"
+#define DIRECT3D_VERSION 0x0800
+#include <d3d8.h>
+#include "EmuXG.h"
 };
 
 extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE *Data, ULONG Size);
