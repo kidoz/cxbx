@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuXapi.cpp
+// *   cxbx->win32->cxbxkrnl->xapi_emulation.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -59,7 +59,7 @@ namespace NtDll
 // ******************************************************************
 namespace XTL
 {
-#include "EmuXapi.h"
+#include "xapi_emulation.h"
 #include "dinput_emulation.h"
 };
 
