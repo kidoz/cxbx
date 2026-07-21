@@ -311,7 +311,7 @@ cxbx_launcher_src = files(
   'src/platform/win32/shared_runtime_state_launcher.cpp',
   'src/platform/win32/shared_video_config.cpp',
   'src/win32/Cxbx/controller_config_dialog.cpp',
-  'src/win32/Cxbx/DlgVideoConfig.cpp',
+  'src/win32/Cxbx/video_config_dialog.cpp',
   'src/win32/Cxbx/EmuExe.cpp',
   'src/win32/Cxbx/Prolog.cpp',
   'src/win32/Cxbx/WinMain.cpp',
