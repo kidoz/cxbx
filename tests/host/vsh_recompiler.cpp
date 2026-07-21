@@ -510,7 +510,7 @@ bool DifferentialTexCoordMatches(const std::vector<DWORD>& program, const float*
     ShaderOutputs cpuOutputs{};
     XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
     if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
-           program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
+           program, hardwareConstants, inputs, cpuOutputs.position.data(),
            cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
            cpuOutputs.texCoords.size(), &rasterOutputs))
     {
@@ -522,10 +522,12 @@ bool DifferentialTexCoordMatches(const std::vector<DWORD>& program, const float*
     {
         return false;
     }
+    const std::size_t maxD3dTokens = 16 + program.size() * 24;
     const XTL::VshDiagnostics::ValidationResult validation =
-        XTL::VshDiagnostics::ValidateD3D8Translation(program.data(), translated);
+        XTL::VshDiagnostics::ValidateD3D8Translation(
+            program, { translated, maxD3dTokens });
     ShaderOutputs hostOutputs{};
-    const bool executed = ExecuteD3D8Bytecode(translated, 16 + program.size() * 24,
+    const bool executed = ExecuteD3D8Bytecode(translated, maxD3dTokens,
                                               hostConstants, inputs, hostOutputs);
     delete[] translated;
     if(!validation.valid || !executed)
@@ -649,7 +651,7 @@ void ReportDifferentialMatrixFailure(std::size_t caseId, const char* stage,
                                      const ShaderOutputs& cpuOutputs,
                                      const ShaderOutputs& hostOutputs)
 {
-    const std::uint32_t hash = XTL::VshDiagnostics::HashXboxFunction(program.data());
+    const std::uint32_t hash = XTL::VshDiagnostics::HashXboxFunction(program);
     std::fprintf(stderr, "VSHMATRIX| mismatch case=%zu hash=%08X stage=%s words=%zu\n",
                  caseId, hash, stage, program.size());
     for(std::size_t word = 0; word < program.size(); ++word)
@@ -657,12 +659,12 @@ void ReportDifferentialMatrixFailure(std::size_t caseId, const char* stage,
         std::fprintf(stderr, "VSHMATRIX| raw case=%zu word=%zu value=%08X\n", caseId,
                      word, static_cast<unsigned int>(program[word]));
     }
-    for(const std::string& line : XTL::VshDiagnostics::DecodeXboxFunction(program.data()))
+    for(const std::string& line : XTL::VshDiagnostics::DecodeXboxFunction(program))
     {
         std::fprintf(stderr, "VSHMATRIX| nv2a case=%zu %s\n", caseId, line.c_str());
     }
     for(const std::string& line :
-        XTL::VshDiagnostics::DecodeD3D8Function(translated, maxD3dTokens))
+        XTL::VshDiagnostics::DecodeD3D8Function({ translated, maxD3dTokens }))
     {
         std::fprintf(stderr, "VSHMATRIX| d3d8 case=%zu %s\n", caseId, line.c_str());
     }
@@ -680,7 +682,7 @@ bool RunDifferentialMatrixCase(std::size_t caseId, bool reportFailure,
     ShaderOutputs cpuOutputs{};
     XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
     if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
-           program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
+           program, hardwareConstants, inputs, cpuOutputs.position.data(),
            cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
            cpuOutputs.texCoords.size(), &rasterOutputs))
     {
@@ -704,7 +706,8 @@ bool RunDifferentialMatrixCase(std::size_t caseId, bool reportFailure,
         return false;
     }
     const XTL::VshDiagnostics::ValidationResult validation =
-        XTL::VshDiagnostics::ValidateD3D8Translation(program.data(), translated.get());
+        XTL::VshDiagnostics::ValidateD3D8Translation(
+            program, { translated.get(), maxD3dTokens });
     if(!validation.valid)
     {
         if(reportFailure)
@@ -837,7 +840,7 @@ DifferentialFailureStage EvaluateSequenceProgram(std::size_t caseId, bool report
     ShaderOutputs cpuOutputs{};
     XTL::VshDiagnostics::RasterOutputs rasterOutputs{};
     if(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
-           program.data(), hardwareConstants, inputs, cpuOutputs.position.data(),
+           program, hardwareConstants, inputs, cpuOutputs.position.data(),
            cpuOutputs.colors.data(), cpuOutputs.colors.size(), cpuOutputs.texCoords.data(),
            cpuOutputs.texCoords.size(), &rasterOutputs))
     {
@@ -865,7 +868,8 @@ DifferentialFailureStage EvaluateSequenceProgram(std::size_t caseId, bool report
         return DifferentialFailureStage::Translation;
     }
     const XTL::VshDiagnostics::ValidationResult validation =
-        XTL::VshDiagnostics::ValidateD3D8Translation(program.data(), translated.get());
+        XTL::VshDiagnostics::ValidateD3D8Translation(
+            program, { translated.get(), maxD3dTokens });
     if(!validation.valid)
     {
         if(reportFailure)
@@ -1149,7 +1153,7 @@ bool ParseReplayCaptureLine(const std::string& line, ReplayCaptureRecord& record
     if(record.function.size() < 5 || (record.function.size() - 1) % 4 != 0 ||
        (record.function[0] & 0xFFFFu) != 0x2078u ||
        (record.function.back() & 1u) == 0 || !ReplayDeclarationIsFramed(record.declaration) ||
-       XTL::VshDiagnostics::HashXboxFunction(record.function.data()) != record.hash)
+       XTL::VshDiagnostics::HashXboxFunction(record.function) != record.hash)
     {
         error = "invalid function or hash";
         return false;
@@ -1171,23 +1175,22 @@ int ReplayCapture(const ReplayCaptureRecord& record)
     if(record.reason == "collapsed_geometry")
     {
         const std::vector<std::string> listing =
-            XTL::VshDiagnostics::DecodeXboxFunction(record.function.data());
+            XTL::VshDiagnostics::DecodeXboxFunction(record.function);
         for(const std::string& instruction : listing)
         {
             std::printf("VSHREPLAY| decoded hash=%08X %s\n", record.hash,
                         instruction.c_str());
         }
     }
-    DWORD translatedDeclaration[128] = {};
+    std::array<std::uint32_t, 128> translatedDeclaration{};
     XTL::VshDiagnostics::DeclarationTranslationResult declarationResult{};
     std::array<float, 192 * 4> hardwareConstants = record.constants;
     if(!record.declaration.empty())
     {
         declarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
-            record.declaration.data(), translatedDeclaration,
-            std::size(translatedDeclaration));
+            record.declaration, translatedDeclaration);
         if(!XTL::VshDiagnostics::ApplyXboxDeclarationConstants(
-               record.declaration.data(), record.constants.data(), hardwareConstants.data(),
+               record.declaration, record.constants.data(), hardwareConstants.data(),
                hardwareConstants.size()))
         {
             std::fprintf(stderr,
@@ -1202,12 +1205,12 @@ int ReplayCapture(const ReplayCaptureRecord& record)
               hostConstants.begin());
     std::string dispositionReason;
     const XTL::VshDiagnostics::XboxFunctionDisposition disposition =
-        XTL::VshDiagnostics::ClassifyXboxFunction(record.function.data(), dispositionReason);
+        XTL::VshDiagnostics::ClassifyXboxFunction(record.function, dispositionReason);
     if(disposition != XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost)
     {
         ShaderOutputs cpuOutputs{};
         const bool cpuExecuted = XTL::VshDiagnostics::ExecuteXboxVertexShader(
-            record.function.data(), hardwareConstants.data(), record.inputs.data(),
+            record.function, hardwareConstants.data(), record.inputs.data(),
             cpuOutputs.position.data(), cpuOutputs.colors.data(), cpuOutputs.colors.size(),
             cpuOutputs.texCoords.data(), cpuOutputs.texCoords.size());
         const char* dispositionName =
@@ -1247,10 +1250,10 @@ int ReplayCapture(const ReplayCaptureRecord& record)
     EvaluateSequenceProgram(record.hash, true, reduced, hardwareConstants.data(),
                             hostConstants.data(), record.inputs.data());
     const XTL::VshDiagnostics::TranslationCapture reducedCapture = {
-        reduced.data(),
-        nullptr,
-        record.declaration.empty() ? nullptr : record.declaration.data(),
-        nullptr,
+        reduced,
+        {},
+        record.declaration,
+        {},
         DifferentialFailureStageName(failureStage),
         hardwareConstants.data(),
         hardwareConstants.size(),
@@ -1792,13 +1795,11 @@ int RunTests()
     {
         return g_failures;
     }
-    const DWORD* translated = translation.tokens.data();
-
     const std::uint32_t hash = XTL::VshDiagnostics::HashXboxFunction(kXboxProgram);
     Check(hash == 0x79E4E0BEu, "stable Xbox-function hash");
 
     const XTL::VshDiagnostics::ValidationResult validation =
-        XTL::VshDiagnostics::ValidateD3D8Translation(kXboxProgram, translated);
+        XTL::VshDiagnostics::ValidateD3D8Translation(kXboxProgram, translation.tokens);
     Check(validation.valid, "generated bytecode validates");
     Check(validation.message == "ok", "validator success reason");
     std::string dispositionReason;
@@ -1806,6 +1807,14 @@ int RunTests()
               XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
           "supported shader is classified for host translation");
     Check(dispositionReason.empty(), "host translation disposition has no failure reason");
+
+    const std::array<DWORD, 1> truncatedXboxFunction{ 0x00012078u };
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(truncatedXboxFunction,
+                                                    dispositionReason) ==
+              XTL::VshDiagnostics::XboxFunctionDisposition::Reject,
+          "bounded Xbox function rejects missing instruction words");
+    Check(dispositionReason == "truncated_xbox_function",
+          "bounded Xbox function reports truncation");
 
     std::array<float, 192 * 4> opcodeHardwareConstants{};
     std::array<float, 96 * 4> opcodeHostConstants{};
@@ -2047,17 +2056,17 @@ int RunTests()
                                              const char* expectedReason, const char* name)
     {
         std::string reason;
-        Check(XTL::VshDiagnostics::ClassifyXboxFunction(program.data(), reason) ==
+        Check(XTL::VshDiagnostics::ClassifyXboxFunction(program, reason) ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject,
               name);
         Check(reason == expectedReason, name);
-        Check(!XTL::VshDiagnostics::RequiresCpuFallback(program.data(), reason), name);
+        Check(!XTL::VshDiagnostics::RequiresCpuFallback(program, reason), name);
         DWORD* rejectedTranslation = XTL::EmuVshRecompileXboxFunction(program.data());
         Check(rejectedTranslation == nullptr, name);
         delete[] rejectedTranslation;
         ShaderOutputs rejectedOutputs{};
         Check(!XTL::VshDiagnostics::ExecuteXboxVertexShader(
-                  program.data(), opcodeHardwareConstants.data(), opcodeInputs.data(),
+                  program, opcodeHardwareConstants.data(), opcodeInputs.data(),
                   rejectedOutputs.position.data(), rejectedOutputs.colors.data(),
                   rejectedOutputs.colors.size(), rejectedOutputs.texCoords.data(),
                   rejectedOutputs.texCoords.size()),
@@ -2110,9 +2119,9 @@ int RunTests()
     noScratchDph[1 + 11 * 4 + 2] = 0x0836186Cu;
     noScratchDph[1 + 11 * 4 + 3] = 0x0000F801u;
     std::string fallbackReason;
-    Check(XTL::VshDiagnostics::RequiresCpuFallback(noScratchDph.data(), fallbackReason),
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noScratchDph, fallbackReason),
           "DPH without a free temporary requires CPU fallback");
-    Check(XTL::VshDiagnostics::ClassifyXboxFunction(noScratchDph.data(), fallbackReason) ==
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(noScratchDph, fallbackReason) ==
               XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu,
           "DPH without scratch is classified for CPU execution");
     Check(fallbackReason == "dph_no_scratch", "DPH CPU fallback reason is stable");
@@ -2129,7 +2138,7 @@ int RunTests()
     noPositionScratch[1 + 12 * 4 + 2] = 0x08000000u;
     noPositionScratch[1 + 12 * 4 + 3] = 0x0000F801u;
     fallbackReason.clear();
-    Check(XTL::VshDiagnostics::RequiresCpuFallback(noPositionScratch.data(), fallbackReason),
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noPositionScratch, fallbackReason),
           "R12 position alias without a free temporary requires CPU fallback");
     Check(fallbackReason == "position_alias_no_scratch",
           "R12 position-alias CPU fallback reason is stable");
@@ -2146,7 +2155,7 @@ int RunTests()
     noPairedScratch[1 + 11 * 4 + 2] = 0x0800006Cu;
     noPairedScratch[1 + 11 * 4 + 3] = 0x1F0FF801u;
     fallbackReason.clear();
-    Check(XTL::VshDiagnostics::RequiresCpuFallback(noPairedScratch.data(), fallbackReason),
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noPairedScratch, fallbackReason),
           "paired hazard without a free temporary requires CPU fallback");
     Check(fallbackReason == "paired_ilu_no_scratch",
           "paired-hazard CPU fallback reason is stable");
@@ -2172,7 +2181,7 @@ int RunTests()
                                                     unusedSource, 0, 0, 0, 0xFu, 9, 0,
                                                     true));
     fallbackReason.clear();
-    Check(XTL::VshDiagnostics::RequiresCpuFallback(noDualDestinationScratch.data(),
+    Check(XTL::VshDiagnostics::RequiresCpuFallback(noDualDestinationScratch,
                                                    fallbackReason),
           "dual-destination dependency without a free temporary requires CPU fallback");
     Check(fallbackReason == "dual_destination_no_scratch",
@@ -2264,8 +2273,7 @@ int RunTests()
     rccInputs.fill(0.0f);
     rccInputs[0] = -0.25f;
     const XTL::VshDiagnostics::ValidationResult hostRelativeValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(kHostRelativeProgram,
-                                                  std::size(kHostRelativeProgram));
+        XTL::VshDiagnostics::ValidateD3D8Function(kHostRelativeProgram);
     Check(hostRelativeValidation.valid, "host relative-address bytecode validates");
     ShaderOutputs hostRoundedRelativeOutputs{};
     Check(ExecuteD3D8Bytecode(kHostRelativeProgram, std::size(kHostRelativeProgram),
@@ -2354,7 +2362,7 @@ int RunTests()
 
     const std::vector<std::string> xboxListing = XTL::VshDiagnostics::DecodeXboxFunction(kXboxProgram);
     const std::vector<std::string> d3dListing =
-        XTL::VshDiagnostics::DecodeD3D8Function(translated, 4 + 5 * 20);
+        XTL::VshDiagnostics::DecodeD3D8Function(translation.tokens);
     Check(xboxListing.size() == 5, "decoded NV2A instruction count");
     Check(d3dListing.size() == 6, "decoded optimized D3D8 instruction count");
     Check(xboxListing.front().find("mac=dp4") != std::string::npos, "NV2A listing names DP4");
@@ -2363,18 +2371,18 @@ int RunTests()
 
     const DWORD unknownOpcode[] = { 0xFFFE0101u, 0x00001234u, 0x0000FFFFu };
     const XTL::VshDiagnostics::ValidationResult unknownValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(unknownOpcode, 3);
+        XTL::VshDiagnostics::ValidateD3D8Function(unknownOpcode);
     Check(!unknownValidation.valid, "unknown opcode rejected");
     Check(unknownValidation.instructionIndex == 0, "unknown opcode location");
     DWORD unknownOptimizationInput[] = { 0xFFFE0101u, 0x00001234u, 0x0000FFFFu };
     const XTL::VshDiagnostics::OptimizationResult unknownOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(unknownOptimizationInput, std::size(unknownOptimizationInput));
+        XTL::VshDiagnostics::OptimizeD3D8Function(unknownOptimizationInput);
     Check(!unknownOptimization.valid, "unknown opcode is not optimized");
     Check(unknownOptimizationInput[1] == 0x00001234u, "failed optimization leaves bytecode unchanged");
 
     const DWORD truncatedInstruction[] = { 0xFFFE0101u, 0x00000001u, 0x800F0000u };
     const XTL::VshDiagnostics::ValidationResult truncatedValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(truncatedInstruction, 3);
+        XTL::VshDiagnostics::ValidateD3D8Function(truncatedInstruction);
     Check(!truncatedValidation.valid, "truncated instruction rejected");
     Check(truncatedValidation.message == "instruction is truncated", "truncated instruction reason");
 
@@ -2386,7 +2394,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::ValidationResult constantValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(invalidConstant, 5);
+        XTL::VshDiagnostics::ValidateD3D8Function(invalidConstant);
     Check(!constantValidation.valid, "constant above c95 rejected");
     Check(constantValidation.message.find("exceeds c95") != std::string::npos,
           "invalid constant reason");
@@ -2399,7 +2407,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::ValidationResult positionValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(missingPosition, 5);
+        XTL::VshDiagnostics::ValidateD3D8Function(missingPosition);
     Check(!positionValidation.valid, "missing oPos rejected");
     Check(positionValidation.message == "shader never writes oPos", "missing oPos reason");
 
@@ -2417,7 +2425,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::OptimizationResult overwriteOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(overwrittenTemporary, std::size(overwrittenTemporary));
+        XTL::VshDiagnostics::OptimizeD3D8Function(overwrittenTemporary);
     Check(overwriteOptimization.valid, "dead-write optimization succeeds");
     Check(overwriteOptimization.beforeInstructionCount == 3, "dead-write input count");
     Check(overwriteOptimization.afterInstructionCount == 2, "overwritten temporary removed");
@@ -2434,7 +2442,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::OptimizationResult partialOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(partialTemporary, std::size(partialTemporary));
+        XTL::VshDiagnostics::OptimizeD3D8Function(partialTemporary);
     Check(partialOptimization.valid, "partial-mask optimization succeeds");
     Check(((partialTemporary[2] >> 16) & 0xFu) == 0x1u, "dead destination component removed");
 
@@ -2450,7 +2458,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::OptimizationResult dotOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(dotProductDependency, std::size(dotProductDependency));
+        XTL::VshDiagnostics::OptimizeD3D8Function(dotProductDependency);
     Check(dotOptimization.afterInstructionCount == 2, "dot product preserves all source lanes");
     Check(((dotProductDependency[2] >> 16) & 0xFu) == 0x2u, "dot product preserves Y dependency");
 
@@ -2468,7 +2476,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::OptimizationResult relativeOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(relativeAddress, std::size(relativeAddress));
+        XTL::VshDiagnostics::OptimizeD3D8Function(relativeAddress);
     Check(relativeOptimization.valid, "relative-address optimization succeeds");
     Check(relativeOptimization.afterInstructionCount == 3, "relative addressing preserves a0 write");
 
@@ -2486,7 +2494,7 @@ int RunTests()
         0x0000FFFFu,
     };
     const XTL::VshDiagnostics::OptimizationResult addressOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(unusedAddress, std::size(unusedAddress));
+        XTL::VshDiagnostics::OptimizeD3D8Function(unusedAddress);
     Check(addressOptimization.valid, "unused-address optimization succeeds");
     Check(addressOptimization.afterInstructionCount == 2, "unused a0 write removed");
 
@@ -2499,17 +2507,18 @@ int RunTests()
     oversizedShader.insert(oversizedShader.end(), 128, 0x00000000u);
     oversizedShader.push_back(0x0000FFFFu);
     const XTL::VshDiagnostics::ValidationResult oversizedValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(oversizedShader.data(), oversizedShader.size());
+        XTL::VshDiagnostics::ValidateD3D8Function(oversizedShader);
     Check(!oversizedValidation.valid, "shader above 128 instructions rejected");
     Check(oversizedValidation.instructionIndex == 128, "instruction-limit location");
     Check(oversizedValidation.message.find("limit of 128") != std::string::npos,
           "instruction-limit reason");
     const XTL::VshDiagnostics::OptimizationResult oversizedOptimization =
-        XTL::VshDiagnostics::OptimizeD3D8Function(oversizedShader.data(), oversizedShader.size());
+        XTL::VshDiagnostics::OptimizeD3D8Function(oversizedShader);
     Check(oversizedOptimization.beforeInstructionCount == 129, "oversized optimizer input count");
     Check(oversizedOptimization.afterInstructionCount == 1, "dead NOP instructions removed");
     const XTL::VshDiagnostics::ValidationResult optimizedOversizedValidation =
-        XTL::VshDiagnostics::ValidateD3D8Function(oversizedShader.data(), oversizedOptimization.tokenCount);
+        XTL::VshDiagnostics::ValidateD3D8Function(
+            { oversizedShader.data(), oversizedOptimization.tokenCount });
     Check(optimizedOversizedValidation.valid, "optimized shader meets instruction limit");
 
     std::vector<std::uint32_t> quadIndices;
@@ -2763,7 +2772,7 @@ int RunTests()
         Check(NearlyEqual(cpuPositionOutputs.position[3], 1.0f),
               "DPH adds B.w independently of A.w");
         const std::vector<std::string> dphListing = XTL::VshDiagnostics::DecodeD3D8Function(
-            differentialPositionD3D8, 16 + 5 * 20);
+            { differentialPositionD3D8, 16 + 5 * 20 });
         bool hasDp3 = false;
         bool hasAdd = false;
         for(const std::string& instruction : dphListing)
@@ -2868,7 +2877,7 @@ int RunTests()
                                 0, 0, 0, 0xF, 3, 0, true));
     ShaderOutputs cpuViewportPairOutputs{};
     Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
-              viewportPairProgram.data(), differentialHardwareConstants.data(),
+              viewportPairProgram, differentialHardwareConstants.data(),
               differentialInputs.data(), cpuViewportPairOutputs.position.data(),
               cpuViewportPairOutputs.colors.data(), cpuViewportPairOutputs.colors.size(),
               cpuViewportPairOutputs.texCoords.data(), cpuViewportPairOutputs.texCoords.size()),
@@ -2915,7 +2924,7 @@ int RunTests()
                                 viewportUnusedSource, 0, 0, 0, 0xF, 3, 0, true));
     ShaderOutputs cpuInterleavedViewportPairOutputs{};
     Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
-              interleavedViewportPairProgram.data(), differentialHardwareConstants.data(),
+              interleavedViewportPairProgram, differentialHardwareConstants.data(),
               differentialInputs.data(), cpuInterleavedViewportPairOutputs.position.data(),
               cpuInterleavedViewportPairOutputs.colors.data(),
               cpuInterleavedViewportPairOutputs.colors.size(),
@@ -2982,7 +2991,7 @@ int RunTests()
           "raw raster execution preserves fused c58/c59 viewport pair");
     ShaderOutputs cpuFusedViewportPairOutputs{};
     Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
-              fusedViewportPairProgram.data(), differentialHardwareConstants.data(),
+              fusedViewportPairProgram, differentialHardwareConstants.data(),
               differentialInputs.data(), cpuFusedViewportPairOutputs.position.data(),
               cpuFusedViewportPairOutputs.colors.data(),
               cpuFusedViewportPairOutputs.colors.size(),
@@ -2992,7 +3001,7 @@ int RunTests()
     Check(PositionsEqual(cpuFusedViewportPairOutputs, cpuEpilogueOutputs),
           "CPU removes fused RCC c58/c59 viewport pair");
     fallbackReason.clear();
-    Check(XTL::VshDiagnostics::ClassifyXboxFunction(fusedViewportPairProgram.data(),
+    Check(XTL::VshDiagnostics::ClassifyXboxFunction(fusedViewportPairProgram,
                                                     fallbackReason) ==
               XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
           "dead RCC in fused viewport pair permits host translation");
@@ -3003,8 +3012,8 @@ int RunTests()
     if(fusedViewportPairD3D8 != nullptr)
     {
         const XTL::VshDiagnostics::ValidationResult fusedValidation =
-            XTL::VshDiagnostics::ValidateD3D8Translation(fusedViewportPairProgram.data(),
-                                                         fusedViewportPairD3D8);
+            XTL::VshDiagnostics::ValidateD3D8Translation(
+                fusedViewportPairProgram, { fusedViewportPairD3D8, 4 + 4 * 20 });
         Check(fusedValidation.valid, "fused RCC viewport pair bytecode validates");
         ShaderOutputs d3d8FusedViewportPairOutputs{};
         Check(ExecuteD3D8Bytecode(fusedViewportPairD3D8, 4 + 4 * 20,
@@ -3042,13 +3051,13 @@ int RunTests()
                                 constantSource, 0, 0, 0, 0xE, 0, 0, true, 59));
     fallbackReason.clear();
     Check(XTL::VshDiagnostics::ClassifyXboxFunction(
-              delayedFusedViewportPairProgram.data(), fallbackReason) ==
+              delayedFusedViewportPairProgram, fallbackReason) ==
               XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
           "delayed fused viewport pair permits host translation");
     Check(fallbackReason.empty(), "delayed fused viewport pair has no fallback reason");
     ShaderOutputs cpuDelayedFusedViewportPairOutputs{};
     Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
-              delayedFusedViewportPairProgram.data(),
+              delayedFusedViewportPairProgram,
               differentialHardwareConstants.data(), differentialInputs.data(),
               cpuDelayedFusedViewportPairOutputs.position.data(),
               cpuDelayedFusedViewportPairOutputs.colors.data(),
@@ -3085,7 +3094,7 @@ int RunTests()
               overwrittenFusedViewportPairProgram.begin() + 9);
     fallbackReason.clear();
     Check(XTL::VshDiagnostics::ClassifyXboxFunction(
-              overwrittenFusedViewportPairProgram.data(), fallbackReason) ==
+              overwrittenFusedViewportPairProgram, fallbackReason) ==
               XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu,
           "overwritten fused viewport reciprocal requires CPU fallback");
     Check(fallbackReason == "ambiguous_screen_space_suffix",
@@ -3103,7 +3112,7 @@ int RunTests()
                                 constantSource, 0, 0, 0, 0xE, 0, 0, true, 59));
     ShaderOutputs cpuTerminalFusedViewportPairOutputs{};
     Check(XTL::VshDiagnostics::ExecuteXboxVertexShader(
-              terminalFusedViewportPairProgram.data(),
+              terminalFusedViewportPairProgram,
               differentialHardwareConstants.data(), differentialInputs.data(),
               cpuTerminalFusedViewportPairOutputs.position.data(),
               cpuTerminalFusedViewportPairOutputs.colors.data(),
@@ -3115,7 +3124,7 @@ int RunTests()
           "CPU removes terminal fused RCC c58/c59 viewport pair");
     fallbackReason.clear();
     Check(XTL::VshDiagnostics::ClassifyXboxFunction(
-              terminalFusedViewportPairProgram.data(), fallbackReason) ==
+              terminalFusedViewportPairProgram, fallbackReason) ==
               XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
           "verified terminal viewport pair overrides ambiguous suffix classification");
     Check(fallbackReason.empty(), "terminal fused viewport pair has no fallback reason");
@@ -3127,7 +3136,8 @@ int RunTests()
     {
         const XTL::VshDiagnostics::ValidationResult terminalFusedValidation =
             XTL::VshDiagnostics::ValidateD3D8Translation(
-                terminalFusedViewportPairProgram.data(), terminalFusedViewportPairD3D8);
+                terminalFusedViewportPairProgram,
+                { terminalFusedViewportPairD3D8, 4 + 4 * 20 });
         Check(terminalFusedValidation.valid,
               "terminal fused RCC viewport pair bytecode validates");
         ShaderOutputs d3d8TerminalFusedViewportPairOutputs{};
@@ -3221,8 +3231,8 @@ int RunTests()
 
     DWORD translatedDeclaration[8] = {};
     const XTL::VshDiagnostics::DeclarationTranslationResult declarationResult =
-        XTL::VshDiagnostics::TranslateXboxDeclaration(kXboxDeclaration, translatedDeclaration,
-                                                      std::size(translatedDeclaration));
+        XTL::VshDiagnostics::TranslateXboxDeclaration(kXboxDeclaration,
+                                                      translatedDeclaration);
     Check(declarationResult.disposition ==
               XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
           "host-compatible declaration is classified for translation");
@@ -3258,7 +3268,7 @@ int RunTests()
         };
         DWORD output[3] = {};
         const XTL::VshDiagnostics::DeclarationTranslationResult typeResult =
-            XTL::VshDiagnostics::TranslateXboxDeclaration(declaration, output, std::size(output));
+            XTL::VshDiagnostics::TranslateXboxDeclaration(declaration, output);
         Check(typeResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost,
               "host vertex declaration type translates");
@@ -3288,7 +3298,7 @@ int RunTests()
         };
         DWORD output[3] = {};
         const XTL::VshDiagnostics::DeclarationTranslationResult typeResult =
-            XTL::VshDiagnostics::TranslateXboxDeclaration(declaration, output, std::size(output));
+            XTL::VshDiagnostics::TranslateXboxDeclaration(declaration, output);
         Check(typeResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::ExecuteOnCpu,
               "Xbox-only vertex declaration type selects CPU execution");
@@ -3307,15 +3317,13 @@ int RunTests()
     DWORD translatedConstantPayload[6] = {};
     const XTL::VshDiagnostics::DeclarationTranslationResult constantPayloadResult =
         XTL::VshDiagnostics::TranslateXboxDeclaration(
-            constantPayloadDeclaration, translatedConstantPayload,
-            std::size(translatedConstantPayload));
+            constantPayloadDeclaration, translatedConstantPayload);
     Check(constantPayloadResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
               constantPayloadResult.tokenCount == std::size(constantPayloadDeclaration),
           "constant payload data cannot terminate declaration parsing");
     const std::vector<std::string> constantPayloadListing =
-        XTL::VshDiagnostics::DecodeVertexDeclaration(
-            constantPayloadDeclaration, std::size(constantPayloadDeclaration));
+        XTL::VshDiagnostics::DecodeVertexDeclaration(constantPayloadDeclaration);
     Check(constantPayloadListing.size() == std::size(constantPayloadDeclaration),
           "declaration diagnostic listing retains every payload token");
     Check(constantPayloadListing.size() > 1 &&
@@ -3368,7 +3376,7 @@ int RunTests()
     DWORD tessellatorOutput[4] = {};
     const XTL::VshDiagnostics::DeclarationTranslationResult tessellatorResult =
         XTL::VshDiagnostics::TranslateXboxDeclaration(
-            hostTessellatorDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+            hostTessellatorDeclaration, tessellatorOutput);
     Check(tessellatorResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
               !tessellatorResult.cpuCompatible &&
@@ -3383,7 +3391,7 @@ int RunTests()
     };
     const XTL::VshDiagnostics::DeclarationTranslationResult cpuTessellatorResult =
         XTL::VshDiagnostics::TranslateXboxDeclaration(
-            cpuTessellatorDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+            cpuTessellatorDeclaration, tessellatorOutput);
     Check(cpuTessellatorResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               cpuTessellatorResult.reason == "declaration_cpu_tessellator",
@@ -3396,7 +3404,7 @@ int RunTests()
     };
     const XTL::VshDiagnostics::DeclarationTranslationResult extensionResult =
         XTL::VshDiagnostics::TranslateXboxDeclaration(
-            extensionDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+            extensionDeclaration, tessellatorOutput);
     Check(extensionResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::TranslateToHost &&
               !extensionResult.cpuCompatible &&
@@ -3409,7 +3417,7 @@ int RunTests()
     };
     XTL::VshDiagnostics::DeclarationTranslationResult invalidConstantResult =
         XTL::VshDiagnostics::TranslateXboxDeclaration(
-            invalidConstantRangeDeclaration, tessellatorOutput, std::size(tessellatorOutput));
+            invalidConstantRangeDeclaration, tessellatorOutput);
     Check(invalidConstantResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               invalidConstantResult.reason == "declaration_constant_range",
@@ -3423,7 +3431,7 @@ int RunTests()
     DWORD rejectedDeclaration[8] = {};
     XTL::VshDiagnostics::DeclarationTranslationResult rejectedDeclarationResult =
         XTL::VshDiagnostics::TranslateXboxDeclaration(
-            unsupportedTypeDeclaration, rejectedDeclaration, std::size(rejectedDeclaration));
+            unsupportedTypeDeclaration, rejectedDeclaration);
     Check(rejectedDeclarationResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               rejectedDeclarationResult.reason == "unsupported_vertex_type",
@@ -3435,7 +3443,7 @@ int RunTests()
         0xFFFFFFFFu,
     };
     rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
-        invalidRegisterDeclaration, rejectedDeclaration, std::size(rejectedDeclaration));
+        invalidRegisterDeclaration, rejectedDeclaration);
     Check(rejectedDeclarationResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               rejectedDeclarationResult.reason == "declaration_register_range",
@@ -3443,7 +3451,7 @@ int RunTests()
 
     const DWORD malformedDeclaration[] = { 0xC0000000u, 0xFFFFFFFFu };
     rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
-        malformedDeclaration, rejectedDeclaration, std::size(rejectedDeclaration));
+        malformedDeclaration, rejectedDeclaration);
     Check(rejectedDeclarationResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               rejectedDeclarationResult.reason == "malformed_declaration_token",
@@ -3451,21 +3459,21 @@ int RunTests()
 
     std::array<DWORD, 128> unterminatedDeclaration{};
     rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
-        unterminatedDeclaration.data(), rejectedDeclaration, std::size(rejectedDeclaration));
+        unterminatedDeclaration, rejectedDeclaration);
     Check(rejectedDeclarationResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               rejectedDeclarationResult.reason == "declaration_capacity",
           "declaration exceeding output capacity is rejected");
     std::array<DWORD, 128> unterminatedOutput{};
     rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
-        unterminatedDeclaration.data(), unterminatedOutput.data(), unterminatedOutput.size());
+        unterminatedDeclaration, unterminatedOutput);
     Check(rejectedDeclarationResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               rejectedDeclarationResult.reason == "declaration_missing_end",
           "unterminated declaration is rejected");
 
     rejectedDeclarationResult = XTL::VshDiagnostics::TranslateXboxDeclaration(
-        kXboxDeclaration, rejectedDeclaration, 2);
+        kXboxDeclaration, { rejectedDeclaration, 2 });
     Check(rejectedDeclarationResult.disposition ==
                   XTL::VshDiagnostics::XboxFunctionDisposition::Reject &&
               rejectedDeclarationResult.reason == "declaration_capacity" &&
@@ -3484,7 +3492,7 @@ int RunTests()
     {
         const XTL::VshDiagnostics::TranslationCapture translationCapture = {
             kXboxProgram,
-            translated,
+            translation.tokens,
             kXboxDeclaration,
             translatedDeclaration,
         };
@@ -3514,18 +3522,18 @@ int RunTests()
         if(rejectedCapture != nullptr)
         {
             const XTL::VshDiagnostics::TranslationCapture translationCapture = {
-                reservedMacProgram.data(),
-                nullptr,
+                reservedMacProgram,
+                {},
                 constantPayloadDeclaration,
-                nullptr,
+                {},
                 "unsupported_mac_opcode",
             };
             XTL::VshDiagnostics::DumpRejectedTranslation(rejectedCapture, translationCapture);
             XTL::VshDiagnostics::DumpReplayCapture(rejectedCapture, translationCapture);
             const GeneratedSequenceProgram replaySequence = GenerateSequenceProgram(1);
             const XTL::VshDiagnostics::TranslationCapture validReplayCapture = {
-                replaySequence.program.data(),
-                nullptr,
+                replaySequence.program,
+                {},
                 kXboxDeclaration,
                 translatedDeclaration,
                 "round_trip",
@@ -3598,7 +3606,7 @@ int RunTests()
                     {
                         Check(rejectedRecord.hash ==
                                       XTL::VshDiagnostics::HashXboxFunction(
-                                          reservedMacProgram.data()) &&
+                                          reservedMacProgram) &&
                                   rejectedRecord.declaration.size() ==
                                       std::size(constantPayloadDeclaration) &&
                                   rejectedRecord.inputSource == "canonical",

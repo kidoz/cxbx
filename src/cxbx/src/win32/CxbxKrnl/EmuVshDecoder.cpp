@@ -21,12 +21,7 @@
 
 #include "core/VertexShaderTranslator.h"
 
-#if !defined(CXBX_VSH_HOST_TEST)
-using DWORD = unsigned long;
-static_assert(sizeof(DWORD) == sizeof(std::uint32_t));
-#else
 using DWORD = std::uint32_t;
-#endif
 
 constexpr DWORD FALSE = 0;
 
@@ -298,23 +293,18 @@ static bool VshNeedsDualDestinationScratch(const DWORD* Instruction, DWORD Mac, 
     return readsPosition && readsTemporaryDestination;
 }
 
-static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
+static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction,
+                                          std::size_t instructionCount)
 {
     VshScratchPlan plan{};
-    if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
+    if(XboxFunction == nullptr)
     {
         plan.failureReason = "invalid_xbox_shader";
         return plan;
     }
 
-    DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
-    if(instructionCount == 0 || instructionCount > 136)
-    {
-        instructionCount = 136;
-    }
-
     std::array<bool, VSH_HOST_TEMP_COUNT> used{};
-    for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
+    for(std::size_t instruction = 0; instruction < instructionCount; ++instruction)
     {
         const DWORD* encoded = &XboxFunction[1 + instruction * 4];
         const DWORD mac = VshGetField(encoded, FLD_MAC);
@@ -443,19 +433,15 @@ static VshScratchPlan VshBuildScratchPlan(const DWORD* XboxFunction)
 
 static bool VshHasIluOpcodeOutsidePair(const DWORD* XboxFunction, DWORD Opcode,
                                        std::size_t IgnoredScale,
-                                       std::size_t IgnoredOffset)
+                                       std::size_t IgnoredOffset,
+                                       std::size_t instructionCount)
 {
-    if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
+    if(XboxFunction == nullptr)
     {
         return false;
     }
 
-    DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
-    if(instructionCount == 0 || instructionCount > 136)
-    {
-        instructionCount = 136;
-    }
-    for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
+    for(std::size_t instruction = 0; instruction < instructionCount; ++instruction)
     {
         if(instruction == IgnoredScale || instruction == IgnoredOffset)
         {
@@ -474,19 +460,15 @@ static bool VshHasIluOpcodeOutsidePair(const DWORD* XboxFunction, DWORD Opcode,
     return false;
 }
 
-static bool VshUsesRelativeConstants(const DWORD* XboxFunction)
+static bool VshUsesRelativeConstants(const DWORD* XboxFunction,
+                                     std::size_t instructionCount)
 {
-    if(XboxFunction == nullptr || (XboxFunction[0] & 0xFFFFu) != 0x2078u)
+    if(XboxFunction == nullptr)
     {
         return false;
     }
 
-    DWORD instructionCount = (XboxFunction[0] >> 16) & 0xFFFFu;
-    if(instructionCount == 0 || instructionCount > 136)
-    {
-        instructionCount = 136;
-    }
-    for(DWORD instruction = 0; instruction < instructionCount; ++instruction)
+    for(std::size_t instruction = 0; instruction < instructionCount; ++instruction)
     {
         const DWORD* encoded = &XboxFunction[1 + instruction * 4];
         if(VshGetField(encoded, FLD_A0X) != 0)
@@ -874,13 +856,14 @@ constexpr std::size_t VSH_MAX_D3D8_TOKENS_PER_XBOX_INSTRUCTION = 28;
 std::string VshHex(DWORD value)
 {
     std::ostringstream stream;
-    stream << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << value;
+    stream << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
+           << static_cast<unsigned long>(value);
     return stream.str();
 }
 
-std::size_t VshXboxInstructionCapacity(const DWORD* xboxFunction)
+std::size_t VshXboxInstructionCapacity(XTL::VshDiagnostics::ShaderWordView xboxFunction)
 {
-    if(xboxFunction == nullptr || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    if(xboxFunction.empty() || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
     {
         return 0;
     }
@@ -888,12 +871,35 @@ std::size_t VshXboxInstructionCapacity(const DWORD* xboxFunction)
     const DWORD encodedCount = (xboxFunction[0] >> 16) & 0xFFFFu;
     if(encodedCount == 0 || encodedCount > VSH_MAX_XBOX_INSTRUCTIONS)
     {
-        return VSH_MAX_XBOX_INSTRUCTIONS;
+        return std::min(VSH_MAX_XBOX_INSTRUCTIONS, (xboxFunction.size() - 1) / 4);
     }
-    return static_cast<std::size_t>(encodedCount);
+    return std::min(static_cast<std::size_t>(encodedCount), (xboxFunction.size() - 1) / 4);
 }
 
-std::size_t VshXboxInstructionCount(const DWORD* xboxFunction)
+bool VshXboxFunctionHasEncodedCapacity(
+    XTL::VshDiagnostics::ShaderWordView xboxFunction)
+{
+    if(xboxFunction.empty() || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    {
+        return false;
+    }
+    const DWORD encodedCount = (xboxFunction[0] >> 16) & 0xFFFFu;
+    if(encodedCount != 0 && encodedCount <= VSH_MAX_XBOX_INSTRUCTIONS)
+    {
+        return xboxFunction.size() >= 1 + static_cast<std::size_t>(encodedCount) * 4;
+    }
+    const std::size_t availableInstructions = (xboxFunction.size() - 1) / 4;
+    for(std::size_t instruction = 0; instruction < availableInstructions; ++instruction)
+    {
+        if((xboxFunction[1 + instruction * 4 + 3] & 1u) != 0)
+        {
+            return true;
+        }
+    }
+    return availableInstructions >= VSH_MAX_XBOX_INSTRUCTIONS;
+}
+
+std::size_t VshXboxInstructionCount(XTL::VshDiagnostics::ShaderWordView xboxFunction)
 {
     const std::size_t capacity = VshXboxInstructionCapacity(xboxFunction);
     for(std::size_t index = 0; index < capacity; ++index)
@@ -1223,10 +1229,9 @@ bool VshValidateRegister(DWORD token, bool destination, std::string& message)
 }
 } // namespace
 
-std::uint32_t XTL::VshDiagnostics::HashXboxFunction(const void* xboxFunctionData)
+std::uint32_t XTL::VshDiagnostics::HashXboxFunction(ShaderWordView xboxFunction)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
-    if(xboxFunction == nullptr)
+    if(xboxFunction.empty())
     {
         return 0;
     }
@@ -1247,13 +1252,13 @@ std::uint32_t XTL::VshDiagnostics::HashXboxFunction(const void* xboxFunctionData
     return hash;
 }
 
-XTL::VshDiagnostics::OptimizationResult XTL::VshDiagnostics::OptimizeD3D8Function(void* d3dFunctionData,
-                                                                                  std::size_t maxTokens)
+XTL::VshDiagnostics::OptimizationResult
+XTL::VshDiagnostics::OptimizeD3D8Function(MutableShaderWordView d3dFunction)
 {
-    DWORD* function = static_cast<DWORD*>(d3dFunctionData);
+    DWORD* function = d3dFunction.data();
     OptimizationResult result{};
     std::vector<VshD3dInstruction> instructions;
-    if(!VshParseD3dInstructions(function, maxTokens, instructions))
+    if(!VshParseD3dInstructions(function, d3dFunction.size(), instructions))
     {
         return result;
     }
@@ -1336,17 +1341,16 @@ XTL::VshDiagnostics::OptimizationResult XTL::VshDiagnostics::OptimizeD3D8Functio
     return result;
 }
 
-XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Function(const void* d3dFunctionData,
-                                                                                std::size_t maxTokens)
+XTL::VshDiagnostics::ValidationResult
+XTL::VshDiagnostics::ValidateD3D8Function(ShaderWordView d3dFunction)
 {
-    const DWORD* d3dFunction = static_cast<const DWORD*>(d3dFunctionData);
     ValidationResult result{};
-    if(d3dFunction == nullptr)
+    if(d3dFunction.empty())
     {
         result.message = "function is null";
         return result;
     }
-    if(maxTokens < 2 || d3dFunction[0] != VSH_D3D_VERSION)
+    if(d3dFunction.size() < 2 || d3dFunction[0] != VSH_D3D_VERSION)
     {
         result.message = "missing vs.1.1 version token";
         return result;
@@ -1355,7 +1359,7 @@ XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Function(
     std::size_t tokenIndex = 1;
     std::size_t instructionIndex = 0;
     bool writesPosition = false;
-    while(tokenIndex < maxTokens)
+    while(tokenIndex < d3dFunction.size())
     {
         const DWORD instructionToken = d3dFunction[tokenIndex];
         if(instructionToken == VSH_D3D_END)
@@ -1382,7 +1386,7 @@ XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Function(
         }
 
         const std::size_t parameterCount = sourceCount == 0 ? 0 : static_cast<std::size_t>(sourceCount + 1);
-        if(tokenIndex + 1 + parameterCount > maxTokens)
+        if(tokenIndex + 1 + parameterCount > d3dFunction.size())
         {
             result.instructionIndex = instructionIndex;
             result.message = "instruction is truncated";
@@ -1423,14 +1427,20 @@ XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Function(
     return result;
 }
 
-XTL::VshDiagnostics::ValidationResult XTL::VshDiagnostics::ValidateD3D8Translation(const void* xboxFunctionData,
-                                                                                   const void* d3dFunction)
+XTL::VshDiagnostics::ValidationResult
+XTL::VshDiagnostics::ValidateD3D8Translation(ShaderWordView xboxFunction,
+                                             ShaderWordView d3dFunction)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
+    if(!VshXboxFunctionHasEncodedCapacity(xboxFunction))
+    {
+        ValidationResult result;
+        result.message = "Xbox function is invalid or truncated";
+        return result;
+    }
     const std::size_t maxD3dTokens =
         16 + VshXboxInstructionCount(xboxFunction) *
                  VSH_MAX_D3D8_TOKENS_PER_XBOX_INSTRUCTION;
-    return ValidateD3D8Function(d3dFunction, maxD3dTokens);
+    return ValidateD3D8Function(d3dFunction.first(std::min(d3dFunction.size(), maxD3dTokens)));
 }
 
 bool XTL::VshDiagnostics::ExpandQuadListIndices(const std::uint32_t* sourceIndices,
@@ -1539,27 +1549,31 @@ std::uint32_t XTL::VshDiagnostics::PackD3DSpecularFog(
 }
 
 XTL::VshDiagnostics::XboxFunctionDisposition
-XTL::VshDiagnostics::ClassifyXboxFunction(const void* xboxFunctionData, std::string& reason)
+XTL::VshDiagnostics::ClassifyXboxFunction(ShaderWordView xboxFunction, std::string& reason)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
-    if(xboxFunction == nullptr || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    if(xboxFunction.empty() || (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
     {
         reason = "invalid_xbox_function";
+        return XboxFunctionDisposition::Reject;
+    }
+    if(!VshXboxFunctionHasEncodedCapacity(xboxFunction))
+    {
+        reason = "truncated_xbox_function";
         return XboxFunctionDisposition::Reject;
     }
 
     const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
     const char* rejectionReason =
-        VshTranslationFallbackReason(&xboxFunction[1], instructionCount);
+        VshTranslationFallbackReason(xboxFunction.data() + 1, instructionCount);
     if(rejectionReason != nullptr)
     {
         reason = rejectionReason;
         return XboxFunctionDisposition::Reject;
     }
     const VshScreenSpaceSuffix screenSpaceSuffix =
-        VshClassifyScreenSpaceSuffix(&xboxFunction[1], instructionCount);
+        VshClassifyScreenSpaceSuffix(xboxFunction.data() + 1, instructionCount);
     const VshViewportPair viewportPair =
-        VshFindViewportScaleAddPair(&xboxFunction[1], instructionCount);
+        VshFindViewportScaleAddPair(xboxFunction.data() + 1, instructionCount);
     const bool viewportPairCoversFinalInstruction =
         viewportPair.scale < instructionCount && viewportPair.offset == instructionCount - 1;
     if(screenSpaceSuffix.ambiguous && !viewportPairCoversFinalInstruction)
@@ -1569,19 +1583,20 @@ XTL::VshDiagnostics::ClassifyXboxFunction(const void* xboxFunctionData, std::str
     }
     const std::size_t ignoredViewportScale =
         viewportPair.discardScale ? viewportPair.scale : instructionCount;
-    if(VshHasIluOpcodeOutsidePair(xboxFunction, ILU_RCC, ignoredViewportScale,
-                                 viewportPair.offset))
+    if(VshHasIluOpcodeOutsidePair(xboxFunction.data(), ILU_RCC, ignoredViewportScale,
+                                  viewportPair.offset, instructionCount))
     {
         reason = "rcc_requires_clamp";
         return XboxFunctionDisposition::ExecuteOnCpu;
     }
-    if(VshUsesRelativeConstants(xboxFunction))
+    if(VshUsesRelativeConstants(xboxFunction.data(), instructionCount))
     {
         reason = "relative_constant_dynamic_range";
         return XboxFunctionDisposition::ExecuteOnCpu;
     }
 
-    const VshScratchPlan scratchPlan = VshBuildScratchPlan(xboxFunction);
+    const VshScratchPlan scratchPlan =
+        VshBuildScratchPlan(xboxFunction.data(), instructionCount);
     if(!scratchPlan.valid)
     {
         reason = scratchPlan.failureReason;
@@ -1591,15 +1606,14 @@ XTL::VshDiagnostics::ClassifyXboxFunction(const void* xboxFunctionData, std::str
     return XboxFunctionDisposition::TranslateToHost;
 }
 
-bool XTL::VshDiagnostics::RequiresCpuFallback(const void* xboxFunctionData, std::string& reason)
+bool XTL::VshDiagnostics::RequiresCpuFallback(ShaderWordView xboxFunction, std::string& reason)
 {
-    return ClassifyXboxFunction(xboxFunctionData, reason) ==
+    return ClassifyXboxFunction(xboxFunction, reason) ==
            XboxFunctionDisposition::ExecuteOnCpu;
 }
 
-std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xboxFunctionData)
+std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(ShaderWordView xboxFunction)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
     std::vector<std::string> listing;
     const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
     listing.reserve(instructionCount);
@@ -1635,19 +1649,18 @@ std::vector<std::string> XTL::VshDiagnostics::DecodeXboxFunction(const void* xbo
     return listing;
 }
 
-std::vector<std::string> XTL::VshDiagnostics::DecodeD3D8Function(const void* d3dFunctionData,
-                                                                 std::size_t maxTokens)
+std::vector<std::string>
+XTL::VshDiagnostics::DecodeD3D8Function(ShaderWordView d3dFunction)
 {
-    const DWORD* d3dFunction = static_cast<const DWORD*>(d3dFunctionData);
     std::vector<std::string> listing;
-    if(d3dFunction == nullptr || maxTokens == 0)
+    if(d3dFunction.empty())
     {
         return listing;
     }
 
     std::size_t tokenIndex = 1;
     std::size_t instructionIndex = 0;
-    while(tokenIndex < maxTokens && d3dFunction[tokenIndex] != VSH_D3D_END)
+    while(tokenIndex < d3dFunction.size() && d3dFunction[tokenIndex] != VSH_D3D_END)
     {
         const DWORD token = d3dFunction[tokenIndex];
         const DWORD opcode = token & 0xFFFFu;
@@ -1662,7 +1675,7 @@ std::vector<std::string> XTL::VshDiagnostics::DecodeD3D8Function(const void* d3d
             break;
         }
         const std::size_t parameterCount = sourceCount == 0 ? 0 : static_cast<std::size_t>(sourceCount + 1);
-        if(tokenIndex + 1 + parameterCount > maxTokens)
+        if(tokenIndex + 1 + parameterCount > d3dFunction.size())
         {
             line << " invalid=truncated";
             listing.push_back(line.str());
@@ -1685,17 +1698,15 @@ std::vector<std::string> XTL::VshDiagnostics::DecodeD3D8Function(const void* d3d
 }
 
 std::vector<std::string>
-XTL::VshDiagnostics::DecodeVertexDeclaration(const void* declarationData,
-                                             std::size_t maxTokens)
+XTL::VshDiagnostics::DecodeVertexDeclaration(ShaderWordView declaration)
 {
-    const DWORD* declaration = static_cast<const DWORD*>(declarationData);
     std::vector<std::string> listing;
-    if(declaration == nullptr || maxTokens == 0)
+    if(declaration.empty())
     {
         return listing;
     }
 
-    for(std::size_t tokenIndex = 0; tokenIndex < maxTokens;)
+    for(std::size_t tokenIndex = 0; tokenIndex < declaration.size();)
     {
         const DWORD token = declaration[tokenIndex];
         std::ostringstream line;
@@ -1777,13 +1788,13 @@ XTL::VshDiagnostics::DecodeVertexDeclaration(const void* declarationData,
         listing.push_back(line.str());
         ++tokenIndex;
 
-        if(payloadCount > maxTokens - tokenIndex)
+        if(payloadCount > declaration.size() - tokenIndex)
         {
             std::ostringstream truncated;
             truncated << "token=" << std::dec << std::setw(3) << std::setfill('0')
                       << tokenIndex << " type=invalid invalid=truncated_" << payloadOwner
                       << "_payload expected=" << payloadCount
-                      << " available=" << (maxTokens - tokenIndex);
+                      << " available=" << (declaration.size() - tokenIndex);
             listing.push_back(truncated.str());
             return listing;
         }
@@ -1804,26 +1815,23 @@ XTL::VshDiagnostics::DecodeVertexDeclaration(const void* declarationData,
 
 void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const TranslationCapture& capture)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(capture.xboxFunction);
-    const DWORD* d3dFunction = static_cast<const DWORD*>(capture.d3dFunction);
-    const DWORD* xboxDeclaration = static_cast<const DWORD*>(capture.xboxDeclaration);
-    const DWORD* d3dDeclaration = static_cast<const DWORD*>(capture.d3dDeclaration);
     if(stream == nullptr)
     {
         return;
     }
 
     const bool hasXboxFunction =
-        xboxFunction != nullptr && (xboxFunction[0] & 0xFFFFu) == VSH_XBOX_VERSION;
-    const std::uint32_t hash = hasXboxFunction ? HashXboxFunction(xboxFunction) : 0;
-    const std::size_t xboxInstructionCount = VshXboxInstructionCount(xboxFunction);
+        !capture.xboxFunction.empty() &&
+        (capture.xboxFunction[0] & 0xFFFFu) == VSH_XBOX_VERSION;
+    const std::uint32_t hash = hasXboxFunction ? HashXboxFunction(capture.xboxFunction) : 0;
+    const std::size_t xboxInstructionCount = VshXboxInstructionCount(capture.xboxFunction);
     const std::size_t maxD3dTokens =
         16 + xboxInstructionCount * VSH_MAX_D3D8_TOKENS_PER_XBOX_INSTRUCTION;
-    const bool validationAvailable = hasXboxFunction && d3dFunction != nullptr;
+    const bool validationAvailable = hasXboxFunction && !capture.d3dFunction.empty();
     ValidationResult validation;
     if(validationAvailable)
     {
-        validation = ValidateD3D8Translation(xboxFunction, d3dFunction);
+        validation = ValidateD3D8Translation(capture.xboxFunction, capture.d3dFunction);
     }
     const char* reason = capture.rejectionReason;
     if(reason == nullptr || reason[0] == '\0')
@@ -1836,36 +1844,39 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
     std::fprintf(stream,
                  "VSH| rejected hash=%08X xbox_instructions=%zu d3d8=%s validation=%s "
                  "at=%zu reason=%s\n",
-                 hash, xboxInstructionCount, d3dFunction != nullptr ? "present" : "unavailable",
+                 hash, xboxInstructionCount,
+                 !capture.d3dFunction.empty() ? "present" : "unavailable",
                  validationState, validation.instructionIndex, reason);
 
-    for(const std::string& line : DecodeXboxFunction(xboxFunction))
+    for(const std::string& line : DecodeXboxFunction(capture.xboxFunction))
     {
         std::fprintf(stream, "VSH| nv2a hash=%08X %s\n", hash, line.c_str());
     }
-    for(const std::string& line : DecodeD3D8Function(d3dFunction, maxD3dTokens))
+    const ShaderWordView d3dFunction = capture.d3dFunction.first(
+        std::min(capture.d3dFunction.size(), maxD3dTokens));
+    for(const std::string& line : DecodeD3D8Function(d3dFunction))
     {
         std::fprintf(stream, "VSH| d3d8 hash=%08X %s\n", hash, line.c_str());
     }
 
-    if(xboxDeclaration == nullptr)
+    if(capture.xboxDeclaration.empty())
     {
         std::fprintf(stream, "VSH| declaration_xbox hash=%08X unavailable\n", hash);
     }
     else
     {
-        for(const std::string& line : DecodeVertexDeclaration(xboxDeclaration, 128))
+        for(const std::string& line : DecodeVertexDeclaration(capture.xboxDeclaration))
         {
             std::fprintf(stream, "VSH| declaration_xbox hash=%08X %s\n", hash, line.c_str());
         }
     }
-    if(d3dDeclaration == nullptr)
+    if(capture.d3dDeclaration.empty())
     {
         std::fprintf(stream, "VSH| declaration_d3d8 hash=%08X unavailable\n", hash);
     }
     else
     {
-        for(const std::string& line : DecodeVertexDeclaration(d3dDeclaration, 128))
+        for(const std::string& line : DecodeVertexDeclaration(capture.d3dDeclaration))
         {
             std::fprintf(stream, "VSH| declaration_d3d8 hash=%08X %s\n", hash, line.c_str());
         }
@@ -1873,14 +1884,14 @@ void XTL::VshDiagnostics::DumpRejectedTranslation(FILE* stream, const Translatio
     std::fflush(stream);
 }
 
-static std::size_t VshReplayDeclarationTokenCount(const DWORD* declaration,
-                                                  std::size_t maxTokens)
+static std::size_t
+VshReplayDeclarationTokenCount(XTL::VshDiagnostics::ShaderWordView declaration)
 {
-    if(declaration == nullptr)
+    if(declaration.empty())
     {
         return 0;
     }
-    for(std::size_t tokenIndex = 0; tokenIndex < maxTokens;)
+    for(std::size_t tokenIndex = 0; tokenIndex < declaration.size();)
     {
         const DWORD token = declaration[tokenIndex++];
         if(token == 0xFFFFFFFFu)
@@ -1901,13 +1912,13 @@ static std::size_t VshReplayDeclarationTokenCount(const DWORD* declaration,
         {
             payloadCount = (token >> 24) & 0x1Fu;
         }
-        if(payloadCount > maxTokens - tokenIndex)
+        if(payloadCount > declaration.size() - tokenIndex)
         {
-            return maxTokens;
+            return declaration.size();
         }
         tokenIndex += payloadCount;
     }
-    return maxTokens;
+    return declaration.size();
 }
 
 static void VshReplayPrintReason(FILE* stream, const char* reason)
@@ -1927,14 +1938,15 @@ static void VshReplayPrintReason(FILE* stream, const char* reason)
     }
 }
 
-static void VshReplayPrintWords(FILE* stream, const DWORD* words, std::size_t wordCount)
+static void VshReplayPrintWords(FILE* stream,
+                                XTL::VshDiagnostics::ShaderWordView words)
 {
-    if(words == nullptr || wordCount == 0)
+    if(words.empty())
     {
         std::fputc('-', stream);
         return;
     }
-    for(std::size_t index = 0; index < wordCount; ++index)
+    for(std::size_t index = 0; index < words.size(); ++index)
     {
         std::fprintf(stream, "%s%08X", index == 0 ? "" : ",",
                      static_cast<unsigned int>(words[index]));
@@ -1966,9 +1978,8 @@ static void VshReplayPrintSparseFloats(FILE* stream, const float* values,
 void XTL::VshDiagnostics::DumpReplayCapture(FILE* stream,
                                             const TranslationCapture& capture)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(capture.xboxFunction);
-    if(stream == nullptr || xboxFunction == nullptr ||
-       (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
+    if(stream == nullptr || capture.xboxFunction.empty() ||
+       (capture.xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
     {
         return;
     }
@@ -1994,23 +2005,23 @@ void XTL::VshDiagnostics::DumpReplayCapture(FILE* stream,
         inputSource = "runtime";
     }
 
-    const std::size_t functionWordCount = 1 + VshXboxInstructionCount(xboxFunction) * 4;
-    const DWORD* declaration = static_cast<const DWORD*>(capture.xboxDeclaration);
+    const std::size_t functionWordCount =
+        1 + VshXboxInstructionCount(capture.xboxFunction) * 4;
     const std::size_t declarationTokenCount =
-        VshReplayDeclarationTokenCount(declaration, 128);
+        VshReplayDeclarationTokenCount(capture.xboxDeclaration);
     const std::size_t constantFloatCount =
         capture.constants == nullptr
             ? 0
             : std::min<std::size_t>(capture.constantFloatCount, 192 * 4);
     std::fprintf(stream, "VSHREPLAY| version=1 hash=%08X reason=",
-                 static_cast<unsigned int>(HashXboxFunction(xboxFunction)));
+                 static_cast<unsigned int>(HashXboxFunction(capture.xboxFunction)));
     VshReplayPrintReason(stream, capture.rejectionReason);
     std::fputs(" input_source=", stream);
     VshReplayPrintReason(stream, inputSource);
     std::fputs(" function=", stream);
-    VshReplayPrintWords(stream, xboxFunction, functionWordCount);
+    VshReplayPrintWords(stream, capture.xboxFunction.first(functionWordCount));
     std::fputs(" declaration=", stream);
-    VshReplayPrintWords(stream, declaration, declarationTokenCount);
+    VshReplayPrintWords(stream, capture.xboxDeclaration.first(declarationTokenCount));
     std::fputs(" constants=", stream);
     VshReplayPrintSparseFloats(stream, capture.constants, constantFloatCount);
     std::fputs(" inputs=", stream);
@@ -2027,18 +2038,17 @@ void XTL::VshDiagnostics::DumpReplayCapture(FILE* stream,
 // * Returns an empty token vector on failure.
 // ******************************************************************
 XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXboxFunction(
-    const void* xboxFunctionData, DiagnosticSink diagnosticSink)
+    ShaderWordView xboxFunction, DiagnosticSink diagnosticSink)
 {
-    const DWORD* pXboxFunction = static_cast<const DWORD*>(xboxFunctionData);
-    if(diagnosticSink == nullptr || pXboxFunction == NULL ||
-       (pXboxFunction[0] & 0xFFFF) != 0x2078)
+    if(diagnosticSink == nullptr || xboxFunction.empty() ||
+       (xboxFunction[0] & 0xFFFF) != 0x2078)
     {
         return {};
     }
 
     std::string dispositionReason;
     const VshDiagnostics::XboxFunctionDisposition disposition =
-        VshDiagnostics::ClassifyXboxFunction(pXboxFunction, dispositionReason);
+        VshDiagnostics::ClassifyXboxFunction(xboxFunction, dispositionReason);
     if(disposition != VshDiagnostics::XboxFunctionDisposition::TranslateToHost)
     {
         const char* mode =
@@ -2049,14 +2059,15 @@ XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXbo
         return {};
     }
 
-    const DWORD InstrCount = static_cast<DWORD>(VshXboxInstructionCount(pXboxFunction));
+    const DWORD InstrCount = static_cast<DWORD>(VshXboxInstructionCount(xboxFunction));
+    const DWORD* pXboxFunction = xboxFunction.data();
 
     const VshScreenSpaceSuffix ScreenSpaceSuffix =
         VshClassifyScreenSpaceSuffix(&pXboxFunction[1], InstrCount);
     const VshViewportPair ViewportPair =
         VshFindViewportScaleAddPair(&pXboxFunction[1], InstrCount);
 
-    const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction);
+    const VshScratchPlan ScratchPlan = VshBuildScratchPlan(pXboxFunction, InstrCount);
 
     // Paired DPH+ILU can require staged source and dual-destination results.
     std::vector<DWORD> Out;
@@ -2453,14 +2464,15 @@ XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXbo
     VshEmit(Out, &n, 0x0000FFFF); // end
 
     const VshDiagnostics::OptimizationResult optimization =
-        VshDiagnostics::OptimizeD3D8Function(Out.data(), static_cast<std::size_t>(n));
+        VshDiagnostics::OptimizeD3D8Function(
+            MutableShaderWordView{ Out.data(), static_cast<std::size_t>(n) });
     if(optimization.valid)
     {
         n = static_cast<int>(optimization.tokenCount);
     }
 
     printf("VSH| optimized hash=%08X xbox_instructions=%lu before=%zu after=%zu tokens=%d\n",
-           static_cast<unsigned int>(VshDiagnostics::HashXboxFunction(pXboxFunction)),
+           static_cast<unsigned int>(VshDiagnostics::HashXboxFunction(xboxFunction)),
            static_cast<unsigned long>(InstrCount), optimization.beforeInstructionCount,
            optimization.afterInstructionCount, n);
     fflush(stdout);
@@ -2544,23 +2556,22 @@ bool VshIsCpuVertexType(DWORD type)
 } // namespace
 
 XTL::VshDiagnostics::DeclarationTranslationResult
-XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
-                                              void* d3dDeclarationData,
-                                              std::size_t maxTokens)
+XTL::VshDiagnostics::TranslateXboxDeclaration(ShaderWordView xboxDeclaration,
+                                              MutableShaderWordView d3dDeclaration)
 {
     DeclarationTranslationResult result;
-    const DWORD* xboxDeclaration = static_cast<const DWORD*>(xboxDeclarationData);
-    DWORD* d3dDeclaration = static_cast<DWORD*>(d3dDeclarationData);
-    if(xboxDeclaration == nullptr || d3dDeclaration == nullptr || maxTokens == 0)
+    if(xboxDeclaration.empty() || d3dDeclaration.empty())
     {
         result.reason = "invalid_declaration_arguments";
         return result;
     }
 
     result.disposition = XboxFunctionDisposition::TranslateToHost;
-    for(std::size_t inputIndex = 0; inputIndex < VSH_MAX_DECLARATION_TOKENS;)
+    const std::size_t inputTokenLimit =
+        std::min(xboxDeclaration.size(), VSH_MAX_DECLARATION_TOKENS);
+    for(std::size_t inputIndex = 0; inputIndex < inputTokenLimit;)
     {
-        if(result.tokenCount >= maxTokens)
+        if(result.tokenCount >= d3dDeclaration.size())
         {
             result.disposition = XboxFunctionDisposition::Reject;
             result.tokenCount = 0;
@@ -2656,8 +2667,8 @@ XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
         {
             payloadCount = (token >> 24) & 0x1Fu;
         }
-        if(payloadCount > VSH_MAX_DECLARATION_TOKENS - inputIndex ||
-           payloadCount > maxTokens - result.tokenCount)
+        if(payloadCount > inputTokenLimit - inputIndex ||
+           payloadCount > d3dDeclaration.size() - result.tokenCount)
         {
             result.disposition = XboxFunctionDisposition::Reject;
             result.tokenCount = 0;
@@ -2676,23 +2687,24 @@ XTL::VshDiagnostics::TranslateXboxDeclaration(const void* xboxDeclarationData,
     return result;
 }
 
-bool XTL::VshDiagnostics::ApplyXboxDeclarationConstants(const void* xboxDeclarationData,
+bool XTL::VshDiagnostics::ApplyXboxDeclarationConstants(ShaderWordView xboxDeclaration,
                                                         const float* baseConstants,
                                                         float* outputConstants,
                                                         std::size_t constantFloatCount)
 {
     constexpr std::size_t HardwareConstantFloatCount = 192 * 4;
-    if(xboxDeclarationData == nullptr || baseConstants == nullptr || outputConstants == nullptr ||
+    if(xboxDeclaration.empty() || baseConstants == nullptr || outputConstants == nullptr ||
        constantFloatCount < HardwareConstantFloatCount)
     {
         return false;
     }
 
     std::memmove(outputConstants, baseConstants, HardwareConstantFloatCount * sizeof(float));
-    const DWORD* declaration = static_cast<const DWORD*>(xboxDeclarationData);
-    for(std::size_t tokenIndex = 0; tokenIndex < VSH_MAX_DECLARATION_TOKENS;)
+    const std::size_t declarationTokenLimit =
+        std::min(xboxDeclaration.size(), VSH_MAX_DECLARATION_TOKENS);
+    for(std::size_t tokenIndex = 0; tokenIndex < declarationTokenLimit;)
     {
-        const DWORD token = declaration[tokenIndex++];
+        const DWORD token = xboxDeclaration[tokenIndex++];
         if(token == 0xFFFFFFFFu)
         {
             return true;
@@ -2713,18 +2725,18 @@ bool XTL::VshDiagnostics::ApplyXboxDeclarationConstants(const void* xboxDeclarat
                 return false;
             }
             payloadCount = constantCount * 4;
-            if(payloadCount > VSH_MAX_DECLARATION_TOKENS - tokenIndex)
+            if(payloadCount > declarationTokenLimit - tokenIndex)
             {
                 return false;
             }
             std::memcpy(&outputConstants[(96 + constantAddress) * 4],
-                        &declaration[tokenIndex], payloadCount * sizeof(DWORD));
+                        &xboxDeclaration[tokenIndex], payloadCount * sizeof(std::uint32_t));
         }
         else if(tokenType == 5)
         {
             payloadCount = (token >> 24) & 0x1Fu;
         }
-        if(payloadCount > VSH_MAX_DECLARATION_TOKENS - tokenIndex)
+        if(payloadCount > declarationTokenLimit - tokenIndex)
         {
             return false;
         }
@@ -2881,11 +2893,12 @@ void VshDecodeXboxVertexValue(const std::uint8_t* source, DWORD type, float outp
 }
 } // namespace
 
-bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, const VertexStreamView* streams,
+bool XTL::VshDiagnostics::DecodeXboxVertex(ShaderWordView xboxDeclaration,
+                                           const VertexStreamView* streams,
                                            std::size_t streamCount, std::size_t vertexIndex,
                                            float* inputRegisters, std::size_t inputFloatCount)
 {
-    if(xboxDeclarationData == nullptr || streams == nullptr || inputRegisters == nullptr ||
+    if(xboxDeclaration.empty() || streams == nullptr || inputRegisters == nullptr ||
        inputFloatCount < 16 * 4)
     {
         return false;
@@ -2899,7 +2912,6 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, cons
         inputRegisters[reg * 4 + 3] = 1.0f;
     }
 
-    const DWORD* declaration = static_cast<const DWORD*>(xboxDeclarationData);
     std::array<std::size_t, 16> streamOffsets{};
     DWORD currentStream = 0;
     const auto consumeStreamBytes = [&](DWORD streamIndex, std::size_t byteCount)
@@ -2925,9 +2937,11 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, cons
         streamOffsets[streamIndex] += byteCount;
         return true;
     };
-    for(std::size_t tokenIndex = 0; tokenIndex < 128; ++tokenIndex)
+    const std::size_t declarationTokenLimit =
+        std::min(xboxDeclaration.size(), VSH_MAX_DECLARATION_TOKENS);
+    for(std::size_t tokenIndex = 0; tokenIndex < declarationTokenLimit; ++tokenIndex)
     {
-        const DWORD token = declaration[tokenIndex];
+        const DWORD token = xboxDeclaration[tokenIndex];
         if(token == 0xFFFFFFFFu)
         {
             return true;
@@ -2949,7 +2963,7 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(const void* xboxDeclarationData, cons
         if(tokenType == 4u)
         {
             const std::size_t payloadCount = static_cast<std::size_t>((token >> 25) & 0xFu) * 4;
-            if(payloadCount > 127 - tokenIndex)
+            if(payloadCount >= declarationTokenLimit - tokenIndex)
             {
                 return false;
             }
@@ -3403,15 +3417,15 @@ extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount,
                                      nullptr, false);
 }
 
-bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, const float* constants,
+bool XTL::VshDiagnostics::ExecuteXboxVertexShader(ShaderWordView xboxFunction,
+                                                  const float* constants,
                                                   const float* inputRegisters, float* outputPosition,
                                                   float* outputColors, std::size_t outputColorFloatCount,
                                                   float* outputTexCoords,
                                                   std::size_t outputTexCoordFloatCount,
                                                   RasterOutputs* outputRaster)
 {
-    const DWORD* xboxFunction = static_cast<const DWORD*>(xboxFunctionData);
-    if(xboxFunction == nullptr || constants == nullptr || inputRegisters == nullptr ||
+    if(xboxFunction.empty() || constants == nullptr || inputRegisters == nullptr ||
        outputPosition == nullptr || outputColors == nullptr ||
        (xboxFunction[0] & 0xFFFFu) != VSH_XBOX_VERSION)
     {
@@ -3423,7 +3437,8 @@ bool XTL::VshDiagnostics::ExecuteXboxVertexShader(const void* xboxFunctionData, 
         return false;
     }
     const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
-    return VshExecuteProgramInternal(&xboxFunction[1], static_cast<int>(instructionCount), 0, constants,
+    return VshExecuteProgramInternal(xboxFunction.data() + 1,
+                                     static_cast<int>(instructionCount), 0, constants,
                                      inputRegisters, outputPosition, outputColors,
                                      outputColorFloatCount, outputTexCoords,
                                      outputTexCoordFloatCount, outputRaster, true);
