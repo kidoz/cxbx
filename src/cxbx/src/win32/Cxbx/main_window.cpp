@@ -36,7 +36,7 @@
 #include "controller_config_dialog.h"
 #include "video_config_dialog.h"
 #include "ResCxbx.h"
-#include "EmuExe.h"
+#include "xbe_to_pe_converter.h"
 #include "shared_runtime_state.h"
 
 #include <io.h>

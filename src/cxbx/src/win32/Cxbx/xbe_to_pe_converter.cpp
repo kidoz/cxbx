@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbx->EmuExe.cpp
+// *   cxbx->win32->cxbx->xbe_to_pe_converter.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "EmuExe.h"
+#include "xbe_to_pe_converter.h"
 #include "executable_prolog.h"
 #include "Emu.h"
 
