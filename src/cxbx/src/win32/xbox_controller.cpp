@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->XBController.cpp
+// *   cxbx->win32->xbox_controller.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "XBController.h"
+#include "xbox_controller.h"
 
 // This is ridiculous
 #define FIELD_OFFSET(type,field)  ((ULONG)&(((type *)0)->field))

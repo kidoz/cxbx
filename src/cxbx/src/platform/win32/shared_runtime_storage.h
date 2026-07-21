@@ -35,7 +35,7 @@
 #define EMUSHARED_H
 
 #include "Cxbx.h"
-#include "XBController.h"
+#include "xbox_controller.h"
 #include "xbox_video.h"
 
 #include <memory.h>

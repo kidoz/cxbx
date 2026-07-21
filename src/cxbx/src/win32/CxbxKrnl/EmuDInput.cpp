@@ -36,7 +36,7 @@
 
 #include "HostInput.h"
 #include "Emu.h"
-#include "XBController.h"
+#include "xbox_controller.h"
 #include "emulation_window_access.h"
 #include "host_input_lifecycle.h"
 #include "shared_controller_config.h"
