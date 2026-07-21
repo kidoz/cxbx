@@ -38,6 +38,7 @@
 #include "Emu.h"
 #include "XBController.h"
 #include "emulation_window_access.h"
+#include "host_input_lifecycle.h"
 #include "shared_controller_config.h"
 
 #include <cstring>

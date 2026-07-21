@@ -1,8 +1,6 @@
 // Host-input lifecycle access for runtime consumers.
 #include "host_input_lifecycle.h"
 
-#include "XBController.h"
-
 namespace cxbx::platform
 {
 
