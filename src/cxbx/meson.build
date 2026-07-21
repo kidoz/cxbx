@@ -413,16 +413,18 @@ cxbx_vsh_host_dep = declare_dependency(
   include_directories : cxbx_public_inc,
 )
 
+cxbx_d3d8_public_inc = [
+  cxbx_public_inc,
+  cxbx_win32_inc,
+  cxbx_krnl_inc,
+  cxbx_dxsdk_inc,
+]
+
 cxbx_hle_d3d8 = static_library(
   'cxbx_hle_d3d8',
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
-  include_directories : cxbx_inc,
-  dependencies : [
-    cxbx_platform_win32_dep,
-    cxbx_trace_dep,
-    cxbx_yuy2_dep,
-  ],
+  include_directories : cxbx_d3d8_public_inc + [openxdk_inc],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
@@ -434,20 +436,20 @@ cxbx_hle_d3d8_dep = declare_dependency(
   link_whole : cxbx_hle_d3d8,
   link_with : d3d8_import_lib,
   dependencies : [
-    cxbx_guest_tls_win32_dep,
-    cxbx_hle_input_dep,
-    cxbx_hle_xg_dep,
-    cxbx_platform_win32_dep,
-    cxbx_trace_dep,
-    cxbx_vsh_components_dep,
-    cxbx_vsh_runtime_dep,
-    cxbx_yuy2_dep,
+    cxbx_guest_tls_win32_dep.partial_dependency(link_args : true, links : true),
+    cxbx_hle_input_dep.partial_dependency(link_args : true, links : true),
+    cxbx_hle_xg_dep.partial_dependency(link_args : true, links : true),
+    cxbx_platform_win32_dep.partial_dependency(link_args : true, links : true),
+    cxbx_trace_dep.partial_dependency(link_args : true, links : true),
+    cxbx_vsh_components_dep.partial_dependency(link_args : true, links : true),
+    cxbx_vsh_runtime_dep.partial_dependency(link_args : true, links : true),
+    cxbx_yuy2_dep.partial_dependency(link_args : true, links : true),
   ],
   link_args : [
     '-lddraw',
     '-lwinmm',
   ],
-  include_directories : cxbx_inc,
+  include_directories : cxbx_d3d8_public_inc,
 )
 
 cxbx_hle_runtime = static_library(

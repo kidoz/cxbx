@@ -22,6 +22,7 @@ openxdk_inc = include_directories('include/open-xdk/include')
 cxbx_public_inc = include_directories('include/cxbx/include')
 cxbx_win32_inc = include_directories('include/cxbx/include/win32')
 cxbx_krnl_inc = include_directories('include/cxbx/include/win32/cxbxkrnl')
+cxbx_dxsdk_inc = include_directories('3rdparty/dxsdk/Include')
 
 # The xusb library is a Linux-kernel-derived USB stack. Its sources use
 # quote-includes rooted at the xusb/ and open-xdk/ header directories
