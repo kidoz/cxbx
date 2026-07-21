@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->shared_runtime_storage.cpp
+// *   cxbx->platform->win32->shared_runtime_storage.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
