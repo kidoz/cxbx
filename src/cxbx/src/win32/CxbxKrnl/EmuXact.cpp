@@ -12,7 +12,8 @@
 
 namespace XTL
 {
-#include "EmuXTL.h"
+#include "EmuXact.h"
+#include "EmuDSound.h"
 };
 
 struct XactNotificationRegistration;
