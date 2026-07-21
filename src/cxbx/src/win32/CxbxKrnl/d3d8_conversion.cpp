@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuD3D8Conv.cpp
+// *   cxbx->win32->cxbxkrnl->d3d8_conversion.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
