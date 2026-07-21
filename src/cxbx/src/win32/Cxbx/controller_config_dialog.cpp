@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbx->DlgControllerConfig.cpp
+// *   cxbx->win32->cxbx->controller_config_dialog.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "DlgControllerConfig.h"
+#include "controller_config_dialog.h"
 #include "ResCxbx.h"
 #include "xbox_controller.h"
 #include "shared_controller_config.h"
