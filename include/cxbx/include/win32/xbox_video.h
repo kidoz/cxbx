@@ -36,7 +36,7 @@
 
 #include "Cxbx.h"
 #include "core/Error.h"
-#include "Mutex.h"
+#include "mutex.h"
 
 // ******************************************************************
 // * class: XBVideo
