@@ -1,4 +1,4 @@
-// Process-level shared-runtime access without exposing stored configuration types.
+// Launcher-local shared-runtime access through the legacy exported storage ABI.
 #include "shared_runtime_state.h"
 
 #include "EmuShared.h"
@@ -14,11 +14,6 @@ void InitializeSharedRuntime()
 void ShutdownSharedRuntime()
 {
     EmuShared::Cleanup();
-}
-
-void GetSharedXbePath(char (&path)[kSharedXbePathCapacity])
-{
-    g_EmuShared->GetXbePath(path);
 }
 
 void SetSharedXbePath(const char (&path)[kSharedXbePathCapacity])

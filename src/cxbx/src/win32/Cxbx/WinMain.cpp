@@ -33,9 +33,9 @@
 // ******************************************************************
 #include "Emu.h"
 #include "WndMain.h"
-#include "EmuShared.h"
 #include "EmuExe.h"
 #include "core/Xbe.h"
+#include "shared_runtime_state.h"
 
 #include <cstdio>
 #include <cstring>
@@ -210,7 +210,7 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
 
     CopyRuntimeDllNextToExe(szExePath);
 
-    g_EmuShared->SetXbePath(i_Xbe.m_szPath);
+    cxbx::platform::SetSharedXbePath(i_Xbe.m_szPath);
 
     char szWorkingDirectory[260];
     BuildXbeDirectory(szAbsoluteXbePath, szWorkingDirectory);
@@ -372,12 +372,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
 
-    EmuShared::Init();
+    cxbx::platform::InitializeSharedRuntime();
 
     if(bBatchRun)
     {
         int ret = RunXbeBatch(szXbeArg, szLogFile);
-        EmuShared::Cleanup();
+        cxbx::platform::ShutdownSharedRuntime();
         return ret;
     }
 
@@ -401,7 +401,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     delete MainWindow;
 
-    EmuShared::Cleanup();
+    cxbx::platform::ShutdownSharedRuntime();
 
     return 0;
 }
