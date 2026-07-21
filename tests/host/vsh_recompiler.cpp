@@ -1,6 +1,7 @@
 #include "core/VertexShaderTranslator.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshCpuDeviceState.h"
+#include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshShaderCreation.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshShaderRegistry.h"
 
 #include <algorithm>
@@ -1860,12 +1861,89 @@ void TestCpuDeviceState()
     XTL::VshCpuDeviceState::SetStream(3, {});
     XTL::VshCpuDeviceState::SetIndexBuffer({});
 }
+
+void TestShaderCreationPlanning()
+{
+    const XTL::VshShaderCreation::Plan hostPlan =
+        XTL::VshShaderCreation::BuildPlan({
+            {},
+            kXboxDeclaration,
+            false,
+            true,
+            ReportTranslationWarning,
+        });
+    Check(hostPlan.disposition ==
+                  XTL::VshShaderCreation::Disposition::CreateOnHost &&
+              hostPlan.translatedFunction.empty() &&
+              hostPlan.translatedDeclarationAvailable &&
+              hostPlan.declarationTokenCount == std::size(kXboxDeclaration),
+          "shader creation plan owns the translated host declaration");
+
+    const XTL::VshShaderCreation::Plan cpuPlan =
+        XTL::VshShaderCreation::BuildPlan({
+            kRccProgram,
+            kXboxDeclaration,
+            true,
+            true,
+            ReportTranslationWarning,
+        });
+    Check(cpuPlan.disposition ==
+                  XTL::VshShaderCreation::Disposition::ExecuteOnCpu &&
+              cpuPlan.reason == "rcc_requires_clamp",
+          "shader creation plan selects classified CPU fallback");
+
+    const XTL::VshShaderCreation::Plan missingDeclarationPlan =
+        XTL::VshShaderCreation::BuildPlan({
+            kRccProgram,
+            {},
+            true,
+            false,
+            ReportTranslationWarning,
+        });
+    Check(missingDeclarationPlan.disposition ==
+                  XTL::VshShaderCreation::Disposition::Reject &&
+              missingDeclarationPlan.reason == "cpu_fallback_requires_declaration",
+          "shader creation plan rejects CPU fallback without a declaration");
+
+    const std::array<std::uint32_t, 3> cpuDeclaration{
+        0x20000000u,
+        0x40110000u,
+        0xFFFFFFFFu,
+    };
+    const XTL::VshShaderCreation::Plan declarationCpuPlan =
+        XTL::VshShaderCreation::BuildPlan({
+            kRccProgram,
+            cpuDeclaration,
+            true,
+            true,
+            ReportTranslationWarning,
+        });
+    Check(declarationCpuPlan.disposition ==
+                  XTL::VshShaderCreation::Disposition::ExecuteOnCpu &&
+              declarationCpuPlan.reason == "declaration_cpu_vertex_type" &&
+              declarationCpuPlan.translatedFunction.empty(),
+          "shader creation plan lets the declaration select CPU fallback");
+
+    const XTL::VshShaderCreation::Plan rawFunctionPlan =
+        XTL::VshShaderCreation::BuildPlan({
+            {},
+            cpuDeclaration,
+            false,
+            true,
+            ReportTranslationWarning,
+        });
+    Check(rawFunctionPlan.disposition ==
+                  XTL::VshShaderCreation::Disposition::Reject &&
+              rawFunctionPlan.reason == "cpu_declaration_requires_xbox_function",
+          "shader creation plan rejects CPU declarations for raw host functions");
+}
 } // namespace
 
 int RunTests()
 {
     TestShaderRegistry();
     TestCpuDeviceState();
+    TestShaderCreationPlanning();
     const XTL::VshDiagnostics::FunctionTranslationResult translation =
         XTL::VshDiagnostics::TranslateXboxFunction(kXboxProgram, ReportTranslationWarning);
     Check(!translation.tokens.empty(), "owned recompiler returns bytecode");

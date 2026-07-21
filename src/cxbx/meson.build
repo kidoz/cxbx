@@ -382,6 +382,7 @@ cxbx_vsh_host = static_library(
     'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderHost.cpp',
     'src/win32/CxbxKrnl/EmuVshCpuDeviceState.cpp',
+    'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
     'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   ),
   include_directories : cxbx_inc,
@@ -399,6 +400,7 @@ cxbx_hle_d3d8 = static_library(
   'src/win32/CxbxKrnl/EmuD3D8.cpp',
   'src/win32/CxbxKrnl/EmuD3D8Conv.cpp',
   'src/win32/CxbxKrnl/EmuVshCpuDeviceState.cpp',
+  'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
   'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   include_directories : cxbx_inc,
   dependencies : [
