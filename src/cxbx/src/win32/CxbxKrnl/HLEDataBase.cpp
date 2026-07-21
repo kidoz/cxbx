@@ -51,7 +51,7 @@ namespace XTL
 #include "EmuDSound.h"
 #include "xact_emulation.h"
 #include "xonline_emulation.h"
-#include "EmuXG.h"
+#include "xg_emulation.h"
 };
 
 #include "HLEDataBase.h"

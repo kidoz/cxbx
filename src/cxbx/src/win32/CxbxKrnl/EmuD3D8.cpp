@@ -67,7 +67,7 @@ namespace xboxkrnl
 namespace XTL
 {
     #include "EmuD3D8.h"
-    #include "EmuXG.h"
+    #include "xg_emulation.h"
 };
 
 #include "runtime_resource_ids.gen.h"

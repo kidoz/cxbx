@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuXG.cpp
+// *   cxbx->win32->cxbxkrnl->xg_emulation.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -61,7 +61,7 @@ namespace XTL
 {
 #define DIRECT3D_VERSION 0x0800
 #include <d3d8.h>
-#include "EmuXG.h"
+#include "xg_emulation.h"
 };
 
 extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE *Data, ULONG Size);
