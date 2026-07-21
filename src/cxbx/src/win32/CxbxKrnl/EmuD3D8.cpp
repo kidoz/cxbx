@@ -70,7 +70,7 @@ namespace XTL
     #include "EmuXG.h"
 };
 
-#include "ResCxbxDll.h"
+#include "runtime_resource_ids.gen.h"
 
 #include <process.h>
 #include <algorithm>

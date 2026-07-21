@@ -513,7 +513,7 @@ cxbx_runtime_resources = custom_target(
   ],
   depend_files : files(
     '../../docs/branding/cxbx.ico',
-    '../../include/cxbx/include/win32/cxbxkrnl/ResCxbxDll.h',
+    '../../include/cxbx/include/win32/cxbxkrnl/runtime_resource_ids.gen.h',
   ),
 )
 cxbx_launcher_resources = custom_target(
