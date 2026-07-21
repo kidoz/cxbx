@@ -1,5 +1,6 @@
 #include "core/VertexShaderTranslator.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
+#include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshCpuDeviceState.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshShaderRegistry.h"
 
 #include <algorithm>
@@ -1824,11 +1825,47 @@ void TestShaderRegistry()
     Check(XTL::VshShaderRegistry::Find(shader) == nullptr,
           "shader registry no longer resolves released CPU fallback data");
 }
+
+void TestCpuDeviceState()
+{
+    const std::array<float, 4> constant{ 1.0f, 2.0f, 3.0f, 4.0f };
+    XTL::VshCpuDeviceState::SetConstant(7, constant);
+    const std::span<const float> constants = XTL::VshCpuDeviceState::Constants();
+    Check(constants.size() == 192 * 4 &&
+              std::equal(constant.begin(), constant.end(), constants.begin() + 7 * 4),
+          "CPU device state owns the mirrored constant bank");
+
+    std::uint32_t vertexBufferStorage = 0;
+    auto* vertexBuffer =
+        reinterpret_cast<XTL::X_D3DVertexBuffer*>(&vertexBufferStorage);
+    XTL::VshCpuDeviceState::SetStream(3, { vertexBuffer, 32 });
+    const XTL::VshCpuDeviceState::StreamBinding stream =
+        XTL::VshCpuDeviceState::Stream(3);
+    Check(stream.resource == vertexBuffer && stream.stride == 32,
+          "CPU device state owns stream resource and stride bindings");
+    XTL::VshCpuDeviceState::SetStream(16, { vertexBuffer, 64 });
+    const XTL::VshCpuDeviceState::StreamBinding invalidStream =
+        XTL::VshCpuDeviceState::Stream(16);
+    Check(invalidStream.resource == nullptr && invalidStream.stride == 0,
+          "CPU device state ignores out-of-range stream bindings");
+
+    std::uint32_t indexBufferStorage = 0;
+    auto* indexBuffer = reinterpret_cast<XTL::X_D3DIndexBuffer*>(&indexBufferStorage);
+    XTL::VshCpuDeviceState::SetIndexBuffer({ indexBuffer, 11 });
+    const XTL::VshCpuDeviceState::IndexBinding indices =
+        XTL::VshCpuDeviceState::IndexBuffer();
+    Check(indices.resource == indexBuffer && indices.baseVertex == 11,
+          "CPU device state owns index resource and base-vertex bindings");
+
+    XTL::VshCpuDeviceState::SetStream(3, {});
+    XTL::VshCpuDeviceState::SetIndexBuffer({});
+}
 } // namespace
 
 int RunTests()
 {
     TestShaderRegistry();
+    TestCpuDeviceState();
     const XTL::VshDiagnostics::FunctionTranslationResult translation =
         XTL::VshDiagnostics::TranslateXboxFunction(kXboxProgram, ReportTranslationWarning);
     Check(!translation.tokens.empty(), "owned recompiler returns bytecode");

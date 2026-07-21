@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "core/VertexShaderTranslator.h"
 #include "EmuVshDecoder.h"
 #include "EmuVshDecoderInternal.h"
+#include "EmuVshCpuDeviceState.h"
 #include "EmuVshShaderRegistry.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
@@ -2904,12 +2905,6 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTileNoWait
     return D3D_OK;
 }
 
-static float g_EmuVshCpuConstants[192 * 4] = {};
-static XTL::X_D3DVertexBuffer* g_EmuVshCpuStreams[16] = {};
-static UINT g_EmuVshCpuStreamStrides[16] = {};
-static XTL::X_D3DIndexBuffer* g_EmuVshCpuIndexBuffer = nullptr;
-static UINT g_EmuVshCpuBaseVertexIndex = 0;
-
 static HRESULT EmuVshCreateHostShader(const DWORD* declaration, const DWORD* function,
                                       DWORD* handle, DWORD usage)
 {
@@ -2931,14 +2926,15 @@ static void EmuVshDumpRejectedShader(
 {
     try
     {
+        const std::span<const float> constants = XTL::VshCpuDeviceState::Constants();
         const XTL::VshDiagnostics::TranslationCapture capture = {
             xboxFunction,
             d3dFunction,
             xboxDeclaration,
             d3dDeclaration,
             reason,
-            g_EmuVshCpuConstants,
-            std::size(g_EmuVshCpuConstants),
+            constants.data(),
+            constants.size(),
             nullptr,
             0,
             "canonical",
@@ -3336,7 +3332,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant
                 const std::int64_t hardwareIndex = static_cast<std::int64_t>(Register) + 96 + constant;
                 if(hardwareIndex >= 0 && hardwareIndex < 192)
                 {
-                    std::memcpy(&g_EmuVshCpuConstants[hardwareIndex * 4], &source[constant * 4], 4 * sizeof(float));
+                    XTL::VshCpuDeviceState::SetConstant(
+                        static_cast<std::size_t>(hardwareIndex),
+                        std::span<const float, 4>{ &source[constant * 4], 4 });
                     EmuNv2aSetTransformConstant(static_cast<ULONG>(hardwareIndex),
                                                 &source[constant * 4]);
                 }
@@ -5662,8 +5660,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetIndices
 
         pIndexBuffer = pIndexData->EmuIndexBuffer8;
     }
-    g_EmuVshCpuIndexBuffer = pIndexData;
-    g_EmuVshCpuBaseVertexIndex = BaseVertexIndex;
+    XTL::VshCpuDeviceState::SetIndexBuffer({ pIndexData, BaseVertexIndex });
 
     HRESULT hRet = D3D_OK;
     __try
@@ -10258,11 +10255,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetStreamSource
         pVertexBuffer8 = pStreamData->EmuVertexBuffer8;
         pVertexBuffer8->Unlock();
     }
-    if(StreamNumber < 16)
-    {
-        g_EmuVshCpuStreams[StreamNumber] = pStreamData;
-        g_EmuVshCpuStreamStrides[StreamNumber] = Stride;
-    }
+    XTL::VshCpuDeviceState::SetStream(StreamNumber, { pStreamData, Stride });
 
     HRESULT hRet = D3D_OK;
     __try
@@ -11301,9 +11294,11 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                     ++drawIndex;
                     if(supported && XTL::VshShaderRegistry::Current() != nullptr)
                     {
+                        const XTL::VshCpuDeviceState::IndexBinding indexBinding =
+                            XTL::VshCpuDeviceState::IndexBuffer();
                         rendered = EmuVshTryDrawCpuBound(
                             quadList, primitiveType, batch.primitiveCount,
-                            g_EmuVshCpuBaseVertexIndex,
+                            indexBinding.baseVertex,
                             static_cast<UINT>(indices.size()), indices.data());
                         EmuVshLogCpuDraw("RunPushBuffer", beginEndOperation,
                                          static_cast<UINT>(indices.size()), rendered,
@@ -12157,8 +12152,9 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         1 + metadata->instructionCount * 4,
     };
     std::array<float, 192 * 4> shaderConstants{};
+    const std::span<const float> constants = XTL::VshCpuDeviceState::Constants();
     if(!XTL::VshDiagnostics::ApplyXboxDeclarationConstants(
-           xboxDeclaration, g_EmuVshCpuConstants,
+           xboxDeclaration, constants.data(),
            shaderConstants.data(), shaderConstants.size()))
     {
         return false;
@@ -12324,8 +12320,10 @@ static bool EmuVshDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveTyp
     bool lockedAll = true;
     for(std::size_t stream = 0; stream < streams.size(); ++stream)
     {
-        XTL::X_D3DVertexBuffer* resource = g_EmuVshCpuStreams[stream];
-        if(resource == nullptr || g_EmuVshCpuStreamStrides[stream] == 0)
+        const XTL::VshCpuDeviceState::StreamBinding binding =
+            XTL::VshCpuDeviceState::Stream(stream);
+        XTL::X_D3DVertexBuffer* resource = binding.resource;
+        if(resource == nullptr || binding.stride == 0)
         {
             continue;
         }
@@ -12337,7 +12335,7 @@ static bool EmuVshDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveTyp
             streams[stream] = {
                 registration->guestData,
                 registration->byteSize,
-                g_EmuVshCpuStreamStrides[stream],
+                binding.stride,
             };
             continue;
         }
@@ -12351,7 +12349,7 @@ static bool EmuVshDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitiveTyp
         streams[stream] = {
             locked[stream].data,
             locked[stream].byteSize,
-            g_EmuVshCpuStreamStrides[stream],
+            binding.stride,
         };
     }
 
@@ -12435,12 +12433,15 @@ static bool EmuVshTryDrawCpuIndexed(bool quadList, XTL::D3DPRIMITIVETYPE primiti
     BYTE* indexBytes = nullptr;
     try
     {
-        hostIndexBuffer = g_EmuVshCpuIndexBuffer == nullptr ? nullptr : g_EmuVshCpuIndexBuffer->EmuIndexBuffer8;
+        const XTL::VshCpuDeviceState::IndexBinding binding =
+            XTL::VshCpuDeviceState::IndexBuffer();
+        hostIndexBuffer =
+            binding.resource == nullptr ? nullptr : binding.resource->EmuIndexBuffer8;
         UINT indexByteSize = 0;
         const std::size_t byteOffset = reinterpret_cast<std::size_t>(indexData);
         bool rendered = false;
         if(hostIndexBuffer != nullptr &&
-           SUCCEEDED(EmuVshLockIndexBuffer(g_EmuVshCpuIndexBuffer, &indexBytes, &indexByteSize)) &&
+           SUCCEEDED(EmuVshLockIndexBuffer(binding.resource, &indexBytes, &indexByteSize)) &&
            byteOffset <= indexByteSize && vertexCount <= (indexByteSize - byteOffset) / sizeof(WORD))
         {
             std::vector<std::uint32_t> indices(vertexCount);
@@ -12453,7 +12454,7 @@ static bool EmuVshTryDrawCpuIndexed(bool quadList, XTL::D3DPRIMITIVETYPE primiti
             EmuVshUnlockIndexBuffer(hostIndexBuffer);
             indexBytes = nullptr;
             rendered = EmuVshDrawCpuBound(quadList, primitiveType, primitiveCount,
-                                          g_EmuVshCpuBaseVertexIndex, vertexCount, indices.data());
+                                          binding.baseVertex, vertexCount, indices.data());
         }
         if(indexBytes != nullptr)
         {
