@@ -165,7 +165,7 @@ cxbx_trace_dep = declare_dependency(
 
 cxbx_hle_audio = static_library(
   'cxbx_hle_audio',
-  'src/win32/CxbxKrnl/EmuDSound.cpp',
+  'src/win32/CxbxKrnl/dsound_emulation.cpp',
   'src/win32/CxbxKrnl/xact_emulation.cpp',
   include_directories : cxbx_inc,
   dependencies : [

@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuDSound.cpp
+// *   cxbx->win32->cxbxkrnl->dsound_emulation.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -59,7 +59,7 @@ namespace xboxkrnl
 // ******************************************************************
 namespace XTL
 {
-#include "EmuDSound.h"
+#include "dsound_emulation.h"
 };
 
 #include "runtime_resource_ids.gen.h"
