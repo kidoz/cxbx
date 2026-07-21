@@ -36,7 +36,7 @@
 
 #include "Cxbx.h"
 #include "XBController.h"
-#include "XBVideo.h"
+#include "xbox_video.h"
 
 #include <memory.h>
 

@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->Win32->XBVideo.cpp
+// *   cxbx->Win32->xbox_video.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "XBVideo.h"
+#include "xbox_video.h"
 
 #include <cstdio>
 

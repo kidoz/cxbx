@@ -50,7 +50,7 @@ namespace xboxkrnl
 #include "EmuVshShaderCreation.h"
 #include "EmuVshShaderRegistry.h"
 #include "EmuFS.h"
-#include "XBVideo.h"
+#include "xbox_video.h"
 #include "host_input_lifecycle.h"
 #include "shared_video_config.h"
 #include "core/d3d_push_buffer.h"
