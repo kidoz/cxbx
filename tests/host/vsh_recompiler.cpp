@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -31,6 +32,15 @@ void Check(bool condition, const char* name)
         std::fprintf(stderr, "FAIL %s\n", name);
         ++g_failures;
     }
+}
+
+void ReportTranslationWarning(const char* format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    std::vfprintf(stderr, format, arguments);
+    std::fputc('\n', stderr);
+    va_end(arguments);
 }
 
 struct ShaderOutputs
@@ -1775,12 +1785,14 @@ constexpr DWORD kHostRelativeProgram[] = {
 
 int RunTests()
 {
-    DWORD* translated = XTL::EmuVshRecompileXboxFunction(kXboxProgram);
-    Check(translated != nullptr, "recompiler returns bytecode");
-    if(translated == nullptr)
+    const XTL::VshDiagnostics::FunctionTranslationResult translation =
+        XTL::VshDiagnostics::TranslateXboxFunction(kXboxProgram, ReportTranslationWarning);
+    Check(!translation.tokens.empty(), "owned recompiler returns bytecode");
+    if(translation.tokens.empty())
     {
         return g_failures;
     }
+    const DWORD* translated = translation.tokens.data();
 
     const std::uint32_t hash = XTL::VshDiagnostics::HashXboxFunction(kXboxProgram);
     Check(hash == 0x79E4E0BEu, "stable Xbox-function hash");
@@ -3632,7 +3644,6 @@ int RunTests()
         }
     }
 
-    delete[] translated;
     if(g_failures == 0)
     {
         std::puts("PASS host vertex-shader recompiler");
