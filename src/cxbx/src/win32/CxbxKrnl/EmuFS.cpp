@@ -44,7 +44,7 @@ namespace xboxkrnl
 
 #include "Emu.h"
 #include "EmuFS.h"
-#include "EmuLDT.h"
+#include "ldt_emulation.h"
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
