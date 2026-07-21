@@ -62,7 +62,7 @@ namespace XTL
 #include "EmuDSound.h"
 };
 
-#include "ResCxbxDll.h"
+#include "runtime_resource_ids.gen.h"
 
 #include <process.h>
 #include <clocale>

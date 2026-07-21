@@ -1,6 +1,6 @@
 //Microsoft Developer Studio generated resource script.
 //
-#include "..\include\cxbx\include\win32\cxbxkrnl\ResCxbxDll.h"
+#include "..\include\cxbx\include\win32\cxbxkrnl\runtime_resource_ids.gen.h"
 
 #define APSTUDIO_READONLY_SYMBOLS
 /////////////////////////////////////////////////////////////////////////////
@@ -29,7 +29,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 1 TEXTINCLUDE DISCARDABLE 
 BEGIN
-    "..\\include\\cxbx\\include\\win32\\cxbxkrnl\\ResCxbxDll.h\0"
+    "..\\include\\cxbx\\include\\win32\\cxbxkrnl\\runtime_resource_ids.gen.h\0"
 END
 
 2 TEXTINCLUDE DISCARDABLE 
