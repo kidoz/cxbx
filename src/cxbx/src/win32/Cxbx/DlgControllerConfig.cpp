@@ -33,7 +33,8 @@
 // ******************************************************************
 #include "DlgControllerConfig.h"
 #include "ResCxbx.h"
-#include "EmuShared.h"
+#include "XBController.h"
+#include "shared_controller_config.h"
 
 #define DIRECTINPUT_VERSION 0x0800
 
@@ -56,7 +57,7 @@ static BOOL g_bHasChanges;
 void ShowControllerConfig(HWND hwnd) {
     g_bHasChanges = FALSE;
 
-    g_EmuShared->GetXBController(&g_XBController);
+    cxbx::platform::GetSharedControllerConfig(g_XBController);
 
     DialogBox
             (
@@ -103,7 +104,7 @@ INT_PTR CALLBACK DlgControllerConfigProc(HWND hWndDlg, UINT uMsg, WPARAM wParam,
                     EndDialog(hWndDlg, wParam);
                     break;
                 case IDC_INPUT_CONFIG_ACCEPT:
-                    g_EmuShared->SetXBController(&g_XBController);
+                    cxbx::platform::SetSharedControllerConfig(g_XBController);
                     EndDialog(hWndDlg, wParam);
                     break;
                 case IDC_SET_LEFT_POSY:

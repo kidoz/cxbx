@@ -307,7 +307,9 @@ cxbx_yuy2_dep = declare_dependency(
 )
 
 cxbx_launcher_src = files(
+  'src/platform/win32/shared_controller_config.cpp',
   'src/platform/win32/shared_runtime_state_launcher.cpp',
+  'src/platform/win32/shared_video_config.cpp',
   'src/win32/Cxbx/DlgControllerConfig.cpp',
   'src/win32/Cxbx/DlgVideoConfig.cpp',
   'src/win32/Cxbx/EmuExe.cpp',
