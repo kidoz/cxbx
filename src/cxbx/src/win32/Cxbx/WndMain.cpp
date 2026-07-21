@@ -32,7 +32,7 @@
 // *
 // ******************************************************************
 #include "WndMain.h"
-#include "WndAbout.h"
+#include "about_window.h"
 #include "controller_config_dialog.h"
 #include "video_config_dialog.h"
 #include "ResCxbx.h"
