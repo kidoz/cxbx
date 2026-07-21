@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuShared.cpp
+// *   cxbx->win32->cxbxkrnl->shared_runtime_storage.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -35,7 +35,7 @@
 #define _XBOXKRNL_LOCAL_
 
 #include "Emu.h"
-#include "EmuShared.h"
+#include "shared_runtime_storage.h"
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
