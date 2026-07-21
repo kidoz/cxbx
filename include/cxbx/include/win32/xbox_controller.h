@@ -49,7 +49,7 @@ namespace XTL
     #include "EmuXapi.h"
     #define DIRECTINPUT_VERSION 0x0800
     #include <dinput.h>
-    #include "EmuDInput.h"
+    #include "dinput_emulation.h"
 };
 
 // ******************************************************************

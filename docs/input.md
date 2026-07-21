@@ -3,7 +3,7 @@
 ## Controller Configuration
 
 Controller input configuration is handled through the dialog implemented around
-`EmuDInput.cpp` and `EmuDInput.h`.
+`dinput_emulation.cpp` and `dinput_emulation.h`.
 
 Configuration is saved in two places:
 
