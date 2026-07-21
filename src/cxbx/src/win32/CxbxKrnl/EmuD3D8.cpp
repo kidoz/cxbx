@@ -43,6 +43,7 @@ namespace xboxkrnl
 };
 
 #include "Emu.h"
+#include "core/VertexShaderTranslator.h"
 #include "EmuVshDecoder.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
@@ -3142,8 +3143,6 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
     // vertex-program microcode, and the Xbox declaration carries extended
     // data-type codes -- neither is host-consumable. Recompile the microcode
     // into vs.1.1 bytecode and rewrite the declaration types (EmuVshDecoder).
-    extern DWORD* EmuVshRecompileXboxFunction(CONST DWORD * pXboxFunction);
-
     DWORD* pRecompiled = NULL;
     const DWORD* pHostFunction = pFunction;
     bool cpuFallback = false;
