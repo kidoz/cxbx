@@ -1,5 +1,6 @@
 #include "core/VertexShaderTranslator.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
+#include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshShaderRegistry.h"
 
 #include <algorithm>
 #include <array>
@@ -1784,10 +1785,50 @@ constexpr DWORD kHostRelativeProgram[] = {
     0x90E40001u,
     0x0000FFFFu,
 };
+
+void TestShaderRegistry()
+{
+    std::uint32_t shaderStorage = 0;
+    auto* shader = reinterpret_cast<XTL::X_D3DVertexShader*>(&shaderStorage);
+    Check(XTL::VshShaderRegistry::Current() == nullptr,
+          "shader registry starts without a CPU fallback");
+    Check(XTL::VshShaderRegistry::Register(shader, false, {}, {}),
+          "shader registry accepts a host-translated shader");
+    XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+        XTL::VshShaderRegistry::Find(shader);
+    Check(metadata != nullptr && !metadata->enabled,
+          "shader registry tracks a host-translated shader without CPU metadata");
+    XTL::VshShaderRegistry::SetCurrent(metadata, "host-test");
+    Check(XTL::VshShaderRegistry::Current() == metadata,
+          "shader registry owns the current fallback binding");
+    Check(XTL::VshShaderRegistry::Unregister(shader),
+          "shader registry removes a live shader");
+    Check(XTL::VshShaderRegistry::Current() == nullptr,
+          "shader removal clears the current fallback binding");
+    Check(!XTL::VshShaderRegistry::Unregister(shader),
+          "shader registry rejects a stale shader");
+
+    const std::array<std::uint32_t, 5> function{ 0x00012078u, 1u, 2u, 3u, 4u };
+    const std::array<std::uint32_t, 1> declaration{ 0xFFFFFFFFu };
+    Check(XTL::VshShaderRegistry::Register(shader, true, function, declaration),
+          "shader registry accepts owned CPU fallback data");
+    metadata = XTL::VshShaderRegistry::Find(shader);
+    Check(metadata != nullptr && metadata->enabled && metadata->instructionCount == 1 &&
+              metadata->declarationTokenCount == declaration.size() &&
+              metadata->hash == XTL::VshDiagnostics::HashXboxFunction(function) &&
+              std::equal(function.begin(), function.end(), metadata->function.begin()) &&
+              metadata->declaration.front() == declaration.front(),
+          "shader registry owns complete CPU fallback metadata");
+    Check(XTL::VshShaderRegistry::Unregister(shader),
+          "shader registry releases owned CPU fallback data");
+    Check(XTL::VshShaderRegistry::Find(shader) == nullptr,
+          "shader registry no longer resolves released CPU fallback data");
+}
 } // namespace
 
 int RunTests()
 {
+    TestShaderRegistry();
     const XTL::VshDiagnostics::FunctionTranslationResult translation =
         XTL::VshDiagnostics::TranslateXboxFunction(kXboxProgram, ReportTranslationWarning);
     Check(!translation.tokens.empty(), "owned recompiler returns bytecode");

@@ -46,6 +46,7 @@ namespace xboxkrnl
 #include "core/VertexShaderTranslator.h"
 #include "EmuVshDecoder.h"
 #include "EmuVshDecoderInternal.h"
+#include "EmuVshShaderRegistry.h"
 #include "EmuFS.h"
 #include "EmuShared.h"
 #include "core/d3d_push_buffer.h"
@@ -2903,147 +2904,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTileNoWait
     return D3D_OK;
 }
 
-// ******************************************************************
-// * EmuLiveVertexShaders
-// ******************************************************************
-// Live X_D3DVertexShader wrappers handed out by CreateVertexShader. Titles
-// can delete a shader handle twice or pass a stale one; IsBadReadPtr cannot
-// detect freed heap memory, so an unregistered-pointer check is the only
-// reliable guard against a double delete corrupting the host heap.
-constexpr std::size_t EMU_VSH_LIVE_CAPACITY = 256;
-constexpr std::size_t EMU_VSH_MAX_INSTRUCTIONS = 136;
-constexpr std::size_t EMU_VSH_MAX_DECLARATION_TOKENS = 128;
-
-struct EmuVshCpuFallback
-{
-    bool enabled = false;
-    bool bindLogged = false;
-    bool unbindLogged = false;
-    bool drawLogged = false;
-    bool geometryLogged = false;
-    bool materialLogged = false;
-    bool collapseCaptureLogged = false;
-    bool rejectionLogged = false;
-    std::uint32_t hash = 0;
-    std::size_t instructionCount = 0;
-    std::size_t declarationTokenCount = 0;
-    std::array<std::uint32_t, 1 + EMU_VSH_MAX_INSTRUCTIONS * 4> function{};
-    std::array<std::uint32_t, EMU_VSH_MAX_DECLARATION_TOKENS> declaration{};
-};
-
-static XTL::X_D3DVertexShader* g_EmuLiveVertexShaders[EMU_VSH_LIVE_CAPACITY] = { 0 };
-static EmuVshCpuFallback g_EmuCpuVertexShaders[EMU_VSH_LIVE_CAPACITY] = {};
-static EmuVshCpuFallback* g_EmuCurrentCpuVertexShader = nullptr;
 static float g_EmuVshCpuConstants[192 * 4] = {};
 static XTL::X_D3DVertexBuffer* g_EmuVshCpuStreams[16] = {};
 static UINT g_EmuVshCpuStreamStrides[16] = {};
 static XTL::X_D3DIndexBuffer* g_EmuVshCpuIndexBuffer = nullptr;
 static UINT g_EmuVshCpuBaseVertexIndex = 0;
-
-static EmuVshCpuFallback* EmuVshFindLive(XTL::X_D3DVertexShader* pShader)
-{
-    for(std::size_t index = 0; index < EMU_VSH_LIVE_CAPACITY; ++index)
-    {
-        if(g_EmuLiveVertexShaders[index] == pShader)
-        {
-            return &g_EmuCpuVertexShaders[index];
-        }
-    }
-    return nullptr;
-}
-
-static void EmuVshLogCpuBinding(EmuVshCpuFallback* metadata, const char* api, bool bound)
-{
-    if(metadata == nullptr || !metadata->enabled)
-    {
-        return;
-    }
-    bool& logged = bound ? metadata->bindLogged : metadata->unbindLogged;
-    if(logged)
-    {
-        return;
-    }
-    printf("VSH| cpu_bind hash=%08X api=%s state=%s\n",
-           static_cast<unsigned int>(metadata->hash), api, bound ? "bound" : "unbound");
-    fflush(stdout);
-    logged = true;
-}
-
-static void EmuVshSetCurrentCpuShader(EmuVshCpuFallback* metadata, const char* api)
-{
-    if(g_EmuCurrentCpuVertexShader == metadata)
-    {
-        return;
-    }
-    EmuVshLogCpuBinding(g_EmuCurrentCpuVertexShader, api, false);
-    g_EmuCurrentCpuVertexShader = metadata;
-    EmuVshLogCpuBinding(g_EmuCurrentCpuVertexShader, api, true);
-}
-
-static bool EmuVshRegisterLive(XTL::X_D3DVertexShader* pShader, bool cpuFallback,
-                               XTL::VshDiagnostics::ShaderWordView xboxFunction,
-                               XTL::VshDiagnostics::ShaderWordView xboxDeclaration)
-{
-    for(std::size_t index = 0; index < EMU_VSH_LIVE_CAPACITY; ++index)
-    {
-        if(g_EmuLiveVertexShaders[index] != nullptr)
-        {
-            continue;
-        }
-
-        g_EmuLiveVertexShaders[index] = pShader;
-        EmuVshCpuFallback& metadata = g_EmuCpuVertexShaders[index];
-        metadata = {};
-        if(!cpuFallback)
-        {
-            return true;
-        }
-        if(xboxFunction.empty() || xboxDeclaration.empty() ||
-           xboxDeclaration.size() > metadata.declaration.size())
-        {
-            g_EmuLiveVertexShaders[index] = nullptr;
-            metadata = {};
-            return false;
-        }
-
-        metadata.enabled = true;
-        metadata.hash = XTL::VshDiagnostics::HashXboxFunction(xboxFunction);
-        const std::uint32_t encodedCount = (xboxFunction[0] >> 16) & 0xFFFFu;
-        metadata.instructionCount = encodedCount == 0 || encodedCount > EMU_VSH_MAX_INSTRUCTIONS
-                                        ? (xboxFunction.size() - 1) / 4
-                                        : static_cast<std::size_t>(encodedCount);
-        const std::size_t functionWordCount = 1 + metadata.instructionCount * 4;
-        if(xboxFunction.size() < functionWordCount)
-        {
-            metadata.enabled = false;
-            g_EmuLiveVertexShaders[index] = nullptr;
-            metadata = {};
-            return false;
-        }
-        std::copy_n(xboxFunction.begin(), functionWordCount, metadata.function.begin());
-        metadata.declarationTokenCount = xboxDeclaration.size();
-        std::copy(xboxDeclaration.begin(), xboxDeclaration.end(), metadata.declaration.begin());
-        return true;
-    }
-    return false;
-}
-
-static bool EmuVshUnregisterLive(XTL::X_D3DVertexShader* pShader)
-{
-    EmuVshCpuFallback* metadata = EmuVshFindLive(pShader);
-    if(metadata == nullptr)
-    {
-        return false;
-    }
-    if(g_EmuCurrentCpuVertexShader == metadata)
-    {
-        EmuVshSetCurrentCpuShader(nullptr, "DeleteVertexShader");
-    }
-    const std::size_t index = static_cast<std::size_t>(metadata - g_EmuCpuVertexShaders);
-    g_EmuLiveVertexShaders[index] = nullptr;
-    *metadata = {};
-    return true;
-}
 
 static HRESULT EmuVshCreateHostShader(const DWORD* declaration, const DWORD* function,
                                       DWORD* handle, DWORD usage)
@@ -3379,8 +3244,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader
             ? XTL::VshDiagnostics::ShaderWordView{}
             : XTL::VshDiagnostics::ShaderWordView{ fixedDeclaration.data(),
                                                    declarationTokenCount };
-    if(!EmuVshRegisterLive(pD3DVertexShader, cpuFallback, fixedFunction,
-                           ownedDeclaration))
+    if(!XTL::VshShaderRegistry::Register(pD3DVertexShader, cpuFallback, fixedFunction,
+                                         ownedDeclaration))
     {
         if(pD3DVertexShader->Handle != 0)
         {
@@ -10440,19 +10305,20 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader(
     // X_D3DVertexShader wrapper (heap, >= 0x10000); resolve it to the host
     // shader handle it wraps. Raw FVF handles (small bit patterns) pass through.
     DWORD HostHandle = Handle;
-    EmuVshCpuFallback* metadata = Handle >= 0x00010000
-                                      ? EmuVshFindLive(reinterpret_cast<X_D3DVertexShader*>(Handle))
-                                      : nullptr;
+    XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+        Handle >= 0x00010000
+            ? XTL::VshShaderRegistry::Find(reinterpret_cast<X_D3DVertexShader*>(Handle))
+            : nullptr;
     g_EmuCurrentVertexShaderIsCustom = metadata != nullptr;
-    EmuVshSetCurrentCpuShader(metadata != nullptr && metadata->enabled ? metadata : nullptr,
-                              "SetVertexShader");
+    XTL::VshShaderRegistry::SetCurrent(
+        metadata != nullptr && metadata->enabled ? metadata : nullptr, "SetVertexShader");
     if(metadata != nullptr)
     {
         HostHandle = reinterpret_cast<X_D3DVertexShader*>(Handle)->Handle;
     }
 
     HRESULT hRet = D3D_OK;
-    if(g_EmuCurrentCpuVertexShader == nullptr)
+    if(XTL::VshShaderRegistry::Current() == nullptr)
     {
         __try
         {
@@ -10537,19 +10403,20 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader
     // X_D3DVertexShader wrapper (heap, >= 0x10000); resolve it to the host
     // shader handle it wraps. Raw FVF handles (small bit patterns) pass through.
     DWORD HostHandle = Handle;
-    EmuVshCpuFallback* metadata = Handle >= 0x00010000
-                                      ? EmuVshFindLive(reinterpret_cast<X_D3DVertexShader*>(Handle))
-                                      : nullptr;
+    XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+        Handle >= 0x00010000
+            ? XTL::VshShaderRegistry::Find(reinterpret_cast<X_D3DVertexShader*>(Handle))
+            : nullptr;
     g_EmuCurrentVertexShaderIsCustom = metadata != nullptr;
-    EmuVshSetCurrentCpuShader(metadata != nullptr && metadata->enabled ? metadata : nullptr,
-                              "SelectVertexShader");
+    XTL::VshShaderRegistry::SetCurrent(
+        metadata != nullptr && metadata->enabled ? metadata : nullptr, "SelectVertexShader");
     if(metadata != nullptr)
     {
         HostHandle = reinterpret_cast<X_D3DVertexShader*>(Handle)->Handle;
     }
 
     HRESULT hRet = D3D_OK;
-    if(g_EmuCurrentCpuVertexShader == nullptr)
+    if(XTL::VshShaderRegistry::Current() == nullptr)
     {
         __try
         {
@@ -10593,7 +10460,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeleteVertexShader(
     }
 #endif
 
-    if(Handle >= 0x00010000 && EmuVshUnregisterLive((X_D3DVertexShader*)Handle))
+    if(Handle >= 0x00010000 &&
+       XTL::VshShaderRegistry::Unregister((X_D3DVertexShader*)Handle))
     {
         X_D3DVertexShader* pShader = (X_D3DVertexShader*)Handle;
         if(pShader->Handle != 0)
@@ -10643,9 +10511,10 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetVertexShaderSize(
 
     if(pSize != NULL)
     {
-        EmuVshCpuFallback* metadata = Handle >= 0x00010000
-                                          ? EmuVshFindLive(reinterpret_cast<X_D3DVertexShader*>(Handle))
-                                          : nullptr;
+        XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+            Handle >= 0x00010000
+                ? XTL::VshShaderRegistry::Find(reinterpret_cast<X_D3DVertexShader*>(Handle))
+                : nullptr;
         *pSize = metadata != nullptr && metadata->enabled
                      ? static_cast<UINT>(metadata->instructionCount * 4 * sizeof(DWORD))
                      : 0;
@@ -11430,7 +11299,7 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                         }
                     }
                     ++drawIndex;
-                    if(supported && g_EmuCurrentCpuVertexShader != nullptr)
+                    if(supported && XTL::VshShaderRegistry::Current() != nullptr)
                     {
                         rendered = EmuVshTryDrawCpuBound(
                             quadList, primitiveType, batch.primitiveCount,
@@ -11513,7 +11382,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_RunPushBuffer(
                                                ? recording->registeredData
                                                : reinterpret_cast<const DWORD*>(
                                                      pPushBuffer->Data);
-                if(hasRegisteredData && g_EmuCurrentCpuVertexShader != nullptr)
+                if(hasRegisteredData && XTL::VshShaderRegistry::Current() != nullptr)
                 {
                     if(!EmuReplayHlePushBuffer(commandData, pPushBuffer->Size, recording))
                     {
@@ -11902,8 +11771,9 @@ static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport)
 static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
                                      const EmuVshCpuVertex* vertices)
 {
-    if(g_EmuCurrentCpuVertexShader != nullptr &&
-       !g_EmuCurrentCpuVertexShader->geometryLogged && vertices != nullptr)
+    XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+        XTL::VshShaderRegistry::Current();
+    if(metadata != nullptr && !metadata->geometryLogged && vertices != nullptr)
     {
         const UINT vertexCount = EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
         if(vertexCount != 0)
@@ -11944,7 +11814,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             printf("VSH| cpu_geometry hash=%08X vertices=%u bounds=%.3f,%.3f,%.3f,%.3f "
                    "depth=%.6f,%.6f tex0=%.6f,%.6f,%.6f,%.6f "
                    "visible_colors=%u visible_alpha=%u diffuse=%08X\n",
-                   static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), vertexCount,
+                   static_cast<unsigned int>(metadata->hash), vertexCount,
                    minX, minY, maxX, maxY, minZ, maxZ, minU, minV, maxU, maxV,
                    visibleColors, visibleAlpha,
                    static_cast<unsigned int>(vertices[0].diffuse));
@@ -11999,12 +11869,12 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             }
             printf("VSH| cpu_raster_state hash=%08X z=%lu zfunc=%lu cull=%lu blend=%lu "
                    "alpha_test=%lu color_write=%08lX pixel_fallback=%u rt=%ux%u backbuffer=%u\n",
-                   static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), zEnable,
+                   static_cast<unsigned int>(metadata->hash), zEnable,
                    zFunction, cullMode, alphaBlend, alphaTest, colorWrite,
                    g_bUsePixelShaderFallback ? 1u : 0u, renderTargetWidth,
                    renderTargetHeight, drawsToBackBuffer ? 1u : 0u);
             fflush(stdout);
-            g_EmuCurrentCpuVertexShader->geometryLogged = true;
+            metadata->geometryLogged = true;
         }
     }
 
@@ -12095,8 +11965,9 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             cxbx::d3d::SelectCpuFallbackMaterial(
                 g_bUsePixelShaderFallback, g_EmuCurrentPixelShaderHandle != 0,
                 stage0TextureUsable);
-        if(g_EmuCurrentCpuVertexShader != nullptr &&
-           !g_EmuCurrentCpuVertexShader->materialLogged)
+        XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+            XTL::VshShaderRegistry::Current();
+        if(metadata != nullptr && !metadata->materialLogged)
         {
             printf("VSH| cpu_material hash=%08X pixel=%08lX stage0_texture=%u texcoord=%lu "
                    "texture_type=%lu texture_format=%lu texture_size=%ux%u "
@@ -12104,7 +11975,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                    "stage3_size=%ux%u stage3_data=%u "
                    "finite=%u varies=%u texture_data=%u mode=%s "
                    "combiner=%s\n",
-                   static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash),
+                   static_cast<unsigned int>(metadata->hash),
                    g_EmuCurrentPixelShaderHandle, stage0TextureBound ? 1u : 0u, texCoordIndex,
                    stage0TextureType, stage0TextureFormat, stage0TextureWidth,
                    stage0TextureHeight,
@@ -12115,12 +11986,12 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                    stage0TextureHasData ? 1u : 0u,
                    material == cxbx::d3d::CpuFallbackMaterial::PreservePixelShader
                        ? "preserve_pixel_shader"
-                       : material == cxbx::d3d::CpuFallbackMaterial::TextureModulate
-                             ? "texture_modulate"
-                             : "diffuse",
+                   : material == cxbx::d3d::CpuFallbackMaterial::TextureModulate
+                       ? "texture_modulate"
+                       : "diffuse",
                    cxbx::d3d::PixelShaderFallbackName(EmuCurrentPixelShaderFallback()));
             fflush(stdout);
-            g_EmuCurrentCpuVertexShader->materialLogged = true;
+            metadata->materialLogged = true;
         }
 
         if(material == cxbx::d3d::CpuFallbackMaterial::PreservePixelShader)
@@ -12240,18 +12111,19 @@ static float EmuVshGetDefaultPointSize()
 static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveType,
                              UINT vertexCount, bool rendered, const char* reason)
 {
-    if(g_EmuCurrentCpuVertexShader == nullptr)
+    XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+        XTL::VshShaderRegistry::Current();
+    if(metadata == nullptr)
     {
         return;
     }
-    bool& logged = rendered ? g_EmuCurrentCpuVertexShader->drawLogged
-                            : g_EmuCurrentCpuVertexShader->rejectionLogged;
+    bool& logged = rendered ? metadata->drawLogged : metadata->rejectionLogged;
     if(logged)
     {
         return;
     }
     printf("VSH| cpu_draw hash=%08X api=%s vertices=%u primitive=%lu result=%s reason=%s\n",
-           static_cast<unsigned int>(g_EmuCurrentCpuVertexShader->hash), api, vertexCount,
+           static_cast<unsigned int>(metadata->hash), api, vertexCount,
            static_cast<unsigned long>(primitiveType), rendered ? "success" : "rejected", reason);
     fflush(stdout);
     logged = true;
@@ -12262,7 +12134,9 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
                                        UINT firstVertex, UINT vertexCount,
                                        std::vector<EmuVshCpuVertex>& output)
 {
-    if(g_EmuCurrentCpuVertexShader == nullptr || vertexCount == 0 || vertexCount > 65536)
+    XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
+        XTL::VshShaderRegistry::Current();
+    if(metadata == nullptr || vertexCount == 0 || vertexCount > 65536)
     {
         return false;
     }
@@ -12275,12 +12149,12 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
 
     const float defaultPointSize = EmuVshGetDefaultPointSize();
     const XTL::VshDiagnostics::ShaderWordView xboxDeclaration = {
-        g_EmuCurrentCpuVertexShader->declaration.data(),
-        g_EmuCurrentCpuVertexShader->declarationTokenCount,
+        metadata->declaration.data(),
+        metadata->declarationTokenCount,
     };
     const XTL::VshDiagnostics::ShaderWordView xboxFunction = {
-        g_EmuCurrentCpuVertexShader->function.data(),
-        1 + g_EmuCurrentCpuVertexShader->instructionCount * 4,
+        metadata->function.data(),
+        1 + metadata->instructionCount * 4,
     };
     std::array<float, 192 * 4> shaderConstants{};
     if(!XTL::VshDiagnostics::ApplyXboxDeclarationConstants(
@@ -12372,7 +12246,7 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
     }
 
     if(vertexCount >= 3 && capturedFirstInputs &&
-       !g_EmuCurrentCpuVertexShader->collapseCaptureLogged)
+       !metadata->collapseCaptureLogged)
     {
         float minX = output[0].x;
         float maxX = output[0].x;
@@ -12407,7 +12281,7 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
             {
                 EmuWarning("VshDecoder: collapsed-geometry capture raised a host exception");
             }
-            g_EmuCurrentCpuVertexShader->collapseCaptureLogged = true;
+            metadata->collapseCaptureLogged = true;
         }
     }
     return true;
@@ -12649,7 +12523,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
         return;
     }
 
-    if(g_EmuCurrentCpuVertexShader != nullptr)
+    if(XTL::VshShaderRegistry::Current() != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
         const bool rendered = EmuVshTryDrawCpuBound(quadList, PCPrimitiveType, PrimitiveCount,
@@ -12788,7 +12662,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         return;
     }
 
-    if(g_EmuCurrentCpuVertexShader != nullptr)
+    if(XTL::VshShaderRegistry::Current() != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
         const bool rendered = EmuVshTryDrawCpuUp(quadList, PCPrimitiveType, PrimitiveCount,
@@ -12935,7 +12809,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVerticesUP(
         return;
     }
 
-    if(g_EmuCurrentCpuVertexShader != nullptr)
+    if(XTL::VshShaderRegistry::Current() != nullptr)
     {
         static LONG CpuWarnCount = 0;
         if(InterlockedIncrement(&CpuWarnCount) <= 5)
@@ -13049,7 +12923,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
         return;
     }
 
-    if(g_EmuCurrentCpuVertexShader != nullptr)
+    if(XTL::VshShaderRegistry::Current() != nullptr)
     {
         const bool quadList = PrimitiveType == 8;
         const bool rendered = EmuVshTryDrawCpuIndexed(quadList, PCPrimitiveType, PrimitiveCount,
