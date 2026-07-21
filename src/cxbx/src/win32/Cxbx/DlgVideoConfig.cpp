@@ -34,7 +34,7 @@
 #include "DlgVideoConfig.h"
 #include "ResCxbx.h"
 #include "Emu.h"
-#include "XBVideo.h"
+#include "xbox_video.h"
 #include "shared_video_config.h"
 
 #include <cstdio>
