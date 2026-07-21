@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbx->Wnd.cpp
+// *   cxbx->win32->cxbx->window.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "Wnd.h"
+#include "window.h"
 #include "ResCxbx.h"
 
 // ******************************************************************

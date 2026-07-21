@@ -34,7 +34,7 @@
 #ifndef WNDMAIN_H
 #define WNDMAIN_H
 
-#include "Wnd.h"
+#include "window.h"
 #include "core/Exe.h"
 #include "core/Xbe.h"
 
