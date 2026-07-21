@@ -36,16 +36,8 @@
 
 #include "HostInput.h"
 #include "Emu.h"
-
-// ******************************************************************
-// * prevent name collisions
-// ******************************************************************
-namespace XTL
-{
-    #include "EmuXTL.h"
-};
-
 #include "XBController.h"
+#include "emulation_window_access.h"
 #include "shared_controller_config.h"
 
 #include <cstring>
@@ -66,7 +58,7 @@ static std::mutex g_DirectInputMutex;
 static void EmuDInputStartLegacyUnlocked()
 {
     cxbx::platform::GetSharedControllerConfig(g_XBController);
-    g_XBController.ListenBegin(XTL::g_hEmuWindow);
+    g_XBController.ListenBegin(static_cast<HWND>(cxbx::platform::GetEmulationWindow()));
 
     if (g_XBController.GetError()) {
         printf("EmuDInput: legacy DirectInput initialization failed: %s\n",
@@ -94,7 +86,7 @@ bool XTL::EmuDInputInit()
         directInputReady = g_DirectInputReady;
     }
 
-    if (!HostInput::AttachWindow(XTL::g_hEmuWindow)) {
+    if (!HostInput::AttachWindow(cxbx::platform::GetEmulationWindow())) {
         printf("EmuDInput: host gamepad device notifications are unavailable; "
                "using polling fallback.\n");
     }
