@@ -501,7 +501,7 @@ resource_root = join_paths(meson.project_source_root(), 'Resource')
 branding_root = join_paths(meson.project_source_root(), 'docs', 'branding')
 cxbx_runtime_resources = custom_target(
   'cxbx_runtime_resources',
-  input : files('../../Resource/CxbxDll.rc'),
+  input : files('../../Resource/runtime_resources.rc'),
   output : 'CxbxDll.res',
   command : [
     resource_compiler,
@@ -518,7 +518,7 @@ cxbx_runtime_resources = custom_target(
 )
 cxbx_launcher_resources = custom_target(
   'cxbx_launcher_resources',
-  input : files('../../Resource/Cxbx.rc'),
+  input : files('../../Resource/launcher_resources.rc'),
   output : 'Cxbx.res',
   command : [
     resource_compiler,

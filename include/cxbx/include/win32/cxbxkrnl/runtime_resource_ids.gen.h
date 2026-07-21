@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Developer Studio generated include file.
-// Used by CxbxDll.rc
+// Used by runtime_resources.rc
 //
 #define IDI_CXBX                        101
 
