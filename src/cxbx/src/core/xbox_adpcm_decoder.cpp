@@ -1,4 +1,4 @@
-#include "core/XboxAdpcmDecoder.h"
+#include "core/xbox_adpcm_decoder.h"
 
 #include <array>
 #include <climits>

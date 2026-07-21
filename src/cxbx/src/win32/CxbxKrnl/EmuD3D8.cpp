@@ -57,7 +57,7 @@ namespace xboxkrnl
 #include "core/d3d_present.h"
 #include "core/d3d_texture.h"
 #include "core/trace.h"
-#include "core/Yuy2Converter.h"
+#include "core/yuy2_converter.h"
 
 // ******************************************************************
 // * prevent name collisions
