@@ -19,6 +19,8 @@
 // *
 // ******************************************************************
 
+#include "core/VertexShaderTranslator.h"
+
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
@@ -60,12 +62,6 @@ static void EmuWarning(const char* format, ...)
 #include <iomanip>
 #include <limits>
 #include <sstream>
-
-namespace XTL
-{
-DWORD* EmuVshRecompileXboxFunction(const DWORD* xboxFunction);
-int EmuVshTranslateXboxDeclaration(const DWORD* xboxDeclaration, DWORD* pcDeclaration, int maxTokens);
-} // namespace XTL
 
 // ******************************************************************
 // * NV2A microcode field layout (from nxdk vp20compiler main.c)

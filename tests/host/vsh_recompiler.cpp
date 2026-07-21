@@ -1,3 +1,4 @@
+#include "core/VertexShaderTranslator.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
 
 #include <algorithm>
