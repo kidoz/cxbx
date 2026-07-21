@@ -50,6 +50,7 @@ namespace xboxkrnl
 #include "core/nv2a_raster.h"
 #include "core/nvnet.h"
 #include "core/trace.h"
+#include "shared_runtime_state.h"
 
 // ******************************************************************
 // * prevent name collisions
@@ -72,7 +73,6 @@ namespace XTL
 #include <crtdbg.h>
 #endif
 
-#include "EmuShared.h"
 #include "HLEDataBase.h"
 
 // Forward-declare HostInput::Initialize to avoid pulling STL headers into the
@@ -10309,7 +10309,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
         EmuConfigureLogFile();
         SetUnhandledExceptionFilter(EmuUnhandledExceptionFilter);
         printf("--- cxbx runtime attach ---\n");
-        EmuShared::Init();
+        cxbx::platform::InitializeSharedRuntime();
     }
     
     if(fdwReason == DLL_PROCESS_DETACH)
@@ -10320,7 +10320,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             g_hEmuVectoredExceptionHandler = NULL;
         }
 
-        EmuShared::Cleanup();
+        cxbx::platform::ShutdownSharedRuntime();
     }
 
     return TRUE;
@@ -10487,9 +10487,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 	// * Initialize current directory
     // ******************************************************************
 	{
-		char szBuffer[260];
+        char szBuffer[cxbx::platform::kSharedXbePathCapacity];
 
-        g_EmuShared->GetXbePath(szBuffer);
+        cxbx::platform::GetSharedXbePath(szBuffer);
 
         SetCurrentDirectory(szBuffer);
 
