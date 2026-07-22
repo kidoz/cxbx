@@ -3,7 +3,7 @@
 #pragma once
 
 #include "core/VertexShaderTranslator.h"
-#include "EmuVshDecoder.h"
+#include "vsh_decoder.h"
 
 namespace XTL::VshInternal
 {

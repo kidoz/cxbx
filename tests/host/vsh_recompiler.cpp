@@ -1,5 +1,5 @@
 #include "core/VertexShaderTranslator.h"
-#include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshDecoder.h"
+#include "../../src/cxbx/src/win32/CxbxKrnl/vsh_decoder.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshCpuDeviceState.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshShaderCreation.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/EmuVshShaderRegistry.h"
