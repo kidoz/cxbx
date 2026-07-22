@@ -298,12 +298,12 @@ cxbx_hle_dispatch_dep = declare_dependency(
 cxbx_yuy2 = static_library(
   'cxbx_yuy2',
   'src/core/yuy2_converter.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_yuy2_dep = declare_dependency(
   link_with : cxbx_yuy2,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_launcher_src = files(
