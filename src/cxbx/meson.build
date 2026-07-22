@@ -3,7 +3,7 @@ cxbx_core = static_library(
   'src/core/error.cpp',
   'src/core/exe.cpp',
   'src/core/open_xdk.cpp',
-  'src/core/Xbe.cpp',
+  'src/core/xbe.cpp',
   include_directories : cxbx_inc,
   cpp_args : [
     '-DXBOXKRNL_NO_EXTERN_C',

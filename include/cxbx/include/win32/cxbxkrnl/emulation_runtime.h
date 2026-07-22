@@ -34,7 +34,7 @@
 #ifndef EMU_H
 #define EMU_H
 
-#include "core/Xbe.h"
+#include "core/xbe.h"
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>

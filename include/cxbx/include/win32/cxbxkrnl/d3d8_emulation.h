@@ -34,7 +34,7 @@
 #ifndef EMUD3D8_H
 #define EMUD3D8_H
 
-#include "core/Xbe.h"
+#include "core/xbe.h"
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
