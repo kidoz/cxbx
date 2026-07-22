@@ -41,12 +41,12 @@ cxbx_xbox_adpcm_dep = declare_dependency(
 cxbx_nv2a_capture = static_library(
   'cxbx_nv2a_capture',
   'src/core/nv2a_capture.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_nv2a_capture_dep = declare_dependency(
   link_with : cxbx_nv2a_capture,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_platform_win32 = static_library(
