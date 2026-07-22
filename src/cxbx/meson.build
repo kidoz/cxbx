@@ -155,12 +155,12 @@ cxbx_trace = static_library(
   'cxbx_trace',
   'src/core/trace/trace.cpp',
   'src/platform/win32/trace_os.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_trace_dep = declare_dependency(
   link_with : cxbx_trace,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_hle_audio = static_library(
