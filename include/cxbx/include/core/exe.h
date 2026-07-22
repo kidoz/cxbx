@@ -60,7 +60,7 @@ class Exe : public Error
         // ******************************************************************
         // * DOSHeader
         // ******************************************************************
-        #include "AlignPrefix1.h"
+        #include "align_prefix_1.h"
         struct DOSHeader
         {
             uint16 m_magic;                 // DOS .EXE magic number
@@ -83,13 +83,13 @@ class Exe : public Error
             uint16 m_res2[10];              // reserved words
             uint32 m_lfanew;                // file address of new .EXE header
         };
-        #include "AlignPosfix1.h"
+        #include "align_postfix_1.h"
         DOSHeader m_DOSHeader;
 
         // ******************************************************************
         // * Header (PE)
         // ******************************************************************
-        #include "AlignPrefix1.h"
+        #include "align_prefix_1.h"
         struct Header
         {
             uint32 m_magic;                         // magic number [should be "PE\0\0"]
@@ -101,13 +101,13 @@ class Exe : public Error
             uint16 m_sizeof_optional_header;        // size of optional header
             uint16 m_characteristics;               // characteristics
         };
-        #include "AlignPosfix1.h"
+        #include "align_postfix_1.h"
         Header m_Header;
 
         // ******************************************************************
         // * OptionalHeader (PE)
         // ******************************************************************
-        #include "AlignPrefix1.h"
+        #include "align_prefix_1.h"
         struct OptionalHeader
         {
             uint16 m_magic;                         // magic number [should be 0x010B]
@@ -148,13 +148,13 @@ class Exe : public Error
             }
             m_image_data_directory[0x10];
         };
-        #include "AlignPosfix1.h"
+        #include "align_postfix_1.h"
         OptionalHeader m_OptionalHeader;
 
         // ******************************************************************
         // * PE Section Header
         // ******************************************************************
-        #include "AlignPrefix1.h"
+        #include "align_prefix_1.h"
         struct SectionHeader
         {
             char   m_name[8];                       // name of section
@@ -168,7 +168,7 @@ class Exe : public Error
             uint16 m_linenumbers;                   // number of linenumbers
             uint32 m_characteristics;               // characteristics for this segment
         }
-        #include "AlignPosfix1.h"
+        #include "align_postfix_1.h"
         *m_SectionHeader;
 
         // ******************************************************************
