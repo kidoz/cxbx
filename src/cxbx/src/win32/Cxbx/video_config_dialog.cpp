@@ -33,7 +33,7 @@
 // ******************************************************************
 #include "video_config_dialog.h"
 #include "launcher_resource_ids.gen.h"
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "xbox_video.h"
 #include "shared_video_config.h"
 

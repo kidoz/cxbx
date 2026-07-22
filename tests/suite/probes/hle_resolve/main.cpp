@@ -7,8 +7,8 @@
 // its OOVPA signature database (D3D8.1.0.5849.inl et al.) and overwrites each
 // located function's prologue with `jmp <host wrapper>` (0xE9 rel32 into the
 // emulator's own module, far above guest address space -- see
-// EmuInstallWrapper in Emu.cpp). The probe reads its own function prologues
-// and checks, per function, that the patch landed.
+// EmuInstallWrapper in emulation_runtime.cpp). The probe reads its own function
+// prologues and checks, per function, that the patch landed.
 //
 // Expectations encode current reality: `1` = signature must resolve (a FAIL
 // is a signature/HLE regression), `0` = documented gap (a FAIL here means the

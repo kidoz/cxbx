@@ -47,7 +47,7 @@
 #define DIRECTDRAW_VERSION 0x0700
 #include <ddraw.h>
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 // ******************************************************************
 // * global exports

@@ -39,7 +39,7 @@
 
 #include <windows.h>
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 // ******************************************************************
 // * prevent name collisions

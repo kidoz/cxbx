@@ -9,7 +9,7 @@ namespace xboxkrnl
 #include <xboxkrnl/xboxkrnl.h>
 };
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "EmuVshDecoderInternal.h"
 
 DWORD* XTL::EmuVshRecompileXboxFunction(const DWORD* xboxFunction)

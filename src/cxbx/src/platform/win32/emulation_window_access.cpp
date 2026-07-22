@@ -1,7 +1,7 @@
 // Access to the active emulation window without exposing D3D8 declarations.
 #include "emulation_window_access.h"
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 namespace XTL
 {

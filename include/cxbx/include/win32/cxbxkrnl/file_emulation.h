@@ -52,7 +52,7 @@ namespace NtDll
     #include "ntdll_emulation.h"
 };
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 // ******************************************************************
 // * Maximum number of open handles in the system

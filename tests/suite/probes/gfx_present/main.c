@@ -7,10 +7,10 @@
 // register write via pbkit's synchronous flip. A scanout-capturing target then
 // snapshots what would appear on screen.
 //
-// On this Cxbx build it drives Emu.cpp's scanout interception, which reads the
-// displayed surface straight from guest memory on the PCRTC_START write and
-// writes it to %TEMP%\cxbx_fbN.bmp -- proving the on-screen-image path end to
-// end with a deterministic, verifiable pattern.
+// On this Cxbx build it drives emulation_runtime.cpp's scanout interception,
+// which reads the displayed surface straight from guest memory on the
+// PCRTC_START write and writes it to %TEMP%\cxbx_fbN.bmp -- proving the
+// on-screen-image path end to end with a deterministic, verifiable pattern.
 //
 // SCOPE: the frame is composed by CPU writes into the framebuffer (no rasterizer
 // required); the flip is a real NV_PCRTC_START programming, the same signal a

@@ -44,7 +44,7 @@ namespace xboxkrnl
 
 #include "Cxbx.h"
 #include "core/trace.h"
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 #include <cstdarg>
 

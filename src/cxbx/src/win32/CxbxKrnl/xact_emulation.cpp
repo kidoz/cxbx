@@ -2,7 +2,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "fs_emulation.h"
 
 #include <cstring>

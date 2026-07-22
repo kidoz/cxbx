@@ -33,7 +33,7 @@
 // ******************************************************************
 #include "core/Xbe.h"
 #include "core/Exe.h"
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 #include <memory.h>
 #include <clocale>
