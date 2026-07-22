@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// EmuNV2ALogging.h - decode tables + trace macros for the NV2A (Xbox GPU)
+// nv2a_logging.h - decode tables + trace macros for the NV2A (Xbox GPU)
 // support code in CXBX.
 //
 // CXBX is still an HLE emulator, but it has a small NV2A MMIO/RAMIN/PFIFO/PGRAPH
@@ -19,8 +19,8 @@
 //   NV2A| mthd KELVIN(0x97) method=0x0300 data=0x00000000
 //   NV2A| ramht handle=0xCAFE0001 -> inst=0x00001240 class=0x97
 
-#ifndef EMUNV2ALOGGING_H
-#define EMUNV2ALOGGING_H
+#ifndef NV2A_LOGGING_H
+#define NV2A_LOGGING_H
 
 #include <cstdio>
 #include <cstdint>
@@ -283,4 +283,4 @@ static inline void EmuNV2ALogRamht(uint32_t handle, uint32_t instance, uint32_t 
 
 #endif // CXBX_NV2A_TRACE
 
-#endif // EMUNV2ALOGGING_H
+#endif // NV2A_LOGGING_H

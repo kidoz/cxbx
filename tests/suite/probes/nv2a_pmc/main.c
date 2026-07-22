@@ -16,7 +16,7 @@
 #define NV2A_BASE   0xFD000000u
 #define REG32(off)  (*(volatile uint32_t *)(NV2A_BASE + (uint32_t)(off)))
 
-// Engine/register offsets (subset; see EmuNV2ALogging.h).
+// Engine/register offsets (subset; see nv2a_logging.h).
 #define PMC_BOOT_0  0x000000u
 #define PMC_ENABLE  0x000200u
 #define PRAMIN      0x700000u
