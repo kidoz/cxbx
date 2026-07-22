@@ -113,7 +113,7 @@ host_trace_benchmark = executable(
   'trace_benchmark.cpp',
   '../../src/cxbx/src/core/trace/trace.cpp',
   '../../src/cxbx/src/platform/win32/trace_os.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   cpp_args : '-DCXBX_TRACE_BENCH_OPTIMIZATION="3"',
   override_options : ['optimization=3', 'debug=false'],
 )
@@ -148,7 +148,7 @@ test(
 host_stack_precommit_test = executable(
   'host_stack_precommit_test',
   'stack_precommit.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_krnl_inc,
   install : false,
 )
 
