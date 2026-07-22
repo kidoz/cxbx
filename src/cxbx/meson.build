@@ -481,7 +481,7 @@ cxbx_hle_d3d8_dep = declare_dependency(
 cxbx_hle_runtime = static_library(
   'cxbx_hle_runtime',
   'src/win32/CxbxKrnl/emulation_runtime.cpp',
-  include_directories : cxbx_inc,
+  include_directories : openxdk_inc,
   dependencies : [
     cxbx_core_dep,
     cxbx_host_input_win32_dep,
@@ -511,7 +511,6 @@ cxbx_hle_runtime_dep = declare_dependency(
     cxbx_trace_dep,
     cxbx_vsh_runtime_dep,
   ],
-  include_directories : cxbx_inc,
 )
 
 resource_compiler = find_program('llvm-rc')
