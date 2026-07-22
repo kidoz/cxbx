@@ -1,4 +1,4 @@
-#include "EmuVshShaderRegistry.h"
+#include "vsh_shader_registry.h"
 
 #include <algorithm>
 #include <array>
