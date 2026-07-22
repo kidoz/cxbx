@@ -270,7 +270,7 @@ cxbx_hle_xonline = static_library(
 
 cxbx_hle_xonline_dep = declare_dependency(
   link_whole : cxbx_hle_xonline,
-  dependencies : cxbx_guest_tls_win32_dep,
+  dependencies : cxbx_guest_tls_win32_dep.partial_dependency(link_args : true, links : true),
   link_args : '-lws2_32',
 )
 
