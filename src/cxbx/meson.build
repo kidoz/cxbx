@@ -555,7 +555,6 @@ cxbx_launcher_resources = custom_target(
 cxbx_runtime = shared_library(
   'Cxbx',
   cxbx_runtime_resources,
-  include_directories : cxbx_inc,
   dependencies : [
     cxbx_hle_audio_dep,
     cxbx_hle_d3d8_dep,
@@ -579,27 +578,17 @@ cxbx_runtime = shared_library(
     '-Wl,/BASE:0x10000000',
     '-Wl,/DYNAMICBASE:NO',
   ],
-  cpp_args : [
-    '-D_CXBXKRNL_INTERNAL',
-    '-DXBOXKRNL_NO_EXTERN_C',
-    '-Wno-c++11-narrowing',
-  ],
   name_prefix : '',
 )
 
 executable(
   'cxbx',
   cxbx_launcher_resources,
-  include_directories : cxbx_inc,
   dependencies : cxbx_frontend_win32_dep,
   link_with : [
     cxbx_runtime,
     d3d8_import_lib,
     cxbx_link_libs,
-  ],
-  cpp_args : [
-    '-DXBOXKRNL_NO_EXTERN_C',
-    '-Wno-c++11-narrowing',
   ],
   win_subsystem : 'windows',
 )
