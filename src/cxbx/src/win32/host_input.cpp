@@ -1,5 +1,5 @@
 // Windows XInput backend for original Xbox controller emulation.
-#include "HostInput.h"
+#include "host_input.h"
 
 #define POINTER_64 __ptr64
 #include <windows.h>

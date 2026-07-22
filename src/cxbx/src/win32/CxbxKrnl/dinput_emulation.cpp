@@ -34,7 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#include "HostInput.h"
+#include "host_input.h"
 #include "emulation_runtime.h"
 #include "xbox_controller.h"
 #include "emulation_window_access.h"

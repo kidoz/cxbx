@@ -76,7 +76,7 @@ namespace XTL
 #include "hle_database.h"
 
 // Forward-declare HostInput::Initialize to avoid pulling STL headers into the
-// XTL namespace scope (HostInput.h includes <array>/<cstdint> which conflict
+// XTL namespace scope (host_input.h includes <array>/<cstdint> which conflict
 // with the Xbox declarations inside namespace XTL).
 namespace HostInput { bool Initialize(); }
 
