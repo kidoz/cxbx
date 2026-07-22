@@ -4,7 +4,11 @@ cxbx_core = static_library(
   'src/core/exe.cpp',
   'src/core/open_xdk.cpp',
   'src/core/xbe.cpp',
-  include_directories : cxbx_inc,
+  include_directories : [
+    cxbx_public_inc,
+    cxbx_win32_inc,
+    cxbx_krnl_inc,
+  ],
   cpp_args : [
     '-DXBOXKRNL_NO_EXTERN_C',
     '-Wno-c++11-narrowing',
@@ -13,7 +17,10 @@ cxbx_core = static_library(
 
 cxbx_core_dep = declare_dependency(
   link_with : cxbx_core,
-  include_directories : cxbx_inc,
+  include_directories : [
+    cxbx_public_inc,
+    cxbx_win32_inc,
+  ],
 )
 
 cxbx_pcm = static_library(
