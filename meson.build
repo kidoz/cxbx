@@ -21,6 +21,7 @@ openxdk_root_inc = include_directories('include/open-xdk')
 openxdk_inc = include_directories('include/open-xdk/include')
 cxbx_public_inc = include_directories('include/cxbx/include')
 cxbx_win32_inc = include_directories('include/cxbx/include/win32')
+cxbx_frontend_inc = include_directories('include/cxbx/include/win32/cxbx')
 cxbx_krnl_inc = include_directories('include/cxbx/include/win32/cxbxkrnl')
 cxbx_dxsdk_inc = include_directories('3rdparty/dxsdk/Include')
 
@@ -32,16 +33,6 @@ cxbx_dxsdk_inc = include_directories('3rdparty/dxsdk/Include')
 openxdk_xusb_inc = include_directories(
   'include/open-xdk/include/xusb',
   'include/open-xdk/include/open-xdk',
-)
-
-cxbx_inc = include_directories(
-  'include/cxbx/include',
-  'include/cxbx/include/win32',
-  'include/cxbx/include/win32/cxbx',
-  'include/cxbx/include/win32/cxbxkrnl',
-  'include/open-xdk/include',
-  # Bundled DirectX SDK headers used directly by the Meson build.
-  '3rdparty/dxsdk/Include',
 )
 
 # open-xdk support libraries. Each sets a `lib<name>` variable consumed by the
