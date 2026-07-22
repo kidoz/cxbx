@@ -1,8 +1,8 @@
 #include "core/vertex_shader_translator.h"
-#include "../../src/cxbx/src/win32/CxbxKrnl/vsh_decoder.h"
-#include "../../src/cxbx/src/win32/CxbxKrnl/vsh_cpu_device_state.h"
-#include "../../src/cxbx/src/win32/CxbxKrnl/vsh_shader_creation.h"
-#include "../../src/cxbx/src/win32/CxbxKrnl/vsh_shader_registry.h"
+#include "vsh_decoder.h"
+#include "vsh_cpu_device_state.h"
+#include "vsh_shader_creation.h"
+#include "vsh_shader_registry.h"
 
 #include <algorithm>
 #include <array>
