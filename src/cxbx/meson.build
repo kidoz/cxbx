@@ -117,8 +117,8 @@ cxbx_runtime_win32_dep = declare_dependency(
 
 cxbx_guest_tls_win32 = static_library(
   'cxbx_guest_tls_win32',
-  'src/win32/CxbxKrnl/fs_emulation.cpp',
-  'src/win32/CxbxKrnl/ldt_emulation.cpp',
+  'src/platform/win32/guest_tls/fs_emulation.cpp',
+  'src/platform/win32/guest_tls/ldt_emulation.cpp',
   include_directories : openxdk_inc,
   dependencies : cxbx_platform_win32_dep,
   cpp_args : [
