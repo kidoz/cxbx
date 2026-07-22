@@ -30,12 +30,12 @@ cxbx_pcm_dep = declare_dependency(
 cxbx_xbox_adpcm = static_library(
   'cxbx_xbox_adpcm',
   'src/core/xbox_adpcm_decoder.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_xbox_adpcm_dep = declare_dependency(
   link_with : cxbx_xbox_adpcm,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
 )
 
 cxbx_nv2a_capture = static_library(
