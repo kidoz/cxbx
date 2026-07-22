@@ -35,7 +35,7 @@
 #define WNDMAIN_H
 
 #include "window.h"
-#include "core/Exe.h"
+#include "core/exe.h"
 #include "core/Xbe.h"
 
 // ******************************************************************

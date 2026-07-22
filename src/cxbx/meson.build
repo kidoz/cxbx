@@ -1,7 +1,7 @@
 cxbx_core = static_library(
   'cxbx_core',
   'src/core/Error.cpp',
-  'src/core/Exe.cpp',
+  'src/core/exe.cpp',
   'src/core/open_xdk.cpp',
   'src/core/Xbe.cpp',
   include_directories : cxbx_inc,
