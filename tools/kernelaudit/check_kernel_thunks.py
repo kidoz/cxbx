@@ -14,7 +14,7 @@
 import csv, re, os, sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-THUNK = os.path.join(ROOT, "src", "cxbx", "src", "win32", "CxbxKrnl", "kernel_thunk.cpp")
+THUNK = os.path.join(ROOT, "src", "cxbx", "src", "hle", "dispatch", "kernel_thunk.cpp")
 REF   = os.path.join(os.path.dirname(__file__), "xboxkrnl_ordinals.csv")
 
 # Ordinals whose wired Emu symbol legitimately does not name-match the export
