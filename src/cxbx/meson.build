@@ -135,7 +135,7 @@ cxbx_guest_tls_win32 = static_library(
 
 cxbx_guest_tls_win32_dep = declare_dependency(
   link_whole : cxbx_guest_tls_win32,
-  dependencies : cxbx_runtime_win32_dep,
+  dependencies : cxbx_runtime_win32_dep.partial_dependency(link_args : true, links : true),
 )
 
 cxbx_hle_input = static_library(
