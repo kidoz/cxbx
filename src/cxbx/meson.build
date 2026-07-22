@@ -279,7 +279,7 @@ cxbx_hle_xg_dep = declare_dependency(
 cxbx_hle_dispatch = static_library(
   'cxbx_hle_dispatch',
   'src/win32/CxbxKrnl/hle_database.cpp',
-  'src/win32/CxbxKrnl/KernelThunk.cpp',
+  'src/win32/CxbxKrnl/kernel_thunk.cpp',
   include_directories : cxbx_inc,
   dependencies : cxbx_trace_dep,
   cpp_args : [

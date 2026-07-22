@@ -22,7 +22,7 @@
 #define KTRACE(name, fmt, ...) do { } while (0)
 #endif
 
-// Logs a call into an unimplemented kernel export. Defined in KernelThunk.cpp
+// Logs a call into an unimplemented kernel export. Defined in kernel_thunk.cpp
 // (where the per-ordinal trap stubs live). Always emits, so a developer sees
 // exactly which export a title needs even in a non-_DEBUG build.
 extern "C" void EmuUnimplementedKernelLog(int Ordinal, void *Caller);

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Kernel-ordinal regression guard.
 #
-# Cross-references src/.../KernelThunk.cpp's KernelThunkTable[] against the
+# Cross-references src/.../kernel_thunk.cpp's KernelThunkTable[] against the
 # authoritative Xbox kernel export ordinals (tools/kernelaudit/xboxkrnl_ordinals.csv,
 # derived from nxdk's xboxkrnl.exe.def -- the ABI every title imports against).
 #
@@ -14,7 +14,7 @@
 import csv, re, os, sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-THUNK = os.path.join(ROOT, "src", "cxbx", "src", "win32", "CxbxKrnl", "KernelThunk.cpp")
+THUNK = os.path.join(ROOT, "src", "cxbx", "src", "win32", "CxbxKrnl", "kernel_thunk.cpp")
 REF   = os.path.join(os.path.dirname(__file__), "xboxkrnl_ordinals.csv")
 
 # Ordinals whose wired Emu symbol legitimately does not name-match the export
