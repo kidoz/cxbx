@@ -34,7 +34,7 @@
 #ifndef XNET_1_0_4627_H
 #define XNET_1_0_4627_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern OOVPATable XNet_1_0_3911[];
 extern uint32     XNet_1_0_3911_SIZE;

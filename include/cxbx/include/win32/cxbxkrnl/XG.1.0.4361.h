@@ -34,7 +34,7 @@
 #ifndef XG_1_0_4361_H
 #define XG_1_0_4361_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern OOVPATable XG_1_0_4361[];
 extern uint32     XG_1_0_4361_SIZE;

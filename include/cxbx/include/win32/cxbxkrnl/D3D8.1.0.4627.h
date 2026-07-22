@@ -34,7 +34,7 @@
 #ifndef D3D8_1_0_4627_H
 #define D3D8_1_0_4627_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern SOOVPA<10> IDirect3DDevice8_SetTextureState_TexCoordIndex_1_0_4627;
 extern SOOVPA<15> IDirect3DDevice8_SetRenderState_CullMode_1_0_4627;

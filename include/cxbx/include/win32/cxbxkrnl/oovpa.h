@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->OOVPA.h
+// *   cxbx->win32->cxbxkrnl->oovpa.h
 // *
 // *  This file is part of the cxbx project.
 // *

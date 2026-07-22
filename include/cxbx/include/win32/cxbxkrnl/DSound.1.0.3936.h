@@ -34,7 +34,7 @@
 #ifndef DSOUND_1_0_3936_H
 #define DSOUND_1_0_3936_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern OOVPATable DSOUND_1_0_3936[];
 extern uint32     DSOUND_1_0_3936_SIZE;

@@ -34,7 +34,7 @@
 #ifndef XONLINE_1_0_4627_H
 #define XONLINE_1_0_4627_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern OOVPATable XOnline_1_0_4361[];
 extern uint32     XOnline_1_0_4361_SIZE;
