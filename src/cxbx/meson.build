@@ -119,8 +119,13 @@ cxbx_guest_tls_win32 = static_library(
   'cxbx_guest_tls_win32',
   'src/platform/win32/guest_tls/fs_emulation.cpp',
   'src/platform/win32/guest_tls/ldt_emulation.cpp',
-  include_directories : openxdk_inc,
-  dependencies : cxbx_platform_win32_dep,
+  include_directories : [
+    openxdk_inc,
+    cxbx_krnl_inc,
+    cxbx_dxsdk_inc,
+    cxbx_public_inc,
+    cxbx_win32_inc,
+  ],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
