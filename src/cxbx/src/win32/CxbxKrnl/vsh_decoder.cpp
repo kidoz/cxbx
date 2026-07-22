@@ -19,7 +19,7 @@
 // *
 // ******************************************************************
 
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 
 using DWORD = std::uint32_t;
 

@@ -1,4 +1,4 @@
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/vsh_decoder.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/vsh_cpu_device_state.h"
 #include "../../src/cxbx/src/win32/CxbxKrnl/vsh_shader_creation.h"
