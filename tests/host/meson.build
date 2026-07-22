@@ -17,7 +17,7 @@ test('host-yuy2-conversion', host_yuy2_test)
 host_d3d_present_test = executable(
   'host_d3d_present_test',
   'd3d_present.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   install : false,
 )
 
@@ -26,7 +26,7 @@ test('host-d3d-present', host_d3d_present_test)
 host_d3d_push_buffer_test = executable(
   'host_d3d_push_buffer_test',
   'd3d_push_buffer.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   install : false,
 )
 
@@ -35,7 +35,7 @@ test('host-d3d-push-buffer', host_d3d_push_buffer_test)
 host_nv2a_raster_test = executable(
   'host_nv2a_raster_test',
   'nv2a_raster.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   install : false,
 )
 
@@ -53,7 +53,7 @@ test('host-nv2a-capture', host_nv2a_capture_test)
 host_nvnet_test = executable(
   'host_nvnet_test',
   'nvnet.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   install : false,
 )
 
@@ -62,7 +62,7 @@ test('host-nvnet', host_nvnet_test)
 host_psh_translate_test = executable(
   'host_psh_translate_test',
   'psh_translate.cpp',
-  include_directories : cxbx_inc,
+  include_directories : cxbx_public_inc,
   install : false,
 )
 
