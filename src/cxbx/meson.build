@@ -249,7 +249,6 @@ cxbx_hle_xapi_dep = declare_dependency(
   dependencies : [
     cxbx_guest_tls_win32_dep,
     cxbx_hle_input_dep,
-    cxbx_platform_win32_dep,
   ],
 )
 
