@@ -59,6 +59,8 @@ cxbx_nv2a_capture_dep = declare_dependency(
 cxbx_platform_win32_inc = [
   cxbx_krnl_inc,
   cxbx_dxsdk_inc,
+  cxbx_public_inc,
+  cxbx_win32_inc,
 ]
 
 cxbx_platform_win32 = static_library(
@@ -67,7 +69,7 @@ cxbx_platform_win32 = static_library(
   'src/win32/xbox_controller.cpp',
   'src/win32/xbox_video.cpp',
   include_directories : cxbx_platform_win32_inc,
-  dependencies : cxbx_core_dep,
+  dependencies : cxbx_core_dep.partial_dependency(links : true),
   cpp_args : [
     '-DXBOXKRNL_NO_EXTERN_C',
     '-Wno-c++11-narrowing',
@@ -76,7 +78,7 @@ cxbx_platform_win32 = static_library(
 
 cxbx_platform_win32_dep = declare_dependency(
   link_with : cxbx_platform_win32,
-  dependencies : cxbx_core_dep,
+  dependencies : cxbx_core_dep.partial_dependency(links : true),
   link_args : [
     '-ldinput8',
     '-ldxguid',
