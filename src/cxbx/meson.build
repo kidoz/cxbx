@@ -366,7 +366,7 @@ d3d8_import_lib = custom_target(
 cxbx_vsh_components = static_library(
   'cxbx_vsh_components',
   files(
-    'src/win32/CxbxKrnl/EmuVshCpuDeviceState.cpp',
+    'src/win32/CxbxKrnl/vsh_cpu_device_state.cpp',
     'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
     'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   ),
