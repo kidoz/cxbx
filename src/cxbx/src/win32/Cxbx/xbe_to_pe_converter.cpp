@@ -33,7 +33,7 @@
 // ******************************************************************
 #include "xbe_to_pe_converter.h"
 #include "executable_prolog.h"
-#include "Emu.h"
+#include "emulation_runtime.h"
 
 // ******************************************************************
 // * constructor

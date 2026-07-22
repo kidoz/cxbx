@@ -235,7 +235,7 @@ standardise per-thunk tracing.
 
 ## Graphics / NV2A — scope note
 
-This Cxbx tree now has a **register-level NV2A model** (`Emu.cpp`): it
+This Cxbx tree now has a **register-level NV2A model** (`emulation_runtime.cpp`): it
 trap-and-emulates the `0xFD000000` MMIO aperture — PMC, PFIFO with a DMA pusher,
 PGRAPH method dispatch, and 1 MiB of RAMIN with RAMHT lookup. The `nv2a_pmc` /
 `nv2a_intr` / `nv2a_pfifo` probes validate exactly that layer and pass on this

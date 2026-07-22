@@ -42,7 +42,7 @@ namespace xboxkrnl
     #include <xboxkrnl/xboxkrnl.h>
 };
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "core/VertexShaderTranslator.h"
 #include "EmuVshDecoder.h"
 #include "EmuVshDecoderInternal.h"
@@ -161,7 +161,8 @@ static INT                          g_D3DPerfEventDepth = 0;
 // Last D3D wrapper entered -- a lightweight (single store) entry trace so the
 // vectored-exception dump can name the HLE wrapper that was on the call path
 // when host d3d8 throws (e.g. the 0xE06D7363/D3DERR_NOTAVAILABLE storm on the
-// Turok Evolution render path). Printed by the vectored handler in Emu.cpp via
+// Turok Evolution render path). Printed by the vectored handler in
+// emulation_runtime.cpp via
 // EmuGetLastD3DCall(). The store is now unconditional (it earned its keep on
 // every Turok crash triage); CXBX_D3D_CALL_STATS additionally counts the
 // calls per wrapper and dumps the table every 128 Swaps, which shows what a
@@ -6383,7 +6384,8 @@ INT WINAPI XTL::EmuD3DPERF_EndEvent()
     return EventLevel;
 }
 
-// Mirror the presented frame to the emulator's GDI window (Emu.cpp).
+// Mirror the presented frame to the emulator's GDI window
+// (emulation_runtime.cpp).
 extern "C" void EmuHostBlitToWindow(const void* Pixels, unsigned Width, unsigned Height);
 
 struct EmuPresentMirrorFrame

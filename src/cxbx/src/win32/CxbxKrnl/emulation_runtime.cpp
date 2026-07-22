@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->Emu.cpp
+// *   cxbx->win32->cxbxkrnl->emulation_runtime.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -42,7 +42,7 @@ namespace xboxkrnl
     #include <xboxkrnl/xboxkrnl.h>
 };
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "fs_emulation.h"
 #include "EmuNV2ALogging.h"
 #include "core/d3d_push_buffer.h"

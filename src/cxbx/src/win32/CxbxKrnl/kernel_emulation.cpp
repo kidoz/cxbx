@@ -60,7 +60,7 @@ namespace NtDll
     #include "ntdll_emulation.h"
 };
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "fs_emulation.h"
 #include "file_emulation.h"
 #include "core/trace.h"
@@ -99,7 +99,7 @@ struct EmuObjectType
 extern "C" PVOID NTAPI EmuExAllocatePoolWithTag(ULONG NumberOfBytes, ULONG Tag);
 extern "C" VOID NTAPI EmuExFreePool(PVOID P);
 extern "C" EmuObjectType g_EmuPsThreadObjectType;
-extern "C" ULONG g_EmuDisplayPitch;   // defined in Emu.cpp; scanout capture width
+extern "C" ULONG g_EmuDisplayPitch; // defined in emulation_runtime.cpp; scanout capture width
 
 struct EmuObjectHeader
 {
@@ -3593,7 +3593,7 @@ static ULONG EmuQueryContiguousMemoryAllocationSize(PVOID Address)
 }
 
 // ---------------------------------------------------------------------------
-// Bridges for the NV2A model (Emu.cpp). In this HLE emulator the guest programs
+// Bridges for the NV2A model (emulation_runtime.cpp). In this HLE emulator the guest programs
 // the NV2A with raw host pointers into MmAllocateContiguousMemory blocks (the
 // pushbuffer PUT, texture offsets), so the NV2A pusher/texture code reads guest
 // data straight from host memory. These let it find the enclosing block base
@@ -4111,7 +4111,7 @@ extern "C" ULONG NTAPI EmuAvSetDisplayMode(PVOID RegisterBase, ULONG Step, ULONG
            GetCurrentThreadId(), Step, Mode, Format, Pitch, Pitch, FrameBuffer);
     fflush(stdout);
     // Publish the scanline pitch so the NV2A scanout capture can recover the
-    // display width when the CRTC base is flipped. See Emu.cpp EmuNv2aDumpScanout.
+    // display width when the CRTC base is flipped. See emulation_runtime.cpp EmuNv2aDumpScanout.
     if(Pitch != 0)
         g_EmuDisplayPitch = Pitch;
     EmuSwapFS();   // Xbox FS
@@ -5308,7 +5308,7 @@ static void EmuStartVblankThread()
 static const ULONG EmuAudioInterruptLevels[2] = { 5, 6 };
 static volatile LONG g_EmuAudioThreadStarted = 0;
 
-extern "C" void EmuAciSignalAudioInterrupt();   // Emu.cpp: raise GLOB_STA PCM-out status
+extern "C" void EmuAciSignalAudioInterrupt(); // emulation_runtime.cpp: raise GLOB_STA PCM-out status
 
 static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
 {
@@ -5347,7 +5347,7 @@ static DWORD WINAPI EmuAudioInterruptThread(LPVOID)
 }
 
 // AC97 bus-master DMA delivery: once a title sets a channel's run bit, tick the
-// register-side DMA model (EmuAciDmaAdvance in Emu.cpp -- CIV/PICB/SR/GLOB_STA
+// register-side DMA model (EmuAciDmaAdvance in emulation_runtime.cpp -- CIV/PICB/SR/GLOB_STA
 // advancement) and deliver the buffer-completion interrupt to the connected
 // audio-level ISR. Unlike the timer-based CXBX_APU_IRQ thread this only fires
 // when the title actually programmed and ran a buffer queue, matching the
@@ -5414,8 +5414,8 @@ extern "C" void EmuAciStartDmaThread()
 // Track pending timers and re-fire each DPC once its due time arrives; the
 // immediate fire is kept for compatibility with titles tuned to it.
 extern "C" BOOLEAN NTAPI EmuKeInsertQueueDpc(xboxkrnl::PKDPC Dpc, PVOID SystemArgument1, PVOID SystemArgument2);
-extern "C" void EmuCrc32TraceRearm();   // Emu.cpp: single-step trace recovery
-extern "C" void EmuDsoundSingletonKeepAlive();   // Emu.cpp: DSOUND core keep-alive
+extern "C" void EmuCrc32TraceRearm();          // emulation_runtime.cpp: single-step trace recovery
+extern "C" void EmuDsoundSingletonKeepAlive(); // emulation_runtime.cpp: DSOUND core keep-alive
 
 struct EmuPendingTimerDpc
 {
@@ -5563,10 +5563,10 @@ extern "C" void EmuStartTimerDpcThread()
 // instantly: every tick, clear the active bit of every voice structure (array
 // = DSOUND m_ctxMemory[3].virt, located generically by the context-release
 // patch), latch the voice-interrupt status, and fire the connected ISR.
-extern "C" ULONG g_EmuDsoundApuContextTable;   // Emu.cpp (pattern scan)
-extern "C" void EmuApuRaiseVoiceInterrupt();   // Emu.cpp (ISTS latch)
-extern "C" ULONG EmuApuReadInterruptStatus();  // Emu.cpp (ISTS peek, diagnostics)
-extern "C" int EmuApuConsumeOffPendingVoice(ULONG Voice);   // Emu.cpp (VP PIO capture)
+extern "C" ULONG g_EmuDsoundApuContextTable;   // emulation_runtime.cpp (pattern scan)
+extern "C" void EmuApuRaiseVoiceInterrupt();   // emulation_runtime.cpp (ISTS latch)
+extern "C" ULONG EmuApuReadInterruptStatus();  // emulation_runtime.cpp (ISTS peek, diagnostics)
+extern "C" int EmuApuConsumeOffPendingVoice(ULONG Voice); // emulation_runtime.cpp (VP PIO capture)
 static volatile LONG g_EmuApuVoiceThreadStarted = 0;
 
 static DWORD WINAPI EmuApuVoiceThread(LPVOID)
@@ -5850,7 +5850,7 @@ static void EmuStartAudioInterruptThread()
 static const ULONG EmuUsbInterruptLevel = 1;
 static volatile LONG g_EmuUsbThreadStarted = 0;
 
-extern "C" void EmuUsb0SignalInterrupt();   // Emu.cpp: raise HcInterruptStatus SOF
+extern "C" void EmuUsb0SignalInterrupt(); // emulation_runtime.cpp: raise HcInterruptStatus SOF
 
 static DWORD WINAPI EmuUsbInterruptThread(LPVOID)
 {

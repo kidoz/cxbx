@@ -5,10 +5,11 @@
 // a BEGIN_END primitive batch through pbkit. A GPU-emulating (or texture-
 // intercepting) target can then capture the source image the title uploaded.
 //
-// On this Cxbx build it drives Emu.cpp's KELVIN texture interception, which
-// decodes the bound stage-0 texture straight from guest memory and writes it to
-// %TEMP%\cxbx_texN.bmp -- proving the source-texture path end to end with a
-// deterministic, verifiable pattern (matching the gfx probe's pattern_px).
+// On this Cxbx build it drives emulation_runtime.cpp's KELVIN texture
+// interception, which decodes the bound stage-0 texture straight from guest
+// memory and writes it to %TEMP%\cxbx_texN.bmp -- proving the source-texture
+// path end to end with a deterministic, verifiable pattern (matching the gfx
+// probe's pattern_px).
 //
 // SCOPE: submission only. No rasterizer is required; the interception triggers
 // on SET_BEGIN_END while a texture is bound, before any pixels would be drawn.

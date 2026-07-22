@@ -35,7 +35,7 @@
 #define _XBOXKRNL_LOCAL_
 
 #include "HostInput.h"
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "xbox_controller.h"
 #include "emulation_window_access.h"
 #include "host_input_lifecycle.h"

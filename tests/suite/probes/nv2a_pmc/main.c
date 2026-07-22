@@ -2,8 +2,8 @@
 //
 // nv2a_pmc - NV2A PMC registers + RAMIN instance memory, exercised through the
 // 0xFD000000 MMIO aperture. On CXBX these accesses fault and are trap-and-
-// emulated into the NV2A model in Emu.cpp; on an LLE target they hit the real
-// GPU model. Self-checking against fixed/deterministic values.
+// emulated into the NV2A model in emulation_runtime.cpp; on an LLE target they
+// hit the real GPU model. Self-checking against fixed/deterministic values.
 //
 // This is also the round-trip canary: if `nv2a.pmc_boot0` reads back the chip
 // ID, guest -> access-violation -> instruction-decode -> NV2A model works with

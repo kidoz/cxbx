@@ -47,7 +47,7 @@ namespace xboxkrnl
 #include <memory>
 #include <new>
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "fs_emulation.h"
 #include "core/pcm_converter.h"
 #include "core/xbox_adpcm_decoder.h"

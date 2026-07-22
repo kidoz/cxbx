@@ -42,7 +42,7 @@
 #include <cstdint>
 #include <limits>
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "fs_emulation.h"
 #include "HostInput.h"
 

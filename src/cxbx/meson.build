@@ -462,7 +462,7 @@ cxbx_hle_d3d8_dep = declare_dependency(
 
 cxbx_hle_runtime = static_library(
   'cxbx_hle_runtime',
-  'src/win32/CxbxKrnl/Emu.cpp',
+  'src/win32/CxbxKrnl/emulation_runtime.cpp',
   include_directories : cxbx_inc,
   dependencies : [
     cxbx_core_dep,

@@ -42,7 +42,7 @@ namespace xboxkrnl
     #include <xboxkrnl/xboxkrnl.h>
 };
 
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "fs_emulation.h"
 #include "ldt_emulation.h"
 

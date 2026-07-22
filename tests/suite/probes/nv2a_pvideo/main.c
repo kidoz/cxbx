@@ -2,8 +2,9 @@
 //
 // nv2a_pvideo - NV2A PVIDEO (video-port overlay/capture) registers, exercised
 // through the 0xFD000000 MMIO aperture. On CXBX these accesses fault and are
-// trap-and-emulated into the NV2A model in Emu.cpp; on an LLE target they hit
-// the real GPU model. Self-checking against deterministic values.
+// trap-and-emulated into the NV2A model in emulation_runtime.cpp; on an LLE
+// target they hit the real GPU model. Self-checking against deterministic
+// values.
 //
 // This is a GAP probe, not a behavior probe. Cxbx's NV2A model special-cases
 // PMC/PFIFO/PGRAPH/PCRTC/PFB/PRAMDAC but does NOT model the PVIDEO engine, so

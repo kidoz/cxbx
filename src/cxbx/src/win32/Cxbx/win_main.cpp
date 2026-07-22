@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "Emu.h"
+#include "emulation_runtime.h"
 #include "main_window.h"
 #include "xbe_to_pe_converter.h"
 #include "core/Xbe.h"
