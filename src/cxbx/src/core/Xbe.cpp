@@ -32,7 +32,7 @@
 // *
 // ******************************************************************
 #include "core/Xbe.h"
-#include "core/Exe.h"
+#include "core/exe.h"
 #include "emulation_runtime.h"
 
 #include <memory.h>

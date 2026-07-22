@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "core/Exe.h"
+#include "core/exe.h"
 #include "core/Xbe.h"
 
 #include <cstring>
