@@ -21,7 +21,6 @@ openxdk_root_inc = include_directories('include/open-xdk')
 openxdk_inc = include_directories('include/open-xdk/include')
 cxbx_public_inc = include_directories('include/cxbx/include')
 cxbx_win32_inc = include_directories('include/cxbx/include/win32')
-cxbx_frontend_inc = include_directories('include/cxbx/include/win32/cxbx')
 cxbx_krnl_inc = include_directories('include/cxbx/include/win32/cxbxkrnl')
 cxbx_dxsdk_inc = include_directories('3rdparty/dxsdk/Include')
 
