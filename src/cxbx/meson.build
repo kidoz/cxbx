@@ -328,20 +328,19 @@ cxbx_launcher_src = files(
   'src/platform/win32/shared_controller_config.cpp',
   'src/platform/win32/shared_runtime_state_launcher.cpp',
   'src/platform/win32/shared_video_config.cpp',
-  'src/win32/Cxbx/controller_config_dialog.cpp',
-  'src/win32/Cxbx/video_config_dialog.cpp',
-  'src/win32/Cxbx/xbe_to_pe_converter.cpp',
-  'src/win32/Cxbx/executable_prolog.cpp',
-  'src/win32/Cxbx/win_main.cpp',
-  'src/win32/Cxbx/window.cpp',
-  'src/win32/Cxbx/about_window.cpp',
-  'src/win32/Cxbx/main_window.cpp',
+  'src/frontend/win32_legacy/controller_config_dialog.cpp',
+  'src/frontend/win32_legacy/video_config_dialog.cpp',
+  'src/frontend/win32_legacy/xbe_to_pe_converter.cpp',
+  'src/frontend/win32_legacy/executable_prolog.cpp',
+  'src/frontend/win32_legacy/win_main.cpp',
+  'src/frontend/win32_legacy/window.cpp',
+  'src/frontend/win32_legacy/about_window.cpp',
+  'src/frontend/win32_legacy/main_window.cpp',
 )
 
 cxbx_frontend_win32 = static_library(
   'cxbx_frontend_win32',
   cxbx_launcher_src,
-  include_directories : cxbx_frontend_inc,
   dependencies : [
     cxbx_platform_win32_dep,
     cxbx_core_dep,
@@ -546,7 +545,7 @@ cxbx_launcher_resources = custom_target(
   ],
   depend_files : files(
     '../../docs/branding/cxbx.ico',
-    '../../include/cxbx/include/win32/cxbx/launcher_resource_ids.gen.h',
+    'src/frontend/win32_legacy/launcher_resource_ids.gen.h',
     '../../Resource/Splash.bmp',
   ),
 )
