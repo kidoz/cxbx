@@ -227,7 +227,7 @@ cxbx_hle_kernel_dep = declare_dependency(
 
 cxbx_hle_xapi = static_library(
   'cxbx_hle_xapi',
-  'src/win32/CxbxKrnl/xapi_emulation.cpp',
+  'src/hle/xapi/xapi_emulation.cpp',
   dependencies : [
     cxbx_host_input_win32_dep,
     cxbx_platform_win32_dep,
