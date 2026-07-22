@@ -219,7 +219,7 @@ skipped on targets that don't advertise a GPU model.
 
 Stock Cxbx stored an unimplemented kernel ordinal's own number in the thunk
 table, so calling it jumped to a bogus address and crashed with no diagnostic.
-`KernelThunk.cpp` now (default `CXBX_TRAP_UNIMPLEMENTED=1`) points each
+`kernel_thunk.cpp` now (default `CXBX_TRAP_UNIMPLEMENTED=1`) points each
 unimplemented ordinal at a per-ordinal template stub that logs
 
 ```
