@@ -34,7 +34,7 @@
 #ifndef OOVPA_H
 #define OOVPA_H
 
-#include "Cxbx.h"
+#include "cxbx.h"
 
 // ******************************************************************
 // * Take THIS C++ !!

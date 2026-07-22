@@ -34,7 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#include "Cxbx.h"
+#include "cxbx.h"
 
 #include "emulation_runtime.h"
 #include "fs_emulation.h"

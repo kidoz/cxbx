@@ -34,7 +34,7 @@
 #ifndef PROLOG_H
 #define PROLOG_H
 
-#include "Cxbx.h"
+#include "cxbx.h"
 
 // ******************************************************************
 // * func : Prolog

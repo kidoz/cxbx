@@ -42,7 +42,7 @@ namespace xboxkrnl
     #include <xboxkrnl/xboxkrnl.h>
 };
 
-#include "Cxbx.h"
+#include "cxbx.h"
 #include "core/trace.h"
 #include "emulation_runtime.h"
 
