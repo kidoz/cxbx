@@ -1,6 +1,6 @@
 // CXBX runtime diagnostics adapter for the vertex-shader translator.
 
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 
 #define _XBOXKRNL_LOCAL_
 

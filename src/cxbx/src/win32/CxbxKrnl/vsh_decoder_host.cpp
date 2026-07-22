@@ -1,6 +1,6 @@
 // Host-test diagnostics adapter for the vertex-shader translator.
 
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 #include "vsh_decoder_internal.h"
 
 #include <cstdarg>

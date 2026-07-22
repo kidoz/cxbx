@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 
 #include <array>
 #include <cstddef>

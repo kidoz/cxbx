@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 #include "vsh_decoder.h"
 
 namespace XTL::VshInternal

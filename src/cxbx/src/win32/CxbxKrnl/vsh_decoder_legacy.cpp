@@ -1,6 +1,6 @@
 // Legacy allocation adapter for the vertex-shader translator.
 
-#include "core/VertexShaderTranslator.h"
+#include "core/vertex_shader_translator.h"
 
 #if !defined(CXBX_VSH_HOST_TEST)
 using DWORD = unsigned long;
