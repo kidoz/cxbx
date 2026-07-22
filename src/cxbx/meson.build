@@ -157,9 +157,9 @@ cxbx_hle_input = static_library(
 cxbx_hle_input_dep = declare_dependency(
   link_whole : cxbx_hle_input,
   dependencies : [
-    cxbx_host_input_win32_dep,
-    cxbx_runtime_win32_dep,
-    cxbx_platform_win32_dep,
+    cxbx_host_input_win32_dep.partial_dependency(links : true),
+    cxbx_runtime_win32_dep.partial_dependency(link_args : true, links : true),
+    cxbx_platform_win32_dep.partial_dependency(link_args : true, links : true),
   ],
 )
 
