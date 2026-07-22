@@ -202,8 +202,8 @@ cxbx_hle_audio_dep = declare_dependency(
 
 cxbx_hle_kernel = static_library(
   'cxbx_hle_kernel',
-  'src/win32/CxbxKrnl/file_emulation.cpp',
-  'src/win32/CxbxKrnl/kernel_emulation.cpp',
+  'src/hle/kernel/file_emulation.cpp',
+  'src/hle/kernel/kernel_emulation.cpp',
   include_directories : [
     cxbx_win32_inc,
     cxbx_krnl_inc,
