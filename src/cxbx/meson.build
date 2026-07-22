@@ -251,7 +251,11 @@ cxbx_hle_xapi_dep = declare_dependency(
 cxbx_hle_xonline = static_library(
   'cxbx_hle_xonline',
   'src/win32/CxbxKrnl/xonline_emulation.cpp',
-  include_directories : cxbx_inc,
+  include_directories : [
+    cxbx_public_inc,
+    cxbx_win32_inc,
+    cxbx_krnl_inc,
+  ],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
@@ -263,7 +267,6 @@ cxbx_hle_xonline_dep = declare_dependency(
   link_whole : cxbx_hle_xonline,
   dependencies : cxbx_guest_tls_win32_dep,
   link_args : '-lws2_32',
-  include_directories : cxbx_inc,
 )
 
 cxbx_hle_xg = static_library(
