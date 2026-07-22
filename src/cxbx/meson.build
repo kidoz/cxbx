@@ -379,12 +379,14 @@ d3d8_import_lib = custom_target(
   command : [dlltool, '-m', 'i386', '-k', '-d', '@INPUT@', '-l', '@OUTPUT@'],
 )
 
+cxbx_vsh_private_inc = include_directories('src/hw/nv2a/vsh')
+
 cxbx_vsh_components = static_library(
   'cxbx_vsh_components',
   files(
-    'src/win32/CxbxKrnl/vsh_cpu_device_state.cpp',
-    'src/win32/CxbxKrnl/vsh_shader_creation.cpp',
-    'src/win32/CxbxKrnl/vsh_shader_registry.cpp',
+    'src/hw/nv2a/vsh/vsh_cpu_device_state.cpp',
+    'src/hw/nv2a/vsh/vsh_shader_creation.cpp',
+    'src/hw/nv2a/vsh/vsh_shader_registry.cpp',
   ),
   include_directories : cxbx_public_inc,
 )
@@ -397,9 +399,9 @@ cxbx_vsh_components_dep = declare_dependency(
 cxbx_vsh_runtime = static_library(
   'cxbx_vsh_runtime',
   files(
-    'src/win32/CxbxKrnl/vsh_decoder.cpp',
-    'src/win32/CxbxKrnl/vsh_decoder_legacy.cpp',
-    'src/win32/CxbxKrnl/vsh_decoder_runtime.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder_legacy.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder_runtime.cpp',
   ),
   include_directories : [
     cxbx_public_inc,
@@ -422,9 +424,9 @@ cxbx_vsh_runtime_dep = declare_dependency(
 cxbx_vsh_host = static_library(
   'cxbx_vsh_host',
   files(
-    'src/win32/CxbxKrnl/vsh_decoder.cpp',
-    'src/win32/CxbxKrnl/vsh_decoder_legacy.cpp',
-    'src/win32/CxbxKrnl/vsh_decoder_host.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder_legacy.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder_host.cpp',
   ),
   include_directories : cxbx_public_inc,
   cpp_args : '-DCXBX_VSH_HOST_TEST',
@@ -434,7 +436,7 @@ cxbx_vsh_host_dep = declare_dependency(
   link_with : cxbx_vsh_host,
   compile_args : '-DCXBX_VSH_HOST_TEST',
   dependencies : cxbx_vsh_components_dep,
-  include_directories : cxbx_public_inc,
+  include_directories : [cxbx_public_inc, cxbx_vsh_private_inc],
 )
 
 cxbx_d3d8_public_inc = [
@@ -448,7 +450,7 @@ cxbx_hle_d3d8 = static_library(
   'cxbx_hle_d3d8',
   'src/win32/CxbxKrnl/d3d8_emulation.cpp',
   'src/win32/CxbxKrnl/d3d8_conversion.cpp',
-  include_directories : cxbx_d3d8_public_inc + [openxdk_inc],
+  include_directories : cxbx_d3d8_public_inc + [cxbx_vsh_private_inc, openxdk_inc],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
