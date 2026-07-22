@@ -250,7 +250,7 @@ cxbx_hle_xapi_dep = declare_dependency(
 
 cxbx_hle_xonline = static_library(
   'cxbx_hle_xonline',
-  'src/win32/CxbxKrnl/xonline_emulation.cpp',
+  'src/hle/xonline/xonline_emulation.cpp',
   include_directories : [
     cxbx_public_inc,
     cxbx_win32_inc,
