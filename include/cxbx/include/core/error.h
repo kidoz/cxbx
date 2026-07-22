@@ -34,7 +34,7 @@
 #ifndef ERROR_H
 #define ERROR_H
 
-#include "Cxbx.h"
+#include "cxbx.h"
 
 // ******************************************************************
 // * Inherited from this class for easy Error detection

@@ -34,7 +34,7 @@
 #ifndef XBVIDEO_H
 #define XBVIDEO_H
 
-#include "Cxbx.h"
+#include "cxbx.h"
 #include "core/error.h"
 #include "mutex.h"
 

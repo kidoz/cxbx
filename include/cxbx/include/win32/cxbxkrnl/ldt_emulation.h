@@ -34,7 +34,7 @@
 #ifndef EMULDT_H
 #define EMULDT_H
 
-#include "Cxbx.h"
+#include "cxbx.h"
 
 // ******************************************************************
 // * func: EmuInitLDT
