@@ -225,8 +225,8 @@ cxbx_hle_kernel = static_library(
 cxbx_hle_kernel_dep = declare_dependency(
   link_whole : cxbx_hle_kernel,
   dependencies : [
-    cxbx_guest_tls_win32_dep,
-    cxbx_trace_dep,
+    cxbx_guest_tls_win32_dep.partial_dependency(link_args : true, links : true),
+    cxbx_trace_dep.partial_dependency(links : true),
   ],
 )
 
