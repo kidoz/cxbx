@@ -44,7 +44,7 @@
 
 #include "emulation_runtime.h"
 #include "fs_emulation.h"
-#include "HostInput.h"
+#include "host_input.h"
 
 // ******************************************************************
 // * prevent name collisions

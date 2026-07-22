@@ -74,7 +74,7 @@ cxbx_platform_win32_dep = declare_dependency(
 
 cxbx_host_input_win32 = static_library(
   'cxbx_host_input_win32',
-  'src/win32/HostInput.cpp',
+  'src/win32/host_input.cpp',
   include_directories : cxbx_inc,
 )
 

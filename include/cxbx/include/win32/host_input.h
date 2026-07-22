@@ -1,6 +1,6 @@
 // Windows host gamepad input translated to the original Xbox controller model.
-#ifndef HOSTINPUT_H
-#define HOSTINPUT_H
+#ifndef HOST_INPUT_H
+#define HOST_INPUT_H
 
 #include <array>
 #include <cstddef>
