@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->core->Xbe.cpp
+// *   cxbx->core->xbe.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "core/Xbe.h"
+#include "core/xbe.h"
 #include "core/exe.h"
 #include "emulation_runtime.h"
 

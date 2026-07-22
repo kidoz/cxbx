@@ -34,7 +34,7 @@
 #include "emulation_runtime.h"
 #include "main_window.h"
 #include "xbe_to_pe_converter.h"
-#include "core/Xbe.h"
+#include "core/xbe.h"
 #include "shared_runtime_state.h"
 
 #include <cstdio>

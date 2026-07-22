@@ -32,7 +32,7 @@
 // *
 // ******************************************************************
 #include "core/exe.h"
-#include "core/Xbe.h"
+#include "core/xbe.h"
 
 #include <cstring>
 
