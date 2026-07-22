@@ -48,7 +48,7 @@ namespace xboxkrnl
 #include "vsh_decoder_internal.h"
 #include "vsh_cpu_device_state.h"
 #include "vsh_shader_creation.h"
-#include "EmuVshShaderRegistry.h"
+#include "vsh_shader_registry.h"
 #include "fs_emulation.h"
 #include "xbox_video.h"
 #include "host_input_lifecycle.h"
