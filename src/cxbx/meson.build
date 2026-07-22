@@ -292,7 +292,7 @@ cxbx_hle_xg = static_library(
 
 cxbx_hle_xg_dep = declare_dependency(
   link_whole : cxbx_hle_xg,
-  dependencies : cxbx_guest_tls_win32_dep,
+  dependencies : cxbx_guest_tls_win32_dep.partial_dependency(link_args : true, links : true),
 )
 
 cxbx_hle_dispatch = static_library(
