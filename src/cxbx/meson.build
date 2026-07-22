@@ -271,7 +271,7 @@ cxbx_hle_xonline_dep = declare_dependency(
 
 cxbx_hle_xg = static_library(
   'cxbx_hle_xg',
-  'src/win32/CxbxKrnl/xg_emulation.cpp',
+  'src/hle/xg/xg_emulation.cpp',
   include_directories : [
     cxbx_public_inc,
     cxbx_win32_inc,
