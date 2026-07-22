@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->cxbxkrnl->EmuVshDecoder.cpp
+// *   cxbx->win32->cxbxkrnl->vsh_decoder.cpp
 // *
 // *  Xbox vertex-shader recompiler: decodes the 128-bit NV2A vertex-
 // *  program microcode an XDK title passes to D3DDevice_CreateVertexShader

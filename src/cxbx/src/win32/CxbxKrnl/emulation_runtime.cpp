@@ -1875,7 +1875,7 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define EmuNv2aVpMaxInstr                   136u
 #define EmuNv2aInlineWordCapacity           65536u
 
-// CPU vertex-program interpreter (implemented in EmuVshDecoder.cpp): transform
+// CPU vertex-program interpreter (implemented in vsh_decoder.cpp): transform
 // one vertex through the loaded NV2A microcode. Inputs are the 16 attribute
 // registers (16*4 floats), constants the 192-entry constant memory (192*4
 // floats), outputs clip-space oPos + oD0 diffuse.

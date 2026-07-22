@@ -381,7 +381,7 @@ cxbx_vsh_components_dep = declare_dependency(
 cxbx_vsh_runtime = static_library(
   'cxbx_vsh_runtime',
   files(
-    'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+    'src/win32/CxbxKrnl/vsh_decoder.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/vsh_decoder_runtime.cpp',
   ),
@@ -406,7 +406,7 @@ cxbx_vsh_runtime_dep = declare_dependency(
 cxbx_vsh_host = static_library(
   'cxbx_vsh_host',
   files(
-    'src/win32/CxbxKrnl/EmuVshDecoder.cpp',
+    'src/win32/CxbxKrnl/vsh_decoder.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderLegacy.cpp',
     'src/win32/CxbxKrnl/EmuVshDecoderHost.cpp',
   ),

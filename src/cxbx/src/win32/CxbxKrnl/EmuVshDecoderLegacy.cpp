@@ -7,7 +7,7 @@ using DWORD = unsigned long;
 static_assert(sizeof(DWORD) == sizeof(std::uint32_t));
 #endif
 
-#include "EmuVshDecoderInternal.h"
+#include "vsh_decoder_internal.h"
 
 #include <algorithm>
 #include <memory>
