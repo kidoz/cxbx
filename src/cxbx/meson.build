@@ -480,7 +480,7 @@ cxbx_hle_d3d8_dep = declare_dependency(
 
 cxbx_hle_runtime = static_library(
   'cxbx_hle_runtime',
-  'src/win32/CxbxKrnl/emulation_runtime.cpp',
+  'src/hle/runtime/emulation_runtime.cpp',
   include_directories : openxdk_inc,
   dependencies : [
     cxbx_core_dep,
