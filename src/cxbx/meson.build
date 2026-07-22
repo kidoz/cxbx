@@ -174,7 +174,7 @@ cxbx_hle_audio = static_library(
   'cxbx_hle_audio',
   'src/win32/CxbxKrnl/dsound_emulation.cpp',
   'src/win32/CxbxKrnl/xact_emulation.cpp',
-  include_directories : cxbx_inc,
+  include_directories : openxdk_inc,
   dependencies : [
     cxbx_pcm_dep,
     cxbx_platform_win32_dep,
@@ -198,7 +198,6 @@ cxbx_hle_audio_dep = declare_dependency(
     cxbx_xbox_adpcm_dep,
   ],
   link_args : '-ldsound',
-  include_directories : cxbx_inc,
 )
 
 cxbx_hle_kernel = static_library(
