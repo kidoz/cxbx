@@ -315,7 +315,7 @@ cxbx_hle_dispatch = static_library(
 
 cxbx_hle_dispatch_dep = declare_dependency(
   link_whole : cxbx_hle_dispatch,
-  dependencies : cxbx_trace_dep,
+  dependencies : cxbx_trace_dep.partial_dependency(links : true),
 )
 
 cxbx_yuy2 = static_library(
