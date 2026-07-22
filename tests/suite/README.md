@@ -230,7 +230,7 @@ and returns 0, so a title survives long enough to tell you *which export to
 implement next*. `kernel_trap` verifies this end-to-end. Caveat: the Xbox kernel
 ABI is `__stdcall`; for a multi-argument unimplemented export the stub cannot
 restore the caller stack, so the title may still destabilise after the warning —
-but you get the diagnostic first. `EmuKrnlLogging.h` also provides `KTRACE()` to
+but you get the diagnostic first. `kernel_logging.h` also provides `KTRACE()` to
 standardise per-thunk tracing.
 
 ## Graphics / NV2A — scope note

@@ -408,7 +408,7 @@ namespace xboxkrnl
 // * address 0x000000NN. Build with CXBX_TRAP_UNIMPLEMENTED=0 to restore the
 // * old crash-at-ordinal behaviour.
 // ******************************************************************
-#include "EmuKrnlLogging.h"
+#include "kernel_logging.h"
 
 #ifndef CXBX_TRAP_UNIMPLEMENTED
 #define CXBX_TRAP_UNIMPLEMENTED 1

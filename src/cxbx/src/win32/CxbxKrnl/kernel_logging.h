@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// EmuKrnlLogging.h - standardized, parseable kernel-HLE trace helpers.
+// kernel_logging.h - standardized, parseable kernel-HLE trace helpers.
 //
 // KTRACE() unifies the ad-hoc "#ifdef _DEBUG_TRACE printf(...)" pattern used
 // throughout kernel_emulation.cpp into a single line with a stable "KTRACE|" prefix, so
@@ -10,8 +10,8 @@
 //   KTRACE("IoCreateSymbolicLink", "link=%s dev=%s", link, dev);
 //     -> KTRACE| IoCreateSymbolicLink link=\Device\... dev=\Device\...
 
-#ifndef EMUKRNLLOGGING_H
-#define EMUKRNLLOGGING_H
+#ifndef KERNEL_LOGGING_H
+#define KERNEL_LOGGING_H
 
 #include <cstdio>
 
@@ -27,4 +27,4 @@
 // exactly which export a title needs even in a non-_DEBUG build.
 extern "C" void EmuUnimplementedKernelLog(int Ordinal, void *Caller);
 
-#endif // EMUKRNLLOGGING_H
+#endif // KERNEL_LOGGING_H
