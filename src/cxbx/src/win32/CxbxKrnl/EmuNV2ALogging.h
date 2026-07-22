@@ -7,7 +7,7 @@
 // model for hardware-init paths. This header keeps those handlers instrumented
 // with the same stable, machine-parseable trace grammar as the rest of the tree
 // (compare the "XT|" guest trace prefix in tests/suite and the "KTRACE|" kernel
-// prefix in EmuKrnlLogging.h). See .agents/contexts/services/NV2A_EMULATION_TRACING.md.
+// prefix in kernel_logging.h). See the project NV2A tracing guidance.
 //
 // The macros compile to no-ops unless CXBX_NV2A_TRACE is set, so keeping the
 // calls in hot MMIO paths is cheap by default.
