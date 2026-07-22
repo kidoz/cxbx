@@ -44,7 +44,7 @@ namespace xboxkrnl
 
 #include "emulation_runtime.h"
 #include "fs_emulation.h"
-#include "EmuNV2ALogging.h"
+#include "nv2a_logging.h"
 #include "core/d3d_push_buffer.h"
 #include "core/nv2a_capture.h"
 #include "core/nv2a_raster.h"
