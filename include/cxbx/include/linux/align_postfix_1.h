@@ -7,11 +7,11 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->win32->AlignPrefix1.h
+// *   cxbx->linux->align_postfix_1.h
 // *
-// *  This file is part of the cxbx project.
+// *  This file is part of the Cxbx project.
 // *
-// *  cxbx and cxbe are free software; you can redistribute them
+// *  Cxbx and cxbe are free software; you can redistribute them
 // *  and/or modify them under the terms of the GNU General Public
 // *  License as published by the Free Software Foundation; either
 // *  version 2 of the license, or (at your option) any later version.
@@ -31,17 +31,12 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#ifndef ALIGNPREFIX1_H
-#define ALIGNPREFIX1_H
+#ifndef ALIGNPOSFIX1_H
+#define ALIGNPOSFIX1_H
 
 // ******************************************************************
-// * Turn on 1-byte structure alignment
+// * 1-byte structure alignment
 // ******************************************************************
-#pragma pack(1)
-
-// ******************************************************************
-// * Tell the compiler not to complain about this *odd* circumstance
-// ******************************************************************
-#pragma warning(disable:4103)
+__attribute((packed))
 
 #endif
