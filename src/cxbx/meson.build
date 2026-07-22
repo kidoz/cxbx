@@ -366,8 +366,8 @@ cxbx_frontend_win32 = static_library(
 cxbx_frontend_win32_dep = declare_dependency(
   link_whole : cxbx_frontend_win32,
   dependencies : [
-    cxbx_platform_win32_dep,
-    cxbx_core_dep,
+    cxbx_platform_win32_dep.partial_dependency(link_args : true, links : true),
+    cxbx_core_dep.partial_dependency(links : true),
   ],
 )
 
