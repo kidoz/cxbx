@@ -341,7 +341,7 @@ cxbx_launcher_src = files(
 cxbx_frontend_win32 = static_library(
   'cxbx_frontend_win32',
   cxbx_launcher_src,
-  include_directories : cxbx_inc,
+  include_directories : cxbx_frontend_inc,
   dependencies : [
     cxbx_platform_win32_dep,
     cxbx_core_dep,
@@ -358,7 +358,6 @@ cxbx_frontend_win32_dep = declare_dependency(
     cxbx_platform_win32_dep,
     cxbx_core_dep,
   ],
-  include_directories : cxbx_inc,
 )
 
 cxbx_link_libs = [
