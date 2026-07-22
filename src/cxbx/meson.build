@@ -367,7 +367,7 @@ cxbx_vsh_components = static_library(
   'cxbx_vsh_components',
   files(
     'src/win32/CxbxKrnl/vsh_cpu_device_state.cpp',
-    'src/win32/CxbxKrnl/EmuVshShaderCreation.cpp',
+    'src/win32/CxbxKrnl/vsh_shader_creation.cpp',
     'src/win32/CxbxKrnl/EmuVshShaderRegistry.cpp',
   ),
   include_directories : cxbx_public_inc,
