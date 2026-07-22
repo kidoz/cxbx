@@ -204,7 +204,11 @@ cxbx_hle_kernel = static_library(
   'cxbx_hle_kernel',
   'src/win32/CxbxKrnl/file_emulation.cpp',
   'src/win32/CxbxKrnl/kernel_emulation.cpp',
-  include_directories : cxbx_inc,
+  include_directories : [
+    cxbx_win32_inc,
+    cxbx_krnl_inc,
+    openxdk_inc,
+  ],
   dependencies : cxbx_trace_dep,
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
@@ -219,7 +223,6 @@ cxbx_hle_kernel_dep = declare_dependency(
     cxbx_guest_tls_win32_dep,
     cxbx_trace_dep,
   ],
-  include_directories : cxbx_inc,
 )
 
 cxbx_hle_xapi = static_library(
