@@ -1,4 +1,4 @@
-// Host regression test for EmuStackPrecommit.h: guest-role threads must never
+// Host regression test for emu_stack_precommit.h: guest-role threads must never
 // depend on kernel stack growth, because while Xbox code runs the TEB stack
 // fields hold KPCR/TLS content and the kernel will not grow the stack on a
 // guard fault (Turok Evolution's intermittent early 0xC0000005 during CPU
@@ -8,7 +8,7 @@
 // StackBase exactly the way the Xbox FS role does and recurses far past the
 // originally committed region -- which only survives when no growth is needed.
 
-#include "EmuStackPrecommit.h"
+#include "emu_stack_precommit.h"
 
 #include <cstdio>
 #include <cstring>

@@ -1,4 +1,4 @@
-// EmuStackPrecommit.h - pre-commit a thread's entire stack reservation.
+// emu_stack_precommit.h - pre-commit a thread's entire stack reservation.
 //
 // Guest threads run Xbox code with the TEB's NtTib stack fields holding
 // KPCR/TLS content (the LDT-less FS convention: fs:[4] is the Xbox TLS
