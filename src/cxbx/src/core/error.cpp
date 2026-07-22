@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->core->Error.cpp
+// *   cxbx->core->error.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
@@ -31,7 +31,7 @@
 // *  All rights reserved
 // *
 // ******************************************************************
-#include "core/Error.h"
+#include "core/error.h"
 
 #include <cstring>
 

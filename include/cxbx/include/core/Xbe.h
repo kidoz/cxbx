@@ -34,7 +34,7 @@
 #ifndef XBE_H
 #define XBE_H
 
-#include "core/Error.h"
+#include "core/error.h"
 
 #include <cstdio>
 

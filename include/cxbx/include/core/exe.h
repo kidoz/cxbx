@@ -34,7 +34,7 @@
 #ifndef EXE_H
 #define EXE_H
 
-#include "core/Error.h"
+#include "core/error.h"
 
 // ******************************************************************
 // * Exe (PE) file object

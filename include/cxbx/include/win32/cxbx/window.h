@@ -34,7 +34,7 @@
 #ifndef WND_H
 #define WND_H
 
-#include "core/Error.h"
+#include "core/error.h"
 
 #define POINTER_64 __ptr64
 #include <windows.h>
