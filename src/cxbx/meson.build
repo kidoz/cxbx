@@ -448,8 +448,8 @@ cxbx_d3d8_public_inc = [
 
 cxbx_hle_d3d8 = static_library(
   'cxbx_hle_d3d8',
-  'src/win32/CxbxKrnl/d3d8_emulation.cpp',
-  'src/win32/CxbxKrnl/d3d8_conversion.cpp',
+  'src/hle/d3d8/d3d8_emulation.cpp',
+  'src/hle/d3d8/d3d8_conversion.cpp',
   include_directories : cxbx_d3d8_public_inc + [cxbx_vsh_private_inc, openxdk_inc],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
