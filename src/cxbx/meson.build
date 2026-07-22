@@ -138,7 +138,6 @@ cxbx_hle_input = static_library(
   'src/platform/win32/emulation_window_access.cpp',
   'src/platform/win32/host_input_lifecycle.cpp',
   'src/win32/CxbxKrnl/dinput_emulation.cpp',
-  include_directories : cxbx_inc,
   dependencies : [
     cxbx_host_input_win32_dep,
     cxbx_platform_win32_dep,
@@ -157,7 +156,6 @@ cxbx_hle_input_dep = declare_dependency(
     cxbx_runtime_win32_dep,
     cxbx_platform_win32_dep,
   ],
-  include_directories : cxbx_inc,
 )
 
 cxbx_trace = static_library(
