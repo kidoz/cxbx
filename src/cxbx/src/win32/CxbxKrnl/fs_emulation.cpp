@@ -48,7 +48,7 @@ namespace xboxkrnl
 
 #undef FIELD_OFFSET     // prevent macro redefinition warnings
 #include <windows.h>
-#include "EmuStackPrecommit.h"
+#include "emu_stack_precommit.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -118,7 +118,7 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
     // fault surfaces, the guard burns, and a deeper touch dies 0xC0000005
     // under the committed floor). Commit the whole reservation now, while the
     // host TIB is still authoritative, so growth is never needed. See
-    // EmuStackPrecommit.h.
+    // emu_stack_precommit.h.
     {
         SIZE_T Precommitted = EmuPrecommitThreadStack();
         if(Precommitted != 0)
