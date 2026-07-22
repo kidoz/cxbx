@@ -1,7 +1,7 @@
 # kernelaudit — kernel-ordinal regression guard
 
 Static source check that the emulator's `KernelThunkTable[]`
-(`src/cxbx/src/win32/CxbxKrnl/kernel_thunk.cpp`) matches the **authoritative Xbox
+(`src/cxbx/src/hle/dispatch/kernel_thunk.cpp`) matches the **authoritative Xbox
 kernel export ordinals** — the ABI every title imports against.
 
 ## Why

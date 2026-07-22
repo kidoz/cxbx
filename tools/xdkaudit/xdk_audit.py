@@ -37,7 +37,7 @@ class AuditError(RuntimeError):
 
 
 def parse_hle_database(repo_root: Path) -> list[dict[str, Any]]:
-    source = repo_root / "src/cxbx/src/win32/CxbxKrnl/hle_database.cpp"
+    source = repo_root / "src/cxbx/src/hle/dispatch/hle_database.cpp"
     try:
         text = source.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:

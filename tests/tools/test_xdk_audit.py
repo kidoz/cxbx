@@ -45,7 +45,7 @@ class XdkAuditTests(unittest.TestCase):
             repo = root / "repo"
             (xdk / "xbox/lib").mkdir(parents=True)
             (xdk / "Samples/Xbox/Graphics/Test").mkdir(parents=True)
-            (repo / "src/cxbx/src/win32/CxbxKrnl").mkdir(parents=True)
+            (repo / "src/cxbx/src/hle/dispatch").mkdir(parents=True)
             (xdk / "xbox/lib/d3d8.lib").write_bytes(b"archive")
             (xdk / "xbox/lib/d3d8i.lib").write_bytes(b"archive")
             (xdk / "Samples/Xbox/Graphics/Test/Test.vcproj").write_text(
@@ -53,7 +53,7 @@ class XdkAuditTests(unittest.TestCase):
                 "</VisualStudioProject>",
                 encoding="utf-8",
             )
-            (repo / "src/cxbx/src/win32/CxbxKrnl/hle_database.cpp").write_text(
+            (repo / "src/cxbx/src/hle/dispatch/hle_database.cpp").write_text(
                 '{ "D3D8", 1, 0, 5849, D3D8_1_0_5849, D3D8_1_0_5849_SIZE },',
                 encoding="utf-8",
             )
