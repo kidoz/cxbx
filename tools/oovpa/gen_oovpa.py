@@ -8,7 +8,7 @@ function's section bytes and relocations are extracted, and (offset, value)
 pairs are chosen at relocation-free offsets (relocated dwords differ per title
 image, so they can never be part of a signature). The result is an
 `SOOVPA<N>` (or, for offsets beyond 0xFF, `LOOVPA<N>`) initializer ready for a
-D3D8/DSound `.inl` file (struct layout: include/cxbx/include/win32/cxbxkrnl/OOVPA.h,
+D3D8/DSound `.inl` file (struct layout: include/cxbx/include/win32/cxbxkrnl/oovpa.h,
 matcher: EmuLocateFunction in emulation_runtime.cpp).
 
 Every signature is validated against verification binaries: it must match

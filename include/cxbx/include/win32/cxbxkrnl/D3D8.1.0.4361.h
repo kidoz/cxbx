@@ -34,7 +34,7 @@
 #ifndef D3D8_1_0_4361_H
 #define D3D8_1_0_4361_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern SOOVPA<10> IDirect3DDevice8_SetTextureState_TexCoordIndex_1_0_4361;
 

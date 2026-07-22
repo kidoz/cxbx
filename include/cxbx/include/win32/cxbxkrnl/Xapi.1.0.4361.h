@@ -34,7 +34,7 @@
 #ifndef XAPI_1_0_4361_H
 #define XAPI_1_0_4361_H
 
-#include "OOVPA.h"
+#include "oovpa.h"
 
 extern SOOVPA<7> XapiInitProcess_1_0_4361;
 extern OOVPATable XAPI_1_0_4361[];
