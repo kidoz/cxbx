@@ -294,7 +294,12 @@ cxbx_hle_dispatch = static_library(
   'cxbx_hle_dispatch',
   'src/win32/CxbxKrnl/hle_database.cpp',
   'src/win32/CxbxKrnl/kernel_thunk.cpp',
-  include_directories : cxbx_inc,
+  include_directories : [
+    cxbx_win32_inc,
+    cxbx_krnl_inc,
+    openxdk_inc,
+    cxbx_dxsdk_inc,
+  ],
   dependencies : cxbx_trace_dep,
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
@@ -306,7 +311,6 @@ cxbx_hle_dispatch = static_library(
 cxbx_hle_dispatch_dep = declare_dependency(
   link_whole : cxbx_hle_dispatch,
   dependencies : cxbx_trace_dep,
-  include_directories : cxbx_inc,
 )
 
 cxbx_yuy2 = static_library(
