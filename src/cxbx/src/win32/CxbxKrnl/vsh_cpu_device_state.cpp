@@ -1,4 +1,4 @@
-#include "EmuVshCpuDeviceState.h"
+#include "vsh_cpu_device_state.h"
 
 #include <algorithm>
 #include <array>

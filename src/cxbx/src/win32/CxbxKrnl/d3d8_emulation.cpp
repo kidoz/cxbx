@@ -46,7 +46,7 @@ namespace xboxkrnl
 #include "core/VertexShaderTranslator.h"
 #include "vsh_decoder.h"
 #include "vsh_decoder_internal.h"
-#include "EmuVshCpuDeviceState.h"
+#include "vsh_cpu_device_state.h"
 #include "EmuVshShaderCreation.h"
 #include "EmuVshShaderRegistry.h"
 #include "fs_emulation.h"
