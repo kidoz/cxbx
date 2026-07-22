@@ -102,7 +102,6 @@ cxbx_runtime_win32 = static_library(
   'src/platform/win32/shared_video_config.cpp',
   'src/platform/win32/shared_runtime_storage.cpp',
   'src/win32/CxbxKrnl/ntdll_emulation.cpp',
-  include_directories : cxbx_inc,
   dependencies : cxbx_platform_win32_dep,
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
@@ -114,7 +113,6 @@ cxbx_runtime_win32 = static_library(
 cxbx_runtime_win32_dep = declare_dependency(
   link_whole : cxbx_runtime_win32,
   dependencies : cxbx_platform_win32_dep,
-  include_directories : cxbx_inc,
 )
 
 cxbx_guest_tls_win32 = static_library(
