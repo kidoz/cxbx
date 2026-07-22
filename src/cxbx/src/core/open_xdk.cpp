@@ -7,7 +7,7 @@
 // *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
-// *   cxbx->core->OpenXDK.cpp
+// *   cxbx->core->open_xdk.cpp
 // *
 // *  This file is part of the cxbx project.
 // *
