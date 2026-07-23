@@ -3,9 +3,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace cxbx::nv2a
 {
+
+struct RamhtLookupResult
+{
+    std::uint32_t instance = 0;
+    // Raw RAMIN class byte; callers own compatibility fallback policy.
+    std::uint32_t objectClass = 0;
+};
 
 class DeviceState final
 {
@@ -16,6 +24,9 @@ class DeviceState final
     [[nodiscard]] bool IsRaminOffset(std::uint32_t offset) const noexcept;
     [[nodiscard]] std::uint32_t ReadRamin32(std::uint32_t offset) const noexcept;
     void WriteRamin32(std::uint32_t offset, std::uint32_t value) noexcept;
+    [[nodiscard]] std::optional<RamhtLookupResult> LookupRamht(
+        std::uint32_t handle, std::uint32_t ramht,
+        std::uint32_t channelId) const noexcept;
 
     [[nodiscard]] const void* RaminData() const noexcept;
     [[nodiscard]] constexpr std::uint32_t RaminByteSize() const noexcept

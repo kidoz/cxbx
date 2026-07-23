@@ -19,6 +19,16 @@ bool ExpectEqual(std::uint32_t actual, std::uint32_t expected,
     return false;
 }
 
+void WriteRamhtEntry(cxbx::nv2a::DeviceState& state,
+                     std::uint32_t tableOffset, std::uint32_t entryIndex,
+                     std::uint32_t handle, std::uint32_t context) noexcept
+{
+    const std::uint32_t entryOffset =
+        cxbx::nv2a::DeviceState::RaminBase + tableOffset + entryIndex * 8;
+    state.WriteRamin32(entryOffset, handle);
+    state.WriteRamin32(entryOffset + 4, context);
+}
+
 } // namespace
 
 int main() noexcept
@@ -75,6 +85,70 @@ int main() noexcept
     state.WriteRamin32(end, 0xFFFFFFFFu);
     if(!ExpectEqual(state.ReadRamin32(lastDword), 0xAABBCCDDu,
                     "partial or out-of-range writes must be ignored"))
+    {
+        return 1;
+    }
+
+    constexpr std::uint32_t handle = 0x00000123u;
+    constexpr std::uint32_t objectInstance = 0x00000400u;
+    WriteRamhtEntry(state, 0, 0x123u, handle,
+                    0x80000000u | (objectInstance >> 4));
+    state.WriteRamin32(first + objectInstance, 0x00000097u);
+
+    const auto directLookup = state.LookupRamht(handle, 0, 0);
+    if(!directLookup ||
+       !ExpectEqual(directLookup->instance, objectInstance,
+                    "direct RAMHT object instance") ||
+       !ExpectEqual(directLookup->objectClass, 0x97u,
+                    "direct RAMHT object class"))
+    {
+        return 1;
+    }
+
+    constexpr std::uint32_t channelThreeHash = 0x0A3u;
+    WriteRamhtEntry(state, 0, channelThreeHash, handle, objectInstance >> 4);
+    WriteRamhtEntry(state, 0, channelThreeHash + 1, handle + 1,
+                    0x80000000u | (objectInstance >> 4));
+    constexpr std::uint32_t zeroClassInstance = 0x00000500u;
+    WriteRamhtEntry(state, 0, channelThreeHash + 2, handle,
+                    0x80000000u | (zeroClassInstance >> 4));
+
+    const auto collisionLookup = state.LookupRamht(handle, 0, 3);
+    if(!collisionLookup ||
+       !ExpectEqual(collisionLookup->instance, zeroClassInstance,
+                    "probed RAMHT object instance") ||
+       !ExpectEqual(collisionLookup->objectClass, 0,
+                    "RAMHT must preserve a raw zero object class"))
+    {
+        return 1;
+    }
+
+    constexpr std::uint32_t cappedHandle = 0x00000321u;
+    constexpr std::uint32_t cappedHash = 0x121u;
+    WriteRamhtEntry(state, 0, cappedHash + 16, cappedHandle,
+                    0x80000000u | (objectInstance >> 4));
+    if(state.LookupRamht(cappedHandle, 0, 0))
+    {
+        std::fputs("RAMHT lookup exceeded its 16-entry probe bound\n", stderr);
+        return 1;
+    }
+
+    constexpr std::uint32_t configuredRamht = 0x00010010u;
+    constexpr std::uint32_t configuredTableOffset = 0x00001000u;
+    constexpr std::uint32_t foldedHandle = 0xABCDEF01u;
+    constexpr std::uint32_t foldedHash = 0x174u;
+    constexpr std::uint32_t configuredInstance = 0x00000600u;
+    WriteRamhtEntry(state, configuredTableOffset, foldedHash, foldedHandle,
+                    0x80000000u | (configuredInstance >> 4));
+    state.WriteRamin32(first + configuredInstance, 0x0000003Du);
+
+    const auto configuredLookup =
+        state.LookupRamht(foldedHandle, configuredRamht, 2);
+    if(!configuredLookup ||
+       !ExpectEqual(configuredLookup->instance, configuredInstance,
+                    "configured RAMHT object instance") ||
+       !ExpectEqual(configuredLookup->objectClass, 0x3Du,
+                    "configured RAMHT object class"))
     {
         return 1;
     }
