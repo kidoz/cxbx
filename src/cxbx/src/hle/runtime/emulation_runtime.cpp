@@ -1581,56 +1581,39 @@ extern "C" void EmuNv2aEnableGpuInterrupts()
 
 static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 {
-    ULONG Ramht = EmuNv2aCachedRegister(NV_PFIFO_RAMHT, 0);
-    ULONG RamhtBase = ((Ramht & 0x000001F0) >> 4) << 12;
-    ULONG RamhtSize = 1 << (((Ramht & 0x00030000) >> 16) + 12);
-    ULONG Bits = 11;
-    ULONG Hash = 0;
-    ULONG TempHandle = Handle;
-
-    while((1ul << (Bits + 1)) < RamhtSize && Bits < 15)
-        Bits++;
-
-    while(TempHandle != 0)
+    const ULONG Ramht = EmuNv2aCachedRegister(NV_PFIFO_RAMHT, 0);
+    const ULONG ChannelId =
+        EmuNv2aCachedRegister(EmuNv2aPfifoCache1Push1, 0) & 0x1F;
+    const auto Lookup = g_EmuNv2aDeviceState.LookupRamht(
+        static_cast<std::uint32_t>(Handle), static_cast<std::uint32_t>(Ramht),
+        static_cast<std::uint32_t>(ChannelId));
+    if(!Lookup)
     {
-        Hash ^= TempHandle & ((1ul << Bits) - 1);
-        TempHandle >>= Bits;
+        return false;
     }
 
-    if(Bits > 4)
-        Hash ^= (EmuNv2aCachedRegister(EmuNv2aPfifoCache1Push1, 0) & 0x1F) << (Bits - 4);
-
-    Hash &= (RamhtSize / 8) - 1;
-
-    for(ULONG Probe = 0; Probe < 16 && (Probe * 8) < RamhtSize; Probe++)
+    const ULONG ObjectInstance = static_cast<ULONG>(Lookup->instance);
+    ULONG ObjectClass = static_cast<ULONG>(Lookup->objectClass);
+    if(ObjectClass == 0)
     {
-        ULONG EntryOffset = EmuNv2aRaminBase + RamhtBase + (((Hash + Probe) & ((RamhtSize / 8) - 1)) * 8);
-        ULONG EntryHandle = EmuNv2aReadRamin32(EntryOffset);
-        ULONG EntryContext = EmuNv2aReadRamin32(EntryOffset + 4);
-
-        if(EntryHandle != Handle || (EntryContext & 0x80000000) == 0)
-            continue;
-
-        ULONG ObjectInstance = (EntryContext & 0x0000FFFF) << 4;
-        ULONG ObjectClass = EmuNv2aReadRamin32(EmuNv2aRaminBase + ObjectInstance) & 0xFF;
-
-        if(ObjectClass == 0)
-            ObjectClass = NV_CLASS_KELVIN;
-
-        if(Instance != NULL)
-            *Instance = ObjectInstance;
-
-        if(Class != NULL)
-            *Class = ObjectClass;
-
-        NV2A_TRACE_RAMHT(Handle, ObjectInstance, ObjectClass);
-        cxbx::trace::RecordNv2aRamht(static_cast<std::uint32_t>(Handle),
-                                     static_cast<std::uint32_t>(ObjectInstance),
-                                     static_cast<std::uint32_t>(ObjectClass));
-        return true;
+        ObjectClass = NV_CLASS_KELVIN;
     }
 
-    return false;
+    if(Instance != NULL)
+    {
+        *Instance = ObjectInstance;
+    }
+
+    if(Class != NULL)
+    {
+        *Class = ObjectClass;
+    }
+
+    NV2A_TRACE_RAMHT(Handle, ObjectInstance, ObjectClass);
+    cxbx::trace::RecordNv2aRamht(static_cast<std::uint32_t>(Handle),
+                                 static_cast<std::uint32_t>(ObjectInstance),
+                                 static_cast<std::uint32_t>(ObjectClass));
+    return true;
 }
 
 // ---------------------------------------------------------------------------
