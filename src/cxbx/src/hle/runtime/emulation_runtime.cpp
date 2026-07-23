@@ -598,8 +598,6 @@ static void EmuStoreMmioRegister(ULONG Address, ULONG Value)
 
 static const ULONG EmuNv2aMmioBase = NV2A_XBOX_MMIO_BASE;
 static const ULONG EmuNv2aMmioEnd = NV2A_XBOX_MMIO_BASE + NV2A_MMIO_SIZE - 1;
-static const ULONG EmuNv2aRaminBase = cxbx::nv2a::DeviceState::RaminBase;
-static const ULONG EmuNv2aRaminSize = cxbx::nv2a::DeviceState::RaminSize;
 static const ULONG EmuNv2aPmcIntrPfifo = 0x00000100;
 static const ULONG EmuNv2aPmcIntrPgraph = 0x00001000;
 static const ULONG EmuNv2aPmcIntrPcrtc = 0x01000000;
@@ -3776,31 +3774,35 @@ static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
 static ULONG EmuNv2aResolveDmaBase(ULONG Handle)
 {
     if(Handle == 0)
+    {
         return 0;
+    }
 
     ULONG Instance = Handle;
-    ULONG Class = 0;
     // Context-DMA methods are relocated from a RAMHT handle to their RAMIN
     // instance by EmuNv2aHandlePgraphMethod before render state sees them.
     // Callers outside that path can still supply the original handle, so
     // support both forms here.
-    if(!EmuNv2aRamhtLookup(Handle, &Instance, &Class))
+    const bool ResolvedFromRamht =
+        EmuNv2aRamhtLookup(Handle, &Instance, NULL);
+    const auto DmaObject = g_EmuNv2aDeviceState.DecodeDmaObject(
+        static_cast<std::uint32_t>(Instance));
+    if(!DmaObject)
     {
-        if(Instance + 12 > EmuNv2aRaminSize)
-            return 0;
-
-        const ULONG ObjectClass =
-            EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance) & 0x00000FFF;
-        if(ObjectClass != 2 && ObjectClass != 3 && ObjectClass != 0x3D)
-            return 0;
+        return 0;
     }
 
-    if(Instance + 12 > EmuNv2aRaminSize)
-        return 0;
+    if(!ResolvedFromRamht)
+    {
+        const ULONG ObjectClass =
+            static_cast<ULONG>(DmaObject->ObjectClass());
+        if(ObjectClass != 2 && ObjectClass != 3 && ObjectClass != 0x3D)
+        {
+            return 0;
+        }
+    }
 
-    ULONG Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance);
-    ULONG Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 8);
-    return (Frame & 0xFFFFF000) + ((Flags >> 20) & 0x00000FFF);
+    return static_cast<ULONG>(DmaObject->AdjustedAddress());
 }
 
 static ULONG EmuNv2aTextureDmaHandle(ULONG Format)
@@ -3833,15 +3835,17 @@ static void EmuNv2aWriteBackendSemaphore(ULONG Data)
         DmaInstance = ResolvedInstance;
     }
 
-    if(DmaInstance <= EmuNv2aRaminSize - 12)
+    const auto DmaObject = g_EmuNv2aDeviceState.DecodeDmaObject(
+        static_cast<std::uint32_t>(DmaInstance));
+    if(DmaObject)
     {
-        Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + DmaInstance);
-        Limit = EmuNv2aReadRamin32(EmuNv2aRaminBase + DmaInstance + 4);
-        Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + DmaInstance + 8);
+        Flags = static_cast<ULONG>(DmaObject->rawFlags);
+        Limit = static_cast<ULONG>(DmaObject->limit);
+        Frame = static_cast<ULONG>(DmaObject->rawFrame);
         // NV_DMA_IN_MEMORY object: word0 = class | adjust<<20, word2 = page
         // frame | target bits. The XDK D3D semaphore object carries the
         // sub-page offset in adjust, so honor it (frame|class-bits is wrong).
-        Base = (Frame & 0xFFFFF000) + ((Flags >> 20) & 0x00000FFF);
+        Base = static_cast<ULONG>(DmaObject->AdjustedAddress());
     }
 
     if(g_EmuNv2aSemaphoreOffset > Limit ||
@@ -7373,21 +7377,27 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
 
 static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)
 {
-    ULONG Instance = (EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_INSTANCE, 0) & 0x0000FFFF) << 4;
-
-    if(Instance + 12 > EmuNv2aRaminSize)
+    const ULONG Instance =
+        (EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_INSTANCE, 0) &
+         0x0000FFFF)
+        << 4;
+    const auto DmaObject = g_EmuNv2aDeviceState.DecodeDmaObject(
+        static_cast<std::uint32_t>(Instance));
+    if(!DmaObject)
+    {
         return false;
-
-    ULONG Flags = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance);
-    ULONG DmaLimit = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 4);
-    ULONG Frame = EmuNv2aReadRamin32(EmuNv2aRaminBase + Instance + 8);
-    ULONG Address = (Frame & 0x07FFFFFF) | (Flags & 0x00000FFF);
+    }
 
     if(BaseAddress != NULL)
-        *BaseAddress = Address;
+    {
+        *BaseAddress =
+            static_cast<ULONG>(DmaObject->LegacyPusherAddress());
+    }
 
     if(Limit != NULL)
-        *Limit = DmaLimit;
+    {
+        *Limit = static_cast<ULONG>(DmaObject->limit);
+    }
 
     return true;
 }
