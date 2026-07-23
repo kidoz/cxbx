@@ -1,3 +1,18 @@
+cxbx_yuy2 = static_library(
+  'cxbx_yuy2',
+  'src/core/yuy2_converter.cpp',
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_yuy2_dep = declare_dependency(
+  link_with : cxbx_yuy2,
+  include_directories : cxbx_public_inc,
+)
+
+if build_host_asan
+  subdir_done()
+endif
+
 cxbx_core = static_library(
   'cxbx_core',
   'src/core/error.cpp',
@@ -323,17 +338,6 @@ cxbx_hle_dispatch = static_library(
 cxbx_hle_dispatch_dep = declare_dependency(
   link_whole : cxbx_hle_dispatch,
   dependencies : cxbx_trace_dep.partial_dependency(links : true),
-)
-
-cxbx_yuy2 = static_library(
-  'cxbx_yuy2',
-  'src/core/yuy2_converter.cpp',
-  include_directories : cxbx_public_inc,
-)
-
-cxbx_yuy2_dep = declare_dependency(
-  link_with : cxbx_yuy2,
-  include_directories : cxbx_public_inc,
 )
 
 cxbx_launcher_src = files(
