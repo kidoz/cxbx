@@ -3,13 +3,13 @@
 #include <array>
 #include <climits>
 #include <cstring>
+#include <limits>
 
 namespace cxbx::audio
 {
 namespace
 {
 constexpr std::size_t kHeaderBytesPerChannel = 4;
-constexpr std::size_t kEncodedBytesPerChannelBlock = 36;
 
 constexpr std::array<int, 16> kIndexAdjust = {
     -1,
@@ -154,25 +154,41 @@ std::int16_t DecodeNibble(DecoderState& state, std::uint8_t nibble) noexcept
     const int step = kStepTable[state.StepIndex];
     int difference = step >> 3;
     if((nibble & 4) != 0)
+    {
         difference += step;
+    }
     if((nibble & 2) != 0)
+    {
         difference += step >> 1;
+    }
     if((nibble & 1) != 0)
+    {
         difference += step >> 2;
+    }
     if((nibble & 8) != 0)
+    {
         difference = -difference;
+    }
 
     state.Predictor += difference;
     if(state.Predictor > INT16_MAX)
+    {
         state.Predictor = INT16_MAX;
+    }
     else if(state.Predictor < INT16_MIN)
+    {
         state.Predictor = INT16_MIN;
+    }
 
     state.StepIndex += kIndexAdjust[nibble & 0x0f];
     if(state.StepIndex < 0)
+    {
         state.StepIndex = 0;
+    }
     else if(state.StepIndex >= static_cast<int>(kStepTable.size()))
+    {
         state.StepIndex = static_cast<int>(kStepTable.size()) - 1;
+    }
 
     return static_cast<std::int16_t>(state.Predictor);
 }
@@ -182,14 +198,17 @@ bool DecodeMonoBlock(const std::uint8_t* source,
 {
     DecoderState state{};
     if(!ReadHeader(source, state))
+    {
         return false;
+    }
 
     WriteInt16(destination, static_cast<std::int16_t>(state.Predictor));
     source += kHeaderBytesPerChannel;
-    for(std::size_t sample = 1; sample < kXboxAdpcmSamplesPerBlock; ++sample)
+    for(std::size_t sample = 0; sample < kXboxAdpcmSamplesPerBlock - 1;
+        ++sample)
     {
-        const std::uint8_t packed = source[(sample - 1) / 2];
-        const unsigned shift = ((sample - 1) & 1) != 0 ? 4 : 0;
+        const std::uint8_t packed = source[sample / 2];
+        const unsigned shift = (sample & 1) != 0 ? 4 : 0;
         WriteInt16(destination, DecodeNibble(state, packed >> shift));
     }
     return true;
@@ -210,10 +229,11 @@ bool DecodeStereoBlock(const std::uint8_t* source,
     WriteInt16(destination, static_cast<std::int16_t>(right.Predictor));
     source += 2 * kHeaderBytesPerChannel;
 
-    for(std::size_t sample = 1; sample < kXboxAdpcmSamplesPerBlock; ++sample)
+    for(std::size_t sample = 0; sample < kXboxAdpcmSamplesPerBlock - 1;
+        ++sample)
     {
-        const std::size_t group = (sample - 1) / 8;
-        const std::size_t nibble = (sample - 1) % 8;
+        const std::size_t group = sample / 8;
+        const std::size_t nibble = sample % 8;
         const unsigned shift = static_cast<unsigned>((nibble & 1) * 4);
         const std::size_t byte = nibble / 2;
         const std::uint8_t* groupSource = source + group * 8;
@@ -225,19 +245,77 @@ bool DecodeStereoBlock(const std::uint8_t* source,
 }
 } // namespace
 
+std::size_t XboxAdpcmEncodedBlockBytes(std::size_t channels) noexcept
+{
+    if(channels == 0 || channels > 2)
+    {
+        return 0;
+    }
+    return kXboxAdpcmEncodedBytesPerChannelBlock * channels;
+}
+
+std::size_t XboxAdpcmDecodedBlockBytes(std::size_t channels) noexcept
+{
+    if(channels == 0 || channels > 2)
+    {
+        return 0;
+    }
+    return kXboxAdpcmSamplesPerBlock * channels * sizeof(std::int16_t);
+}
+
+std::size_t XboxAdpcmGuestToPcmBytes(std::size_t guestBytes,
+                                     std::size_t channels) noexcept
+{
+    const std::size_t encodedBlockBytes = XboxAdpcmEncodedBlockBytes(channels);
+    const std::size_t decodedBlockBytes = XboxAdpcmDecodedBlockBytes(channels);
+    if(encodedBlockBytes == 0 || decodedBlockBytes == 0)
+    {
+        return 0;
+    }
+
+    const std::size_t blockCount = guestBytes / encodedBlockBytes;
+    if(blockCount > std::numeric_limits<std::size_t>::max() /
+                        decodedBlockBytes)
+    {
+        return 0;
+    }
+    return blockCount * decodedBlockBytes;
+}
+
+std::size_t XboxAdpcmPcmToGuestBytes(std::size_t pcmBytes,
+                                     std::size_t channels) noexcept
+{
+    const std::size_t encodedBlockBytes = XboxAdpcmEncodedBlockBytes(channels);
+    const std::size_t decodedBlockBytes = XboxAdpcmDecodedBlockBytes(channels);
+    if(encodedBlockBytes == 0 || decodedBlockBytes == 0)
+    {
+        return 0;
+    }
+
+    const std::size_t blockCount = pcmBytes / decodedBlockBytes;
+    if(blockCount > std::numeric_limits<std::size_t>::max() /
+                        encodedBlockBytes)
+    {
+        return 0;
+    }
+    return blockCount * encodedBlockBytes;
+}
+
 std::size_t XboxAdpcmDecodedBytes(std::size_t sourceBytes,
                                   std::size_t channels) noexcept
 {
-    if(channels == 0 || channels > 2)
+    const std::size_t encodedBlockBytes = XboxAdpcmEncodedBlockBytes(channels);
+    if(encodedBlockBytes == 0)
+    {
         return 0;
+    }
 
-    const std::size_t encodedBlockBytes =
-        kEncodedBytesPerChannelBlock * channels;
     if(sourceBytes == 0 || sourceBytes % encodedBlockBytes != 0)
+    {
         return 0;
+    }
 
-    const std::size_t blockCount = sourceBytes / encodedBlockBytes;
-    return blockCount * kXboxAdpcmSamplesPerBlock * channels * sizeof(std::int16_t);
+    return XboxAdpcmGuestToPcmBytes(sourceBytes, channels);
 }
 
 bool DecodeXboxAdpcm(const std::uint8_t* source,
@@ -253,8 +331,7 @@ bool DecodeXboxAdpcm(const std::uint8_t* source,
         return false;
     }
 
-    const std::size_t encodedBlockBytes =
-        kEncodedBytesPerChannelBlock * channels;
+    const std::size_t encodedBlockBytes = XboxAdpcmEncodedBlockBytes(channels);
     std::uint8_t* output = destination;
     for(std::size_t offset = 0; offset < sourceBytes; offset += encodedBlockBytes)
     {
