@@ -20,6 +20,17 @@ cxbx_nv2a_capture_dep = declare_dependency(
   include_directories : cxbx_public_inc,
 )
 
+cxbx_nv2a_device = static_library(
+  'cxbx_nv2a_device',
+  'src/hw/nv2a/nv2a_device_state.cpp',
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_nv2a_device_dep = declare_dependency(
+  link_with : cxbx_nv2a_device,
+  include_directories : cxbx_public_inc,
+)
+
 cxbx_xbox_adpcm = static_library(
   'cxbx_xbox_adpcm',
   'src/core/xbox_adpcm_decoder.cpp',
@@ -502,6 +513,7 @@ cxbx_hle_runtime = static_library(
     cxbx_core_dep,
     cxbx_host_input_win32_dep,
     cxbx_nv2a_capture_dep,
+    cxbx_nv2a_device_dep,
     cxbx_platform_win32_dep,
     cxbx_trace_dep,
   ],
@@ -522,6 +534,7 @@ cxbx_hle_runtime_dep = declare_dependency(
     cxbx_hle_xapi_dep.partial_dependency(link_args : true, links : true),
     cxbx_host_input_win32_dep.partial_dependency(links : true),
     cxbx_nv2a_capture_dep.partial_dependency(links : true),
+    cxbx_nv2a_device_dep.partial_dependency(links : true),
     cxbx_trace_dep.partial_dependency(links : true),
     cxbx_vsh_runtime_dep.partial_dependency(links : true),
   ],
@@ -583,6 +596,7 @@ cxbx_runtime = shared_library(
     cxbx_platform_win32_dep,
     cxbx_core_dep,
     cxbx_nv2a_capture_dep,
+    cxbx_nv2a_device_dep,
     cxbx_trace_dep,
     cxbx_vsh_runtime_dep,
     cxbx_yuy2_dep,
