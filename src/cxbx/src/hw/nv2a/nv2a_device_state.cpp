@@ -21,6 +21,10 @@ constexpr std::uint32_t RamhtMaximumHashBits = 15;
 constexpr std::uint32_t RamhtChannelHashBias = 4;
 constexpr std::uint32_t RaminPageShift = 12;
 constexpr std::uint32_t RamhtInstanceShift = 4;
+constexpr std::uint32_t DmaObjectWordSize = sizeof(std::uint32_t);
+constexpr std::uint32_t DmaObjectWordCount = 3;
+constexpr std::uint32_t DmaObjectByteSize =
+    DmaObjectWordSize * DmaObjectWordCount;
 
 } // namespace
 
@@ -123,6 +127,22 @@ std::optional<RamhtLookupResult> DeviceState::LookupRamht(
     }
 
     return std::nullopt;
+}
+
+std::optional<DmaObjectDescriptor> DeviceState::DecodeDmaObject(
+    std::uint32_t instance) const noexcept
+{
+    if(instance > RaminSize - DmaObjectByteSize)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint32_t descriptorOffset = RaminBase + instance;
+    return DmaObjectDescriptor{
+        ReadRamin32(descriptorOffset),
+        ReadRamin32(descriptorOffset + DmaObjectWordSize),
+        ReadRamin32(descriptorOffset + DmaObjectWordSize * 2),
+    };
 }
 
 const void* DeviceState::RaminData() const noexcept

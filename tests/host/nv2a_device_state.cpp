@@ -153,5 +153,58 @@ int main() noexcept
         return 1;
     }
 
+    constexpr std::uint32_t dmaInstance = 0x00000700u;
+    constexpr std::uint32_t dmaFlags = 0xABC3003Du;
+    constexpr std::uint32_t dmaLimit = 0x001FFFFFu;
+    constexpr std::uint32_t dmaFrame = 0x81234000u;
+    state.WriteRamin32(first + dmaInstance, dmaFlags);
+    state.WriteRamin32(first + dmaInstance + 4, dmaLimit);
+    state.WriteRamin32(first + dmaInstance + 8, dmaFrame);
+
+    const auto dmaObject = state.DecodeDmaObject(dmaInstance);
+    if(!dmaObject ||
+       !ExpectEqual(dmaObject->rawFlags, dmaFlags,
+                    "DMA object raw flags") ||
+       !ExpectEqual(dmaObject->limit, dmaLimit, "DMA object limit") ||
+       !ExpectEqual(dmaObject->rawFrame, dmaFrame,
+                    "DMA object raw frame") ||
+       !ExpectEqual(dmaObject->ObjectClass(), 0x3Du,
+                    "DMA object class") ||
+       !ExpectEqual(dmaObject->AdjustedAddress(), 0x81234ABCu,
+                    "DMA object adjusted address") ||
+       !ExpectEqual(dmaObject->LegacyPusherAddress(), 0x0123403Du,
+                    "DMA object legacy pusher address"))
+    {
+        return 1;
+    }
+
+    const auto misalignedDmaObject = state.DecodeDmaObject(dmaInstance + 1);
+    if(!misalignedDmaObject ||
+       !ExpectEqual(misalignedDmaObject->AdjustedAddress(), 0x81234ABCu,
+                    "legacy containing-dword DMA object access"))
+    {
+        return 1;
+    }
+
+    constexpr std::uint32_t lastDmaInstance =
+        cxbx::nv2a::DeviceState::RaminSize - 12;
+    state.WriteRamin32(first + lastDmaInstance, 0x00200003u);
+    state.WriteRamin32(first + lastDmaInstance + 4, 0x00000FFFu);
+    state.WriteRamin32(first + lastDmaInstance + 8, 0x00123000u);
+    const auto lastDmaObject = state.DecodeDmaObject(lastDmaInstance);
+    if(!lastDmaObject ||
+       !ExpectEqual(lastDmaObject->AdjustedAddress(), 0x00123002u,
+                    "last bounded DMA object"))
+    {
+        return 1;
+    }
+
+    if(state.DecodeDmaObject(lastDmaInstance + 1) ||
+       state.DecodeDmaObject(cxbx::nv2a::DeviceState::RaminSize))
+    {
+        std::fputs("out-of-range DMA object decode must fail\n", stderr);
+        return 1;
+    }
+
     return 0;
 }
