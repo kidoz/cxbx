@@ -22,6 +22,19 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_pcm_test = executable(
+    'host_pcm_test',
+    'pcm_conversion.cpp',
+    dependencies : cxbx_pcm_dep,
+  )
+
+  test(
+    'host-pcm-conversion',
+    host_pcm_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_asan_runtime_probe = executable(
     'host_asan_runtime_probe',
     'asan_runtime_probe.cpp',
