@@ -28,6 +28,13 @@ host_nv2a_pfifo_test = executable(
   install : false,
 )
 
+host_nv2a_pgraph_surface_test = executable(
+  'host_nv2a_pgraph_surface_test',
+  'nv2a_pgraph_surface.cpp',
+  dependencies : cxbx_nv2a_pgraph_surface_dep,
+  install : false,
+)
+
 if build_host_asan
   test(
     'host-yuy2-conversion',
@@ -46,6 +53,13 @@ if build_host_asan
   test(
     'host-nv2a-pfifo',
     host_nv2a_pfifo_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
+  test(
+    'host-nv2a-pgraph-surface',
+    host_nv2a_pgraph_surface_test,
     env : cxbx_host_asan_test_env,
     suite : 'sanitizer',
   )
@@ -197,6 +211,7 @@ else
   test('host-yuy2-conversion', host_yuy2_test)
   test('host-nv2a-device-state', host_nv2a_device_state_test)
   test('host-nv2a-pfifo', host_nv2a_pfifo_test)
+  test('host-nv2a-pgraph-surface', host_nv2a_pgraph_surface_test)
 endif
 
 host_d3d_present_test = executable(

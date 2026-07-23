@@ -52,6 +52,7 @@ namespace xboxkrnl
 #include "core/trace.h"
 #include "hw/nv2a_device_state.h"
 #include "hw/nv2a_pfifo.h"
+#include "hw/nv2a_pgraph_surface.h"
 #include "shared_runtime_state.h"
 
 // ******************************************************************
@@ -677,6 +678,7 @@ static const ULONG EmuAciBusMasterControlRun = 0x00000001;
 static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 
 static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
+static cxbx::nv2a::PgraphSurfaceState g_EmuNv2aSurfaceState{};
 static ULONG g_EmuNv2aSubchannelClass[8] = {};
 
 static bool EmuNv2aIsMmioAddress(ULONG Address)
@@ -1767,15 +1769,7 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // edge-function triangle raster writing straight into the surface. No z-buffer,
 // no texturing, no vertex program yet. Gated behind CXBX_NV2A_RASTER so it
 // cannot perturb the working HLE-D3D8 titles or the conformance suite.
-#define NV097_SET_CONTEXT_DMA_COLOR         0x0194u
-#define NV097_SET_CONTEXT_DMA_VERTEX_A      0x019Cu
-#define NV097_SET_CONTEXT_DMA_ZETA          0x0198u
-#define NV097_SET_SURFACE_CLIP_HORIZONTAL   0x0200u
-#define NV097_SET_SURFACE_CLIP_VERTICAL     0x0204u
-#define NV097_SET_SURFACE_FORMAT            0x0208u
-#define NV097_SET_SURFACE_PITCH             0x020Cu
-#define NV097_SET_SURFACE_COLOR_OFFSET      0x0210u
-#define NV097_SET_SURFACE_ZETA_OFFSET       0x0214u
+#define NV097_SET_CONTEXT_DMA_VERTEX_A         0x019Cu
 #define NV097_SET_ALPHA_TEST_ENABLE         0x0300u
 #define NV097_SET_BLEND_ENABLE              0x0304u
 #define NV097_SET_DEPTH_TEST_ENABLE         0x030Cu
@@ -1827,11 +1821,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_CONTEXT_DMA_SEMAPHORE     0x01A4u
 #define NV097_SET_SEMAPHORE_OFFSET          0x1D6Cu
 #define NV097_BACK_END_WRITE_SEMAPHORE_RELEASE 0x1D70u
-#define NV097_SET_ZSTENCIL_CLEAR_VALUE      0x1D8Cu
-#define NV097_SET_COLOR_CLEAR_VALUE         0x1D90u
-#define NV097_CLEAR_SURFACE                 0x1D94u
-#define NV097_SET_CLEAR_RECT_HORIZONTAL     0x1D98u
-#define NV097_SET_CLEAR_RECT_VERTICAL       0x1D9Cu
 #define EmuNv2aVertexAttrCount              16u
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
@@ -1858,17 +1847,9 @@ struct EmuNv2aVertexArrayState
 };
 
 static EmuNv2aVertexArrayState g_EmuNv2aVertexArray[EmuNv2aVertexAttrCount] = {};
-static ULONG g_EmuNv2aContextDmaColor = 0;
 static ULONG g_EmuNv2aContextDmaVertex = 0;
 static ULONG g_EmuNv2aContextDmaSemaphore = 0;
 static ULONG g_EmuNv2aSemaphoreOffset = 0;
-static ULONG g_EmuNv2aSurfaceColorOffset = 0;
-static ULONG g_EmuNv2aSurfacePitchColor = 0;
-static ULONG g_EmuNv2aSurfaceFormat = 0;
-static ULONG g_EmuNv2aSurfaceClipX = 0;
-static ULONG g_EmuNv2aSurfaceClipY = 0;
-static ULONG g_EmuNv2aSurfaceClipW = 0;
-static ULONG g_EmuNv2aSurfaceClipH = 0;
 static ULONG g_EmuNv2aBeginOp = 0;
 static ULONG g_EmuNv2aElementIndices[4096] = {};
 static ULONG g_EmuNv2aElementIndexCount = 0;
@@ -1947,10 +1928,6 @@ extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Va
 
 // Depth buffer (Phase 3): bound zeta surface + the depth-test state. Testing is
 // off by default so Phase 0-2 titles (which never enable it) are unaffected.
-static ULONG g_EmuNv2aContextDmaZeta = 0;
-static ULONG g_EmuNv2aSurfaceZetaOffset = 0;
-static ULONG g_EmuNv2aSurfacePitchZeta = 0;
-static ULONG g_EmuNv2aSurfaceZetaFormat = 0; // 1=Z16, 2=Z24S8
 static bool  g_EmuNv2aDepthTest = false;
 static bool  g_EmuNv2aDepthWrite = true;
 static ULONG g_EmuNv2aDepthFunc = 0x0201;    // LESS
@@ -1972,10 +1949,6 @@ static ULONG g_EmuNv2aStencilMask = 0xFF;        // write mask
 static ULONG g_EmuNv2aStencilOpFail = 0x1E00;    // KEEP
 static ULONG g_EmuNv2aStencilOpZFail = 0x1E00;
 static ULONG g_EmuNv2aStencilOpZPass = 0x1E00;
-static ULONG g_EmuNv2aZStencilClearValue = 0;
-static ULONG g_EmuNv2aColorClearValue = 0;
-static ULONG g_EmuNv2aClearRectHorizontal = 0;
-static ULONG g_EmuNv2aClearRectVertical = 0;
 static ULONG g_EmuNv2aCombinerAlphaIcw[8] = {};
 static ULONG g_EmuNv2aCombinerColorIcw[8] = {};
 static ULONG g_EmuNv2aCombinerAlphaOcw[8] = {};
@@ -2323,37 +2296,39 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         EmuNv2aSetRenderState(Method, Data);
         switch(Method)
         {
-            case NV097_SET_CONTEXT_DMA_COLOR:    g_EmuNv2aContextDmaColor = Data; break;
+            case cxbx::nv2a::PgraphSurfaceMethod::SetContextDmaColor:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetContextDmaZeta:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetSurfaceClipHorizontal:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetSurfaceClipVertical:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetSurfaceFormat:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetSurfacePitch:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetSurfaceColorOffset:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetSurfaceZetaOffset:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetZStencilClearValue:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetColorClearValue:
+            case cxbx::nv2a::PgraphSurfaceMethod::ClearSurface:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetClearRectHorizontal:
+            case cxbx::nv2a::PgraphSurfaceMethod::SetClearRectVertical:
+            {
+                const cxbx::nv2a::PgraphSurfaceStep SurfaceStep =
+                    cxbx::nv2a::ApplyPgraphSurfaceMethod(
+                        g_EmuNv2aSurfaceState,
+                        static_cast<std::uint32_t>(Method),
+                        static_cast<std::uint32_t>(Data));
+                if(SurfaceStep.kind ==
+                   cxbx::nv2a::PgraphSurfaceStepKind::ClearSurface)
+                {
+                    EmuNv2aClearSurface(
+                        static_cast<ULONG>(SurfaceStep.data));
+                }
+                break;
+            }
             case NV097_SET_CONTEXT_DMA_VERTEX_A: g_EmuNv2aContextDmaVertex = Data; break;
-            case NV097_SET_CONTEXT_DMA_ZETA:     g_EmuNv2aContextDmaZeta = Data; break;
             case NV097_SET_CONTEXT_DMA_SEMAPHORE: g_EmuNv2aContextDmaSemaphore = Data; break;
             case NV097_SET_SEMAPHORE_OFFSET:     g_EmuNv2aSemaphoreOffset = Data; break;
             case NV097_BACK_END_WRITE_SEMAPHORE_RELEASE:
                 EmuNv2aWriteBackendSemaphore(Data);
                 break;
-            case NV097_SET_SURFACE_CLIP_HORIZONTAL:
-                g_EmuNv2aSurfaceClipX = Data & 0xFFFF;
-                g_EmuNv2aSurfaceClipW = (Data >> 16) & 0xFFFF;
-                break;
-            case NV097_SET_SURFACE_CLIP_VERTICAL:
-                g_EmuNv2aSurfaceClipY = Data & 0xFFFF;
-                g_EmuNv2aSurfaceClipH = (Data >> 16) & 0xFFFF;
-                break;
-            case NV097_SET_SURFACE_FORMAT:
-                g_EmuNv2aSurfaceFormat = Data;
-                g_EmuNv2aSurfaceZetaFormat = (Data >> 4) & 0xF;
-                break;
-            case NV097_SET_SURFACE_PITCH:
-                g_EmuNv2aSurfacePitchColor = Data & 0xFFFF;
-                g_EmuNv2aSurfacePitchZeta = (Data >> 16) & 0xFFFF;
-                break;
-            case NV097_SET_SURFACE_COLOR_OFFSET: g_EmuNv2aSurfaceColorOffset = Data; break;
-            case NV097_SET_SURFACE_ZETA_OFFSET:  g_EmuNv2aSurfaceZetaOffset = Data; break;
-            case NV097_SET_ZSTENCIL_CLEAR_VALUE: g_EmuNv2aZStencilClearValue = Data; break;
-            case NV097_SET_COLOR_CLEAR_VALUE:    g_EmuNv2aColorClearValue = Data; break;
-            case NV097_CLEAR_SURFACE:             EmuNv2aClearSurface(Data); break;
-            case NV097_SET_CLEAR_RECT_HORIZONTAL: g_EmuNv2aClearRectHorizontal = Data; break;
-            case NV097_SET_CLEAR_RECT_VERTICAL:   g_EmuNv2aClearRectVertical = Data; break;
             case NV097_SET_BEGIN_END:
                 if(Data == 0)
                 {
@@ -4916,14 +4891,20 @@ static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG 
     fprintf(f, "surface color_dma=0x%.08lX color_offset=0x%.08lX pitch_color=%lu "
                "format=0x%.08lX clip_x=%lu clip_y=%lu clip_w=%lu clip_h=%lu "
                "scanout=0x%.08lX\n",
-            g_EmuNv2aContextDmaColor, g_EmuNv2aSurfaceColorOffset,
-            g_EmuNv2aSurfacePitchColor, g_EmuNv2aSurfaceFormat,
-            g_EmuNv2aSurfaceClipX, g_EmuNv2aSurfaceClipY,
-            g_EmuNv2aSurfaceClipW, g_EmuNv2aSurfaceClipH,
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.contextDmaColor),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.colorOffset),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.colorPitch),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.format),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.clipX),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.clipY),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.clipWidth),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.clipHeight),
             g_EmuNv2aScanoutAddress);
     fprintf(f, "zeta dma=0x%.08lX offset=0x%.08lX pitch=%lu format=%lu\n",
-            g_EmuNv2aContextDmaZeta, g_EmuNv2aSurfaceZetaOffset,
-            g_EmuNv2aSurfacePitchZeta, g_EmuNv2aSurfaceZetaFormat);
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.contextDmaZeta),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.zetaOffset),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.zetaPitch),
+            static_cast<ULONG>(g_EmuNv2aSurfaceState.zetaFormat));
     fprintf(f, "depth test=%u write=%u func=0x%lX\n",
             g_EmuNv2aDepthTest ? 1u : 0u, g_EmuNv2aDepthWrite ? 1u : 0u,
             g_EmuNv2aDepthFunc);
@@ -5167,7 +5148,7 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
     if(Host != 0)
         EmuContiguousBlockBase(Host, &BlockSize);
 
-    ULONG Height = g_EmuNv2aSurfaceClipH;
+    ULONG Height = g_EmuNv2aSurfaceState.clipHeight;
     if(Height == 0)
     {
         Height = (BlockSize != 0) ? (BlockSize / Pitch) : 480u;
@@ -5308,16 +5289,16 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 
 static void EmuNv2aPresentColorSurface()
 {
-    if(g_EmuNv2aSurfaceColorOffset == 0)
+    if(g_EmuNv2aSurfaceState.colorOffset == 0)
     {
         return;
     }
 
-    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
-    ULONG Address = Base + g_EmuNv2aSurfaceColorOffset;
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aSurfaceState.contextDmaColor);
+    ULONG Address = Base + g_EmuNv2aSurfaceState.colorOffset;
     if(EmuNv2aHostPointer(Address) == 0 && Base != 0)
     {
-        Address = g_EmuNv2aSurfaceColorOffset;
+        Address = g_EmuNv2aSurfaceState.colorOffset;
     }
 
     g_EmuNv2aScanoutAddress = Address & 0x0FFFFFFF;
@@ -5342,7 +5323,7 @@ static void EmuNv2aPresentColorSurface()
 static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
                                       ULONG Width, ULONG Height)
 {
-    const ULONG AaMode = (g_EmuNv2aSurfaceFormat >> 12) & 0x0F;
+    const ULONG AaMode = (g_EmuNv2aSurfaceState.format >> 12) & 0x0F;
     if(AaMode == 0 || Host == 0 || Pitch == 0 || Width == 0 || Height == 0)
     {
         return;
@@ -5355,11 +5336,11 @@ static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
         return;
     }
 
-    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
-    ULONG Address = Base + g_EmuNv2aSurfaceColorOffset;
+    ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aSurfaceState.contextDmaColor);
+    ULONG Address = Base + g_EmuNv2aSurfaceState.colorOffset;
     if(EmuNv2aHostPointer(Address) == 0 && Base != 0)
     {
-        Address = g_EmuNv2aSurfaceColorOffset;
+        Address = g_EmuNv2aSurfaceState.colorOffset;
     }
 
     g_EmuNv2aAaColorSurface.Address = Address;
@@ -5466,47 +5447,47 @@ static void EmuNv2aClearSurface(ULONG Flags)
         return;
     }
 
-    int ColorPitchB = static_cast<int>(g_EmuNv2aSurfacePitchColor);
+    int ColorPitchB = static_cast<int>(g_EmuNv2aSurfaceState.colorPitch);
     if(ColorPitchB <= 0)
     {
         ColorPitchB = 640 * 4;
     }
-    const ULONG AaMode = (g_EmuNv2aSurfaceFormat >> 12) & 0x0Fu;
+    const ULONG AaMode = (g_EmuNv2aSurfaceState.format >> 12) & 0x0Fu;
     const int HorizontalSamples = AaMode == 1 || AaMode == 2 ? 2 : 1;
     const int Width = ColorPitchB / 4 / HorizontalSamples;
-    int Height = static_cast<int>(g_EmuNv2aSurfaceClipY +
-                                  g_EmuNv2aSurfaceClipH);
+    int Height = static_cast<int>(g_EmuNv2aSurfaceState.clipY +
+                                  g_EmuNv2aSurfaceState.clipHeight);
     if(Height <= 0 || Height > 4096)
     {
         Height = 480;
     }
 
-    const int ClearMinX = static_cast<int>(g_EmuNv2aClearRectHorizontal & 0xFFFF);
+    const int ClearMinX = static_cast<int>(g_EmuNv2aSurfaceState.clearRectHorizontal & 0xFFFF);
     const int ClearMaxX =
-        static_cast<int>((g_EmuNv2aClearRectHorizontal >> 16) & 0xFFFF);
-    const int ClearMinY = static_cast<int>(g_EmuNv2aClearRectVertical & 0xFFFF);
+        static_cast<int>((g_EmuNv2aSurfaceState.clearRectHorizontal >> 16) & 0xFFFF);
+    const int ClearMinY = static_cast<int>(g_EmuNv2aSurfaceState.clearRectVertical & 0xFFFF);
     const int ClearMaxY =
-        static_cast<int>((g_EmuNv2aClearRectVertical >> 16) & 0xFFFF);
+        static_cast<int>((g_EmuNv2aSurfaceState.clearRectVertical >> 16) & 0xFFFF);
     if(Width <= 0 || ClearMaxX < ClearMinX || ClearMaxY < ClearMinY)
     {
         return;
     }
 
     const cxbx::nv2a::RasterBounds SurfaceClip = {
-        g_EmuNv2aSurfaceClipW != 0
-            ? min(static_cast<int>(g_EmuNv2aSurfaceClipX), Width)
+        g_EmuNv2aSurfaceState.clipWidth != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipX), Width)
             : 0,
-        g_EmuNv2aSurfaceClipH != 0
-            ? min(static_cast<int>(g_EmuNv2aSurfaceClipY), Height)
+        g_EmuNv2aSurfaceState.clipHeight != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipY), Height)
             : 0,
-        g_EmuNv2aSurfaceClipW != 0
-            ? min(static_cast<int>(g_EmuNv2aSurfaceClipX +
-                                   g_EmuNv2aSurfaceClipW),
+        g_EmuNv2aSurfaceState.clipWidth != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipX +
+                                   g_EmuNv2aSurfaceState.clipWidth),
                   Width)
             : Width,
-        g_EmuNv2aSurfaceClipH != 0
-            ? min(static_cast<int>(g_EmuNv2aSurfaceClipY +
-                                   g_EmuNv2aSurfaceClipH),
+        g_EmuNv2aSurfaceState.clipHeight != 0
+            ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipY +
+                                   g_EmuNv2aSurfaceState.clipHeight),
                   Height)
             : Height,
     };
@@ -5523,25 +5504,25 @@ static void EmuNv2aClearSurface(ULONG Flags)
     const int MaxY = ClearBounds.maxY - 1;
 
     ULONG ColorHost = 0;
-    if((Flags & 0xF0) != 0 && g_EmuNv2aSurfaceColorOffset != 0)
+    if((Flags & 0xF0) != 0 && g_EmuNv2aSurfaceState.colorOffset != 0)
     {
-        ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
-        ColorHost = EmuNv2aHostPointer(Base + g_EmuNv2aSurfaceColorOffset);
+        ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aSurfaceState.contextDmaColor);
+        ColorHost = EmuNv2aHostPointer(Base + g_EmuNv2aSurfaceState.colorOffset);
         if(ColorHost == 0 && Base != 0)
         {
-            ColorHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceColorOffset);
+            ColorHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceState.colorOffset);
         }
     }
 
     ULONG ZetaHost = 0;
-    if((Flags & 0x03) != 0 && g_EmuNv2aSurfaceZetaOffset != 0 &&
-       g_EmuNv2aSurfaceZetaFormat != 0)
+    if((Flags & 0x03) != 0 && g_EmuNv2aSurfaceState.zetaOffset != 0 &&
+       g_EmuNv2aSurfaceState.zetaFormat != 0)
     {
-        ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaZeta);
-        ZetaHost = EmuNv2aHostPointer(Base + g_EmuNv2aSurfaceZetaOffset);
+        ULONG Base = EmuNv2aResolveDmaBase(g_EmuNv2aSurfaceState.contextDmaZeta);
+        ZetaHost = EmuNv2aHostPointer(Base + g_EmuNv2aSurfaceState.zetaOffset);
         if(ZetaHost == 0 && Base != 0)
         {
-            ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceZetaOffset);
+            ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceState.zetaOffset);
         }
     }
 
@@ -5573,15 +5554,15 @@ static void EmuNv2aClearSurface(ULONG Flags)
                 for(int X = MinX; X <= MaxX; ++X)
                 {
                     ULONG &Pixel = Color[Y * Pitch + X];
-                    Pixel = (Pixel & ~Mask) | (g_EmuNv2aColorClearValue & Mask);
+                    Pixel = (Pixel & ~Mask) | (g_EmuNv2aSurfaceState.colorClearValue & Mask);
                 }
             }
         }
 
         if(ZetaHost != 0)
         {
-            int PitchB = static_cast<int>(g_EmuNv2aSurfacePitchZeta);
-            if(g_EmuNv2aSurfaceZetaFormat == 2)
+            int PitchB = static_cast<int>(g_EmuNv2aSurfaceState.zetaPitch);
+            if(g_EmuNv2aSurfaceState.zetaFormat == 2)
             {
                 if(PitchB <= 0)
                 {
@@ -5596,11 +5577,11 @@ static void EmuNv2aClearSurface(ULONG Flags)
                     for(int X = MinX; X <= MaxX; ++X)
                     {
                         ULONG &Pixel = Zeta[Y * Pitch + X];
-                        Pixel = (Pixel & ~Mask) | (g_EmuNv2aZStencilClearValue & Mask);
+                        Pixel = (Pixel & ~Mask) | (g_EmuNv2aSurfaceState.zStencilClearValue & Mask);
                     }
                 }
             }
-            else if(g_EmuNv2aSurfaceZetaFormat == 1 && (Flags & 0x01) != 0)
+            else if(g_EmuNv2aSurfaceState.zetaFormat == 1 && (Flags & 0x01) != 0)
             {
                 if(PitchB <= 0)
                 {
@@ -5608,7 +5589,7 @@ static void EmuNv2aClearSurface(ULONG Flags)
                 }
                 unsigned short *Zeta = reinterpret_cast<unsigned short *>(static_cast<uintptr_t>(ZetaHost));
                 int Pitch = PitchB / 2;
-                unsigned short Value = static_cast<unsigned short>(g_EmuNv2aZStencilClearValue);
+                unsigned short Value = static_cast<unsigned short>(g_EmuNv2aSurfaceState.zStencilClearValue);
                 for(int Y = MinY; Y <= MaxY; ++Y)
                 {
                     for(int X = MinX; X <= MaxX; ++X)
@@ -5634,9 +5615,12 @@ static void EmuNv2aClearSurface(ULONG Flags)
     {
         printf("Emu (0x%lX): NV2A clear flags=0x%.02lX rect=(%d,%d)-(%d,%d) color=0x%.08lX@0x%.08lX zeta=0x%.08lX@0x%.08lX fmt=%lu.\n",
                GetCurrentThreadId(), Flags, MinX, MinY, MaxX, MaxY,
-               g_EmuNv2aColorClearValue, ColorHost,
-               g_EmuNv2aZStencilClearValue, ZetaHost,
-               g_EmuNv2aSurfaceZetaFormat);
+               static_cast<ULONG>(g_EmuNv2aSurfaceState.colorClearValue),
+               ColorHost,
+               static_cast<ULONG>(
+                   g_EmuNv2aSurfaceState.zStencilClearValue),
+               ZetaHost,
+               static_cast<ULONG>(g_EmuNv2aSurfaceState.zetaFormat));
         fflush(stdout);
         ++ClearLogCount;
     }
@@ -6708,12 +6692,12 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         return;
     }
 
-    ULONG SurfaceBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaColor);
-    ULONG SurfaceHost = EmuNv2aHostPointer(SurfaceBase + g_EmuNv2aSurfaceColorOffset);
+    ULONG SurfaceBase = EmuNv2aResolveDmaBase(g_EmuNv2aSurfaceState.contextDmaColor);
+    ULONG SurfaceHost = EmuNv2aHostPointer(SurfaceBase + g_EmuNv2aSurfaceState.colorOffset);
     // Fall back to treating the offset as a raw guest pointer (base-0 DMA, the
     // common Xbox case) when the color DMA base did not land on mapped memory.
-    if(SurfaceHost == 0 && SurfaceBase != 0 && g_EmuNv2aSurfaceColorOffset != 0)
-        SurfaceHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceColorOffset);
+    if(SurfaceHost == 0 && SurfaceBase != 0 && g_EmuNv2aSurfaceState.colorOffset != 0)
+        SurfaceHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceState.colorOffset);
     // Last resort for a real pbkit title whose color-surface DMA object this HLE
     // does not model: render into the displayed framebuffer (the surface the
     // guest last flipped to via NV_PCRTC_START).
@@ -6724,42 +6708,46 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
         if(g_EmuNv2aRasterLogCount < 16)
         {
             printf("Emu (0x%lX): NV2A raster: surface unresolved (dma=0x%.08lX off=0x%.08lX).\n",
-                   GetCurrentThreadId(), g_EmuNv2aContextDmaColor, g_EmuNv2aSurfaceColorOffset);
+                   GetCurrentThreadId(),
+                   static_cast<ULONG>(
+                       g_EmuNv2aSurfaceState.contextDmaColor),
+                   static_cast<ULONG>(
+                       g_EmuNv2aSurfaceState.colorOffset));
             fflush(stdout);
             g_EmuNv2aRasterLogCount++;
         }
         return;
     }
 
-    int PitchB = (int)g_EmuNv2aSurfacePitchColor;
+    int PitchB = (int)g_EmuNv2aSurfaceState.colorPitch;
     if(PitchB <= 0)
     {
         PitchB = 640 * 4;
     }
     const int PitchPx = PitchB / 4;
-    const ULONG AaMode = (g_EmuNv2aSurfaceFormat >> 12) & 0x0Fu;
+    const ULONG AaMode = (g_EmuNv2aSurfaceState.format >> 12) & 0x0Fu;
     const int HorizontalSamples = AaMode == 1 || AaMode == 2 ? 2 : 1;
     const int Width = PitchPx / HorizontalSamples;
-    int Height = (int)(g_EmuNv2aSurfaceClipY + g_EmuNv2aSurfaceClipH);
+    int Height = (int)(g_EmuNv2aSurfaceState.clipY + g_EmuNv2aSurfaceState.clipHeight);
     if(Height <= 0 || Height > 4096)
     {
         Height = 480;
     }
 
-    const int ClipMinX = g_EmuNv2aSurfaceClipW != 0
-                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipX), Width)
+    const int ClipMinX = g_EmuNv2aSurfaceState.clipWidth != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipX), Width)
                              : 0;
-    const int ClipMinY = g_EmuNv2aSurfaceClipH != 0
-                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipY), Height)
+    const int ClipMinY = g_EmuNv2aSurfaceState.clipHeight != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipY), Height)
                              : 0;
-    const int ClipMaxX = g_EmuNv2aSurfaceClipW != 0
-                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipX +
-                                                    g_EmuNv2aSurfaceClipW),
+    const int ClipMaxX = g_EmuNv2aSurfaceState.clipWidth != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipX +
+                                                    g_EmuNv2aSurfaceState.clipWidth),
                                    Width)
                              : Width;
-    const int ClipMaxY = g_EmuNv2aSurfaceClipH != 0
-                             ? min(static_cast<int>(g_EmuNv2aSurfaceClipY +
-                                                    g_EmuNv2aSurfaceClipH),
+    const int ClipMaxY = g_EmuNv2aSurfaceState.clipHeight != 0
+                             ? min(static_cast<int>(g_EmuNv2aSurfaceState.clipY +
+                                                    g_EmuNv2aSurfaceState.clipHeight),
                                    Height)
                              : Height;
     if(Width <= 0 || ClipMinX >= ClipMaxX || ClipMinY >= ClipMaxY)
@@ -6824,17 +6812,17 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     // Resolve the depth (zeta) surface when depth OR stencil testing is enabled
     // and a zeta surface is bound (same base-0 raw-pointer fallback as color).
     if((g_EmuNv2aDepthTest || g_EmuNv2aStencilTest) &&
-       g_EmuNv2aSurfaceZetaFormat != 0 && g_EmuNv2aSurfaceZetaOffset != 0)
+       g_EmuNv2aSurfaceState.zetaFormat != 0 && g_EmuNv2aSurfaceState.zetaOffset != 0)
     {
-        ULONG ZetaBase = EmuNv2aResolveDmaBase(g_EmuNv2aContextDmaZeta);
-        ULONG ZetaHost = EmuNv2aHostPointer(ZetaBase + g_EmuNv2aSurfaceZetaOffset);
+        ULONG ZetaBase = EmuNv2aResolveDmaBase(g_EmuNv2aSurfaceState.contextDmaZeta);
+        ULONG ZetaHost = EmuNv2aHostPointer(ZetaBase + g_EmuNv2aSurfaceState.zetaOffset);
         if(ZetaHost == 0 && ZetaBase != 0)
-            ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceZetaOffset);
+            ZetaHost = EmuNv2aHostPointer(g_EmuNv2aSurfaceState.zetaOffset);
         if(ZetaHost != 0)
         {
-            int DepthPitchB = (int)g_EmuNv2aSurfacePitchZeta;
+            int DepthPitchB = (int)g_EmuNv2aSurfaceState.zetaPitch;
             if(DepthPitchB <= 0)
-                DepthPitchB = Width * (g_EmuNv2aSurfaceZetaFormat == 2 ? 4 : 2);
+                DepthPitchB = Width * (g_EmuNv2aSurfaceState.zetaFormat == 2 ? 4 : 2);
             ULONG DepthBlockSize = 0;
             const ULONG DepthBlockBase =
                 EmuContiguousBlockBase(ZetaHost, &DepthBlockSize);
@@ -6846,12 +6834,12 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                DepthEnd <= static_cast<ULONGLONG>(DepthBlockBase) + DepthBlockSize)
             {
                 Target.Depth = (void *)(uintptr_t)ZetaHost;
-                Target.DepthFormat = g_EmuNv2aSurfaceZetaFormat;
+                Target.DepthFormat = g_EmuNv2aSurfaceState.zetaFormat;
                 Target.DepthFunc = g_EmuNv2aDepthFunc;
                 Target.DepthTest = g_EmuNv2aDepthTest;
                 Target.DepthWrite = g_EmuNv2aDepthWrite;
                 Target.DepthPitchB = DepthPitchB;
-                Target.StencilTest = g_EmuNv2aStencilTest && (g_EmuNv2aSurfaceZetaFormat == 2);
+                Target.StencilTest = g_EmuNv2aStencilTest && (g_EmuNv2aSurfaceState.zetaFormat == 2);
                 Target.StencilFunc = g_EmuNv2aStencilFunc;
                 Target.StencilRef = g_EmuNv2aStencilRef;
                 Target.StencilFuncMask = g_EmuNv2aStencilFuncMask;
@@ -7347,7 +7335,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
                VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount, g_EmuNv2aVpStart,
-               Target.Depth ? "on" : "off", g_EmuNv2aSurfaceZetaFormat, g_EmuNv2aDepthFunc,
+               Target.Depth ? "on" : "off",
+               static_cast<ULONG>(g_EmuNv2aSurfaceState.zetaFormat),
+               g_EmuNv2aDepthFunc,
                SamplerReady[0] ? "on" : "off",
                SamplerReady[0] ? Target.Sampler[0]->Width : 0,
                SamplerReady[0] ? Target.Sampler[0]->Height : 0,
