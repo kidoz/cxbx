@@ -55,7 +55,7 @@ if build_host_asan
   foreach runtime_file : [
     'clang_rt.asan_dynamic-x86_64.dll',
     'clang_rt.asan_dynamic-x86_64.lib',
-    'clang_rt.asan_dynamic_runtime_thunk-x86_64.lib',
+    'clang_rt.asan_static_runtime_thunk-x86_64.lib',
   ]
     runtime_path = join_paths(cxbx_host_asan_runtime_dir, runtime_file)
     if not fs.is_file(runtime_path)
@@ -82,9 +82,14 @@ if build_host_asan
 
   cxbx_host_asan_test_env = environment()
   cxbx_host_asan_test_env.prepend('PATH', cxbx_host_asan_runtime_dir)
+  llvm_symbolizer = find_program('llvm-symbolizer', required : true)
+  cxbx_host_asan_test_env.set(
+    'ASAN_SYMBOLIZER_PATH',
+    llvm_symbolizer.full_path(),
+  )
   cxbx_host_asan_test_env.set(
     'ASAN_OPTIONS',
-    'halt_on_error=1:abort_on_error=1',
+    'halt_on_error=1:abort_on_error=1:print_stacktrace=1:symbolize=1',
   )
 endif
 
