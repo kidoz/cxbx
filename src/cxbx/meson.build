@@ -447,7 +447,7 @@ cxbx_vsh_host = static_library(
 cxbx_vsh_host_dep = declare_dependency(
   link_with : cxbx_vsh_host,
   compile_args : '-DCXBX_VSH_HOST_TEST',
-  dependencies : cxbx_vsh_components_dep,
+  dependencies : cxbx_vsh_components_dep.partial_dependency(links : true),
   include_directories : [cxbx_public_inc, cxbx_vsh_private_inc],
 )
 
