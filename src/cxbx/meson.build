@@ -511,17 +511,15 @@ cxbx_hle_runtime = static_library(
 cxbx_hle_runtime_dep = declare_dependency(
   link_whole : cxbx_hle_runtime,
   dependencies : [
-    cxbx_core_dep,
-    cxbx_guest_tls_win32_dep,
-    cxbx_hle_d3d8_dep,
-    cxbx_hle_dispatch_dep,
-    cxbx_hle_kernel_dep,
-    cxbx_hle_xapi_dep,
-    cxbx_host_input_win32_dep,
-    cxbx_nv2a_capture_dep,
-    cxbx_platform_win32_dep,
-    cxbx_trace_dep,
-    cxbx_vsh_runtime_dep,
+    cxbx_guest_tls_win32_dep.partial_dependency(link_args : true, links : true),
+    cxbx_hle_d3d8_dep.partial_dependency(link_args : true, links : true),
+    cxbx_hle_dispatch_dep.partial_dependency(links : true),
+    cxbx_hle_kernel_dep.partial_dependency(link_args : true, links : true),
+    cxbx_hle_xapi_dep.partial_dependency(link_args : true, links : true),
+    cxbx_host_input_win32_dep.partial_dependency(links : true),
+    cxbx_nv2a_capture_dep.partial_dependency(links : true),
+    cxbx_trace_dep.partial_dependency(links : true),
+    cxbx_vsh_runtime_dep.partial_dependency(links : true),
   ],
 )
 
