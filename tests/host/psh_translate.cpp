@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 
 using cxbx::d3d::PixelShaderTranslation;
 using cxbx::d3d::TranslatePixelShader;
@@ -47,14 +48,30 @@ static std::uint32_t Outputs(unsigned ab, unsigned cd, unsigned muxSum,
 // Common registers / mappings (mirroring the XDK enums).
 enum : unsigned
 {
-    ZERO = 0x0, C0 = 0x1, C1 = 0x2, FOG = 0x3, V0 = 0x4, V1 = 0x5,
-    T0 = 0x8, T1 = 0x9, T2 = 0xA, T3 = 0xB, R0 = 0xC, R1 = 0xD,
+    ZERO = 0x0,
+    C0 = 0x1,
+    C1 = 0x2,
+    FOG = 0x3,
+    V0 = 0x4,
+    V1 = 0x5,
+    T0 = 0x8,
+    T1 = 0x9,
+    T2 = 0xA,
+    T3 = 0xB,
+    R0 = 0xC,
+    R1 = 0xD,
     EF_PROD = 0xF,
     DISCARD = 0x0,
-    CH_RGB = 0x00, CH_ALPHA = 0x10, CH_BLUE = 0x00,
-    MAP_IDENTITY = 0x00, MAP_INVERT = 0x20, MAP_EXPAND = 0x40,
+    CH_RGB = 0x00,
+    CH_ALPHA = 0x10,
+    CH_BLUE = 0x00,
+    MAP_IDENTITY = 0x00,
+    MAP_INVERT = 0x20,
+    MAP_EXPAND = 0x40,
     MAP_SIGNED_NEG = 0xE0,
-    OUT_SHIFTLEFT_1 = 0x10, OUT_MUX = 0x04, OUT_BIAS = 0x08,
+    OUT_SHIFTLEFT_1 = 0x10,
+    OUT_MUX = 0x04,
+    OUT_BIAS = 0x08,
 };
 
 struct DefBuilder
@@ -119,12 +136,16 @@ static unsigned CountToken(const PixelShaderTranslation& t, std::uint32_t opcode
 {
     unsigned count = 0;
     for(std::uint32_t token : t.bytecode)
+    {
         if(token == opcode)
+        {
             ++count;
+        }
+    }
     return count;
 }
 
-int main()
+static int RunPixelShaderTranslationTest()
 {
     // 1. Texture * diffuse modulate through the sum slot (the classic
     //    "modulate" shader): rgb and alpha portions, CD zeroed.
@@ -183,8 +204,7 @@ int main()
             .StageConstant0(0, 0x40404040u)
             .Rgb(0, Inputs(In(T1), In(V0), In(C0), In(ZERO, CH_RGB, MAP_INVERT)),
                  Outputs(DISCARD, DISCARD, R0))
-            .Alpha(0, Inputs(In(T1, CH_ALPHA), In(V0, CH_ALPHA), In(C0, CH_ALPHA),
-                             In(ZERO, CH_ALPHA, MAP_INVERT)),
+            .Alpha(0, Inputs(In(T1, CH_ALPHA), In(V0, CH_ALPHA), In(C0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT)),
                    Outputs(DISCARD, DISCARD, R0))
             .Final(Inputs(In(FOG, CH_ALPHA), In(EF_PROD), In(FOG), In(ZERO)),
                    Inputs(In(R0), In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO)));
@@ -209,13 +229,11 @@ int main()
             .StageConstant0(0, 0x40404040u)
             .Rgb(0, Inputs(In(T1), In(V0), In(C0), In(ZERO, CH_RGB, MAP_INVERT)),
                  Outputs(R0, R1, DISCARD))
-            .Alpha(0, Inputs(In(T1, CH_ALPHA), In(V0, CH_ALPHA), In(C0, CH_ALPHA),
-                             In(ZERO, CH_ALPHA, MAP_INVERT)),
+            .Alpha(0, Inputs(In(T1, CH_ALPHA), In(V0, CH_ALPHA), In(C0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT)),
                    Outputs(R0, R1, DISCARD))
             .Rgb(1, Inputs(In(R0), In(T2), In(R1), In(ZERO, CH_RGB, MAP_INVERT)),
                  Outputs(DISCARD, DISCARD, R0))
-            .Alpha(1, Inputs(In(R0, CH_ALPHA), In(T2, CH_ALPHA), In(R1, CH_ALPHA),
-                             In(ZERO, CH_ALPHA, MAP_INVERT)),
+            .Alpha(1, Inputs(In(R0, CH_ALPHA), In(T2, CH_ALPHA), In(R1, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT)),
                    Outputs(DISCARD, DISCARD, R0))
             .Final(Inputs(In(FOG, CH_ALPHA), In(EF_PROD), In(FOG), In(ZERO)),
                    Inputs(In(R0), In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO)));
@@ -258,7 +276,9 @@ int main()
         Check(t.ok(), "invert translates");
         bool sawComp = false;
         for(std::uint32_t token : t.bytecode)
+        {
             sawComp |= (token & 0x8F000000u) == (0x80000000u | (6u << 24));
+        }
         Check(sawComp, "invert emits the complement modifier");
     }
 
@@ -275,7 +295,9 @@ int main()
         Check(t.ok(), "shift translates");
         bool sawX2Dest = false;
         for(std::uint32_t token : t.bytecode)
+        {
             sawX2Dest |= (token & 0x8F0F0000u) == (0x80000000u | (1u << 24) | (0x7u << 16));
+        }
         Check(sawX2Dest, "x2 destination shift emitted");
     }
 
@@ -429,11 +451,9 @@ int main()
             .TextureMode(1, 1)
             .TextureMode(2, 6)
             .InputTexture(2, 1)
-            .Rgb(0, Inputs(In(T2), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO),
-                           In(ZERO)),
+            .Rgb(0, Inputs(In(T2), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO), In(ZERO)),
                  Outputs(DISCARD, DISCARD, R0))
-            .Alpha(0, Inputs(In(T2, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT),
-                             In(ZERO), In(ZERO)),
+            .Alpha(0, Inputs(In(T2, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT), In(ZERO), In(ZERO)),
                    Outputs(DISCARD, DISCARD, R0));
         const PixelShaderTranslation t = TranslatePixelShader(b.def);
         Check(t.ok(), "stage-2 bumpenvmap translates");
@@ -448,17 +468,13 @@ int main()
         b.Combiners(2)
             .TextureMode(0, 1)
             .TextureMode(1, 1)
-            .Rgb(0, Inputs(In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO),
-                           In(ZERO)),
+            .Rgb(0, Inputs(In(T0), In(ZERO, CH_RGB, MAP_INVERT), In(ZERO), In(ZERO)),
                  Outputs(DISCARD, DISCARD, R0))
-            .Alpha(0, Inputs(In(T0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT),
-                             In(ZERO), In(ZERO)),
+            .Alpha(0, Inputs(In(T0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT), In(ZERO), In(ZERO)),
                    Outputs(DISCARD, DISCARD, R0))
-            .Rgb(1, Inputs(In(R0), In(T0), In(T1),
-                           In(ZERO, CH_RGB, MAP_INVERT)),
+            .Rgb(1, Inputs(In(R0), In(T0), In(T1), In(ZERO, CH_RGB, MAP_INVERT)),
                  Outputs(DISCARD, DISCARD, R0))
-            .Alpha(1, Inputs(In(T0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT),
-                             In(ZERO), In(ZERO)),
+            .Alpha(1, Inputs(In(T0, CH_ALPHA), In(ZERO, CH_ALPHA, MAP_INVERT), In(ZERO), In(ZERO)),
                    Outputs(DISCARD, DISCARD, R0))
             .Final(Inputs(In(ZERO, CH_RGB, MAP_INVERT), In(R0), In(R1), In(ZERO)),
                    Inputs(In(ZERO), In(ZERO), In(R0, CH_ALPHA), In(ZERO)));
@@ -472,6 +488,8 @@ int main()
     //      whose dead (1-A) slot parks FOG, CLAMP_SUM settings with no
     //      V1R0_SUM reader, and G = C0.a. Exactly 8 instructions.
     {
+        // Keep captured shader words in five-word rows for dump comparison.
+        // clang-format off
         static const std::uint32_t turok[60] = {
             0xD4301010, 0xDBD53035, 0xDDDB1010, 0x00000000, 0x00000000,
             0x00000000, 0x00000000, 0x00000000, 0x200C0300, 0x00001180,
@@ -486,13 +504,18 @@ int main()
             0x00000000, 0x00000000, 0x00000000, 0x00011104, 0x00008001,
             0x00000000, 0x00000000, 0xFFFFFFFF, 0xFFFFFFFF, 0x000001F7,
         };
+        // clang-format on
         XboxPixelShaderDefinition def{};
         for(unsigned i = 0; i < 60; ++i)
+        {
             def[i] = turok[i];
+        }
         const PixelShaderTranslation t = TranslatePixelShader(def);
         Check(t.ok(), "turok 0xB29D9DD0 translates");
         if(!t.ok())
+        {
             std::printf("  reason: %s\n", t.failure);
+        }
         Check(t.arithmetic <= 8, "turok shader fits the ps.1.1 instruction budget");
         Check(t.textures == 2, "turok shader loads t0 and t3");
     }
@@ -519,6 +542,8 @@ int main()
     // zero. t2's texture stage is inactive, so the translation must discard
     // that dead read rather than fail texture_mode_none.
     {
+        // Keep captured shader words in five-word rows for dump comparison.
+        // clang-format off
         static const std::uint32_t turok[60] = {
             0xD4301010, 0xCDB01010, 0xDDDBD93B, 0x00000000, 0x00000000,
             0x00000000, 0x00000000, 0x00000000, 0x200C0300, 0x00001180,
@@ -533,13 +558,18 @@ int main()
             0x00000000, 0x00000000, 0x00000000, 0x00011104, 0x00008001,
             0x00000000, 0x00000000, 0xFFFFF00F, 0xFFFFFFFF, 0x000001F7,
         };
+        // clang-format on
         XboxPixelShaderDefinition def{};
         for(unsigned i = 0; i < 60; ++i)
+        {
             def[i] = turok[i];
+        }
         const PixelShaderTranslation t = TranslatePixelShader(def);
         Check(t.ok(), "turok 0x16FB263D translates");
         if(!t.ok())
+        {
             std::printf("  reason: %s\n", t.failure);
+        }
         Check(t.textures == 2, "turok material loads live t0 and t3");
         Check(CountToken(t, 0x12) >= 1, "turok material emits an lrp blend");
     }
@@ -548,6 +578,8 @@ int main()
     // calculation that is overwritten before the final combiner. Its live
     // RGB path fits ps.1.1 once dead portions are omitted.
     {
+        // Keep captured shader words in five-word rows for dump comparison.
+        // clang-format off
         static const std::uint32_t turok[60] = {
             0xD4301010, 0xD4D81010, 0xCDB01010, 0xDDDBD93B, 0xD1DC1010,
             0x00000000, 0x00000000, 0x00000000, 0x200C0300, 0x00001C80,
@@ -563,13 +595,18 @@ int main()
             0x00008001, 0x00000000, 0x00000000, 0xFFFF00FF, 0xFFFFFFFF,
             0x000001FF,
         };
+        // clang-format on
         XboxPixelShaderDefinition def{};
         for(unsigned i = 0; i < 60; ++i)
+        {
             def[i] = turok[i];
+        }
         const PixelShaderTranslation t = TranslatePixelShader(def);
         Check(t.ok(), "turok 0x2A41C3D8 translates");
         if(!t.ok())
+        {
             std::printf("  reason: %s\n", t.failure);
+        }
         Check(t.arithmetic <= 8, "turok five-combiner fits the ps.1.1 instruction budget");
         Check(t.textures == 2, "turok five-combiner loads t0 and t3");
     }
@@ -612,6 +649,25 @@ int main()
     }
 
     if(g_failures == 0)
+    {
         std::printf("psh_translate: all checks passed\n");
+    }
     return g_failures == 0 ? 0 : 1;
+}
+
+int main() noexcept
+{
+    try
+    {
+        return RunPixelShaderTranslationTest();
+    }
+    catch(const std::exception& error)
+    {
+        std::fprintf(stderr, "unexpected exception: %s\n", error.what());
+    }
+    catch(...)
+    {
+        std::fputs("unexpected non-standard exception\n", stderr);
+    }
+    return 1;
 }
