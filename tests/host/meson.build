@@ -21,6 +21,13 @@ host_nv2a_device_state_test = executable(
   install : false,
 )
 
+host_nv2a_pfifo_test = executable(
+  'host_nv2a_pfifo_test',
+  'nv2a_pfifo.cpp',
+  dependencies : cxbx_nv2a_pfifo_dep,
+  install : false,
+)
+
 if build_host_asan
   test(
     'host-yuy2-conversion',
@@ -32,6 +39,13 @@ if build_host_asan
   test(
     'host-nv2a-device-state',
     host_nv2a_device_state_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
+  test(
+    'host-nv2a-pfifo',
+    host_nv2a_pfifo_test,
     env : cxbx_host_asan_test_env,
     suite : 'sanitizer',
   )
@@ -182,6 +196,7 @@ if build_host_asan
 else
   test('host-yuy2-conversion', host_yuy2_test)
   test('host-nv2a-device-state', host_nv2a_device_state_test)
+  test('host-nv2a-pfifo', host_nv2a_pfifo_test)
 endif
 
 host_d3d_present_test = executable(

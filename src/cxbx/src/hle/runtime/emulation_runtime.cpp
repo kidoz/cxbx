@@ -51,6 +51,7 @@ namespace xboxkrnl
 #include "core/nvnet.h"
 #include "core/trace.h"
 #include "hw/nv2a_device_state.h"
+#include "hw/nv2a_pfifo.h"
 #include "shared_runtime_state.h"
 
 // ******************************************************************
@@ -608,15 +609,6 @@ static const ULONG EmuNv2aPcrtcStart = 0x600800;   // CRTC scanout base (display
 static const ULONG EmuNv2aPcrtcIntrVblank = 0x00000001;
 static const ULONG EmuNv2aPfifoIntrDmaPusher = 0x00001000;
 static const ULONG EmuNv2aPfifoDmaPushSuspended = 0x00001000;
-static const ULONG EmuNv2aPfifoDmaStateMethodType = 0x00000001;
-static const ULONG EmuNv2aPfifoDmaStateMethod = 0x00001FFC;
-static const ULONG EmuNv2aPfifoDmaStateSubchannel = 0x0000E000;
-static const ULONG EmuNv2aPfifoDmaStateMethodCount = 0x1FFC0000;
-static const ULONG EmuNv2aPfifoDmaStateError = 0xE0000000;
-static const ULONG EmuNv2aPfifoDmaErrorCall = 0x20000000;
-static const ULONG EmuNv2aPfifoDmaErrorReturn = 0x60000000;
-static const ULONG EmuNv2aPfifoDmaErrorReserved = 0x80000000;
-static const ULONG EmuNv2aPfifoDmaErrorProtection = 0xC0000000;
 static const ULONG EmuNv2aPgraphFifoAccess = 0x00000001;
 static const ULONG EmuNv2aPfifoRunoutStatus = 0x002400;
 static const ULONG EmuNv2aPfifoCache1Push1 = 0x003204;
@@ -7432,19 +7424,16 @@ static bool EmuNv2aFetchPushWord(bool HostMode, ULONG BaseAddress, ULONG Address
     return EmuNv2aReadDmaWord(BaseAddress, Address, Value);
 }
 
-static bool EmuNv2aDmaWordInRange(ULONG Offset, ULONG Limit)
-{
-    return Offset <= Limit && Limit - Offset >= sizeof(ULONG) - 1;
-}
-
-static void EmuNv2aSetPusherError(ULONG Error)
+static void EmuNv2aSetPusherError(cxbx::nv2a::PfifoPusherError Error)
 {
     ULONG State = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_STATE, 0);
     ULONG Push = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_PUSH, 1);
     ULONG Intr = EmuNv2aCachedRegister(NV_PFIFO_INTR_0, 0);
 
     EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_STATE,
-                         (State & ~EmuNv2aPfifoDmaStateError) | Error);
+                         static_cast<ULONG>(
+                             cxbx::nv2a::ApplyPfifoPusherError(
+                                 static_cast<std::uint32_t>(State), Error)));
     EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_PUSH,
                          Push | EmuNv2aPfifoDmaPushSuspended);
     EmuNv2aStoreRegister(NV_PFIFO_INTR_0, Intr | EmuNv2aPfifoIntrDmaPusher);
@@ -7487,7 +7476,8 @@ static void EmuNv2aRunPusher()
     }
     else if(!EmuNv2aLoadDmaObject(&BaseAddress, &Limit))
     {
-        EmuNv2aSetPusherError(EmuNv2aPfifoDmaErrorProtection);
+        EmuNv2aSetPusherError(
+            cxbx::nv2a::PfifoPusherError::Protection);
         return;
     }
 
@@ -7501,8 +7491,15 @@ static void EmuNv2aRunPusher()
     g_EmuNv2aPusherRunCount++;
 
     ULONG GuardLimit = HostMode ? 0x100000 : 4096;
-    ULONG State = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_STATE, 0);
-    ULONG Dcount = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_DCOUNT, 0);
+    cxbx::nv2a::PfifoPusherState PusherState{
+        static_cast<std::uint32_t>(Get),
+        static_cast<std::uint32_t>(
+            EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_STATE, 0)),
+        static_cast<std::uint32_t>(
+            EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_DCOUNT, 0)),
+        static_cast<std::uint32_t>(
+            EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0)),
+    };
     EmuNv2aConfigureCapture();
     cxbx::nv2a::PushbufferCaptureWriter* Capture =
         EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
@@ -7510,22 +7507,26 @@ static void EmuNv2aRunPusher()
     {
         Capture->RecordPushRun(
             g_EmuNv2aDebugFrame, HostMode,
-            HostMode ? BlockBase : BaseAddress, Get, Put, State, Dcount,
-            EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0), Limit);
+            HostMode ? BlockBase : BaseAddress, PusherState.get, Put,
+            PusherState.methodState, PusherState.dataCount,
+            PusherState.subroutine, Limit);
     }
-    for(ULONG Guard = 0; Guard < GuardLimit && Get != Put; Guard++)
+    for(ULONG Guard = 0; Guard < GuardLimit && PusherState.get != Put;
+        Guard++)
     {
         ULONG Word = 0;
-        const ULONG FetchAddress = Get;
+        const ULONG FetchAddress = static_cast<ULONG>(PusherState.get);
 
-        if(!EmuNv2aDmaWordInRange(Get, Limit) ||
-           !EmuNv2aFetchPushWord(HostMode, BaseAddress, Get, &Word))
+        if(!cxbx::nv2a::IsPfifoDmaWordInRange(
+               PusherState.get, static_cast<std::uint32_t>(Limit)) ||
+           !EmuNv2aFetchPushWord(
+               HostMode, BaseAddress, FetchAddress, &Word))
         {
-            EmuNv2aSetPusherError(EmuNv2aPfifoDmaErrorProtection);
+            EmuNv2aSetPusherError(
+                cxbx::nv2a::PfifoPusherError::Protection);
             break;
         }
 
-        Get += 4;
         if(Capture != nullptr)
         {
             Capture->RecordPushWord(g_EmuNv2aDebugFrame, FetchAddress, Word);
@@ -7533,98 +7534,66 @@ static void EmuNv2aRunPusher()
         NV2A_TRACE_PB(Word);
         cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
 
-        ULONG Count = (State & EmuNv2aPfifoDmaStateMethodCount) >> 18;
-        if(Count != 0)
+        const cxbx::nv2a::PfifoPusherStep Step =
+            cxbx::nv2a::StepPfifoPusher(
+                PusherState, static_cast<std::uint32_t>(Word));
+        if(Step.kind == cxbx::nv2a::PfifoPusherStepKind::Method)
         {
-            ULONG Method = State & EmuNv2aPfifoDmaStateMethod;
-            ULONG Subchannel = (State & EmuNv2aPfifoDmaStateSubchannel) >> 13;
             if(Capture != nullptr)
             {
                 Capture->RecordMethod(
-                    g_EmuNv2aDebugFrame, Subchannel, Method, Word);
+                    g_EmuNv2aDebugFrame, Step.subchannel, Step.method,
+                    Step.data);
             }
-            EmuNv2aHandlePgraphMethod(Subchannel, Method, Word);
-
-            if((State & EmuNv2aPfifoDmaStateMethodType) == 0)
-            {
-                Method += sizeof(ULONG);
-            }
-
-            Count--;
-            State &= ~(EmuNv2aPfifoDmaStateMethod | EmuNv2aPfifoDmaStateMethodCount);
-            State |= Method & EmuNv2aPfifoDmaStateMethod;
-            State |= (Count << 18) & EmuNv2aPfifoDmaStateMethodCount;
-            Dcount++;
-            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_STATE, State);
-            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_DCOUNT, Dcount);
+            EmuNv2aHandlePgraphMethod(
+                static_cast<ULONG>(Step.subchannel),
+                static_cast<ULONG>(Step.method),
+                static_cast<ULONG>(Step.data));
+            EmuNv2aStoreRegister(
+                NV_PFIFO_CACHE1_DMA_STATE,
+                static_cast<ULONG>(PusherState.methodState));
+            EmuNv2aStoreRegister(
+                NV_PFIFO_CACHE1_DMA_DCOUNT,
+                static_cast<ULONG>(PusherState.dataCount));
             continue;
         }
 
-        if((Word & 0xE0000003) == 0x20000000)
+        if(Step.kind == cxbx::nv2a::PfifoPusherStepKind::Header)
         {
-            Get = Word & 0x1FFFFFFC;
+            EmuNv2aStoreRegister(
+                NV_PFIFO_CACHE1_DMA_STATE,
+                static_cast<ULONG>(PusherState.methodState));
+            EmuNv2aStoreRegister(
+                NV_PFIFO_CACHE1_DMA_DCOUNT,
+                static_cast<ULONG>(PusherState.dataCount));
             continue;
         }
 
-        if((Word & 3) == 1)
+        if(Step.kind == cxbx::nv2a::PfifoPusherStepKind::Call ||
+           Step.kind == cxbx::nv2a::PfifoPusherStepKind::Return)
         {
-            Get = Word & 0xFFFFFFFC;
+            EmuNv2aStoreRegister(
+                NV_PFIFO_CACHE1_DMA_SUBROUTINE,
+                static_cast<ULONG>(PusherState.subroutine));
             continue;
         }
 
-        if((Word & 3) == 2)
+        if(Step.kind == cxbx::nv2a::PfifoPusherStepKind::Jump)
         {
-            ULONG Subroutine = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0);
-            if((Subroutine & 1) != 0)
-            {
-                EmuNv2aSetPusherError(EmuNv2aPfifoDmaErrorCall);
-                break;
-            }
-
-            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, (Get & 0xFFFFFFFC) | 1);
-            Get = Word & 0xFFFFFFFC;
             continue;
         }
 
-        if(Word == 0x00020000)
+        if(Step.kind == cxbx::nv2a::PfifoPusherStepKind::Error)
         {
-            ULONG Subroutine = EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0);
-            if((Subroutine & 1) == 0)
-            {
-                EmuNv2aSetPusherError(EmuNv2aPfifoDmaErrorReturn);
-                break;
-            }
-
-            Get = Subroutine & 0xFFFFFFFC;
-            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_SUBROUTINE, 0);
-            continue;
+            EmuNv2aSetPusherError(Step.error);
+            break;
         }
-
-        if((Word & 0xE0030003) == 0 || (Word & 0xE0030003) == 0x40000000)
-        {
-            bool Incrementing = (Word & 0xE0030003) == 0;
-            State &= EmuNv2aPfifoDmaStateError;
-            State |= Word & (EmuNv2aPfifoDmaStateMethod |
-                             EmuNv2aPfifoDmaStateSubchannel |
-                             EmuNv2aPfifoDmaStateMethodCount);
-            if(!Incrementing)
-            {
-                State |= EmuNv2aPfifoDmaStateMethodType;
-            }
-
-            Dcount = 0;
-            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_STATE, State);
-            EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_DCOUNT, Dcount);
-            continue;
-        }
-
-        EmuNv2aSetPusherError(EmuNv2aPfifoDmaErrorReserved);
-        break;
     }
 
-    EmuNv2aStoreRegister(NV_PFIFO_CACHE1_DMA_GET, Get);
+    EmuNv2aStoreRegister(
+        NV_PFIFO_CACHE1_DMA_GET, static_cast<ULONG>(PusherState.get));
 
-    if(Get == Put)
+    if(PusherState.get == Put)
     {
         EmuNv2aStoreRegister(EmuNv2aPfifoCache1Status,
                              EmuNv2aCachedRegister(EmuNv2aPfifoCache1Status, 0) | 0x10);
