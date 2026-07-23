@@ -35,6 +35,19 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_xbox_adpcm_test = executable(
+    'host_xbox_adpcm_test',
+    'xbox_adpcm.cpp',
+    dependencies : cxbx_xbox_adpcm_dep,
+  )
+
+  test(
+    'host-xbox-adpcm',
+    host_xbox_adpcm_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_asan_runtime_probe = executable(
     'host_asan_runtime_probe',
     'asan_runtime_probe.cpp',

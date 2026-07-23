@@ -9,6 +9,17 @@ cxbx_pcm_dep = declare_dependency(
   include_directories : cxbx_public_inc,
 )
 
+cxbx_xbox_adpcm = static_library(
+  'cxbx_xbox_adpcm',
+  'src/core/xbox_adpcm_decoder.cpp',
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_xbox_adpcm_dep = declare_dependency(
+  link_with : cxbx_xbox_adpcm,
+  include_directories : cxbx_public_inc,
+)
+
 cxbx_yuy2 = static_library(
   'cxbx_yuy2',
   'src/core/yuy2_converter.cpp',
@@ -47,17 +58,6 @@ cxbx_core_dep = declare_dependency(
     cxbx_public_inc,
     cxbx_win32_inc,
   ],
-)
-
-cxbx_xbox_adpcm = static_library(
-  'cxbx_xbox_adpcm',
-  'src/core/xbox_adpcm_decoder.cpp',
-  include_directories : cxbx_public_inc,
-)
-
-cxbx_xbox_adpcm_dep = declare_dependency(
-  link_with : cxbx_xbox_adpcm,
-  include_directories : cxbx_public_inc,
 )
 
 cxbx_nv2a_capture = static_library(
