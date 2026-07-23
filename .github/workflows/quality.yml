@@ -158,17 +158,30 @@ jobs:
 
       - name: Summarize advisory result
         if: always()
+        env:
+          ASAN_DIAGNOSTICS_DIR: ${{ runner.temp }}\cxbx-host-asan-diagnostics
         run: |
+          $resultPath = Join-Path $env:ASAN_DIAGNOSTICS_DIR 'result.txt'
+          $result = if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+              Get-Content -LiteralPath $resultPath
+          } else {
+              @('status=missing', 'message=The ASan runner did not produce result.txt')
+          }
+          $result | Write-Output
           @(
               '### Native x64 ASan (advisory)',
               '',
               'This job is non-gating while hosted-runner repeatability is evaluated.',
-              'Toolchain inventory and Meson diagnostics are retained as an artifact.'
+              'Toolchain inventory and Meson diagnostics are retained as an artifact.',
+              '',
+              '```text',
+              $result,
+              '```'
           ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
 
       - name: Retain ASan diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-x64-asan-diagnostics
           path: |

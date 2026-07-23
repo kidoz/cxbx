@@ -41,10 +41,13 @@ New-Item -ItemType Directory -Force $diagnosticsPath | Out-Null
 try {
     $env:CC = "clang"
     $env:CXX = "clang++"
+    $env:CC_LD = "lld-link"
+    $env:CXX_LD = "lld-link"
 
     $requiredTools = @(
         "clang",
         "clang++",
+        "lld-link",
         "llvm-symbolizer",
         "meson",
         "ninja"
