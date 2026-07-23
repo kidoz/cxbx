@@ -11,22 +11,92 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <random>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount, int Start,
-                                             const float* Const, const float* Input,
-                                             float* OutPos, float* OutColors,
-                                             float* OutTexCoords);
+                                           const float* Const, const float* Input,
+                                           float* OutPos, float* OutColors,
+                                           float* OutTexCoords);
 
 namespace
 {
 int g_failures = 0;
+
+class RemoveDirectoryOnExit final
+{
+  public:
+    explicit RemoveDirectoryOnExit(std::filesystem::path path)
+        : path_(std::move(path))
+    {
+    }
+
+    ~RemoveDirectoryOnExit() noexcept
+    {
+        try
+        {
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+            if(error)
+            {
+                std::fprintf(stderr, "FAIL replay smoke cleanup: %s\n",
+                             error.message().c_str());
+                ++g_failures;
+            }
+        }
+        catch(const std::exception& exception)
+        {
+            std::fprintf(stderr, "FAIL replay smoke cleanup: %s\n",
+                         exception.what());
+            ++g_failures;
+        }
+        catch(...)
+        {
+            std::fputs("FAIL replay smoke cleanup: unknown exception\n", stderr);
+            ++g_failures;
+        }
+    }
+
+    RemoveDirectoryOnExit(const RemoveDirectoryOnExit&) = delete;
+    RemoveDirectoryOnExit& operator=(const RemoveDirectoryOnExit&) = delete;
+
+  private:
+    std::filesystem::path path_;
+};
+
+std::filesystem::path CreateUniqueReplayDirectory()
+{
+    const std::filesystem::path temporaryDirectory =
+        std::filesystem::temp_directory_path();
+    std::random_device random;
+    for(unsigned int attempt = 0; attempt < 64; ++attempt)
+    {
+        const std::filesystem::path candidate =
+            temporaryDirectory /
+            ("cxbx-vsh-" + std::to_string(random()) + "-" +
+             std::to_string(random()));
+        std::error_code error;
+        if(std::filesystem::create_directory(candidate, error))
+        {
+            return candidate;
+        }
+        if(error)
+        {
+            throw std::filesystem::filesystem_error(
+                "could not create replay smoke directory", candidate, error);
+        }
+    }
+    throw std::runtime_error("could not allocate a unique replay smoke directory");
+}
 
 void Check(bool condition, const char* name)
 {
@@ -3700,22 +3770,29 @@ int RunTests()
                 "host_test",
             };
             XTL::VshDiagnostics::DumpReplayCapture(rejectedCapture, validReplayCapture);
-            const char* replayPath = "host_vsh_replay_smoke.tmp";
+            const std::filesystem::path replayDirectory =
+                CreateUniqueReplayDirectory();
+            const RemoveDirectoryOnExit replayCleanup(replayDirectory);
+            const std::string replayPath =
+                (replayDirectory / "replay.txt").string();
             std::FILE* replayFile = nullptr;
 #if defined(_WIN32)
-            const errno_t replayFileError = ::fopen_s(&replayFile, replayPath, "w");
+            const errno_t replayFileError =
+                ::fopen_s(&replayFile, replayPath.c_str(), "w");
             Check(replayFileError == 0, "replay smoke file result");
 #else
-            replayFile = std::fopen(replayPath, "w");
+            replayFile = std::fopen(replayPath.c_str(), "w");
 #endif
             Check(replayFile != nullptr, "replay smoke file");
             if(replayFile != nullptr)
             {
-                XTL::VshDiagnostics::DumpReplayCapture(replayFile, validReplayCapture);
+                XTL::VshDiagnostics::DumpReplayCapture(replayFile,
+                                                       validReplayCapture);
                 Check(std::fclose(replayFile) == 0, "replay smoke file close");
-                Check(ReplayCaptureFile(replayPath) == 0,
+                Check(ReplayCaptureFile(replayPath.c_str()) == 0,
                       "replay file mode executes a captured shader");
-                Check(std::remove(replayPath) == 0, "replay smoke file cleanup");
+                Check(std::remove(replayPath.c_str()) == 0,
+                      "replay smoke file cleanup");
             }
             const int seekResult = std::fseek(rejectedCapture, 0, SEEK_SET);
             Check(seekResult == 0, "pre-translation diagnostic capture seek");

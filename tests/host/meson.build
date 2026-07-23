@@ -132,6 +132,19 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_vsh_recompiler_test = executable(
+    'host_vsh_recompiler_test',
+    'vsh_recompiler.cpp',
+    dependencies : cxbx_vsh_host_dep,
+  )
+
+  test(
+    'host-vsh-recompiler',
+    host_vsh_recompiler_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_asan_runtime_probe = executable(
     'host_asan_runtime_probe',
     'asan_runtime_probe.cpp',

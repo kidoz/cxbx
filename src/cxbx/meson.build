@@ -42,6 +42,41 @@ cxbx_yuy2_dep = declare_dependency(
   include_directories : cxbx_public_inc,
 )
 
+cxbx_vsh_private_inc = include_directories('src/hw/nv2a/vsh')
+
+cxbx_vsh_components = static_library(
+  'cxbx_vsh_components',
+  files(
+    'src/hw/nv2a/vsh/vsh_cpu_device_state.cpp',
+    'src/hw/nv2a/vsh/vsh_shader_creation.cpp',
+    'src/hw/nv2a/vsh/vsh_shader_registry.cpp',
+  ),
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_vsh_components_dep = declare_dependency(
+  link_with : cxbx_vsh_components,
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_vsh_host = static_library(
+  'cxbx_vsh_host',
+  files(
+    'src/hw/nv2a/vsh/vsh_decoder.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder_legacy.cpp',
+    'src/hw/nv2a/vsh/vsh_decoder_host.cpp',
+  ),
+  include_directories : cxbx_public_inc,
+  cpp_args : '-DCXBX_VSH_HOST_TEST',
+)
+
+cxbx_vsh_host_dep = declare_dependency(
+  link_with : cxbx_vsh_host,
+  compile_args : '-DCXBX_VSH_HOST_TEST',
+  dependencies : cxbx_vsh_components_dep.partial_dependency(links : true),
+  include_directories : [cxbx_public_inc, cxbx_vsh_private_inc],
+)
+
 if build_host_asan
   subdir_done()
 endif
@@ -395,23 +430,6 @@ d3d8_import_lib = custom_target(
   command : [dlltool, '-m', 'i386', '-k', '-d', '@INPUT@', '-l', '@OUTPUT@'],
 )
 
-cxbx_vsh_private_inc = include_directories('src/hw/nv2a/vsh')
-
-cxbx_vsh_components = static_library(
-  'cxbx_vsh_components',
-  files(
-    'src/hw/nv2a/vsh/vsh_cpu_device_state.cpp',
-    'src/hw/nv2a/vsh/vsh_shader_creation.cpp',
-    'src/hw/nv2a/vsh/vsh_shader_registry.cpp',
-  ),
-  include_directories : cxbx_public_inc,
-)
-
-cxbx_vsh_components_dep = declare_dependency(
-  link_with : cxbx_vsh_components,
-  include_directories : cxbx_public_inc,
-)
-
 cxbx_vsh_runtime = static_library(
   'cxbx_vsh_runtime',
   files(
@@ -435,24 +453,6 @@ cxbx_vsh_runtime = static_library(
 cxbx_vsh_runtime_dep = declare_dependency(
   link_whole : cxbx_vsh_runtime,
   include_directories : cxbx_public_inc,
-)
-
-cxbx_vsh_host = static_library(
-  'cxbx_vsh_host',
-  files(
-    'src/hw/nv2a/vsh/vsh_decoder.cpp',
-    'src/hw/nv2a/vsh/vsh_decoder_legacy.cpp',
-    'src/hw/nv2a/vsh/vsh_decoder_host.cpp',
-  ),
-  include_directories : cxbx_public_inc,
-  cpp_args : '-DCXBX_VSH_HOST_TEST',
-)
-
-cxbx_vsh_host_dep = declare_dependency(
-  link_with : cxbx_vsh_host,
-  compile_args : '-DCXBX_VSH_HOST_TEST',
-  dependencies : cxbx_vsh_components_dep.partial_dependency(links : true),
-  include_directories : [cxbx_public_inc, cxbx_vsh_private_inc],
 )
 
 cxbx_d3d8_public_inc = [
