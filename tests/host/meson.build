@@ -1,10 +1,12 @@
-host_input_test = executable(
-  'host_input_test',
-  'input_translation.cpp',
-  dependencies : cxbx_host_input_win32_dep,
-)
+if not build_host_asan
+  host_input_test = executable(
+    'host_input_test',
+    'input_translation.cpp',
+    dependencies : cxbx_host_input_win32_dep,
+  )
 
-test('host-input-translation', host_input_test)
+  test('host-input-translation', host_input_test)
+endif
 
 host_yuy2_test = executable(
   'host_yuy2_test',
@@ -12,7 +14,37 @@ host_yuy2_test = executable(
   dependencies : cxbx_yuy2_dep,
 )
 
-test('host-yuy2-conversion', host_yuy2_test)
+if build_host_asan
+  test(
+    'host-yuy2-conversion',
+    host_yuy2_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
+  host_asan_runtime_probe = executable(
+    'host_asan_runtime_probe',
+    'asan_runtime_probe.cpp',
+    install : false,
+  )
+
+  python = import('python').find_installation()
+  test(
+    'host-asan-runtime',
+    python,
+    args : [
+      files('asan_runtime_probe.py'),
+      host_asan_runtime_probe,
+    ],
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+    timeout : 30,
+  )
+
+  subdir_done()
+else
+  test('host-yuy2-conversion', host_yuy2_test)
+endif
 
 host_d3d_present_test = executable(
   'host_d3d_present_test',

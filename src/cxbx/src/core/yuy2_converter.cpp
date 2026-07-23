@@ -65,9 +65,12 @@ bool ConvertYuy2ToBgra(const std::uint8_t* source,
     {
         return false;
     }
-    if(evenWidth > std::numeric_limits<std::size_t>::max() / 4)
+    if constexpr(sizeof(std::size_t) <= sizeof(std::uint32_t))
     {
-        return false;
+        if(evenWidth > std::numeric_limits<std::size_t>::max() / 4)
+        {
+            return false;
+        }
     }
 
     const std::size_t sourceRowBytes = static_cast<std::size_t>(evenWidth) * 2;
