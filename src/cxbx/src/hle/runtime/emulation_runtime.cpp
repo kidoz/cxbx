@@ -50,6 +50,7 @@ namespace xboxkrnl
 #include "core/nv2a_raster.h"
 #include "core/nvnet.h"
 #include "core/trace.h"
+#include "hw/nv2a_device_state.h"
 #include "shared_runtime_state.h"
 
 // ******************************************************************
@@ -597,9 +598,8 @@ static void EmuStoreMmioRegister(ULONG Address, ULONG Value)
 
 static const ULONG EmuNv2aMmioBase = NV2A_XBOX_MMIO_BASE;
 static const ULONG EmuNv2aMmioEnd = NV2A_XBOX_MMIO_BASE + NV2A_MMIO_SIZE - 1;
-static const ULONG EmuNv2aRaminBase = NV_PRAMIN;
-static const ULONG EmuNv2aRaminSize = 0x00100000;
-static const ULONG EmuNv2aRaminDwordCount = EmuNv2aRaminSize / sizeof(ULONG);
+static const ULONG EmuNv2aRaminBase = cxbx::nv2a::DeviceState::RaminBase;
+static const ULONG EmuNv2aRaminSize = cxbx::nv2a::DeviceState::RaminSize;
 static const ULONG EmuNv2aPmcIntrPfifo = 0x00000100;
 static const ULONG EmuNv2aPmcIntrPgraph = 0x00001000;
 static const ULONG EmuNv2aPmcIntrPcrtc = 0x01000000;
@@ -686,7 +686,7 @@ static const ULONG EmuAciBusMasterControlOffset = 0x0000000B;
 static const ULONG EmuAciBusMasterControlRun = 0x00000001;
 static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 
-static ULONG g_EmuNv2aRamin[EmuNv2aRaminDwordCount] = {};
+static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
 static ULONG g_EmuNv2aSubchannelClass[8] = {};
 
 static bool EmuNv2aIsMmioAddress(ULONG Address)
@@ -728,7 +728,7 @@ static ULONG EmuNv2aOffset(ULONG Address)
 
 static bool EmuNv2aIsRaminOffset(ULONG Offset)
 {
-    return Offset >= EmuNv2aRaminBase && Offset < EmuNv2aRaminBase + EmuNv2aRaminSize;
+    return g_EmuNv2aDeviceState.IsRaminOffset(Offset);
 }
 
 static ULONG EmuNv2aRegisterAddress(ULONG Offset)
@@ -1507,22 +1507,12 @@ static void EmuAciWriteRegister(ULONG Address, ULONG Size, ULONG Value)
 
 static ULONG EmuNv2aReadRamin32(ULONG Offset)
 {
-    ULONG RaminOffset = Offset - EmuNv2aRaminBase;
-
-    if(RaminOffset + sizeof(ULONG) > EmuNv2aRaminSize)
-        return 0;
-
-    return g_EmuNv2aRamin[RaminOffset / sizeof(ULONG)];
+    return g_EmuNv2aDeviceState.ReadRamin32(Offset);
 }
 
 static void EmuNv2aWriteRamin32(ULONG Offset, ULONG Value)
 {
-    ULONG RaminOffset = Offset - EmuNv2aRaminBase;
-
-    if(RaminOffset + sizeof(ULONG) > EmuNv2aRaminSize)
-        return;
-
-    g_EmuNv2aRamin[RaminOffset / sizeof(ULONG)] = Value;
+    g_EmuNv2aDeviceState.WriteRamin32(Offset, Value);
 }
 
 static ULONG EmuNv2aPendingPmcInterrupts()
@@ -1748,7 +1738,8 @@ static void EmuNv2aConfigureCapture()
         return;
     }
 
-    g_EmuNv2aCapture.RecordRamin(g_EmuNv2aRamin, sizeof(g_EmuNv2aRamin));
+    g_EmuNv2aCapture.RecordRamin(g_EmuNv2aDeviceState.RaminData(),
+                                 g_EmuNv2aDeviceState.RaminByteSize());
     printf("NVCAP| opened frame=%lu limit_mb=%lu path=%s\n",
            TargetFrame, LimitMb, Path);
     fflush(stdout);
