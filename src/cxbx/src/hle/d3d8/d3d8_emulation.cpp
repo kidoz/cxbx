@@ -774,6 +774,11 @@ static XTL::X_D3DSurface      *g_pCachedRenderTarget = NULL;
 static XTL::X_D3DSurface      *g_pCachedZStencilSurface = NULL;
 static XTL::X_D3DPushBuffer   *g_pRecordingPushBuffer = NULL;
 static DWORD                   g_dwVertexShaderUsage = 0;
+static constexpr DWORD EmuXboxTextureStageCount = 4;
+// Host state blocks retain COM objects, but Xbox push buffers retain guest
+// resource identities whose host backing can change before replay.
+static std::array<XTL::X_D3DResource*, EmuXboxTextureStageCount>
+    g_EmuBoundGuestTextures = {};
 
 struct EmuRecordedPushBufferDraw
 {
@@ -781,6 +786,7 @@ struct EmuRecordedPushBufferDraw
     UINT primitiveCount = 0;
     UINT stride = 0;
     DWORD stateBlock = 0;
+    std::array<XTL::X_D3DResource*, EmuXboxTextureStageCount> guestTextures = {};
     std::vector<BYTE> vertices;
 };
 
@@ -1035,6 +1041,7 @@ static void EmuAppendRecordedDraw(EmuRecordedPushBuffer& recording,
     draw.primitiveCount = primitiveCount;
     draw.stride = stride;
     draw.stateBlock = EmuCaptureD3DStateBlock();
+    draw.guestTextures = g_EmuBoundGuestTextures;
 
     try
     {
@@ -5723,7 +5730,6 @@ static void EmuFlushHostTextureLocks(XTL::IDirect3DBaseTexture8* baseTexture)
     }
 }
 
-static constexpr DWORD EmuXboxTextureStageCount = 4;
 static XTL::IDirect3DBaseTexture8 *g_EmuBoundHostTextures[EmuXboxTextureStageCount] = {};
 
 static void EmuFlushBoundHostTextureLocks()
@@ -5984,6 +5990,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     if(Stage < EmuXboxTextureStageCount)
     {
         g_EmuBoundHostTextures[Stage] = pBaseTexture8;
+        g_EmuBoundGuestTextures[Stage] = pTexture;
     }
 
     static int traceEnabled = -1;
@@ -11067,6 +11074,34 @@ static bool EmuVshTryDrawCpuBound(bool quadList, XTL::D3DPRIMITIVETYPE primitive
 static void EmuVshLogCpuDraw(const char* api, XTL::X_D3DPRIMITIVETYPE primitiveType,
                              UINT vertexCount, bool rendered, const char* reason);
 
+static void EmuRestoreRecordedGuestTextures(const EmuRecordedPushBufferDraw& draw)
+{
+    for(DWORD stage = 0; stage < EmuXboxTextureStageCount; ++stage)
+    {
+        XTL::X_D3DResource* guestTexture = draw.guestTextures[stage];
+        XTL::IDirect3DBaseTexture8* hostTexture = nullptr;
+        if(guestTexture != nullptr)
+        {
+            if((reinterpret_cast<std::uintptr_t>(guestTexture) & 0x80000000u) != 0)
+            {
+                hostTexture = EmuConvertYuy2Texture(EmuFindYuy2Texture(guestTexture));
+            }
+            else if(EmuD3DIsReadableRange(guestTexture, sizeof(*guestTexture)))
+            {
+                EmuVerifyResourceIsRegistered(guestTexture);
+                hostTexture = guestTexture->EmuBaseTexture8;
+            }
+        }
+
+        EmuFlushHostTextureLocks(hostTexture);
+        EmuRefreshLinearTexture(hostTexture);
+        EmuConfigureLinearTextureCoordinates(stage, hostTexture);
+        g_pD3DDevice8->SetTexture(stage, hostTexture);
+        g_EmuBoundHostTextures[stage] = hostTexture;
+        g_EmuBoundGuestTextures[stage] = guestTexture;
+    }
+}
+
 static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                                    const EmuRecordedPushBuffer* recording)
 {
@@ -11155,6 +11190,7 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                         {
                             return false;
                         }
+                        EmuRestoreRecordedGuestTextures(recording->draws[drawIndex]);
                     }
                     ++drawIndex;
                     if(supported && XTL::VshShaderRegistry::Current() != nullptr)
