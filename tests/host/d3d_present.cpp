@@ -130,9 +130,9 @@ int main()
         return 1;
     }
 
-    float projected2d[4] = {0.75f, 1.5f, 6.0f, 3.0f};
-    float projected3d[4] = {0.75f, 1.5f, 6.0f, 3.0f};
-    float zeroQ[4] = {0.75f, 1.5f, 6.0f, 0.0f};
+    float projected2d[4] = { 0.75f, 1.5f, 6.0f, 3.0f };
+    float projected3d[4] = { 0.75f, 1.5f, 6.0f, 3.0f };
+    float zeroQ[4] = { 0.75f, 1.5f, 6.0f, 0.0f };
     if(cxbx::d3d::CpuFallbackTextureUsable(false, 0, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 4, true, true, true) ||
        cxbx::d3d::CpuFallbackTextureUsable(true, 0, false, true, true) ||
