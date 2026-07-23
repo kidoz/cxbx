@@ -35,6 +35,20 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_nv2a_capture_test = executable(
+    'host_nv2a_capture_test',
+    'nv2a_capture.cpp',
+    dependencies : cxbx_nv2a_capture_dep,
+    install : false,
+  )
+
+  test(
+    'host-nv2a-capture',
+    host_nv2a_capture_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_xbox_adpcm_test = executable(
     'host_xbox_adpcm_test',
     'xbox_adpcm.cpp',
