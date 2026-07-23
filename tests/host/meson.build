@@ -49,6 +49,20 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_d3d_present_test = executable(
+    'host_d3d_present_test',
+    'd3d_present.cpp',
+    include_directories : cxbx_public_inc,
+    install : false,
+  )
+
+  test(
+    'host-d3d-present',
+    host_d3d_present_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_xbox_adpcm_test = executable(
     'host_xbox_adpcm_test',
     'xbox_adpcm.cpp',
