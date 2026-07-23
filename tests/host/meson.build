@@ -105,6 +105,20 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_psh_translate_test = executable(
+    'host_psh_translate_test',
+    'psh_translate.cpp',
+    include_directories : cxbx_public_inc,
+    install : false,
+  )
+
+  test(
+    'host-psh-translate',
+    host_psh_translate_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_xbox_adpcm_test = executable(
     'host_xbox_adpcm_test',
     'xbox_adpcm.cpp',
