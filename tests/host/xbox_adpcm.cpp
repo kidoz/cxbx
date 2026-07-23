@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstdint>
-#include <vector>
 
 namespace
 {
@@ -50,7 +49,7 @@ int main()
             return 4;
     }
 
-    std::vector<std::uint8_t> twoBlocks(mono.size() * 2);
+    std::array<std::uint8_t, 72> twoBlocks{};
     WriteHeader(twoBlocks.data(), 10, 0);
     WriteHeader(twoBlocks.data() + mono.size(), 20, 0);
     std::array<std::int16_t, 128> twoBlockPcm{};
