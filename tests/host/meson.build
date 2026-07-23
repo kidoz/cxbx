@@ -77,6 +77,20 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_nv2a_raster_test = executable(
+    'host_nv2a_raster_test',
+    'nv2a_raster.cpp',
+    include_directories : cxbx_public_inc,
+    install : false,
+  )
+
+  test(
+    'host-nv2a-raster',
+    host_nv2a_raster_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_xbox_adpcm_test = executable(
     'host_xbox_adpcm_test',
     'xbox_adpcm.cpp',

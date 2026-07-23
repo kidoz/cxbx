@@ -59,11 +59,11 @@ int main()
     }
 
     if(cxbx::nv2a::BlendSourceAlpha(0x80FF0000u, 0xFF0000FFu) !=
-       0xBF80007Fu ||
+           0xBF80007Fu ||
        cxbx::nv2a::BlendSourceAlpha(0x00FFFFFFu, 0x12345678u) !=
-       0x12345678u ||
+           0x12345678u ||
        cxbx::nv2a::BlendSourceAlpha(0xFFFFFFFFu, 0x12345678u) !=
-       0xFFFFFFFFu)
+           0xFFFFFFFFu)
     {
         std::fputs("source-alpha blend fast path must match ADD blending\n",
                    stderr);
