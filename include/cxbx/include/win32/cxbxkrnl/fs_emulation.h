@@ -63,14 +63,14 @@ extern void EmuInitFS();
 extern bool g_bEmuFSUnavailable;
 
 // ******************************************************************
-// * LDT-less FS content-swap (opt-in via CXBX_FS_SWAP)
+// * LDT-less FS content-swap (default; CXBX_FS_SWAP=0 selects legacy mode)
 // ******************************************************************
 // * On 64-bit Windows NtSetLdtEntries is unavailable, so there is no
 // * separate Xbox FS selector and EmuSwapFS cannot swap selectors. The
-// * default fallback shares one selector (the host TEB) with the Xbox KPCR
+// * legacy fallback shares one selector (the host TEB) with the Xbox KPCR
 // * fields overlaid permanently at fs:[0x1C/0x20/0x24/0x28] -- which corrupts
 // * those slots for host code (the CRT / ntdll / Cxbx.dll read the host TEB's
-// * EnvironmentPointer/PID/TID there). When enabled, EmuSwapFS instead SAVES
+// * EnvironmentPointer/PID/TID there). By default, EmuSwapFS instead SAVES
 // * the current 4 slots and LOADS the other role's values on each swap, so
 // * host code sees the host TEB and guest code sees the Xbox KPCR -- emulating
 // * the selector swap with the one shared selector.

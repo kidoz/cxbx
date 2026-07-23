@@ -43,6 +43,7 @@ namespace xboxkrnl
 };
 
 #include "emulation_runtime.h"
+#include "fs_content_swap_policy.h"
 #include "fs_emulation.h"
 #include "ldt_emulation.h"
 
@@ -57,7 +58,7 @@ namespace xboxkrnl
 // ******************************************************************
 uint32 EmuAutoSleepRate = -1;
 bool g_bEmuFSUnavailable = false;
-bool g_bEmuFSContentSwap = false;
+bool g_bEmuFSContentSwap = true;
 thread_local EmuFsSwapState g_EmuFsSwap = {};
 
 static thread_local xboxkrnl::ETHREAD *g_pEmuCurrentThread = NULL;
@@ -98,9 +99,25 @@ void EmuAdjustCurrentThreadKernelApcDisable(long Delta)
 // ******************************************************************
 void EmuInitFS()
 {
-    g_bEmuFSContentSwap = (getenv("CXBX_FS_SWAP") != NULL);
+    char fsSwapValue[2] = {};
+    const DWORD fsSwapValueLength =
+        GetEnvironmentVariableA("CXBX_FS_SWAP", fsSwapValue, sizeof(fsSwapValue));
+    const char* fsSwapOverride =
+        fsSwapValueLength != 0 && fsSwapValueLength < sizeof(fsSwapValue)
+            ? fsSwapValue
+            : nullptr;
+    g_bEmuFSContentSwap = EmuFsContentSwapEnabledByOverride(fsSwapOverride);
+
     if(g_bEmuFSContentSwap)
-        printf("EmuFS: LDT-less FS content-swap ENABLED (CXBX_FS_SWAP).\n");
+    {
+        printf("EmuFS: LDT-less FS content-swap ENABLED "
+               "(default; set CXBX_FS_SWAP=0 for legacy mode).\n");
+    }
+    else
+    {
+        printf("EmuFS: LDT-less FS content-swap DISABLED "
+               "(CXBX_FS_SWAP=0 legacy mode).\n");
+    }
 
     EmuInitLDT();
 }

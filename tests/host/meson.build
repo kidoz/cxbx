@@ -308,3 +308,14 @@ host_stack_precommit_test = executable(
 )
 
 test('host-stack-precommit', host_stack_precommit_test)
+
+if not build_host_asan
+  host_fs_content_swap_policy_test = executable(
+    'host_fs_content_swap_policy_test',
+    'fs_content_swap_policy.cpp',
+    include_directories : cxbx_krnl_inc,
+    install : false,
+  )
+
+  test('host-fs-content-swap-policy', host_fs_content_swap_policy_test)
+endif
