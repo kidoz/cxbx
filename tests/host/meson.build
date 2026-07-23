@@ -91,6 +91,20 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_nvnet_test = executable(
+    'host_nvnet_test',
+    'nvnet.cpp',
+    include_directories : cxbx_public_inc,
+    install : false,
+  )
+
+  test(
+    'host-nvnet',
+    host_nvnet_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_xbox_adpcm_test = executable(
     'host_xbox_adpcm_test',
     'xbox_adpcm.cpp',
