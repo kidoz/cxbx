@@ -77,6 +77,12 @@ struct X_CDirectSoundBuffer
     DWORD   EmuBufferBytes;
     DWORD   EmuWaveFormatBytes;
     BYTE    EmuWaveFormat[64];
+    DWORD EmuGuestBufferBytes;
+    BYTE* EmuXboxAdpcmBuffer;
+    BYTE* EmuXboxAdpcmDecodedBuffer;
+    BOOL EmuXboxAdpcmDirty;
+    BOOL EmuXboxAdpcmRegistered;
+    X_CDirectSoundBuffer* EmuXboxAdpcmNext;
 };
 
 // ******************************************************************
