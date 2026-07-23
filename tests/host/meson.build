@@ -63,6 +63,20 @@ if build_host_asan
     suite : 'sanitizer',
   )
 
+  host_d3d_push_buffer_test = executable(
+    'host_d3d_push_buffer_test',
+    'd3d_push_buffer.cpp',
+    include_directories : cxbx_public_inc,
+    install : false,
+  )
+
+  test(
+    'host-d3d-push-buffer',
+    host_d3d_push_buffer_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
   host_xbox_adpcm_test = executable(
     'host_xbox_adpcm_test',
     'xbox_adpcm.cpp',

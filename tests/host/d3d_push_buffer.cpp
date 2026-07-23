@@ -1,6 +1,7 @@
 #include "core/d3d_push_buffer.h"
 
 #include <cstdio>
+#include <exception>
 #include <utility>
 #include <vector>
 
@@ -64,9 +65,7 @@ bool CheckRejectedWalk(const std::vector<std::uint32_t>& words, const char* name
     return false;
 }
 
-} // namespace
-
-int main()
+int RunPushBufferTest()
 {
     bool passed = true;
     constexpr auto triangleStrip = cxbx::d3d::ClassifyIndexedBatch(6, 7);
@@ -168,4 +167,23 @@ int main()
         passed = false;
     }
     return passed ? 0 : 1;
+}
+
+} // namespace
+
+int main() noexcept
+{
+    try
+    {
+        return RunPushBufferTest();
+    }
+    catch(const std::exception& error)
+    {
+        std::fprintf(stderr, "unexpected exception: %s\n", error.what());
+    }
+    catch(...)
+    {
+        std::fputs("unexpected non-standard exception\n", stderr);
+    }
+    return 1;
 }
