@@ -2,13 +2,36 @@
 
 #include <array>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 namespace
 {
+
+class RemoveFileOnExit final
+{
+  public:
+    explicit RemoveFileOnExit(const char* path) noexcept : path_(path)
+    {
+    }
+
+    ~RemoveFileOnExit()
+    {
+        std::remove(path_);
+    }
+
+    RemoveFileOnExit(const RemoveFileOnExit&) = delete;
+    RemoveFileOnExit& operator=(const RemoveFileOnExit&) = delete;
+
+  private:
+    const char* path_;
+};
 
 std::uint32_t ReadU32(const std::vector<unsigned char>& bytes,
                       std::size_t offset)
@@ -19,9 +42,7 @@ std::uint32_t ReadU32(const std::vector<unsigned char>& bytes,
            (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
 }
 
-} // namespace
-
-int main()
+int RunCaptureTest(const char* path)
 {
     constexpr std::array<unsigned char, 9> crcInput = {
         '1', '2', '3', '4', '5', '6', '7', '8', '9'
@@ -32,9 +53,6 @@ int main()
         std::fputs("capture CRC must match zlib CRC32\n", stderr);
         return 1;
     }
-
-    constexpr const char* path = "cxbx_nv2a_capture_test.bin";
-    std::remove(path);
 
     cxbx::nv2a::PushbufferCaptureWriter writer;
     if(!writer.Open(path, 0, 64ull * 1024ull * 1024ull))
@@ -67,7 +85,6 @@ int main()
         std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()
     };
     input.close();
-    std::remove(path);
 
     if(bytes.size() < 84 ||
        std::string(bytes.begin(), bytes.begin() + 7) != "CXNVCAP" ||
@@ -85,4 +102,47 @@ int main()
     }
 
     return 0;
+}
+} // namespace
+
+int main() noexcept
+{
+    std::array<char, MAX_PATH> temporaryDirectory{};
+    const DWORD directoryLength = GetTempPathA(
+        static_cast<DWORD>(temporaryDirectory.size()), temporaryDirectory.data());
+    if(directoryLength == 0 || directoryLength >= temporaryDirectory.size())
+    {
+        std::fputs("could not resolve the temporary directory\n", stderr);
+        return 1;
+    }
+
+    std::array<char, MAX_PATH> path{};
+    if(GetTempFileNameA(temporaryDirectory.data(), "cxn", 0, path.data()) == 0)
+    {
+        std::fputs("could not create a unique capture path\n", stderr);
+        return 1;
+    }
+
+    int result = 1;
+    try
+    {
+        const RemoveFileOnExit cleanup(path.data());
+        result = RunCaptureTest(path.data());
+    }
+    catch(const std::exception& exception)
+    {
+        std::fprintf(stderr, "capture test raised an exception: %s\n",
+                     exception.what());
+    }
+    catch(...)
+    {
+        std::fputs("capture test raised an unknown exception\n", stderr);
+    }
+
+    if(GetFileAttributesA(path.data()) != INVALID_FILE_ATTRIBUTES)
+    {
+        std::fputs("capture test did not remove its temporary file\n", stderr);
+        return 1;
+    }
+    return result;
 }

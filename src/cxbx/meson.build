@@ -9,6 +9,17 @@ cxbx_pcm_dep = declare_dependency(
   include_directories : cxbx_public_inc,
 )
 
+cxbx_nv2a_capture = static_library(
+  'cxbx_nv2a_capture',
+  'src/core/nv2a_capture.cpp',
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_nv2a_capture_dep = declare_dependency(
+  link_with : cxbx_nv2a_capture,
+  include_directories : cxbx_public_inc,
+)
+
 cxbx_xbox_adpcm = static_library(
   'cxbx_xbox_adpcm',
   'src/core/xbox_adpcm_decoder.cpp',
@@ -58,17 +69,6 @@ cxbx_core_dep = declare_dependency(
     cxbx_public_inc,
     cxbx_win32_inc,
   ],
-)
-
-cxbx_nv2a_capture = static_library(
-  'cxbx_nv2a_capture',
-  'src/core/nv2a_capture.cpp',
-  include_directories : cxbx_public_inc,
-)
-
-cxbx_nv2a_capture_dep = declare_dependency(
-  link_with : cxbx_nv2a_capture,
-  include_directories : cxbx_public_inc,
 )
 
 cxbx_platform_win32_inc = [
