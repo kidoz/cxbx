@@ -56,6 +56,13 @@ host_nv2a_pgraph_texture_state_test = executable(
   install : false,
 )
 
+host_nv2a_pgraph_vertex_state_test = executable(
+  'host_nv2a_pgraph_vertex_state_test',
+  'nv2a_pgraph_vertex_state.cpp',
+  dependencies : cxbx_nv2a_pgraph_vertex_state_dep,
+  install : false,
+)
+
 if build_host_asan
   test(
     'host-yuy2-conversion',
@@ -102,6 +109,13 @@ if build_host_asan
   test(
     'host-nv2a-pgraph-texture-state',
     host_nv2a_pgraph_texture_state_test,
+    env : cxbx_host_asan_test_env,
+    suite : 'sanitizer',
+  )
+
+  test(
+    'host-nv2a-pgraph-vertex-state',
+    host_nv2a_pgraph_vertex_state_test,
     env : cxbx_host_asan_test_env,
     suite : 'sanitizer',
   )
@@ -257,6 +271,7 @@ else
   test('host-nv2a-pgraph-render-state', host_nv2a_pgraph_render_state_test)
   test('host-nv2a-pgraph-combiner-state', host_nv2a_pgraph_combiner_state_test)
   test('host-nv2a-pgraph-texture-state', host_nv2a_pgraph_texture_state_test)
+  test('host-nv2a-pgraph-vertex-state', host_nv2a_pgraph_vertex_state_test)
 endif
 
 host_d3d_present_test = executable(
