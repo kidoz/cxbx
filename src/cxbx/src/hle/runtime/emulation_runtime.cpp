@@ -5478,6 +5478,37 @@ static void EmuNv2aReadHostVertexComponents(
     }
 }
 
+struct EmuNv2aVertexAttributeReadResult
+{
+    bool Valid;
+    cxbx::nv2a::PgraphVertexAttributeBytes Bytes;
+};
+
+static EmuNv2aVertexAttributeReadResult
+EmuNv2aReadVertexAttribute(
+    const EmuNv2aVertexAttributeMemoryContext& Context,
+    ULONG Attribute,
+    const cxbx::nv2a::PgraphVertexAttributeFetchRequest& FetchRequest)
+{
+    const ULONG HostAddress = EmuNv2aResolveVertexAttributeHost(
+        Context, Attribute, FetchRequest);
+    if(HostAddress == 0)
+    {
+        return {};
+    }
+
+    EmuNv2aVertexAttributeReadResult Result = {
+        true,
+        cxbx::nv2a::InitializePgraphVertexAttributeBytes(
+            FetchRequest.accessPlan.readPlan),
+    };
+    EmuNv2aReadHostVertexComponents(
+        HostAddress,
+        FetchRequest.accessPlan.readPlan.componentMask,
+        Result.Bytes);
+    return Result;
+}
+
 static ULONG EmuNv2aClampByte(float v)
 {
     if(v <= 0.0f) return 0;
@@ -6782,22 +6813,16 @@ static void EmuNv2aRasterizeDrawArrays(
                         Fetch, static_cast<std::uint32_t>(Index),
                         cxbx::nv2a::PgraphVertexAttributeReadPurpose::
                             VertexProgram);
-                ULONG Host = EmuNv2aResolveVertexAttributeHost(
-                    AttributeMemory, a, FetchRequest);
-                if(Host == 0)
+                const auto AttributeRead =
+                    EmuNv2aReadVertexAttribute(
+                        AttributeMemory, a, FetchRequest);
+                if(!AttributeRead.Valid)
                 {
                     continue;
                 }
-                auto Bytes =
-                    cxbx::nv2a::InitializePgraphVertexAttributeBytes(
-                        FetchRequest.accessPlan.readPlan);
-                EmuNv2aReadHostVertexComponents(
-                    Host,
-                    FetchRequest.accessPlan.readPlan.componentMask,
-                    Bytes);
                 AttributeValues[a] =
                     cxbx::nv2a::DecodePgraphVertexAttribute(
-                        Fetch, Bytes);
+                        Fetch, AttributeRead.Bytes);
                 SuppliedAttributeMask |= 1u << a;
             }
             const cxbx::nv2a::PgraphVertexProgramInput Input =
@@ -6871,24 +6896,18 @@ static void EmuNv2aRasterizeDrawArrays(
                     Pos, static_cast<std::uint32_t>(Index),
                     cxbx::nv2a::PgraphVertexAttributeReadPurpose::
                         FixedPosition);
-            ULONG PosHost = EmuNv2aResolveVertexAttributeHost(
-                AttributeMemory,
-                cxbx::nv2a::PgraphVertexPositionAttribute,
-                PositionFetchRequest);
-            if(PosHost == 0)
+            const auto PositionRead =
+                EmuNv2aReadVertexAttribute(
+                    AttributeMemory,
+                    cxbx::nv2a::PgraphVertexPositionAttribute,
+                    PositionFetchRequest);
+            if(!PositionRead.Valid)
             {
                 continue;
             }
-            auto PositionBytes =
-                cxbx::nv2a::InitializePgraphVertexAttributeBytes(
-                    PositionFetchRequest.accessPlan.readPlan);
-            EmuNv2aReadHostVertexComponents(
-                PosHost,
-                PositionFetchRequest.accessPlan.readPlan.componentMask,
-                PositionBytes);
             FixedAttributeValues[cxbx::nv2a::PgraphVertexPositionAttribute] =
                 cxbx::nv2a::DecodePgraphFloatVertexAttribute(
-                    PositionBytes,
+                    PositionRead.Bytes,
                     PositionFetchRequest.accessPlan.readPlan.decodeComponentCount);
             FixedSuppliedAttributeMask |=
                 1u << cxbx::nv2a::PgraphVertexPositionAttribute;
@@ -6900,25 +6919,18 @@ static void EmuNv2aRasterizeDrawArrays(
                         Dif, static_cast<std::uint32_t>(Index),
                         cxbx::nv2a::PgraphVertexAttributeReadPurpose::
                             FixedDiffuse);
-                ULONG DifHost = EmuNv2aResolveVertexAttributeHost(
-                    AttributeMemory,
-                    cxbx::nv2a::PgraphVertexDiffuseAttribute,
-                    DiffuseFetchRequest);
-                if(DifHost != 0)
+                const auto DiffuseRead =
+                    EmuNv2aReadVertexAttribute(
+                        AttributeMemory,
+                        cxbx::nv2a::PgraphVertexDiffuseAttribute,
+                        DiffuseFetchRequest);
+                if(DiffuseRead.Valid)
                 {
-                    auto DiffuseBytes =
-                        cxbx::nv2a::
-                            InitializePgraphVertexAttributeBytes(
-                                DiffuseFetchRequest.accessPlan.readPlan);
-                    EmuNv2aReadHostVertexComponents(
-                        DifHost,
-                        DiffuseFetchRequest.accessPlan.readPlan.componentMask,
-                        DiffuseBytes);
                     if(DifType == 2 /* TYPE_F, float4 RGBA */)
                     {
                         FixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
                             cxbx::nv2a::DecodePgraphFloatVertexAttribute(
-                                DiffuseBytes,
+                                DiffuseRead.Bytes,
                                 DiffuseFetchRequest.accessPlan.readPlan.decodeComponentCount);
                     }
                     else
@@ -6926,7 +6938,7 @@ static void EmuNv2aRasterizeDrawArrays(
                         FixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
                             cxbx::nv2a::
                                 DecodePgraphPackedColorVertexAttribute(
-                                    DiffuseBytes);
+                                    DiffuseRead.Bytes);
                     }
                     FixedSuppliedAttributeMask |=
                         1u << cxbx::nv2a::
@@ -6952,23 +6964,15 @@ static void EmuNv2aRasterizeDrawArrays(
                             cxbx::nv2a::
                                 PgraphVertexAttributeReadPurpose::
                                     FixedTexture);
-                ULONG TexHost =
-                    EmuNv2aResolveVertexAttributeHost(
+                const auto TextureRead =
+                    EmuNv2aReadVertexAttribute(
                         AttributeMemory, TextureAttribute,
                         TextureFetchRequest);
-                if(TexHost != 0)
+                if(TextureRead.Valid)
                 {
-                    auto TextureBytes =
-                        cxbx::nv2a::
-                            InitializePgraphVertexAttributeBytes(
-                                TextureFetchRequest.accessPlan.readPlan);
-                    EmuNv2aReadHostVertexComponents(
-                        TexHost,
-                        TextureFetchRequest.accessPlan.readPlan.componentMask,
-                        TextureBytes);
                     FixedAttributeValues[TextureAttribute] =
                         cxbx::nv2a::DecodePgraphFloatVertexAttribute(
-                            TextureBytes,
+                            TextureRead.Bytes,
                             TextureFetchRequest.accessPlan.readPlan.decodeComponentCount);
                     FixedSuppliedAttributeMask |=
                         1u << TextureAttribute;
