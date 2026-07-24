@@ -95,6 +95,137 @@ int main() noexcept
         return 1;
     }
 
+    PgraphTransformState transformState{};
+    transformState.compositeMatrix = {
+        1.0f,
+        2.0f,
+        3.0f,
+        4.0f,
+        5.0f,
+        6.0f,
+        7.0f,
+        8.0f,
+        9.0f,
+        10.0f,
+        11.0f,
+        12.0f,
+        13.0f,
+        14.0f,
+        15.0f,
+        16.0f,
+    };
+    transformState.viewportOffset = {
+        10.0f, 20.0f, 30.0f, 40.0f
+    };
+    const cxbx::nv2a::PgraphFixedFunctionTransformInput
+        transformInput{ { 1.0f, 2.0f, 3.0f, 4.0f } };
+    const auto transformResult =
+        cxbx::nv2a::TransformPgraphFixedFunctionPosition(
+            transformState, transformInput);
+    const std::array<float,
+                     cxbx::nv2a::PgraphTransformVectorComponentCount>
+        expectedHomogeneous{ 30.0f, 70.0f, 110.0f, 150.0f };
+    const float expectedInverseW = 1.0f / 150.0f;
+    const std::array<float,
+                     cxbx::nv2a::PgraphFixedFunctionScreenComponentCount>
+        expectedScreen{
+            30.0f * expectedInverseW + 10.0f,
+            70.0f * expectedInverseW + 20.0f,
+            110.0f * expectedInverseW,
+        };
+    for(std::uint32_t component = 0;
+        component < cxbx::nv2a::PgraphTransformVectorComponentCount;
+        ++component)
+    {
+        if(!ExpectFloatBits(
+               transformResult.homogeneousPosition[component],
+               std::bit_cast<std::uint32_t>(
+                   expectedHomogeneous[component]),
+               "fixed-function homogeneous position"))
+        {
+            return 1;
+        }
+    }
+    for(std::uint32_t component = 0;
+        component < cxbx::nv2a::PgraphFixedFunctionScreenComponentCount;
+        ++component)
+    {
+        if(!ExpectFloatBits(
+               transformResult.screenPosition[component],
+               std::bit_cast<std::uint32_t>(expectedScreen[component]),
+               "fixed-function screen position"))
+        {
+            return 1;
+        }
+    }
+    if(!ExpectFloatBits(
+           transformResult.inverseW,
+           std::bit_cast<std::uint32_t>(expectedInverseW),
+           "fixed-function inverse w"))
+    {
+        return 1;
+    }
+
+    PgraphTransformState nearZeroState{};
+    nearZeroState.viewportOffset = {
+        10.0f, -20.0f, 30.0f, 40.0f
+    };
+    const cxbx::nv2a::PgraphFixedFunctionTransformInput
+        nearZeroInput{ { 2.0f, 4.0f, 6.0f, 1.0e-6f } };
+    const auto nearZeroResult =
+        cxbx::nv2a::TransformPgraphFixedFunctionPosition(
+            nearZeroState, nearZeroInput);
+    const std::array<float,
+                     cxbx::nv2a::PgraphFixedFunctionScreenComponentCount>
+        expectedNearZeroScreen{ 12.0f, -16.0f, 6.0f };
+    for(std::uint32_t component = 0;
+        component < cxbx::nv2a::PgraphFixedFunctionScreenComponentCount;
+        ++component)
+    {
+        if(!ExpectFloatBits(
+               nearZeroResult.screenPosition[component],
+               std::bit_cast<std::uint32_t>(
+                   expectedNearZeroScreen[component]),
+               "near-zero fixed-function screen position"))
+        {
+            return 1;
+        }
+    }
+    if(!ExpectFloatBits(
+           nearZeroResult.inverseW, 0x3F800000u,
+           "near-zero fixed-function inverse w"))
+    {
+        return 1;
+    }
+
+    const cxbx::nv2a::PgraphFixedFunctionTransformInput
+        negativeWInput{ { 2.0f, 4.0f, 6.0f, -2.0f } };
+    const auto negativeWResult =
+        cxbx::nv2a::TransformPgraphFixedFunctionPosition(
+            PgraphTransformState{}, negativeWInput);
+    const std::array<float,
+                     cxbx::nv2a::PgraphFixedFunctionScreenComponentCount>
+        expectedNegativeWScreen{ -1.0f, -2.0f, -3.0f };
+    for(std::uint32_t component = 0;
+        component < cxbx::nv2a::PgraphFixedFunctionScreenComponentCount;
+        ++component)
+    {
+        if(!ExpectFloatBits(
+               negativeWResult.screenPosition[component],
+               std::bit_cast<std::uint32_t>(
+                   expectedNegativeWScreen[component]),
+               "negative-w fixed-function screen position"))
+        {
+            return 1;
+        }
+    }
+    if(!ExpectFloatBits(
+           negativeWResult.inverseW, 0xBF000000u,
+           "negative-w fixed-function inverse w"))
+    {
+        return 1;
+    }
+
     if(!Expect(cxbx::nv2a::ApplyPgraphTransformMethod(
                    state,
                    PgraphTransformMethod::SetTransformExecutionMode |

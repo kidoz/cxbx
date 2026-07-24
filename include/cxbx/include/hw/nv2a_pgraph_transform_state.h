@@ -9,6 +9,7 @@ namespace cxbx::nv2a
 
 inline constexpr std::uint32_t PgraphTransformVectorComponentCount = 4;
 inline constexpr std::uint32_t PgraphTransformMatrixElementCount = 16;
+inline constexpr std::uint32_t PgraphFixedFunctionScreenComponentCount = 3;
 inline constexpr std::uint32_t PgraphTransformProgramInstructionCount = 136;
 inline constexpr std::uint32_t PgraphTransformProgramWordCount =
     PgraphTransformProgramInstructionCount *
@@ -51,9 +52,28 @@ struct PgraphTransformState
     std::uint32_t constantWriteComponent = 0;
 };
 
+struct PgraphFixedFunctionTransformInput
+{
+    std::array<float, PgraphTransformVectorComponentCount> position{};
+};
+
+struct PgraphFixedFunctionTransformResult
+{
+    std::array<float, PgraphTransformVectorComponentCount>
+        homogeneousPosition{};
+    std::array<float, PgraphFixedFunctionScreenComponentCount>
+        screenPosition{};
+    float inverseW = 1.0f;
+};
+
 [[nodiscard]] bool ApplyPgraphTransformMethod(
     PgraphTransformState& state, std::uint32_t method,
     std::uint32_t data) noexcept;
+
+[[nodiscard]] PgraphFixedFunctionTransformResult
+TransformPgraphFixedFunctionPosition(
+    const PgraphTransformState& state,
+    const PgraphFixedFunctionTransformInput& input) noexcept;
 
 [[nodiscard]] bool SetPgraphTransformConstant(
     PgraphTransformState& state, std::uint32_t constantIndex,

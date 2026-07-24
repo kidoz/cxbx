@@ -6945,6 +6945,7 @@ static void EmuNv2aRasterizeDrawArrays(
         float V[EmuNv2aTextureStageCount] = {};
         float Q[EmuNv2aTextureStageCount] = {1.0f, 1.0f, 1.0f, 1.0f};
         ULONG Color = 0xFFFFFFFF;
+        cxbx::nv2a::PgraphFixedFunctionTransformResult FixedTransform{};
 
         if(VpActive)
         {
@@ -7032,14 +7033,19 @@ static void EmuNv2aRasterizeDrawArrays(
                     cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
                         FixedAttributes.Values, VertexFetchPlan,
                         FixedAttributes.SuppliedAttributeMask);
-            Xc = FixedInput.position[0];
-            Yc = FixedInput.position[1];
-            Zc = FixedInput.position[2];
-            W = FixedInput.position[3];
-            RawPosition[0] = Xc;
-            RawPosition[1] = Yc;
-            RawPosition[2] = Zc;
-            RawPosition[3] = W;
+            const cxbx::nv2a::PgraphFixedFunctionTransformInput
+                FixedTransformInput{ FixedInput.position };
+            FixedTransform =
+                cxbx::nv2a::TransformPgraphFixedFunctionPosition(
+                    TransformState, FixedTransformInput);
+            Xc = FixedTransform.homogeneousPosition[0];
+            Yc = FixedTransform.homogeneousPosition[1];
+            Zc = FixedTransform.homogeneousPosition[2];
+            W = FixedTransform.homogeneousPosition[3];
+            RawPosition[0] = FixedInput.position[0];
+            RawPosition[1] = FixedInput.position[1];
+            RawPosition[2] = FixedInput.position[2];
+            RawPosition[3] = FixedInput.position[3];
             Color = FixedInput.diffuseColor;
             for(ULONG Stage = 0;
                 Stage < EmuNv2aTextureStageCount; ++Stage)
@@ -7051,20 +7057,13 @@ static void EmuNv2aRasterizeDrawArrays(
                 Q[Stage] =
                     FixedInput.textureCoordinates[Stage][3];
             }
-
-            // Fixed-function transform: object position * composite matrix ->
-            // screen homogeneous coordinates. The four uploaded NV2A constant
-            // vectors are matrix columns, matching mat4(c0,c1,c2,c3) and the
-            // hardware's row-vector multiplication.
-            const float* M = TransformState.compositeMatrix.data();
-            float ox = Xc, oy = Yc, oz = Zc, ow = W;
-            Xc = ox * M[0]  + oy * M[1]  + oz * M[2]  + ow * M[3];
-            Yc = ox * M[4]  + oy * M[5]  + oz * M[6]  + ow * M[7];
-            Zc = ox * M[8]  + oy * M[9]  + oz * M[10] + ow * M[11];
-            W  = ox * M[12] + oy * M[13] + oz * M[14] + ow * M[15];
         }
 
-        const float InvW = (W > 1e-6f || W < -1e-6f) ? (1.0f / W) : 1.0f;
+        const float InvW = VpActive
+                               ? ((W > 1e-6f || W < -1e-6f)
+                                      ? (1.0f / W)
+                                      : 1.0f)
+                               : FixedTransform.inverseW;
         VW[i] = W;
         if(VpActive)
         {
@@ -7077,11 +7076,9 @@ static void EmuNv2aRasterizeDrawArrays(
         }
         else
         {
-            // The fixed-function composite matrix already contains viewport
-            // scale. Hardware divides by w and adds only the viewport offset.
-            VX[i] = Xc * InvW + TransformState.viewportOffset[0];
-            VY[i] = Yc * InvW + TransformState.viewportOffset[1];
-            VZ[i] = Zc * InvW;
+            VX[i] = FixedTransform.screenPosition[0];
+            VY[i] = FixedTransform.screenPosition[1];
+            VZ[i] = FixedTransform.screenPosition[2];
             if(VertexTraceEnabled == 1 && i < 4)
             {
                 const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
