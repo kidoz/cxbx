@@ -5556,6 +5556,120 @@ EmuNv2aCollectVertexProgramAttributes(
     return Result;
 }
 
+struct EmuNv2aFixedFunctionAttributeCollection
+{
+    cxbx::nv2a::PgraphVertexAttributeValues Values;
+    std::uint32_t SuppliedAttributeMask;
+    bool PositionValid;
+};
+
+static EmuNv2aFixedFunctionAttributeCollection
+EmuNv2aCollectFixedFunctionAttributes(
+    const EmuNv2aVertexAttributeMemoryContext& Context,
+    const cxbx::nv2a::PgraphVertexFetchPlan& FetchPlan,
+    std::uint32_t VertexIndex)
+{
+    EmuNv2aFixedFunctionAttributeCollection Result{};
+    const auto& PositionFetch =
+        FetchPlan
+            .attributes[cxbx::nv2a::PgraphVertexPositionAttribute];
+    const auto PositionFetchRequest =
+        cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+            PositionFetch, VertexIndex,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                FixedPosition);
+    const auto PositionRead =
+        EmuNv2aReadVertexAttribute(
+            Context,
+            cxbx::nv2a::PgraphVertexPositionAttribute,
+            PositionFetchRequest);
+    if(!PositionRead.Valid)
+    {
+        return Result;
+    }
+
+    Result.Values[cxbx::nv2a::PgraphVertexPositionAttribute] =
+        cxbx::nv2a::DecodePgraphFloatVertexAttribute(
+            PositionRead.Bytes,
+            PositionFetchRequest.accessPlan.readPlan.decodeComponentCount);
+    Result.SuppliedAttributeMask |=
+        1u << cxbx::nv2a::PgraphVertexPositionAttribute;
+    Result.PositionValid = true;
+
+    const auto& DiffuseFetch =
+        FetchPlan
+            .attributes[cxbx::nv2a::PgraphVertexDiffuseAttribute];
+    if(DiffuseFetch.stride != 0)
+    {
+        const auto DiffuseFetchRequest =
+            cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+                DiffuseFetch, VertexIndex,
+                cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                    FixedDiffuse);
+        const auto DiffuseRead =
+            EmuNv2aReadVertexAttribute(
+                Context,
+                cxbx::nv2a::PgraphVertexDiffuseAttribute,
+                DiffuseFetchRequest);
+        if(DiffuseRead.Valid)
+        {
+            if(DiffuseFetch.type == 2u /* TYPE_F, float4 RGBA */)
+            {
+                Result.Values[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
+                    cxbx::nv2a::DecodePgraphFloatVertexAttribute(
+                        DiffuseRead.Bytes,
+                        DiffuseFetchRequest.accessPlan.readPlan
+                            .decodeComponentCount);
+            }
+            else
+            {
+                Result.Values[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
+                    cxbx::nv2a::
+                        DecodePgraphPackedColorVertexAttribute(
+                            DiffuseRead.Bytes);
+            }
+            Result.SuppliedAttributeMask |=
+                1u << cxbx::nv2a::PgraphVertexDiffuseAttribute;
+        }
+    }
+
+    for(ULONG Stage = 0;
+        Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        const std::uint32_t TextureAttribute =
+            cxbx::nv2a::PgraphVertexTexcoord0Attribute + Stage;
+        const auto& TextureFetch =
+            FetchPlan.attributes[TextureAttribute];
+        if(TextureFetch.stride == 0)
+        {
+            continue;
+        }
+
+        const auto TextureFetchRequest =
+            cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+                TextureFetch, VertexIndex,
+                cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                    FixedTexture);
+        const auto TextureRead =
+            EmuNv2aReadVertexAttribute(
+                Context, TextureAttribute,
+                TextureFetchRequest);
+        if(!TextureRead.Valid)
+        {
+            continue;
+        }
+
+        Result.Values[TextureAttribute] =
+            cxbx::nv2a::DecodePgraphFloatVertexAttribute(
+                TextureRead.Bytes,
+                TextureFetchRequest.accessPlan.readPlan
+                    .decodeComponentCount);
+        Result.SuppliedAttributeMask |=
+            1u << TextureAttribute;
+    }
+    return Result;
+}
+
 static ULONG EmuNv2aClampByte(float v)
 {
     if(v <= 0.0f) return 0;
@@ -6742,9 +6856,6 @@ static void EmuNv2aRasterizeDrawArrays(
     const auto& Pos =
         VertexFetchPlan
             .attributes[cxbx::nv2a::PgraphVertexPositionAttribute];
-    const auto& Dif =
-        VertexFetchPlan
-            .attributes[cxbx::nv2a::PgraphVertexDiffuseAttribute];
     ULONG VertexBase = EmuNv2aResolveDmaBase(
         static_cast<ULONG>(VertexFetchPlan.contextDmaVertex));
     const bool Inline = InlineData != nullptr;
@@ -6757,8 +6868,6 @@ static void EmuNv2aRasterizeDrawArrays(
     };
     const ULONG PosStride = static_cast<ULONG>(Pos.stride);
     const ULONG PosType = static_cast<ULONG>(Pos.type);
-    const ULONG DifStride = static_cast<ULONG>(Dif.stride);
-    const ULONG DifType = static_cast<ULONG>(Dif.type);
     ULONG TexStride[EmuNv2aTextureStageCount] = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
@@ -6909,102 +7018,20 @@ static void EmuNv2aRasterizeDrawArrays(
         }
         else
         {
-            cxbx::nv2a::PgraphVertexAttributeValues
-                FixedAttributeValues{};
-            std::uint32_t FixedSuppliedAttributeMask = 0;
-            const auto PositionFetchRequest =
-                cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
-                    Pos, static_cast<std::uint32_t>(Index),
-                    cxbx::nv2a::PgraphVertexAttributeReadPurpose::
-                        FixedPosition);
-            const auto PositionRead =
-                EmuNv2aReadVertexAttribute(
-                    AttributeMemory,
-                    cxbx::nv2a::PgraphVertexPositionAttribute,
-                    PositionFetchRequest);
-            if(!PositionRead.Valid)
+            const auto FixedAttributes =
+                EmuNv2aCollectFixedFunctionAttributes(
+                    AttributeMemory, VertexFetchPlan,
+                    static_cast<std::uint32_t>(Index));
+            if(!FixedAttributes.PositionValid)
             {
                 continue;
-            }
-            FixedAttributeValues[cxbx::nv2a::PgraphVertexPositionAttribute] =
-                cxbx::nv2a::DecodePgraphFloatVertexAttribute(
-                    PositionRead.Bytes,
-                    PositionFetchRequest.accessPlan.readPlan.decodeComponentCount);
-            FixedSuppliedAttributeMask |=
-                1u << cxbx::nv2a::PgraphVertexPositionAttribute;
-
-            if(DifStride != 0)
-            {
-                const auto DiffuseFetchRequest =
-                    cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
-                        Dif, static_cast<std::uint32_t>(Index),
-                        cxbx::nv2a::PgraphVertexAttributeReadPurpose::
-                            FixedDiffuse);
-                const auto DiffuseRead =
-                    EmuNv2aReadVertexAttribute(
-                        AttributeMemory,
-                        cxbx::nv2a::PgraphVertexDiffuseAttribute,
-                        DiffuseFetchRequest);
-                if(DiffuseRead.Valid)
-                {
-                    if(DifType == 2 /* TYPE_F, float4 RGBA */)
-                    {
-                        FixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
-                            cxbx::nv2a::DecodePgraphFloatVertexAttribute(
-                                DiffuseRead.Bytes,
-                                DiffuseFetchRequest.accessPlan.readPlan.decodeComponentCount);
-                    }
-                    else
-                    {
-                        FixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
-                            cxbx::nv2a::
-                                DecodePgraphPackedColorVertexAttribute(
-                                    DiffuseRead.Bytes);
-                    }
-                    FixedSuppliedAttributeMask |=
-                        1u << cxbx::nv2a::
-                            PgraphVertexDiffuseAttribute;
-                }
-            }
-
-            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
-            {
-                if(TexStride[Stage] == 0)
-                {
-                    continue;
-                }
-                const std::uint32_t TextureAttribute =
-                    cxbx::nv2a::PgraphVertexTexcoord0Attribute + Stage;
-                const auto& TextureFetch =
-                    VertexFetchPlan.attributes[TextureAttribute];
-                const auto TextureFetchRequest =
-                    cxbx::nv2a::
-                        BuildPgraphVertexAttributeFetchRequest(
-                            TextureFetch,
-                            static_cast<std::uint32_t>(Index),
-                            cxbx::nv2a::
-                                PgraphVertexAttributeReadPurpose::
-                                    FixedTexture);
-                const auto TextureRead =
-                    EmuNv2aReadVertexAttribute(
-                        AttributeMemory, TextureAttribute,
-                        TextureFetchRequest);
-                if(TextureRead.Valid)
-                {
-                    FixedAttributeValues[TextureAttribute] =
-                        cxbx::nv2a::DecodePgraphFloatVertexAttribute(
-                            TextureRead.Bytes,
-                            TextureFetchRequest.accessPlan.readPlan.decodeComponentCount);
-                    FixedSuppliedAttributeMask |=
-                        1u << TextureAttribute;
-                }
             }
 
             const cxbx::nv2a::PgraphFixedFunctionVertexInput
                 FixedInput =
                     cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
-                        FixedAttributeValues, VertexFetchPlan,
-                        FixedSuppliedAttributeMask);
+                        FixedAttributes.Values, VertexFetchPlan,
+                        FixedAttributes.SuppliedAttributeMask);
             Xc = FixedInput.position[0];
             Yc = FixedInput.position[1];
             Zc = FixedInput.position[2];
