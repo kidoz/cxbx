@@ -52,6 +52,7 @@ namespace xboxkrnl
 #include "core/trace.h"
 #include "hw/nv2a_device_state.h"
 #include "hw/nv2a_pfifo.h"
+#include "hw/nv2a_pgraph_combiner_state.h"
 #include "hw/nv2a_pgraph_render_state.h"
 #include "hw/nv2a_pgraph_surface.h"
 #include "hw/nv2a_pgraph_texture_state.h"
@@ -683,6 +684,7 @@ static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
 static cxbx::nv2a::PgraphRenderState g_EmuNv2aRenderState{};
 static cxbx::nv2a::PgraphSurfaceState g_EmuNv2aSurfaceState{};
 static cxbx::nv2a::PgraphTextureState g_EmuNv2aTextureState{};
+static cxbx::nv2a::PgraphCombinerState g_EmuNv2aCombinerState{};
 static ULONG g_EmuNv2aSubchannelClass[8] = {};
 
 static bool EmuNv2aIsMmioAddress(ULONG Address)
@@ -1757,16 +1759,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_TRANSFORM_PROGRAM_LOAD    0x1E9Cu
 #define NV097_SET_TRANSFORM_PROGRAM_START   0x1EA0u
 #define NV097_SET_TRANSFORM_CONSTANT_LOAD   0x1EA4u
-#define NV097_SET_COMBINER_ALPHA_ICW           0x0260u
-#define NV097_SET_COMBINER_SPECULAR_FOG_CW0    0x0288u
-#define NV097_SET_COMBINER_SPECULAR_FOG_CW1    0x028Cu
-#define NV097_SET_COMBINER_FACTOR0             0x0A60u
-#define NV097_SET_COMBINER_FACTOR1             0x0A80u
-#define NV097_SET_COMBINER_ALPHA_OCW           0x0AA0u
-#define NV097_SET_COMBINER_COLOR_ICW           0x0AC0u
-#define NV097_SET_COMBINER_COLOR_OCW           0x1E40u
-#define NV097_SET_COMBINER_CONTROL             0x1E60u
-#define NV097_SET_SHADER_STAGE_PROGRAM         0x1E70u
 #define NV097_SET_VERTEX_DATA_ARRAY_OFFSET  0x1720u
 #define NV097_SET_VERTEX_DATA_ARRAY_FORMAT  0x1760u
 #define NV097_ARRAY_ELEMENT16                0x1800u
@@ -1885,39 +1877,14 @@ extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Va
     }
 }
 
-static ULONG g_EmuNv2aCombinerAlphaIcw[8] = {};
-static ULONG g_EmuNv2aCombinerColorIcw[8] = {};
-static ULONG g_EmuNv2aCombinerAlphaOcw[8] = {};
-static ULONG g_EmuNv2aCombinerColorOcw[8] = {};
-static ULONG g_EmuNv2aCombinerFactor0[8] = {};
-static ULONG g_EmuNv2aCombinerFactor1[8] = {};
-static ULONG g_EmuNv2aCombinerControl = 0;
-static ULONG g_EmuNv2aFinalCombinerCw0 = 0;
-static ULONG g_EmuNv2aFinalCombinerCw1 = 0;
-static ULONG g_EmuNv2aFinalCombinerMask = 0;
-static ULONG g_EmuNv2aShaderStageProgram = 0;
-
 extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
 {
-    if(cxbx::nv2a::ApplyPgraphRenderStateMethod(
-           g_EmuNv2aRenderState, static_cast<std::uint32_t>(Method),
-           static_cast<std::uint32_t>(Data)))
-    {
-        return;
-    }
-
-    switch(Method & 0x1FFCu)
-    {
-        case NV097_SET_COMBINER_SPECULAR_FOG_CW0:
-            g_EmuNv2aFinalCombinerCw0 = Data;
-            g_EmuNv2aFinalCombinerMask |= 1u;
-            break;
-        case NV097_SET_COMBINER_SPECULAR_FOG_CW1:
-            g_EmuNv2aFinalCombinerCw1 = Data;
-            g_EmuNv2aFinalCombinerMask |= 2u;
-            break;
-        default: break;
-    }
+    static_cast<void>(cxbx::nv2a::ApplyPgraphRenderStateMethod(
+        g_EmuNv2aRenderState, static_cast<std::uint32_t>(Method),
+        static_cast<std::uint32_t>(Data)));
+    static_cast<void>(cxbx::nv2a::ApplyPgraphCombinerStateMethod(
+        g_EmuNv2aCombinerState, static_cast<std::uint32_t>(Method),
+        static_cast<std::uint32_t>(Data)));
 }
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
@@ -2268,40 +2235,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             case NV097_SET_TRANSFORM_PROGRAM_LOAD:   g_EmuNv2aVpWriteDword = Data * 4; break;
             case NV097_SET_TRANSFORM_PROGRAM_START:  g_EmuNv2aVpStart = Data; break;
             case NV097_SET_TRANSFORM_CONSTANT_LOAD:  g_EmuNv2aConstWriteFloat = Data * 4; break;
-            case NV097_SET_COMBINER_CONTROL: g_EmuNv2aCombinerControl = Data; break;
-            case NV097_SET_SHADER_STAGE_PROGRAM: g_EmuNv2aShaderStageProgram = Data; break;
             default:
-                if(Method >= NV097_SET_COMBINER_ALPHA_ICW &&
-                   Method < NV097_SET_COMBINER_ALPHA_ICW + 8 * 4)
-                {
-                    g_EmuNv2aCombinerAlphaIcw[(Method - NV097_SET_COMBINER_ALPHA_ICW) / 4] = Data;
-                }
-                else if(Method >= NV097_SET_COMBINER_FACTOR0 &&
-                        Method < NV097_SET_COMBINER_FACTOR0 + 8 * 4)
-                {
-                    g_EmuNv2aCombinerFactor0[(Method - NV097_SET_COMBINER_FACTOR0) / 4] = Data;
-                }
-                else if(Method >= NV097_SET_COMBINER_FACTOR1 &&
-                        Method < NV097_SET_COMBINER_FACTOR1 + 8 * 4)
-                {
-                    g_EmuNv2aCombinerFactor1[(Method - NV097_SET_COMBINER_FACTOR1) / 4] = Data;
-                }
-                else if(Method >= NV097_SET_COMBINER_ALPHA_OCW &&
-                        Method < NV097_SET_COMBINER_ALPHA_OCW + 8 * 4)
-                {
-                    g_EmuNv2aCombinerAlphaOcw[(Method - NV097_SET_COMBINER_ALPHA_OCW) / 4] = Data;
-                }
-                else if(Method >= NV097_SET_COMBINER_COLOR_ICW &&
-                        Method < NV097_SET_COMBINER_COLOR_ICW + 8 * 4)
-                {
-                    g_EmuNv2aCombinerColorIcw[(Method - NV097_SET_COMBINER_COLOR_ICW) / 4] = Data;
-                }
-                else if(Method >= NV097_SET_COMBINER_COLOR_OCW &&
-                        Method < NV097_SET_COMBINER_COLOR_OCW + 8 * 4)
-                {
-                    g_EmuNv2aCombinerColorOcw[(Method - NV097_SET_COMBINER_COLOR_OCW) / 4] = Data;
-                }
-                else if(Method >= NV097_SET_TRANSFORM_PROGRAM &&
+                if(Method >= NV097_SET_TRANSFORM_PROGRAM &&
                         Method < NV097_SET_TRANSFORM_PROGRAM + 0x80)
                 {
                     // Microcode upload: append one 32-bit word at the load cursor.
@@ -4739,7 +4674,8 @@ static bool EmuNv2aDrawGate(const char *What, ULONG Count)
                g_EmuNv2aDebugFrame, Index, What, g_EmuNv2aBeginOp, Count,
                g_EmuNv2aVpExecMode, g_EmuNv2aVpInstrCount,
                static_cast<ULONG>(g_EmuNv2aTextureState.stages[0].format),
-               g_EmuNv2aShaderStageProgram,
+               static_cast<ULONG>(
+                   g_EmuNv2aCombinerState.shaderStageProgram),
                g_EmuNv2aRenderState.blendEnable ? 1u : 0u, g_EmuNv2aRenderState.depthTest ? 1u : 0u,
                g_EmuNv2aRenderState.alphaTest ? 1u : 0u, g_EmuNv2aRenderState.stencilTest ? 1u : 0u,
                Skipped ? " SKIPPED" : "");
@@ -4809,17 +4745,27 @@ static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG 
                 g_EmuNv2aRenderState.stencilOpZPass));
     fprintf(f, "combiner control=0x%.08lX shader_stage_program=0x%.08lX "
                "final_cw0=0x%.08lX final_cw1=0x%.08lX final_mask=0x%lX\n",
-            g_EmuNv2aCombinerControl, g_EmuNv2aShaderStageProgram,
-            g_EmuNv2aFinalCombinerCw0, g_EmuNv2aFinalCombinerCw1,
-            g_EmuNv2aFinalCombinerMask);
-    for(ULONG i = 0; i < 8; i++)
+            static_cast<ULONG>(g_EmuNv2aCombinerState.control),
+            static_cast<ULONG>(
+                g_EmuNv2aCombinerState.shaderStageProgram),
+            static_cast<ULONG>(
+                g_EmuNv2aCombinerState.finalCombinerCw0),
+            static_cast<ULONG>(
+                g_EmuNv2aCombinerState.finalCombinerCw1),
+            static_cast<ULONG>(
+                g_EmuNv2aCombinerState.finalCombinerMask));
+    for(ULONG i = 0; i < cxbx::nv2a::PgraphCombinerStageCount; i++)
     {
+        const auto& Combiner = g_EmuNv2aCombinerState.stages[i];
         fprintf(f, "combiner[%lu] rgb_icw=0x%.08lX rgb_ocw=0x%.08lX "
                    "alpha_icw=0x%.08lX alpha_ocw=0x%.08lX factor0=0x%.08lX "
                    "factor1=0x%.08lX\n",
-                i, g_EmuNv2aCombinerColorIcw[i], g_EmuNv2aCombinerColorOcw[i],
-                g_EmuNv2aCombinerAlphaIcw[i], g_EmuNv2aCombinerAlphaOcw[i],
-                g_EmuNv2aCombinerFactor0[i], g_EmuNv2aCombinerFactor1[i]);
+                i, static_cast<ULONG>(Combiner.colorIcw),
+                static_cast<ULONG>(Combiner.colorOcw),
+                static_cast<ULONG>(Combiner.alphaIcw),
+                static_cast<ULONG>(Combiner.alphaOcw),
+                static_cast<ULONG>(Combiner.factor0),
+                static_cast<ULONG>(Combiner.factor1));
     }
     for(ULONG i = 0; i < EmuNv2aTextureStageCount; i++)
     {
@@ -6687,17 +6633,19 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     Target.AlphaTest = g_EmuNv2aRenderState.alphaTest;
     Target.AlphaFunc = g_EmuNv2aRenderState.alphaFunc;
     Target.AlphaRef = g_EmuNv2aRenderState.alphaRef;
-    Target.CombinerControl = g_EmuNv2aCombinerControl;
-    Target.CombinerColorIcw = g_EmuNv2aCombinerColorIcw[0];
-    Target.CombinerAlphaIcw = g_EmuNv2aCombinerAlphaIcw[0];
-    Target.CombinerColorOcw = g_EmuNv2aCombinerColorOcw[0];
-    Target.CombinerAlphaOcw = g_EmuNv2aCombinerAlphaOcw[0];
-    Target.CombinerFactor0 = g_EmuNv2aCombinerFactor0[0];
-    Target.CombinerFactor1 = g_EmuNv2aCombinerFactor1[0];
+    const auto& Stage0Combiner = g_EmuNv2aCombinerState.stages[0];
+    Target.CombinerControl = g_EmuNv2aCombinerState.control;
+    Target.CombinerColorIcw = Stage0Combiner.colorIcw;
+    Target.CombinerAlphaIcw = Stage0Combiner.alphaIcw;
+    Target.CombinerColorOcw = Stage0Combiner.colorOcw;
+    Target.CombinerAlphaOcw = Stage0Combiner.alphaOcw;
+    Target.CombinerFactor0 = Stage0Combiner.factor0;
+    Target.CombinerFactor1 = Stage0Combiner.factor1;
     Target.CombinerMode = EmuNv2aClassifyStage0Combiner(&Target);
-    Target.FinalCombinerCw0 = g_EmuNv2aFinalCombinerCw0;
-    Target.FinalCombinerCw1 = g_EmuNv2aFinalCombinerCw1;
-    Target.FinalCombiner = g_EmuNv2aFinalCombinerMask == 3u &&
+    Target.FinalCombinerCw0 = g_EmuNv2aCombinerState.finalCombinerCw0;
+    Target.FinalCombinerCw1 = g_EmuNv2aCombinerState.finalCombinerCw1;
+    Target.FinalCombiner = cxbx::nv2a::IsPgraphFinalCombinerComplete(
+                               g_EmuNv2aCombinerState) &&
                            !cxbx::nv2a::IsFinalCombinerPassthroughR0(
                                Target.FinalCombinerCw0,
                                Target.FinalCombinerCw1);
@@ -6844,7 +6792,8 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
         TextureMode[Stage] =
-            (g_EmuNv2aShaderStageProgram >> (Stage * 5)) & 0x1Fu;
+            (g_EmuNv2aCombinerState.shaderStageProgram >> (Stage * 5)) &
+            0x1Fu;
         const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
         const bool TextureBound = Texture.format != 0 &&
                                   (Texture.control0 & 0x40000000u) != 0 &&
