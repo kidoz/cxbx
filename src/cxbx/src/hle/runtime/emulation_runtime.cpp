@@ -56,6 +56,7 @@ namespace xboxkrnl
 #include "hw/nv2a_pgraph_render_state.h"
 #include "hw/nv2a_pgraph_surface.h"
 #include "hw/nv2a_pgraph_texture_state.h"
+#include "hw/nv2a_pgraph_transform_state.h"
 #include "hw/nv2a_pgraph_vertex_state.h"
 #include "shared_runtime_state.h"
 
@@ -686,6 +687,7 @@ static cxbx::nv2a::PgraphRenderState g_EmuNv2aRenderState{};
 static cxbx::nv2a::PgraphSurfaceState g_EmuNv2aSurfaceState{};
 static cxbx::nv2a::PgraphTextureState g_EmuNv2aTextureState{};
 static cxbx::nv2a::PgraphCombinerState g_EmuNv2aCombinerState{};
+static cxbx::nv2a::PgraphTransformState g_EmuNv2aTransformState{};
 static cxbx::nv2a::PgraphVertexState g_EmuNv2aVertexState{};
 static ULONG g_EmuNv2aSubchannelClass[8] = {};
 
@@ -1750,16 +1752,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // edge-function triangle raster writing straight into the surface. No z-buffer,
 // no texturing, no vertex program yet. Gated behind CXBX_NV2A_RASTER so it
 // cannot perturb the working HLE-D3D8 titles or the conformance suite.
-#define NV097_SET_PROJECTION_MATRIX         0x0440u
-#define NV097_SET_COMPOSITE_MATRIX          0x0680u
-#define NV097_SET_VIEWPORT_OFFSET           0x0A20u
-#define NV097_SET_VIEWPORT_SCALE            0x0AF0u
-#define NV097_SET_TRANSFORM_PROGRAM         0x0B00u
-#define NV097_SET_TRANSFORM_CONSTANT        0x0B80u
-#define NV097_SET_TRANSFORM_EXECUTION_MODE  0x1E94u
-#define NV097_SET_TRANSFORM_PROGRAM_LOAD    0x1E9Cu
-#define NV097_SET_TRANSFORM_PROGRAM_START   0x1EA0u
-#define NV097_SET_TRANSFORM_CONSTANT_LOAD   0x1EA4u
 #define NV097_ARRAY_ELEMENT16                0x1800u
 #define NV097_ARRAY_ELEMENT32                0x1808u
 #define NV097_DRAW_ARRAYS                   0x1810u
@@ -1774,7 +1766,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
 #define EmuNv2aAttrTexcoord0                9u
-#define EmuNv2aVpMaxInstr                   136u
 #define EmuNv2aInlineWordCapacity           65536u
 
 // CPU vertex-program interpreter (implemented in vsh_decoder.cpp): transform
@@ -1784,10 +1775,10 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
                                      const float *Const, const float *Input,
                                      float *OutPos, float *OutCol0, float *OutTex0);
-extern "C" bool EmuVshExecuteProgramRaster(const DWORD *Program, int InstrCount, int Start,
-                                           const float *Const, const float *Input,
-                                           float *OutPos, float *OutColors,
-                                           float *OutTexCoords);
+extern "C" bool EmuVshExecuteProgramRaster(
+    const std::uint32_t* Program, int InstrCount, int Start,
+    const float* Const, const float* Input, float* OutPos,
+    float* OutColors, float* OutTexCoords);
 
 static ULONG g_EmuNv2aContextDmaSemaphore = 0;
 static ULONG g_EmuNv2aSemaphoreOffset = 0;
@@ -1828,44 +1819,30 @@ static ULONG g_EmuNv2aPresentedFrameHeight = 0;
 static bool  g_bEmuNv2aRaster = false;
 static bool  g_bEmuNv2aRasterChecked = false;
 static bool  g_bEmuNv2aHleRaster = false;
-// Viewport transform (clip/NDC -> screen). Defaults are identity so the Phase 0
-// pre-transformed case (w==1, no viewport programmed) maps position straight to
-// screen coordinates; a title that programs a real viewport gets it applied.
-static float g_EmuNv2aViewportOffset[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-static float g_EmuNv2aViewportScale[4]  = { 1.0f, 1.0f, 1.0f, 1.0f };
-// Fixed-function composite matrix (object -> clip), applied in the non-program
-// path. Row-major, D3D row-vector convention (clip.j = sum_i pos.i * M[i][j]).
-// Identity by default so a title that supplies clip/screen coordinates directly
-// (and never programs the matrix) is untransformed.
-static float g_EmuNv2aCompositeMatrix[16] = {
-    1.0f, 0.0f, 0.0f, 0.0f,
-    0.0f, 1.0f, 0.0f, 0.0f,
-    0.0f, 0.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f, 1.0f,
-};
-// Vertex-program state (Phase 2): uploaded microcode + constant memory. The
-// interpreter runs when execution mode is PROGRAM and a program is loaded;
-// otherwise the raw position/diffuse arrays feed the transform back-end.
-static DWORD g_EmuNv2aVpProgram[EmuNv2aVpMaxInstr * 4] = {};
-static ULONG g_EmuNv2aVpWriteDword = 0;   // SET_TRANSFORM_PROGRAM upload cursor
-static ULONG g_EmuNv2aVpInstrCount = 0;   // highest loaded instruction slot + 1
-static ULONG g_EmuNv2aVpStart = 0;        // SET_TRANSFORM_PROGRAM_START
-static ULONG g_EmuNv2aVpExecMode = 0;     // SET_TRANSFORM_EXECUTION_MODE & 3
-static float g_EmuNv2aTransformConstant[192 * 4] = {};
-static ULONG g_EmuNv2aConstWriteFloat = 0; // SET_TRANSFORM_CONSTANT upload cursor
-
 extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Value)
 {
-    if(HardwareIndex < 192 && Value != nullptr)
+    if(Value == nullptr)
     {
-        memcpy(&g_EmuNv2aTransformConstant[HardwareIndex * 4], Value, 4 * sizeof(float));
-        cxbx::nv2a::PushbufferCaptureWriter* Capture =
-            EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
-        if(Capture != nullptr)
-        {
-            Capture->RecordTransformConstant(g_EmuNv2aDebugFrame,
-                                             HardwareIndex, Value);
-        }
+        return;
+    }
+
+    const std::span<const float,
+                    cxbx::nv2a::PgraphTransformVectorComponentCount>
+        Constant{ Value,
+                  cxbx::nv2a::PgraphTransformVectorComponentCount };
+    if(!cxbx::nv2a::SetPgraphTransformConstant(
+           g_EmuNv2aTransformState,
+           static_cast<std::uint32_t>(HardwareIndex), Constant))
+    {
+        return;
+    }
+
+    cxbx::nv2a::PushbufferCaptureWriter* Capture =
+        EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
+    if(Capture != nullptr)
+    {
+        Capture->RecordTransformConstant(g_EmuNv2aDebugFrame,
+                                         HardwareIndex, Value);
     }
 }
 
@@ -1883,6 +1860,7 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 static void EmuNv2aRasterizeDrawArrays(
     const cxbx::nv2a::PgraphVertexState& VertexState,
+    const cxbx::nv2a::PgraphTransformState& TransformState,
     ULONG Start, ULONG Count, const ULONG* Indices = nullptr,
     const BYTE* InlineData = nullptr, ULONG InlineStride = 0,
     const ULONG* InlineOffsets = nullptr);
@@ -2123,6 +2101,10 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         // Phase 0 rasterizer state: track the color surface, the vertex arrays,
         // and the active primitive so a DRAW_ARRAYS can be turned into pixels.
         EmuNv2aSetRenderState(Method, Data);
+        static_cast<void>(cxbx::nv2a::ApplyPgraphTransformMethod(
+            g_EmuNv2aTransformState,
+            static_cast<std::uint32_t>(Method),
+            static_cast<std::uint32_t>(Data)));
         static_cast<void>(cxbx::nv2a::ApplyPgraphVertexStateMethod(
             g_EmuNv2aVertexState, static_cast<std::uint32_t>(Method),
             static_cast<std::uint32_t>(Data)));
@@ -2174,7 +2156,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                     else if(g_EmuNv2aElementIndexCount >= 3)
                     {
                         EmuNv2aRasterizeDrawArrays(
-                            g_EmuNv2aVertexState, 0,
+                            g_EmuNv2aVertexState,
+                            g_EmuNv2aTransformState, 0,
                             g_EmuNv2aElementIndexCount,
                             g_EmuNv2aElementIndices);
                     }
@@ -2214,7 +2197,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 break;
             case NV097_DRAW_ARRAYS:
                 EmuNv2aRasterizeDrawArrays(
-                    g_EmuNv2aVertexState, Data & 0xFFFFFF,
+                    g_EmuNv2aVertexState,
+                    g_EmuNv2aTransformState, Data & 0xFFFFFF,
                     ((Data >> 24) & 0xFF) + 1);
                 break;
             case NV097_INLINE_ARRAY:
@@ -2227,45 +2211,10 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                     g_EmuNv2aInlineOverflow = true;
                 }
                 break;
-            case NV097_SET_TRANSFORM_EXECUTION_MODE: g_EmuNv2aVpExecMode = Data & 0x3; break;
-            case NV097_SET_TRANSFORM_PROGRAM_LOAD:   g_EmuNv2aVpWriteDword = Data * 4; break;
-            case NV097_SET_TRANSFORM_PROGRAM_START:  g_EmuNv2aVpStart = Data; break;
-            case NV097_SET_TRANSFORM_CONSTANT_LOAD:  g_EmuNv2aConstWriteFloat = Data * 4; break;
             default:
-                if(Method >= NV097_SET_TRANSFORM_PROGRAM &&
-                        Method < NV097_SET_TRANSFORM_PROGRAM + 0x80)
-                {
-                    // Microcode upload: append one 32-bit word at the load cursor.
-                    if(g_EmuNv2aVpWriteDword < EmuNv2aVpMaxInstr * 4)
-                    {
-                        g_EmuNv2aVpProgram[g_EmuNv2aVpWriteDword++] = Data;
-                        ULONG Instrs = (g_EmuNv2aVpWriteDword + 3) / 4;
-                        if(Instrs > g_EmuNv2aVpInstrCount)
-                            g_EmuNv2aVpInstrCount = Instrs;
-                    }
-                }
-                else if(Method >= NV097_SET_TRANSFORM_CONSTANT &&
-                        Method < NV097_SET_TRANSFORM_CONSTANT + 0x80)
-                {
-                    // Constant memory upload: one float per word at the load cursor.
-                    if(g_EmuNv2aConstWriteFloat < 192 * 4)
-                        memcpy(&g_EmuNv2aTransformConstant[g_EmuNv2aConstWriteFloat++], &Data, 4);
-                }
-                else if(Method >= NV097_SET_COMPOSITE_MATRIX && Method < NV097_SET_COMPOSITE_MATRIX + 64)
-                {
-                    memcpy(&g_EmuNv2aCompositeMatrix[(Method - NV097_SET_COMPOSITE_MATRIX) / 4], &Data, 4);
-                }
-                else if(Method >= NV097_SET_VIEWPORT_OFFSET && Method < NV097_SET_VIEWPORT_OFFSET + 16)
-                {
-                    memcpy(&g_EmuNv2aViewportOffset[(Method - NV097_SET_VIEWPORT_OFFSET) / 4], &Data, 4);
-                }
-                else if(Method >= NV097_SET_VIEWPORT_SCALE && Method < NV097_SET_VIEWPORT_SCALE + 16)
-                {
-                    memcpy(&g_EmuNv2aViewportScale[(Method - NV097_SET_VIEWPORT_SCALE) / 4], &Data, 4);
-                }
-                else if(Method >= NV097_SET_VERTEX_DATA2F_M &&
-                        Method < NV097_SET_VERTEX_DATA2F_M +
-                                     cxbx::nv2a::PgraphVertexAttributeCount * 8)
+                if(Method >= NV097_SET_VERTEX_DATA2F_M &&
+                   Method < NV097_SET_VERTEX_DATA2F_M +
+                                cxbx::nv2a::PgraphVertexAttributeCount * 8)
                 {
                     const ULONG Relative = Method - NV097_SET_VERTEX_DATA2F_M;
                     const ULONG Attribute = Relative / 8;
@@ -4661,7 +4610,9 @@ static bool EmuNv2aDrawGate(const char *What, ULONG Count)
         printf("NVDRAW| frame=%lu draw=%lu %s op=0x%lX count=%lu vp=%lu/%lu "
                "tex0=0x%.08lX ssp=0x%.08lX blend=%u depth=%u alpha=%u stencil=%u%s\n",
                g_EmuNv2aDebugFrame, Index, What, g_EmuNv2aBeginOp, Count,
-               g_EmuNv2aVpExecMode, g_EmuNv2aVpInstrCount,
+               static_cast<ULONG>(g_EmuNv2aTransformState.executionMode),
+               static_cast<ULONG>(
+                   g_EmuNv2aTransformState.programInstructionCount),
                static_cast<ULONG>(g_EmuNv2aTextureState.stages[0].format),
                static_cast<ULONG>(
                    g_EmuNv2aCombinerState.shaderStageProgram),
@@ -4782,31 +4733,47 @@ static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG 
         }
     }
     fprintf(f, "viewport offset=(%g,%g,%g,%g) scale=(%g,%g,%g,%g)\n",
-            g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1],
-            g_EmuNv2aViewportOffset[2], g_EmuNv2aViewportOffset[3],
-            g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1],
-            g_EmuNv2aViewportScale[2], g_EmuNv2aViewportScale[3]);
-    for(ULONG Row = 0; Row < 4; Row++)
+            g_EmuNv2aTransformState.viewportOffset[0],
+            g_EmuNv2aTransformState.viewportOffset[1],
+            g_EmuNv2aTransformState.viewportOffset[2],
+            g_EmuNv2aTransformState.viewportOffset[3],
+            g_EmuNv2aTransformState.viewportScale[0],
+            g_EmuNv2aTransformState.viewportScale[1],
+            g_EmuNv2aTransformState.viewportScale[2],
+            g_EmuNv2aTransformState.viewportScale[3]);
+    for(ULONG Row = 0;
+        Row < cxbx::nv2a::PgraphTransformVectorComponentCount; Row++)
     {
         fprintf(f, "composite_matrix[%lu] %g %g %g %g\n", Row,
-                g_EmuNv2aCompositeMatrix[Row * 4 + 0],
-                g_EmuNv2aCompositeMatrix[Row * 4 + 1],
-                g_EmuNv2aCompositeMatrix[Row * 4 + 2],
-                g_EmuNv2aCompositeMatrix[Row * 4 + 3]);
+                g_EmuNv2aTransformState.compositeMatrix[Row * 4 + 0],
+                g_EmuNv2aTransformState.compositeMatrix[Row * 4 + 1],
+                g_EmuNv2aTransformState.compositeMatrix[Row * 4 + 2],
+                g_EmuNv2aTransformState.compositeMatrix[Row * 4 + 3]);
     }
     fprintf(f, "vp exec_mode=%lu start=%lu instr_count=%lu\n",
-            g_EmuNv2aVpExecMode, g_EmuNv2aVpStart, g_EmuNv2aVpInstrCount);
-    for(ULONG i = 0; i < g_EmuNv2aVpInstrCount && i < EmuNv2aVpMaxInstr; i++)
+            static_cast<ULONG>(g_EmuNv2aTransformState.executionMode),
+            static_cast<ULONG>(g_EmuNv2aTransformState.programStart),
+            static_cast<ULONG>(
+                g_EmuNv2aTransformState.programInstructionCount));
+    for(ULONG i = 0;
+        i < g_EmuNv2aTransformState.programInstructionCount &&
+        i < cxbx::nv2a::PgraphTransformProgramInstructionCount;
+        i++)
     {
         fprintf(f, "vp[%lu] %.08lX %.08lX %.08lX %.08lX\n", i,
-                (ULONG)g_EmuNv2aVpProgram[i * 4 + 0],
-                (ULONG)g_EmuNv2aVpProgram[i * 4 + 1],
-                (ULONG)g_EmuNv2aVpProgram[i * 4 + 2],
-                (ULONG)g_EmuNv2aVpProgram[i * 4 + 3]);
+                static_cast<ULONG>(
+                    g_EmuNv2aTransformState.program[i * 4 + 0]),
+                static_cast<ULONG>(
+                    g_EmuNv2aTransformState.program[i * 4 + 1]),
+                static_cast<ULONG>(
+                    g_EmuNv2aTransformState.program[i * 4 + 2]),
+                static_cast<ULONG>(
+                    g_EmuNv2aTransformState.program[i * 4 + 3]));
     }
-    for(ULONG i = 0; i < 192; i++)
+    for(ULONG i = 0; i < cxbx::nv2a::PgraphTransformConstantCount; i++)
     {
-        const float *C = &g_EmuNv2aTransformConstant[i * 4];
+        const float* C =
+            &g_EmuNv2aTransformState.constants[i * cxbx::nv2a::PgraphTransformVectorComponentCount];
         if(C[0] != 0.0f || C[1] != 0.0f || C[2] != 0.0f || C[3] != 0.0f)
         {
             fprintf(f, "const[%lu] %g %g %g %g\n", i, C[0], C[1], C[2], C[3]);
@@ -6470,7 +6437,8 @@ static void EmuNv2aRasterizeInlineArray()
     }
 
     EmuNv2aRasterizeDrawArrays(
-        g_EmuNv2aVertexState, 0, VertexCount, nullptr,
+        g_EmuNv2aVertexState, g_EmuNv2aTransformState,
+        0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(g_EmuNv2aInlineWords),
         VertexSize, Offsets);
 }
@@ -6512,7 +6480,8 @@ static void EmuNv2aRasterizeImmediateVertices()
 
     g_EmuNv2aRasterizingImmediate = true;
     EmuNv2aRasterizeDrawArrays(
-        ImmediateVertexState, 0, VertexCount, nullptr,
+        ImmediateVertexState, g_EmuNv2aTransformState,
+        0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(g_EmuNv2aImmediateWords),
         WordsPerVertex * sizeof(ULONG), Offsets);
     g_EmuNv2aRasterizingImmediate = false;
@@ -6520,6 +6489,7 @@ static void EmuNv2aRasterizeImmediateVertices()
 
 static void EmuNv2aRasterizeDrawArrays(
     const cxbx::nv2a::PgraphVertexState& VertexState,
+    const cxbx::nv2a::PgraphTransformState& TransformState,
     ULONG Start, ULONG Count, const ULONG* Indices,
     const BYTE* InlineData, ULONG InlineStride,
     const ULONG* InlineOffsets)
@@ -6796,7 +6766,9 @@ static void EmuNv2aRasterizeDrawArrays(
     // Phase 2: run the loaded vertex program when execution mode is PROGRAM.
     // Otherwise the position/diffuse arrays are consumed directly (Phase 0/1),
     // which needs a float position array.
-    bool VpActive = (g_EmuNv2aVpExecMode == 2 /* PROGRAM */) && (g_EmuNv2aVpInstrCount > 0);
+    const bool VpActive =
+        TransformState.executionMode == 2 /* PROGRAM */ &&
+        TransformState.programInstructionCount > 0;
     if(!VpActive && (PosStride == 0 || PosType != 2 /* TYPE_F */))
     {
         if(g_EmuNv2aRasterLogCount < 16)
@@ -6915,8 +6887,10 @@ static void EmuNv2aRasterizeDrawArrays(
             };
             float OutTexCoords[16] = {};
             EmuVshExecuteProgramRaster(
-                g_EmuNv2aVpProgram, (int)g_EmuNv2aVpInstrCount,
-                (int)g_EmuNv2aVpStart, g_EmuNv2aTransformConstant,
+                TransformState.program.data(),
+                static_cast<int>(TransformState.programInstructionCount),
+                static_cast<int>(TransformState.programStart),
+                TransformState.constants.data(),
                 Input, OutPos, OutColors, OutTexCoords);
             if(Inline)
             {
@@ -7030,7 +7004,7 @@ static void EmuNv2aRasterizeDrawArrays(
             // screen homogeneous coordinates. The four uploaded NV2A constant
             // vectors are matrix columns, matching mat4(c0,c1,c2,c3) and the
             // hardware's row-vector multiplication.
-            const float *M = g_EmuNv2aCompositeMatrix;
+            const float* M = TransformState.compositeMatrix.data();
             float ox = Xc, oy = Yc, oz = Zc, ow = W;
             Xc = ox * M[0]  + oy * M[1]  + oz * M[2]  + ow * M[3];
             Yc = ox * M[4]  + oy * M[5]  + oz * M[6]  + ow * M[7];
@@ -7053,8 +7027,8 @@ static void EmuNv2aRasterizeDrawArrays(
         {
             // The fixed-function composite matrix already contains viewport
             // scale. Hardware divides by w and adds only the viewport offset.
-            VX[i] = Xc * InvW + g_EmuNv2aViewportOffset[0];
-            VY[i] = Yc * InvW + g_EmuNv2aViewportOffset[1];
+            VX[i] = Xc * InvW + TransformState.viewportOffset[0];
+            VY[i] = Yc * InvW + TransformState.viewportOffset[1];
             VZ[i] = Zc * InvW;
             if(VertexTraceEnabled == 1 && i < 4)
             {
@@ -7216,7 +7190,10 @@ static void EmuNv2aRasterizeDrawArrays(
         printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu@%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) blend=%u(0x%lX,0x%lX) vp_scale=(%.1f,%.1f,%.1f) vp_off=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f) uv=(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f) c0=0x%.08lX texel=0x%.08lX sample[%d,%d]=0x%.08lX\n",
                GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
-               VpActive ? "prog" : "raw", g_EmuNv2aVpInstrCount, g_EmuNv2aVpStart,
+               VpActive ? "prog" : "raw",
+               static_cast<ULONG>(
+                   TransformState.programInstructionCount),
+               static_cast<ULONG>(TransformState.programStart),
                Target.Depth ? "on" : "off",
                static_cast<ULONG>(g_EmuNv2aSurfaceState.zetaFormat),
                static_cast<ULONG>(g_EmuNv2aRenderState.depthFunc),
@@ -7224,8 +7201,12 @@ static void EmuNv2aRasterizeDrawArrays(
                SamplerReady[0] ? Target.Sampler[0]->Width : 0,
                SamplerReady[0] ? Target.Sampler[0]->Height : 0,
                Target.BlendEnable ? 1u : 0u, Target.BlendSFactor, Target.BlendDFactor,
-               g_EmuNv2aViewportScale[0], g_EmuNv2aViewportScale[1], g_EmuNv2aViewportScale[2],
-               g_EmuNv2aViewportOffset[0], g_EmuNv2aViewportOffset[1], g_EmuNv2aViewportOffset[2],
+               TransformState.viewportScale[0],
+               TransformState.viewportScale[1],
+               TransformState.viewportScale[2],
+               TransformState.viewportOffset[0],
+               TransformState.viewportOffset[1],
+               TransformState.viewportOffset[2],
                VX[0], VY[0], VZ[0], VX[1], VY[1], VZ[1], VX[2], VY[2], VZ[2],
                V3X, V3Y, Count > 3 ? VZ[3] : 0.0f,
                VU[0][0], VV[0][0], VU[0][1], VV[0][1],
