@@ -1,7 +1,8 @@
 #include "hw/nv2a_pgraph_vertex_state.h"
 
-#include <cstdio>
+#include <array>
 #include <cstdint>
+#include <cstdio>
 
 namespace
 {
@@ -128,6 +129,160 @@ int main() noexcept
         return 1;
     }
 
+    constexpr std::array<std::uint32_t, 8> ComponentSizes = {
+        1,
+        2,
+        4,
+        0,
+        1,
+        2,
+        4,
+        0,
+    };
+    for(std::uint32_t type = 0; type < ComponentSizes.size(); ++type)
+    {
+        if(!ExpectEqual(
+               cxbx::nv2a::GetPgraphVertexComponentSize(type),
+               ComponentSizes[type], "vertex component size"))
+        {
+            return 1;
+        }
+    }
+
+    PgraphVertexState layoutState{};
+    layoutState.contextDmaVertex = 0x76543210u;
+    for(std::uint32_t attribute = 0;
+        attribute < cxbx::nv2a::PgraphVertexAttributeCount; ++attribute)
+    {
+        layoutState.arrays[attribute].offset = 0x1000u + attribute * 0x20u;
+    }
+    layoutState.arrays[0].format = 0x00001030u;
+    layoutState.arrays[1].format = 0x00002021u;
+    layoutState.arrays[2].format = 0x00003032u;
+    layoutState.arrays[3].format = 0x00004044u;
+    layoutState.arrays[4].format = 0x00005015u;
+    layoutState.arrays[5].format = 0x00006016u;
+    layoutState.arrays[6].format = 0x0000700Fu;
+
+    cxbx::nv2a::PgraphVertexLayout inlineLayout{};
+    if(!Expect(cxbx::nv2a::BuildPgraphInlineVertexLayout(
+                   layoutState, inlineLayout),
+               "valid inline vertex layout was rejected") ||
+       !ExpectEqual(inlineLayout.stride, 32,
+                    "inline vertex layout stride") ||
+       !ExpectEqual(inlineLayout.offsets[0], 0,
+                    "inline byte attribute offset") ||
+       !ExpectEqual(inlineLayout.offsets[1], 4,
+                    "inline short attribute offset") ||
+       !ExpectEqual(inlineLayout.offsets[2], 8,
+                    "inline float attribute offset") ||
+       !ExpectEqual(inlineLayout.offsets[3], 20,
+                    "inline OGL byte attribute offset") ||
+       !ExpectEqual(inlineLayout.offsets[4], 24,
+                    "inline S32K attribute offset") ||
+       !ExpectEqual(inlineLayout.offsets[5], 28,
+                    "inline CMP attribute offset") ||
+       !ExpectEqual(
+           inlineLayout.offsets[6],
+           cxbx::nv2a::PgraphVertexLayoutUnusedOffset,
+           "disabled inline attribute offset") ||
+       !ExpectEqual(
+           inlineLayout.offsets[15],
+           cxbx::nv2a::PgraphVertexLayoutUnusedOffset,
+           "unused inline attribute offset") ||
+       !ExpectEqual(inlineLayout.vertexState.contextDmaVertex,
+                    layoutState.contextDmaVertex,
+                    "inline layout vertex DMA snapshot") ||
+       !ExpectEqual(inlineLayout.vertexState.arrays[2].format,
+                    layoutState.arrays[2].format,
+                    "inline layout format snapshot") ||
+       !ExpectEqual(inlineLayout.vertexState.arrays[2].offset,
+                    layoutState.arrays[2].offset,
+                    "inline layout array-offset snapshot"))
+    {
+        return 1;
+    }
+
+    PgraphVertexState emptyLayoutState{};
+    cxbx::nv2a::PgraphVertexLayout rejectedLayout{};
+    rejectedLayout.stride = 0xFFFFFFFFu;
+    if(!Expect(!cxbx::nv2a::BuildPgraphInlineVertexLayout(
+                   emptyLayoutState, rejectedLayout),
+               "empty inline vertex layout was accepted") ||
+       !ExpectEqual(rejectedLayout.stride, 0xFFFFFFFFu,
+                    "empty layout changed rejected output"))
+    {
+        return 1;
+    }
+
+    PgraphVertexState invalidLayoutState{};
+    invalidLayoutState.arrays[0].format = 0x13u;
+    if(!Expect(!cxbx::nv2a::BuildPgraphInlineVertexLayout(
+                   invalidLayoutState, rejectedLayout),
+               "unknown inline component type was accepted"))
+    {
+        return 1;
+    }
+    invalidLayoutState.arrays[0].format = 0x52u;
+    if(!Expect(!cxbx::nv2a::BuildPgraphInlineVertexLayout(
+                   invalidLayoutState, rejectedLayout),
+               "five-component inline attribute was accepted"))
+    {
+        return 1;
+    }
+    invalidLayoutState.arrays[0].format = 0x26u;
+    if(!Expect(!cxbx::nv2a::BuildPgraphInlineVertexLayout(
+                   invalidLayoutState, rejectedLayout),
+               "multi-component CMP inline attribute was accepted"))
+    {
+        return 1;
+    }
+
+    std::array<
+        std::uint32_t, cxbx::nv2a::PgraphVertexAttributeCount>
+        immediateFormats{};
+    immediateFormats[0] = 0x42u;
+    immediateFormats[3] = 0x40u;
+    immediateFormats[9] = 0x22u;
+    const auto immediateLayout =
+        cxbx::nv2a::BuildPgraphImmediateVertexLayout(
+            layoutState, immediateFormats);
+    if(!ExpectEqual(
+           immediateLayout.stride,
+           cxbx::nv2a::PgraphImmediateVertexStride,
+           "immediate vertex layout stride") ||
+       !ExpectEqual(immediateLayout.offsets[0], 0,
+                    "immediate position offset") ||
+       !ExpectEqual(
+           immediateLayout.offsets[3],
+           3u * cxbx::nv2a::PgraphImmediateVertexAttributeStride,
+           "immediate diffuse offset") ||
+       !ExpectEqual(
+           immediateLayout.offsets[9],
+           9u * cxbx::nv2a::PgraphImmediateVertexAttributeStride,
+           "immediate texture offset") ||
+       !ExpectEqual(
+           immediateLayout.offsets[1],
+           cxbx::nv2a::PgraphVertexLayoutUnusedOffset,
+           "disabled immediate attribute offset") ||
+       !ExpectEqual(immediateLayout.vertexState.arrays[0].format, 0x42u,
+                    "immediate position format") ||
+       !ExpectEqual(immediateLayout.vertexState.arrays[3].format, 0x40u,
+                    "immediate diffuse format") ||
+       !ExpectEqual(immediateLayout.vertexState.arrays[9].format, 0x22u,
+                    "immediate texture format") ||
+       !ExpectEqual(immediateLayout.vertexState.arrays[1].format, 0,
+                    "disabled immediate format") ||
+       !ExpectEqual(immediateLayout.vertexState.contextDmaVertex,
+                    layoutState.contextDmaVertex,
+                    "immediate layout vertex DMA snapshot") ||
+       !ExpectEqual(immediateLayout.vertexState.arrays[1].offset,
+                    layoutState.arrays[1].offset,
+                    "immediate layout array-offset snapshot"))
+    {
+        return 1;
+    }
+
     const PgraphVertexState beforeUnknown = state;
     if(!Expect(!cxbx::nv2a::ApplyPgraphVertexStateMethod(
                    state,
@@ -153,5 +308,6 @@ int main() noexcept
         return 1;
     }
 
+    static_assert(cxbx::nv2a::PgraphImmediateVertexStride == 256);
     return 0;
 }

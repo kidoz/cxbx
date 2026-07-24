@@ -7,6 +7,11 @@ namespace cxbx::nv2a
 {
 
 inline constexpr std::uint32_t PgraphVertexAttributeCount = 16;
+inline constexpr std::uint32_t PgraphVertexLayoutUnusedOffset = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PgraphImmediateVertexAttributeStride =
+    4u * sizeof(std::uint32_t);
+inline constexpr std::uint32_t PgraphImmediateVertexStride =
+    PgraphVertexAttributeCount * PgraphImmediateVertexAttributeStride;
 
 struct PgraphVertexMethod final
 {
@@ -34,9 +39,27 @@ struct PgraphVertexArrayFormat
     std::uint32_t stride = 0;
 };
 
+struct PgraphVertexLayout
+{
+    PgraphVertexState vertexState{};
+    std::array<std::uint32_t, PgraphVertexAttributeCount> offsets{};
+    std::uint32_t stride = 0;
+};
+
 [[nodiscard]] bool ApplyPgraphVertexStateMethod(
     PgraphVertexState& state, std::uint32_t method,
     std::uint32_t data) noexcept;
+
+[[nodiscard]] std::uint32_t GetPgraphVertexComponentSize(
+    std::uint32_t type) noexcept;
+
+[[nodiscard]] bool BuildPgraphInlineVertexLayout(
+    const PgraphVertexState& state, PgraphVertexLayout& layout) noexcept;
+
+[[nodiscard]] PgraphVertexLayout BuildPgraphImmediateVertexLayout(
+    const PgraphVertexState& state,
+    const std::array<std::uint32_t, PgraphVertexAttributeCount>&
+        immediateFormats) noexcept;
 
 [[nodiscard]] constexpr PgraphVertexArrayFormat DecodePgraphVertexArrayFormat(
     std::uint32_t format) noexcept

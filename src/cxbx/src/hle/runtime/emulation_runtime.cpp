@@ -1837,7 +1837,7 @@ static void EmuNv2aRasterizeDrawArrays(
     ULONG BeginOp, ULONG Start, ULONG Count,
     const std::uint32_t* Indices = nullptr,
     const BYTE* InlineData = nullptr, ULONG InlineStride = 0,
-    const ULONG* InlineOffsets = nullptr);
+    const std::uint32_t* InlineOffsets = nullptr);
 static void EmuNv2aRasterizeInlineArray(
     const cxbx::nv2a::PgraphVertexBatchAction& Batch, ULONG BeginOp);
 static void EmuNv2aRasterizeImmediateVertices(
@@ -6262,66 +6262,13 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
 // z-buffer, or texturing.
 static ULONG g_EmuNv2aRasterLogCount = 0;
 
-static ULONG EmuNv2aVertexComponentSize(ULONG Type)
-{
-    switch(Type)
-    {
-        case 0: // UB_D3D
-        case 4: // UB_OGL
-            return 1;
-        case 1: // S1
-        case 5: // S32K
-            return 2;
-        case 2: // F
-        case 6: // CMP
-            return 4;
-        default:
-            return 0;
-    }
-}
-
-static bool EmuNv2aBuildInlineLayout(
-    const cxbx::nv2a::PgraphVertexState& VertexState,
-    ULONG* Offsets, ULONG* VertexSize)
-{
-    ULONG Offset = 0;
-    for(ULONG Attribute = 0;
-        Attribute < cxbx::nv2a::PgraphVertexAttributeCount; Attribute++)
-    {
-        Offsets[Attribute] = 0xFFFFFFFF;
-        const auto Format = cxbx::nv2a::DecodePgraphVertexArrayFormat(
-            VertexState.arrays[Attribute].format);
-        const ULONG Type = static_cast<ULONG>(Format.type);
-        const ULONG Count = static_cast<ULONG>(Format.componentCount);
-        if(Count == 0)
-        {
-            continue;
-        }
-
-        ULONG ComponentSize = EmuNv2aVertexComponentSize(Type);
-        if(ComponentSize == 0 || Count > 4 || (Type == 6 && Count != 1))
-        {
-            return false;
-        }
-
-        Offset = (Offset + ComponentSize - 1) & ~(ComponentSize - 1);
-        Offsets[Attribute] = Offset;
-        Offset += ComponentSize * Count;
-        Offset = (Offset + ComponentSize - 1) & ~(ComponentSize - 1);
-    }
-
-    *VertexSize = Offset;
-    return Offset != 0;
-}
-
 static void EmuNv2aRasterizeInlineArray(
     const cxbx::nv2a::PgraphVertexBatchAction& Batch, ULONG BeginOp)
 {
-    ULONG Offsets[cxbx::nv2a::PgraphVertexAttributeCount] = {};
-    ULONG VertexSize = 0;
+    cxbx::nv2a::PgraphVertexLayout Layout{};
     if(Batch.overflow ||
-       !EmuNv2aBuildInlineLayout(
-           g_EmuNv2aVertexState, Offsets, &VertexSize))
+       !cxbx::nv2a::BuildPgraphInlineVertexLayout(
+           g_EmuNv2aVertexState, Layout))
     {
         if(g_EmuNv2aRasterLogCount < 16)
         {
@@ -6334,6 +6281,7 @@ static void EmuNv2aRasterizeInlineArray(
         return;
     }
 
+    const ULONG VertexSize = static_cast<ULONG>(Layout.stride);
     const ULONG ByteCount =
         static_cast<ULONG>(Batch.wordCount) * sizeof(ULONG);
     ULONG VertexCount = ByteCount / VertexSize;
@@ -6357,14 +6305,14 @@ static void EmuNv2aRasterizeInlineArray(
             Attribute < cxbx::nv2a::PgraphVertexAttributeCount;
             Attribute++)
         {
-            if(Offsets[Attribute] != 0xFFFFFFFF)
+            if(Layout.offsets[Attribute] !=
+               cxbx::nv2a::PgraphVertexLayoutUnusedOffset)
             {
                 printf("NV2A| inline attr=%lu fmt=0x%.08lX offset=%lu\n",
                        Attribute,
                        static_cast<ULONG>(
-                           g_EmuNv2aVertexState.arrays[
-                               Attribute].format),
-                       Offsets[Attribute]);
+                           Layout.vertexState.arrays[Attribute].format),
+                       static_cast<ULONG>(Layout.offsets[Attribute]));
             }
         }
         fflush(stdout);
@@ -6372,11 +6320,11 @@ static void EmuNv2aRasterizeInlineArray(
     }
 
     EmuNv2aRasterizeDrawArrays(
-        g_EmuNv2aVertexState, g_EmuNv2aTransformState,
+        Layout.vertexState, g_EmuNv2aTransformState,
         BeginOp, 0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(
             g_EmuNv2aVertexSubmissionState.inlineWords.data()),
-        VertexSize, Offsets);
+        VertexSize, Layout.offsets.data());
 }
 
 static void EmuNv2aRasterizeImmediateVertices(
@@ -6396,32 +6344,18 @@ static void EmuNv2aRasterizeImmediateVertices(
         return;
     }
 
-    cxbx::nv2a::PgraphVertexState ImmediateVertexState =
-        g_EmuNv2aVertexState;
-    ULONG Offsets[cxbx::nv2a::PgraphVertexAttributeCount];
-    for(ULONG Attribute = 0;
-        Attribute < cxbx::nv2a::PgraphVertexAttributeCount; ++Attribute)
-    {
-        if(g_EmuNv2aVertexSubmissionState.immediateFormats[Attribute] != 0)
-        {
-            Offsets[Attribute] = Attribute * 4 * sizeof(ULONG);
-            ImmediateVertexState.arrays[Attribute].format =
-                g_EmuNv2aVertexSubmissionState.immediateFormats[Attribute];
-        }
-        else
-        {
-            Offsets[Attribute] = 0xFFFFFFFF;
-            ImmediateVertexState.arrays[Attribute].format = 0;
-        }
-    }
+    const cxbx::nv2a::PgraphVertexLayout Layout =
+        cxbx::nv2a::BuildPgraphImmediateVertexLayout(
+            g_EmuNv2aVertexState,
+            g_EmuNv2aVertexSubmissionState.immediateFormats);
 
     g_EmuNv2aRasterizingImmediate = true;
     EmuNv2aRasterizeDrawArrays(
-        ImmediateVertexState, g_EmuNv2aTransformState,
+        Layout.vertexState, g_EmuNv2aTransformState,
         BeginOp, 0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(
             g_EmuNv2aVertexSubmissionState.immediateWords.data()),
-        WordsPerVertex * sizeof(ULONG), Offsets);
+        static_cast<ULONG>(Layout.stride), Layout.offsets.data());
     g_EmuNv2aRasterizingImmediate = false;
 }
 
@@ -6431,7 +6365,7 @@ static void EmuNv2aRasterizeDrawArrays(
     ULONG BeginOp, ULONG Start, ULONG Count,
     const std::uint32_t* Indices,
     const BYTE* InlineData, ULONG InlineStride,
-    const ULONG* InlineOffsets)
+    const std::uint32_t* InlineOffsets)
 {
     if(!EmuNv2aRasterEnabled() || BeginOp == 0 || Count < 3)
     {
