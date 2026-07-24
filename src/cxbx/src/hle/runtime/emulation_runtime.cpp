@@ -53,6 +53,7 @@ namespace xboxkrnl
 #include "hw/nv2a_device_state.h"
 #include "hw/nv2a_pfifo.h"
 #include "hw/nv2a_pgraph_combiner_state.h"
+#include "hw/nv2a_pgraph_draw_state.h"
 #include "hw/nv2a_pgraph_flip_state.h"
 #include "hw/nv2a_pgraph_render_state.h"
 #include "hw/nv2a_pgraph_semaphore_state.h"
@@ -685,6 +686,7 @@ static const ULONG EmuAciBusMasterControlRun = 0x00000001;
 static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 
 static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
+static cxbx::nv2a::PgraphDrawState g_EmuNv2aDrawState{};
 static cxbx::nv2a::PgraphFlipState g_EmuNv2aFlipState{};
 static cxbx::nv2a::PgraphRenderState g_EmuNv2aRenderState{};
 static cxbx::nv2a::PgraphSemaphoreState g_EmuNv2aSemaphoreState{};
@@ -1635,7 +1637,6 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 // texture is bound.
 // ---------------------------------------------------------------------------
 #define NV097_NO_OPERATION             0x0100u
-#define NV097_SET_BEGIN_END            0x17FCu
 static constexpr ULONG EmuNv2aTextureStageCount =
     static_cast<ULONG>(cxbx::nv2a::PgraphTextureStageCount);
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
@@ -1748,9 +1749,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // edge-function triangle raster writing straight into the surface. No z-buffer,
 // no texturing, no vertex program yet. Gated behind CXBX_NV2A_RASTER so it
 // cannot perturb the working HLE-D3D8 titles or the conformance suite.
-#define NV097_ARRAY_ELEMENT16                0x1800u
-#define NV097_ARRAY_ELEMENT32                0x1808u
-#define NV097_DRAW_ARRAYS                   0x1810u
 #define NV097_INLINE_ARRAY                  0x1818u
 #define NV097_SET_VERTEX4F                   0x1518u
 #define NV097_SET_VERTEX_DATA2F_M            0x1880u
@@ -1773,9 +1771,6 @@ extern "C" bool EmuVshExecuteProgramRaster(
     const float* Const, const float* Input, float* OutPos,
     float* OutColors, float* OutTexCoords);
 
-static ULONG g_EmuNv2aBeginOp = 0;
-static ULONG g_EmuNv2aElementIndices[4096] = {};
-static ULONG g_EmuNv2aElementIndexCount = 0;
 static ULONG g_EmuNv2aInlineWords[EmuNv2aInlineWordCapacity] = {};
 static ULONG g_EmuNv2aInlineWordCount = 0;
 static bool  g_EmuNv2aInlineOverflow = false;
@@ -1852,11 +1847,12 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 static void EmuNv2aRasterizeDrawArrays(
     const cxbx::nv2a::PgraphVertexState& VertexState,
     const cxbx::nv2a::PgraphTransformState& TransformState,
-    ULONG Start, ULONG Count, const ULONG* Indices = nullptr,
+    ULONG BeginOp, ULONG Start, ULONG Count,
+    const std::uint32_t* Indices = nullptr,
     const BYTE* InlineData = nullptr, ULONG InlineStride = 0,
     const ULONG* InlineOffsets = nullptr);
-static void EmuNv2aRasterizeInlineArray();
-static void EmuNv2aRasterizeImmediateVertices();
+static void EmuNv2aRasterizeInlineArray(ULONG BeginOp);
+static void EmuNv2aRasterizeImmediateVertices(ULONG BeginOp);
 static void EmuNv2aWriteBackendSemaphore(
     const cxbx::nv2a::PgraphSemaphoreRelease& Release);
 static void EmuNv2aClearSurface(ULONG Flags);
@@ -1974,8 +1970,11 @@ static void EmuNv2aRecordMethodStat(ULONG Class, ULONG Method, ULONG Data)
     else if((Method / 4) < EmuNv2aStatsSlotCount)
         Stats->Counts[Method / 4]++;
 
-    if(Method == NV097_SET_BEGIN_END && Data != 0 && Data < 32)
+    if(Method == cxbx::nv2a::PgraphDrawMethod::SetBeginEnd &&
+       Data != 0 && Data < 32)
+    {
         g_EmuNv2aStatsBeginOps[Data]++;
+    }
 
     if((++g_EmuNv2aStatsTotal % 65536) == 0)
         EmuNv2aDumpMethodStats("periodic");
@@ -2072,7 +2071,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                     cxbx::nv2a::PgraphTextureStepKind::Unhandled &&
                 FlipStep.kind ==
                     cxbx::nv2a::PgraphFlipStepKind::Unhandled &&
-                Method == NV097_SET_BEGIN_END && Data != 0)
+                Method == cxbx::nv2a::PgraphDrawMethod::SetBeginEnd &&
+                Data != 0)
         {
             if(EmuNv2aTextureDumpEnabled() &&
                g_EmuNv2aTextureState.stages[0].offset != 0 &&
@@ -2102,6 +2102,10 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         static_cast<void>(cxbx::nv2a::ApplyPgraphVertexStateMethod(
             g_EmuNv2aVertexState, static_cast<std::uint32_t>(Method),
             static_cast<std::uint32_t>(Data)));
+        const cxbx::nv2a::PgraphDrawStep DrawStep =
+            cxbx::nv2a::ApplyPgraphDrawMethod(
+                g_EmuNv2aDrawState, static_cast<std::uint32_t>(Method),
+                static_cast<std::uint32_t>(Data));
         switch(Method)
         {
             case cxbx::nv2a::PgraphSurfaceMethod::SetContextDmaColor:
@@ -2131,26 +2135,33 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 }
                 break;
             }
-            case NV097_SET_BEGIN_END:
+            case cxbx::nv2a::PgraphDrawMethod::SetBeginEnd:
                 if(Data == 0)
                 {
                     if(g_EmuNv2aImmediateWordCount != 0)
                     {
-                        EmuNv2aRasterizeImmediateVertices();
+                        EmuNv2aRasterizeImmediateVertices(
+                            static_cast<ULONG>(DrawStep.action.beginOp));
                     }
                     else if(g_EmuNv2aInlineWordCount != 0)
                     {
-                        EmuNv2aRasterizeInlineArray();
+                        EmuNv2aRasterizeInlineArray(
+                            static_cast<ULONG>(DrawStep.action.beginOp));
                     }
-                    else if(g_EmuNv2aElementIndexCount >= 3)
+                    else if(
+                        DrawStep.action.kind ==
+                        cxbx::nv2a::PgraphDrawActionKind::Indexed)
                     {
                         EmuNv2aRasterizeDrawArrays(
                             g_EmuNv2aVertexState,
-                            g_EmuNv2aTransformState, 0,
-                            g_EmuNv2aElementIndexCount,
-                            g_EmuNv2aElementIndices);
+                            g_EmuNv2aTransformState,
+                            static_cast<ULONG>(DrawStep.action.beginOp),
+                            static_cast<ULONG>(
+                                DrawStep.action.startVertex),
+                            static_cast<ULONG>(
+                                DrawStep.action.vertexCount),
+                            g_EmuNv2aDrawState.elementIndices.data());
                     }
-                    g_EmuNv2aElementIndexCount = 0;
                     g_EmuNv2aInlineWordCount = 0;
                     g_EmuNv2aInlineOverflow = false;
                     g_EmuNv2aImmediateWordCount = 0;
@@ -2158,37 +2169,22 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 }
                 else
                 {
-                    g_EmuNv2aElementIndexCount = 0;
                     g_EmuNv2aInlineWordCount = 0;
                     g_EmuNv2aInlineOverflow = false;
                     g_EmuNv2aImmediateWordCount = 0;
                     g_EmuNv2aImmediateOverflow = false;
                 }
-                g_EmuNv2aBeginOp = Data;
                 break;
-            case NV097_ARRAY_ELEMENT16:
-            {
-                const auto indices = cxbx::d3d::DecodeArrayElement16(Data);
-                for(const std::uint32_t index : indices)
-                {
-                    if(g_EmuNv2aElementIndexCount < std::size(g_EmuNv2aElementIndices))
-                    {
-                        g_EmuNv2aElementIndices[g_EmuNv2aElementIndexCount++] = index;
-                    }
-                }
+            case cxbx::nv2a::PgraphDrawMethod::ArrayElement16:
+            case cxbx::nv2a::PgraphDrawMethod::ArrayElement32:
                 break;
-            }
-            case NV097_ARRAY_ELEMENT32:
-                if(g_EmuNv2aElementIndexCount < std::size(g_EmuNv2aElementIndices))
-                {
-                    g_EmuNv2aElementIndices[g_EmuNv2aElementIndexCount++] = Data;
-                }
-                break;
-            case NV097_DRAW_ARRAYS:
+            case cxbx::nv2a::PgraphDrawMethod::DrawArrays:
                 EmuNv2aRasterizeDrawArrays(
                     g_EmuNv2aVertexState,
-                    g_EmuNv2aTransformState, Data & 0xFFFFFF,
-                    ((Data >> 24) & 0xFF) + 1);
+                    g_EmuNv2aTransformState,
+                    static_cast<ULONG>(DrawStep.action.beginOp),
+                    static_cast<ULONG>(DrawStep.action.startVertex),
+                    static_cast<ULONG>(DrawStep.action.vertexCount));
                 break;
             case NV097_INLINE_ARRAY:
                 if(g_EmuNv2aInlineWordCount < std::size(g_EmuNv2aInlineWords))
@@ -4575,7 +4571,8 @@ static bool EmuNv2aCrcEnabled()
 // Called at the top of every rasterized draw/clear. Assigns the operation its
 // per-frame index, traces it, and returns false when it falls inside the
 // CXBX_NV2A_SKIP_DRAWS bisection range (the caller must skip it).
-static bool EmuNv2aDrawGate(const char *What, ULONG Count)
+static bool EmuNv2aDrawGate(
+    const char* What, ULONG BeginOp, ULONG Count)
 {
     static int s_SkipEnabled = -1;
     static ULONG s_SkipBegin = 0, s_SkipEnd = 0;
@@ -4603,7 +4600,7 @@ static bool EmuNv2aDrawGate(const char *What, ULONG Count)
     {
         printf("NVDRAW| frame=%lu draw=%lu %s op=0x%lX count=%lu vp=%lu/%lu "
                "tex0=0x%.08lX ssp=0x%.08lX blend=%u depth=%u alpha=%u stencil=%u%s\n",
-               g_EmuNv2aDebugFrame, Index, What, g_EmuNv2aBeginOp, Count,
+               g_EmuNv2aDebugFrame, Index, What, BeginOp, Count,
                static_cast<ULONG>(g_EmuNv2aTransformState.executionMode),
                static_cast<ULONG>(
                    g_EmuNv2aTransformState.programInstructionCount),
@@ -4622,7 +4619,8 @@ static bool EmuNv2aDrawGate(const char *What, ULONG Count)
 // Write the complete decoded rasterizer state as key=value text. This is the
 // sidecar the host decoders (tools/nv2a: vp_disasm, combiner, drawreport)
 // consume, so keep field names stable.
-static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG Count)
+static void EmuNv2aWriteDrawStateFile(
+    const char* Path, const char* What, ULONG BeginOp, ULONG Count)
 {
     FILE *f = fopen(Path, "w");
     if(f == NULL)
@@ -4634,7 +4632,7 @@ static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG 
     fprintf(f, "frame=%lu draw=%lu what=%s count=%lu begin_op=0x%lX\n",
             g_EmuNv2aDebugFrame,
             g_EmuNv2aDebugDrawIndex != 0 ? g_EmuNv2aDebugDrawIndex - 1 : 0,
-            What, Count, g_EmuNv2aBeginOp);
+            What, Count, BeginOp);
     fprintf(f, "surface color_dma=0x%.08lX color_offset=0x%.08lX pitch_color=%lu "
                "format=0x%.08lX clip_x=%lu clip_y=%lu clip_w=%lu clip_h=%lu "
                "scanout=0x%.08lX\n",
@@ -4780,8 +4778,9 @@ static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG 
 // Called after a rasterized draw/clear wrote the color surface; dumps the
 // surface (plus the state sidecar) when the operation falls inside the
 // CXBX_NV2A_DUMP_DRAWS range.
-static void EmuNv2aDrawPost(const char *What, ULONG Count, ULONG SurfaceHost,
-                            int PitchB, int Width, int Height)
+static void EmuNv2aDrawPost(
+    const char* What, ULONG BeginOp, ULONG Count, ULONG SurfaceHost,
+    int PitchB, int Width, int Height)
 {
     static int s_DumpEnabled = -1;
     static ULONG s_DumpBegin = 0, s_DumpEnd = 0;
@@ -4834,7 +4833,7 @@ static void EmuNv2aDrawPost(const char *What, ULONG Count, ULONG SurfaceHost,
     FileName[sizeof(FileName) - 1] = '\0';
     char StatePath[MAX_PATH * 2];
     EmuNv2aDebugDumpPath(StatePath, sizeof(StatePath), FileName);
-    EmuNv2aWriteDrawStateFile(StatePath, What, Count);
+    EmuNv2aWriteDrawStateFile(StatePath, What, BeginOp, Count);
 
     _snprintf(FileName, sizeof(FileName), "f%05lu_d%04lu.bmp",
               g_EmuNv2aDebugFrame, Index);
@@ -5236,7 +5235,9 @@ static void EmuNv2aClearSurface(ULONG Flags)
         return;
     }
 
-    if(!EmuNv2aDrawGate("clear", 0))
+    const ULONG BeginOp =
+        static_cast<ULONG>(g_EmuNv2aDrawState.beginOp);
+    if(!EmuNv2aDrawGate("clear", BeginOp, 0))
     {
         return;
     }
@@ -5402,7 +5403,8 @@ static void EmuNv2aClearSurface(ULONG Flags)
     }
 
     EmuNv2aTrackAaColorSurface(ColorHost, ColorPitchB, Width, Height);
-    EmuNv2aDrawPost("clear", 0, ColorHost, ColorPitchB, Width, Height);
+    EmuNv2aDrawPost(
+        "clear", BeginOp, 0, ColorHost, ColorPitchB, Width, Height);
 
     static ULONG ClearLogCount = 0;
     if(ClearLogCount < 8)
@@ -6376,7 +6378,7 @@ static bool EmuNv2aBuildInlineLayout(
     return Offset != 0;
 }
 
-static void EmuNv2aRasterizeInlineArray()
+static void EmuNv2aRasterizeInlineArray(ULONG BeginOp)
 {
     ULONG Offsets[cxbx::nv2a::PgraphVertexAttributeCount] = {};
     ULONG VertexSize = 0;
@@ -6435,12 +6437,12 @@ static void EmuNv2aRasterizeInlineArray()
 
     EmuNv2aRasterizeDrawArrays(
         g_EmuNv2aVertexState, g_EmuNv2aTransformState,
-        0, VertexCount, nullptr,
+        BeginOp, 0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(g_EmuNv2aInlineWords),
         VertexSize, Offsets);
 }
 
-static void EmuNv2aRasterizeImmediateVertices()
+static void EmuNv2aRasterizeImmediateVertices(ULONG BeginOp)
 {
     const ULONG WordsPerVertex =
         cxbx::nv2a::PgraphVertexAttributeCount * 4;
@@ -6478,7 +6480,7 @@ static void EmuNv2aRasterizeImmediateVertices()
     g_EmuNv2aRasterizingImmediate = true;
     EmuNv2aRasterizeDrawArrays(
         ImmediateVertexState, g_EmuNv2aTransformState,
-        0, VertexCount, nullptr,
+        BeginOp, 0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(g_EmuNv2aImmediateWords),
         WordsPerVertex * sizeof(ULONG), Offsets);
     g_EmuNv2aRasterizingImmediate = false;
@@ -6487,11 +6489,12 @@ static void EmuNv2aRasterizeImmediateVertices()
 static void EmuNv2aRasterizeDrawArrays(
     const cxbx::nv2a::PgraphVertexState& VertexState,
     const cxbx::nv2a::PgraphTransformState& TransformState,
-    ULONG Start, ULONG Count, const ULONG* Indices,
+    ULONG BeginOp, ULONG Start, ULONG Count,
+    const std::uint32_t* Indices,
     const BYTE* InlineData, ULONG InlineStride,
     const ULONG* InlineOffsets)
 {
-    if(!EmuNv2aRasterEnabled() || g_EmuNv2aBeginOp == 0 || Count < 3)
+    if(!EmuNv2aRasterEnabled() || BeginOp == 0 || Count < 3)
     {
         return;
     }
@@ -6499,7 +6502,7 @@ static void EmuNv2aRasterizeDrawArrays(
     const char *DrawKind = g_EmuNv2aRasterizingImmediate ? "immediate"
                            : (InlineData != nullptr ? "inline"
                            : (Indices != nullptr ? "elements" : "draw_arrays"));
-    if(!EmuNv2aDrawGate(DrawKind, Count))
+    if(!EmuNv2aDrawGate(DrawKind, BeginOp, Count))
     {
         return;
     }
@@ -7100,7 +7103,7 @@ static void EmuNv2aRasterizeDrawArrays(
     ULONG Triangles = 0;
     __try
     {
-        switch(g_EmuNv2aBeginOp)
+        switch(BeginOp)
         {
             case 5: // TRIANGLES
                 for(ULONG i = 0; i + 2 < Count; i += 3)
@@ -7185,7 +7188,7 @@ static void EmuNv2aRasterizeDrawArrays(
                 (VV[0][0] + VV[0][1] + VV[0][2]) / 3.0f);
         }
         printf("Emu (0x%lX): NV2A raster op=%lu start=%lu verts=%lu tris=%lu surf=0x%.08lX %dx%d pitch=%d vp=%s(%lu@%lu) depth=%s(fmt=%lu func=0x%lX) tex=%s(%lux%lu) blend=%u(0x%lX,0x%lX) vp_scale=(%.1f,%.1f,%.1f) vp_off=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f) uv=(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f) c0=0x%.08lX texel=0x%.08lX sample[%d,%d]=0x%.08lX\n",
-               GetCurrentThreadId(), g_EmuNv2aBeginOp, Start, Count, Triangles,
+               GetCurrentThreadId(), BeginOp, Start, Count, Triangles,
                SurfaceHost, Width, Height, PitchB,
                VpActive ? "prog" : "raw",
                static_cast<ULONG>(
@@ -7214,7 +7217,8 @@ static void EmuNv2aRasterizeDrawArrays(
     }
 
     EmuNv2aTrackAaColorSurface(SurfaceHost, PitchB, Width, Height);
-    EmuNv2aDrawPost(DrawKind, Count, SurfaceHost, PitchB, Width, Height);
+    EmuNv2aDrawPost(
+        DrawKind, BeginOp, Count, SurfaceHost, PitchB, Width, Height);
 }
 
 static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)

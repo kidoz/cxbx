@@ -75,6 +75,17 @@ cxbx_nv2a_pgraph_combiner_state_dep = declare_dependency(
   include_directories : cxbx_public_inc,
 )
 
+cxbx_nv2a_pgraph_draw_state = static_library(
+  'cxbx_nv2a_pgraph_draw_state',
+  'src/hw/nv2a/nv2a_pgraph_draw_state.cpp',
+  include_directories : cxbx_public_inc,
+)
+
+cxbx_nv2a_pgraph_draw_state_dep = declare_dependency(
+  link_with : cxbx_nv2a_pgraph_draw_state,
+  include_directories : cxbx_public_inc,
+)
+
 cxbx_nv2a_pgraph_texture_state = static_library(
   'cxbx_nv2a_pgraph_texture_state',
   'src/hw/nv2a/nv2a_pgraph_texture_state.cpp',
@@ -615,6 +626,7 @@ cxbx_hle_runtime = static_library(
     cxbx_nv2a_device_dep,
     cxbx_nv2a_pfifo_dep,
     cxbx_nv2a_pgraph_combiner_state_dep,
+    cxbx_nv2a_pgraph_draw_state_dep,
     cxbx_nv2a_pgraph_flip_state_dep,
     cxbx_nv2a_pgraph_render_state_dep,
     cxbx_nv2a_pgraph_semaphore_state_dep,
@@ -645,6 +657,7 @@ cxbx_hle_runtime_dep = declare_dependency(
     cxbx_nv2a_device_dep.partial_dependency(links : true),
     cxbx_nv2a_pfifo_dep.partial_dependency(links : true),
     cxbx_nv2a_pgraph_combiner_state_dep.partial_dependency(links : true),
+    cxbx_nv2a_pgraph_draw_state_dep.partial_dependency(links : true),
     cxbx_nv2a_pgraph_flip_state_dep.partial_dependency(links : true),
     cxbx_nv2a_pgraph_render_state_dep.partial_dependency(links : true),
     cxbx_nv2a_pgraph_semaphore_state_dep.partial_dependency(links : true),
@@ -716,6 +729,7 @@ cxbx_runtime = shared_library(
     cxbx_nv2a_device_dep,
     cxbx_nv2a_pfifo_dep,
     cxbx_nv2a_pgraph_combiner_state_dep,
+    cxbx_nv2a_pgraph_draw_state_dep,
     cxbx_nv2a_pgraph_flip_state_dep,
     cxbx_nv2a_pgraph_render_state_dep,
     cxbx_nv2a_pgraph_semaphore_state_dep,
