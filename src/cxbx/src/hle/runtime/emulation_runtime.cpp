@@ -5738,6 +5738,79 @@ EmuNv2aExecuteVertexProgram(
     return Result;
 }
 
+struct EmuNv2aRasterVertex
+{
+    cxbx::nv2a::PgraphVertexComponents Position =
+        cxbx::nv2a::PgraphDefaultVertexComponents;
+    cxbx::nv2a::PgraphVertexComponents HomogeneousPosition =
+        cxbx::nv2a::PgraphDefaultVertexComponents;
+    std::array<float, EmuNv2aTextureStageCount> TextureU{};
+    std::array<float, EmuNv2aTextureStageCount> TextureV{};
+    std::array<float, EmuNv2aTextureStageCount> TextureQ{};
+    float InverseW = 1.0f;
+    ULONG DiffuseColor = 0xFFFFFFFF;
+};
+
+static EmuNv2aRasterVertex
+EmuNv2aBuildVertexProgramRasterVertex(
+    const EmuNv2aVertexProgramExecutionResult& VertexProgram)
+{
+    EmuNv2aRasterVertex Result{};
+    // NV2A vertex programs produce screen-space oPos directly. Host renderers
+    // convert it back to clip space only for their API; the software
+    // rasterizer consumes the native result as-is.
+    Result.Position = VertexProgram.Position;
+    Result.HomogeneousPosition = VertexProgram.Position;
+    const float W = VertexProgram.Position[3];
+    Result.InverseW =
+        W > 1e-6f || W < -1e-6f ? 1.0f / W : 1.0f;
+    Result.DiffuseColor = VertexProgram.DiffuseColor;
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        const ULONG FirstComponent =
+            Stage *
+            cxbx::nv2a::PgraphVertexAttributeComponentCount;
+        Result.TextureU[Stage] =
+            VertexProgram.TextureCoordinates[FirstComponent];
+        Result.TextureV[Stage] =
+            VertexProgram.TextureCoordinates[FirstComponent + 1];
+        Result.TextureQ[Stage] =
+            VertexProgram.TextureCoordinates[FirstComponent + 3];
+    }
+    return Result;
+}
+
+static EmuNv2aRasterVertex
+EmuNv2aBuildFixedFunctionRasterVertex(
+    const cxbx::nv2a::PgraphFixedFunctionVertexInput& Input,
+    const cxbx::nv2a::PgraphTransformState& TransformState)
+{
+    const cxbx::nv2a::PgraphFixedFunctionTransformInput
+        TransformInput{ Input.position };
+    const cxbx::nv2a::PgraphFixedFunctionTransformResult Transform =
+        cxbx::nv2a::TransformPgraphFixedFunctionPosition(
+            TransformState, TransformInput);
+
+    EmuNv2aRasterVertex Result{};
+    Result.Position[0] = Transform.screenPosition[0];
+    Result.Position[1] = Transform.screenPosition[1];
+    Result.Position[2] = Transform.screenPosition[2];
+    Result.Position[3] = Transform.homogeneousPosition[3];
+    Result.HomogeneousPosition = Transform.homogeneousPosition;
+    Result.InverseW = Transform.inverseW;
+    Result.DiffuseColor = Input.diffuseColor;
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        Result.TextureU[Stage] =
+            Input.textureCoordinates[Stage][0];
+        Result.TextureV[Stage] =
+            Input.textureCoordinates[Stage][1];
+        Result.TextureQ[Stage] =
+            Input.textureCoordinates[Stage][3];
+    }
+    return Result;
+}
+
 // Where the current draw's pixels land: color surface + optional bound depth
 // (zeta) surface and the depth-test state. Populated once per DRAW_ARRAYS.
 struct EmuNv2aRasterTarget
@@ -7000,13 +7073,8 @@ static void EmuNv2aRasterizeDrawArrays(
     for(ULONG i = 0; i < Count; i++)
     {
         ULONG Index = Indices == nullptr ? Start + i : Indices[i];
-        float Xc, Yc, Zc = 0.0f, W;
-        float RawPosition[4] = {};
-        float U[EmuNv2aTextureStageCount] = {};
-        float V[EmuNv2aTextureStageCount] = {};
-        float Q[EmuNv2aTextureStageCount] = {1.0f, 1.0f, 1.0f, 1.0f};
-        ULONG Color = 0xFFFFFFFF;
-        cxbx::nv2a::PgraphFixedFunctionTransformResult FixedTransform{};
+        EmuNv2aRasterVertex Vertex{};
+        cxbx::nv2a::PgraphVertexComponents RawPosition{};
 
         if(VpActive)
         {
@@ -7063,26 +7131,9 @@ static void EmuNv2aRasterizeDrawArrays(
                     fflush(stdout);
                 }
             }
-            Xc = VertexProgram.Position[0];
-            Yc = VertexProgram.Position[1];
-            Zc = VertexProgram.Position[2];
-            W = VertexProgram.Position[3];
-            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
-            {
-                const ULONG FirstComponent =
-                    Stage *
-                    cxbx::nv2a::PgraphVertexAttributeComponentCount;
-                U[Stage] =
-                    VertexProgram
-                        .TextureCoordinates[FirstComponent];
-                V[Stage] =
-                    VertexProgram
-                        .TextureCoordinates[FirstComponent + 1];
-                Q[Stage] =
-                    VertexProgram
-                        .TextureCoordinates[FirstComponent + 3];
-            }
-            Color = VertexProgram.DiffuseColor;
+            Vertex =
+                EmuNv2aBuildVertexProgramRasterVertex(
+                    VertexProgram);
         }
         else
         {
@@ -7100,52 +7151,18 @@ static void EmuNv2aRasterizeDrawArrays(
                     cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
                         FixedAttributes.Values, VertexFetchPlan,
                         FixedAttributes.SuppliedAttributeMask);
-            const cxbx::nv2a::PgraphFixedFunctionTransformInput
-                FixedTransformInput{ FixedInput.position };
-            FixedTransform =
-                cxbx::nv2a::TransformPgraphFixedFunctionPosition(
-                    TransformState, FixedTransformInput);
-            Xc = FixedTransform.homogeneousPosition[0];
-            Yc = FixedTransform.homogeneousPosition[1];
-            Zc = FixedTransform.homogeneousPosition[2];
-            W = FixedTransform.homogeneousPosition[3];
-            RawPosition[0] = FixedInput.position[0];
-            RawPosition[1] = FixedInput.position[1];
-            RawPosition[2] = FixedInput.position[2];
-            RawPosition[3] = FixedInput.position[3];
-            Color = FixedInput.diffuseColor;
-            for(ULONG Stage = 0;
-                Stage < EmuNv2aTextureStageCount; ++Stage)
-            {
-                U[Stage] =
-                    FixedInput.textureCoordinates[Stage][0];
-                V[Stage] =
-                    FixedInput.textureCoordinates[Stage][1];
-                Q[Stage] =
-                    FixedInput.textureCoordinates[Stage][3];
-            }
+            RawPosition = FixedInput.position;
+            Vertex =
+                EmuNv2aBuildFixedFunctionRasterVertex(
+                    FixedInput, TransformState);
         }
 
-        const float InvW = VpActive
-                               ? ((W > 1e-6f || W < -1e-6f)
-                                      ? (1.0f / W)
-                                      : 1.0f)
-                               : FixedTransform.inverseW;
-        VW[i] = W;
-        if(VpActive)
+        VW[i] = Vertex.Position[3];
+        VX[i] = Vertex.Position[0];
+        VY[i] = Vertex.Position[1];
+        VZ[i] = Vertex.Position[2];
+        if(!VpActive)
         {
-            // NV2A vertex programs produce screen-space oPos directly. Host
-            // renderers convert it back to clip space only for their API; the
-            // software rasterizer consumes the native result as-is.
-            VX[i] = Xc;
-            VY[i] = Yc;
-            VZ[i] = Zc;
-        }
-        else
-        {
-            VX[i] = FixedTransform.screenPosition[0];
-            VY[i] = FixedTransform.screenPosition[1];
-            VZ[i] = FixedTransform.screenPosition[2];
             if(VertexTraceEnabled == 1 && i < 4)
             {
                 const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
@@ -7156,7 +7173,11 @@ static void EmuNv2aRasterizeDrawArrays(
                        "screen=(%g,%g,%g)\n",
                        g_EmuNv2aDebugFrame, DrawIndex, DrawKind, i, Index,
                        RawPosition[0], RawPosition[1], RawPosition[2], RawPosition[3],
-                       Xc, Yc, Zc, W, VX[i], VY[i], VZ[i]);
+                       Vertex.HomogeneousPosition[0],
+                       Vertex.HomogeneousPosition[1],
+                       Vertex.HomogeneousPosition[2],
+                       Vertex.HomogeneousPosition[3],
+                       VX[i], VY[i], VZ[i]);
                 fflush(stdout);
             }
         }
@@ -7166,19 +7187,22 @@ static void EmuNv2aRasterizeDrawArrays(
             {
                 const cxbx::nv2a::ProjectedTextureCoordinates Projected =
                     cxbx::nv2a::ProjectTexture2D(
-                        U[Stage], V[Stage], Q[Stage], InvW);
+                        Vertex.TextureU[Stage],
+                        Vertex.TextureV[Stage],
+                        Vertex.TextureQ[Stage],
+                        Vertex.InverseW);
                 VU[Stage][i] = Projected.u;
                 VV[Stage][i] = Projected.v;
                 VIW[Stage][i] = Projected.interpolationWeight;
             }
             else
             {
-                VU[Stage][i] = U[Stage];
-                VV[Stage][i] = V[Stage];
-                VIW[Stage][i] = InvW;
+                VU[Stage][i] = Vertex.TextureU[Stage];
+                VV[Stage][i] = Vertex.TextureV[Stage];
+                VIW[Stage][i] = Vertex.InverseW;
             }
         }
-        VC[i] = Color;
+        VC[i] = Vertex.DiffuseColor;
     }
 
     EmuNv2aTextureCoordinateArrays TextureCoordinates = {};
