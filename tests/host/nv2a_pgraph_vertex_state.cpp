@@ -500,6 +500,74 @@ int main() noexcept
         return 1;
     }
 
+    cxbx::nv2a::PgraphVertexAttributeValues inputAttributeValues{};
+    inputAttributeValues[0].components = {
+        1.0f,
+        2.0f,
+        3.0f,
+        4.0f,
+    };
+    inputAttributeValues[7].components = {
+        -1.0f,
+        -2.0f,
+        -3.0f,
+        -4.0f,
+    };
+    inputAttributeValues[15].components = {
+        0.25f,
+        0.5f,
+        0.75f,
+        1.0f,
+    };
+
+    const auto defaultProgramInput =
+        cxbx::nv2a::BuildPgraphVertexProgramInput(
+            inputAttributeValues, 0);
+    for(std::uint32_t attribute = 0;
+        attribute < cxbx::nv2a::PgraphVertexAttributeCount;
+        ++attribute)
+    {
+        const std::uint32_t inputOffset =
+            attribute *
+            cxbx::nv2a::PgraphVertexAttributeComponentCount;
+        if(!ExpectNear(defaultProgramInput[inputOffset], 0.0f,
+                       "default program input x") ||
+           !ExpectNear(defaultProgramInput[inputOffset + 1], 0.0f,
+                       "default program input y") ||
+           !ExpectNear(defaultProgramInput[inputOffset + 2], 0.0f,
+                       "default program input z") ||
+           !ExpectNear(defaultProgramInput[inputOffset + 3], 1.0f,
+                       "default program input w"))
+        {
+            return 1;
+        }
+    }
+
+    const std::uint32_t suppliedAttributeMask =
+        (1u << 0u) | (1u << 15u);
+    const auto assembledProgramInput =
+        cxbx::nv2a::BuildPgraphVertexProgramInput(
+            inputAttributeValues, suppliedAttributeMask);
+    if(!ExpectNear(assembledProgramInput[0], 1.0f,
+                   "assembled first input x") ||
+       !ExpectNear(assembledProgramInput[3], 4.0f,
+                   "assembled first input w") ||
+       !ExpectNear(
+           assembledProgramInput[7u * cxbx::nv2a::PgraphVertexAttributeComponentCount],
+           0.0f, "unsupplied middle input x") ||
+       !ExpectNear(
+           assembledProgramInput[7u * cxbx::nv2a::PgraphVertexAttributeComponentCount + 3u],
+           1.0f, "unsupplied middle input w") ||
+       !ExpectNear(
+           assembledProgramInput[15u * cxbx::nv2a::PgraphVertexAttributeComponentCount],
+           0.25f, "assembled last input x") ||
+       !ExpectNear(
+           assembledProgramInput[15u * cxbx::nv2a::PgraphVertexAttributeComponentCount + 2u],
+           0.75f, "assembled last input z"))
+    {
+        return 1;
+    }
+
     const PgraphVertexState beforeUnknown = state;
     if(!Expect(!cxbx::nv2a::ApplyPgraphVertexStateMethod(
                    state,

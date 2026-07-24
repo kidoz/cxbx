@@ -8,6 +8,8 @@ namespace cxbx::nv2a
 
 inline constexpr std::uint32_t PgraphVertexAttributeCount = 16;
 inline constexpr std::uint32_t PgraphVertexAttributeComponentCount = 4;
+inline constexpr std::uint32_t PgraphVertexProgramInputComponentCount =
+    PgraphVertexAttributeCount * PgraphVertexAttributeComponentCount;
 inline constexpr std::uint32_t PgraphVertexLayoutUnusedOffset = 0xFFFFFFFFu;
 inline constexpr std::uint32_t PgraphImmediateVertexAttributeStride =
     PgraphVertexAttributeComponentCount * sizeof(std::uint32_t);
@@ -85,6 +87,11 @@ struct PgraphVertexAttributeValue
     std::uint32_t packedColor = 0;
 };
 
+using PgraphVertexAttributeValues =
+    std::array<PgraphVertexAttributeValue, PgraphVertexAttributeCount>;
+using PgraphVertexProgramInput =
+    std::array<float, PgraphVertexProgramInputComponentCount>;
+
 [[nodiscard]] bool ApplyPgraphVertexStateMethod(
     PgraphVertexState& state, std::uint32_t method,
     std::uint32_t data) noexcept;
@@ -116,6 +123,10 @@ struct PgraphVertexAttributeValue
 [[nodiscard]] PgraphVertexAttributeValue DecodePgraphVertexAttribute(
     const PgraphVertexAttributeFetch& fetch,
     const PgraphVertexAttributeBytes& bytes) noexcept;
+
+[[nodiscard]] PgraphVertexProgramInput BuildPgraphVertexProgramInput(
+    const PgraphVertexAttributeValues& attributeValues,
+    std::uint32_t suppliedAttributeMask) noexcept;
 
 [[nodiscard]] constexpr PgraphVertexArrayFormat DecodePgraphVertexArrayFormat(
     std::uint32_t format) noexcept

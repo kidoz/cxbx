@@ -256,4 +256,30 @@ PgraphVertexAttributeValue DecodePgraphVertexAttribute(
     return DecodePgraphPackedColorVertexAttribute(bytes);
 }
 
+PgraphVertexProgramInput BuildPgraphVertexProgramInput(
+    const PgraphVertexAttributeValues& attributeValues,
+    std::uint32_t suppliedAttributeMask) noexcept
+{
+    PgraphVertexProgramInput input{};
+    for(std::uint32_t attribute = 0;
+        attribute < PgraphVertexAttributeCount; ++attribute)
+    {
+        const std::uint32_t inputOffset =
+            attribute * PgraphVertexAttributeComponentCount;
+        input[inputOffset + 3] = 1.0f;
+        if((suppliedAttributeMask & (1u << attribute)) == 0)
+        {
+            continue;
+        }
+
+        for(std::uint32_t component = 0;
+            component < PgraphVertexAttributeComponentCount; ++component)
+        {
+            input[inputOffset + component] =
+                attributeValues[attribute].components[component];
+        }
+    }
+    return input;
+}
+
 } // namespace cxbx::nv2a

@@ -6725,12 +6725,11 @@ static void EmuNv2aRasterizeDrawArrays(
         {
             // Gather all bound attribute arrays into the 16 vertex-program input
             // registers (x,y,z default 0, w default 1), then transform on the CPU.
-            float Input[16 * 4];
+            cxbx::nv2a::PgraphVertexAttributeValues AttributeValues{};
+            std::uint32_t SuppliedAttributeMask = 0;
             for(ULONG a = 0;
                 a < cxbx::nv2a::PgraphVertexAttributeCount; a++)
             {
-                Input[a * 4 + 0] = 0.0f; Input[a * 4 + 1] = 0.0f;
-                Input[a * 4 + 2] = 0.0f; Input[a * 4 + 3] = 1.0f;
                 const auto& Fetch = VertexFetchPlan.attributes[a];
                 const ULONG Stride =
                     static_cast<ULONG>(Fetch.stride);
@@ -6758,16 +6757,14 @@ static void EmuNv2aRasterizeDrawArrays(
                         : 1u;
                 EmuNv2aReadHostVertexComponents(
                     Host, (1u << ComponentsToRead) - 1u, Bytes);
-                const cxbx::nv2a::PgraphVertexAttributeValue Value =
+                AttributeValues[a] =
                     cxbx::nv2a::DecodePgraphVertexAttribute(
                         Fetch, Bytes);
-                for(ULONG c = 0;
-                    c < cxbx::nv2a::PgraphVertexAttributeComponentCount;
-                    ++c)
-                {
-                    Input[a * 4 + c] = Value.components[c];
-                }
+                SuppliedAttributeMask |= 1u << a;
             }
+            const cxbx::nv2a::PgraphVertexProgramInput Input =
+                cxbx::nv2a::BuildPgraphVertexProgramInput(
+                    AttributeValues, SuppliedAttributeMask);
 
             float OutPos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
             float OutColors[8] = {
@@ -6780,7 +6777,7 @@ static void EmuNv2aRasterizeDrawArrays(
                 static_cast<int>(TransformState.programInstructionCount),
                 static_cast<int>(TransformState.programStart),
                 TransformState.constants.data(),
-                Input, OutPos, OutColors, OutTexCoords);
+                Input.data(), OutPos, OutColors, OutTexCoords);
             if(Inline)
             {
                 static int TraceEnabled = -1;
