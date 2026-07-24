@@ -355,6 +355,25 @@ PgraphVertexAttributeAccessPlan BuildPgraphVertexAttributeAccessPlan(
     };
 }
 
+PgraphVertexAttributeFetchRequest BuildPgraphVertexAttributeFetchRequest(
+    const PgraphVertexAttributeFetch& fetch,
+    std::uint32_t vertexIndex,
+    PgraphVertexAttributeReadPurpose purpose) noexcept
+{
+    const PgraphVertexFetchOffset fetchOffset =
+        CalculatePgraphVertexFetchOffset(fetch, vertexIndex);
+    if(!fetchOffset.valid)
+    {
+        return {};
+    }
+
+    return {
+        fetch.source,
+        fetchOffset,
+        BuildPgraphVertexAttributeAccessPlan(fetch, purpose),
+    };
+}
+
 PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
     const PgraphVertexAttributeBytes& bytes,
     std::uint32_t componentCount) noexcept

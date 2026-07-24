@@ -113,6 +113,13 @@ struct PgraphVertexAttributeAccessPlan
     PgraphVertexAttributeByteSpan byteSpan{};
 };
 
+struct PgraphVertexAttributeFetchRequest
+{
+    PgraphVertexFetchSource source = PgraphVertexFetchSource::Disabled;
+    PgraphVertexFetchOffset fetchOffset{};
+    PgraphVertexAttributeAccessPlan accessPlan{};
+};
+
 using PgraphVertexAttributeBytes =
     std::array<std::uint8_t, PgraphImmediateVertexAttributeStride>;
 using PgraphVertexComponents =
@@ -191,6 +198,12 @@ BuildPgraphVertexAttributeByteSpan(
 [[nodiscard]] PgraphVertexAttributeAccessPlan
 BuildPgraphVertexAttributeAccessPlan(
     const PgraphVertexAttributeFetch& fetch,
+    PgraphVertexAttributeReadPurpose purpose) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeFetchRequest
+BuildPgraphVertexAttributeFetchRequest(
+    const PgraphVertexAttributeFetch& fetch,
+    std::uint32_t vertexIndex,
     PgraphVertexAttributeReadPurpose purpose) noexcept;
 
 [[nodiscard]] PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(

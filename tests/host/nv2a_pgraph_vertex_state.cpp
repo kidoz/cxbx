@@ -848,6 +848,110 @@ int main() noexcept
         return 1;
     }
 
+    cxbx::nv2a::PgraphVertexAttributeFetch requestFetch{};
+    requestFetch.source =
+        cxbx::nv2a::PgraphVertexFetchSource::VertexArray;
+    requestFetch.offset = 0x20;
+    requestFetch.stride = 12;
+    requestFetch.type = 2;
+    requestFetch.componentCount = 3;
+    auto fetchRequest =
+        cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+            requestFetch, 7,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                VertexProgram);
+    if(!Expect(fetchRequest.fetchOffset.valid,
+               "array fetch request should be valid") ||
+       !Expect(
+           fetchRequest.source ==
+               cxbx::nv2a::PgraphVertexFetchSource::VertexArray,
+           "array fetch request source") ||
+       !ExpectEqual(fetchRequest.fetchOffset.relativeByteOffset,
+                    0x74, "array fetch request offset") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.readPlan.componentMask,
+           0x7u, "array fetch request read mask") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.byteSpan.stagingByteCount,
+           12, "array fetch request staging byte count"))
+    {
+        return 1;
+    }
+
+    requestFetch.source =
+        cxbx::nv2a::PgraphVertexFetchSource::Inline;
+    requestFetch.offset = 16;
+    requestFetch.stride =
+        cxbx::nv2a::PgraphImmediateVertexStride;
+    requestFetch.componentCount = 4;
+    fetchRequest =
+        cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+            requestFetch, 2,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                FixedTexture);
+    if(!Expect(fetchRequest.fetchOffset.valid,
+               "inline fetch request should be valid") ||
+       !Expect(
+           fetchRequest.source ==
+               cxbx::nv2a::PgraphVertexFetchSource::Inline,
+           "inline fetch request source") ||
+       !ExpectEqual(fetchRequest.fetchOffset.relativeByteOffset,
+                    528, "inline fetch request offset") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.readPlan.componentMask,
+           0xBu, "inline fetch request read mask") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.byteSpan.captureByteCount,
+           16, "inline fetch request capture byte count"))
+    {
+        return 1;
+    }
+
+    requestFetch.source =
+        cxbx::nv2a::PgraphVertexFetchSource::Disabled;
+    fetchRequest =
+        cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+            requestFetch, 0,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                VertexProgram);
+    if(!Expect(!fetchRequest.fetchOffset.valid,
+               "disabled fetch request should be invalid") ||
+       !Expect(
+           fetchRequest.source ==
+               cxbx::nv2a::PgraphVertexFetchSource::Disabled,
+           "disabled fetch request source") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.readPlan.componentMask,
+           0, "disabled fetch request read mask") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.byteSpan.stagingByteCount,
+           0, "disabled fetch request staging byte count"))
+    {
+        return 1;
+    }
+
+    requestFetch.source =
+        cxbx::nv2a::PgraphVertexFetchSource::VertexArray;
+    requestFetch.offset = (std::numeric_limits<std::uint32_t>::max)();
+    requestFetch.stride = 1;
+    fetchRequest =
+        cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+            requestFetch, 1,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                VertexProgram);
+    if(!Expect(!fetchRequest.fetchOffset.valid,
+               "overflow fetch request should be invalid") ||
+       !Expect(
+           fetchRequest.source ==
+               cxbx::nv2a::PgraphVertexFetchSource::Disabled,
+           "overflow fetch request source") ||
+       !ExpectEqual(
+           fetchRequest.accessPlan.byteSpan.captureByteCount,
+           0, "overflow fetch request capture byte count"))
+    {
+        return 1;
+    }
+
     cxbx::nv2a::PgraphVertexAttributeBytes attributeBytes{};
     WriteAttributeFloat(attributeBytes, 0, 1.5f);
     WriteAttributeFloat(attributeBytes, 1, -2.25f);
