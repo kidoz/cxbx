@@ -5509,6 +5509,53 @@ EmuNv2aReadVertexAttribute(
     return Result;
 }
 
+struct EmuNv2aVertexProgramAttributeCollection
+{
+    cxbx::nv2a::PgraphVertexAttributeValues Values;
+    std::uint32_t SuppliedAttributeMask;
+};
+
+static EmuNv2aVertexProgramAttributeCollection
+EmuNv2aCollectVertexProgramAttributes(
+    const EmuNv2aVertexAttributeMemoryContext& Context,
+    const cxbx::nv2a::PgraphVertexFetchPlan& FetchPlan,
+    std::uint32_t VertexIndex)
+{
+    EmuNv2aVertexProgramAttributeCollection Result{};
+    for(ULONG Attribute = 0;
+        Attribute < cxbx::nv2a::PgraphVertexAttributeCount;
+        ++Attribute)
+    {
+        const auto& Fetch = FetchPlan.attributes[Attribute];
+        const ULONG Stride = static_cast<ULONG>(Fetch.stride);
+        const ULONG Size =
+            static_cast<ULONG>(Fetch.componentCount);
+        if(Stride == 0 || Size == 0)
+        {
+            continue;
+        }
+
+        const auto FetchRequest =
+            cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
+                Fetch, VertexIndex,
+                cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                    VertexProgram);
+        const auto AttributeRead =
+            EmuNv2aReadVertexAttribute(
+                Context, Attribute, FetchRequest);
+        if(!AttributeRead.Valid)
+        {
+            continue;
+        }
+
+        Result.Values[Attribute] =
+            cxbx::nv2a::DecodePgraphVertexAttribute(
+                Fetch, AttributeRead.Bytes);
+        Result.SuppliedAttributeMask |= 1u << Attribute;
+    }
+    return Result;
+}
+
 static ULONG EmuNv2aClampByte(float v)
 {
     if(v <= 0.0f) return 0;
@@ -6794,40 +6841,14 @@ static void EmuNv2aRasterizeDrawArrays(
         {
             // Gather all bound attribute arrays into the 16 vertex-program input
             // registers (x,y,z default 0, w default 1), then transform on the CPU.
-            cxbx::nv2a::PgraphVertexAttributeValues AttributeValues{};
-            std::uint32_t SuppliedAttributeMask = 0;
-            for(ULONG a = 0;
-                a < cxbx::nv2a::PgraphVertexAttributeCount; a++)
-            {
-                const auto& Fetch = VertexFetchPlan.attributes[a];
-                const ULONG Stride =
-                    static_cast<ULONG>(Fetch.stride);
-                const ULONG Size =
-                    static_cast<ULONG>(Fetch.componentCount);
-                if(Stride == 0 || Size == 0)
-                {
-                    continue;
-                }
-                const auto FetchRequest =
-                    cxbx::nv2a::BuildPgraphVertexAttributeFetchRequest(
-                        Fetch, static_cast<std::uint32_t>(Index),
-                        cxbx::nv2a::PgraphVertexAttributeReadPurpose::
-                            VertexProgram);
-                const auto AttributeRead =
-                    EmuNv2aReadVertexAttribute(
-                        AttributeMemory, a, FetchRequest);
-                if(!AttributeRead.Valid)
-                {
-                    continue;
-                }
-                AttributeValues[a] =
-                    cxbx::nv2a::DecodePgraphVertexAttribute(
-                        Fetch, AttributeRead.Bytes);
-                SuppliedAttributeMask |= 1u << a;
-            }
+            const auto VertexProgramAttributes =
+                EmuNv2aCollectVertexProgramAttributes(
+                    AttributeMemory, VertexFetchPlan,
+                    static_cast<std::uint32_t>(Index));
             const cxbx::nv2a::PgraphVertexProgramInput Input =
                 cxbx::nv2a::BuildPgraphVertexProgramInput(
-                    AttributeValues, SuppliedAttributeMask);
+                    VertexProgramAttributes.Values,
+                    VertexProgramAttributes.SuppliedAttributeMask);
 
             float OutPos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
             float OutColors[8] = {
