@@ -1,5 +1,6 @@
 #include "hw/nv2a_pgraph_vertex_state.h"
 
+#include <algorithm>
 #include <bit>
 
 namespace cxbx::nv2a
@@ -41,6 +42,16 @@ std::uint32_t PackPgraphFloatColorComponent(float component) noexcept
     // Preserve the established truncate-after-bias and low-byte-mask policy.
     // NOLINTNEXTLINE(bugprone-incorrect-roundings)
     return static_cast<std::uint32_t>(component * 255.0f + 0.5f) & 0xFFu;
+}
+
+std::uint32_t BuildLowComponentMask(
+    std::uint32_t componentCount) noexcept
+{
+    if(componentCount == 0)
+    {
+        return 0;
+    }
+    return (1u << componentCount) - 1u;
 }
 
 } // namespace
@@ -214,6 +225,63 @@ PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
     }
 
     return plan;
+}
+
+PgraphVertexAttributeReadPlan BuildPgraphVertexAttributeReadPlan(
+    const PgraphVertexAttributeFetch& fetch,
+    PgraphVertexAttributeReadPurpose purpose) noexcept
+{
+    switch(purpose)
+    {
+        case PgraphVertexAttributeReadPurpose::VertexProgram:
+        {
+            const std::uint32_t componentCount =
+                fetch.type == 2u
+                    ? std::min(
+                          fetch.componentCount,
+                          PgraphVertexAttributeComponentCount)
+                    : 1u;
+            return {
+                BuildLowComponentMask(componentCount),
+                componentCount,
+                0,
+            };
+        }
+        case PgraphVertexAttributeReadPurpose::FixedPosition:
+        {
+            const std::uint32_t componentCount =
+                fetch.componentCount >= 4u
+                    ? 4u
+                    : (fetch.componentCount >= 3u ? 3u : 2u);
+            return {
+                BuildLowComponentMask(componentCount),
+                componentCount,
+                0,
+            };
+        }
+        case PgraphVertexAttributeReadPurpose::FixedDiffuse:
+            if(fetch.type == 2u)
+            {
+                return { 0xFu, 4u, 0 };
+            }
+            return { 0x1u, 1u, 0xFFu };
+        case PgraphVertexAttributeReadPurpose::FixedTexture:
+            if(fetch.componentCount >= 4u)
+            {
+                return { 0xBu, 4u, 0 };
+            }
+            return { 0x3u, 2u, 0 };
+    }
+
+    return {};
+}
+
+PgraphVertexAttributeBytes InitializePgraphVertexAttributeBytes(
+    const PgraphVertexAttributeReadPlan& plan) noexcept
+{
+    PgraphVertexAttributeBytes bytes{};
+    bytes.fill(plan.initialByte);
+    return bytes;
 }
 
 PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(

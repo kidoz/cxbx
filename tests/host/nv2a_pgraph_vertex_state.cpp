@@ -420,6 +420,169 @@ int main() noexcept
         return 1;
     }
 
+    cxbx::nv2a::PgraphVertexAttributeFetch readFetch{};
+    readFetch.type = 2;
+    readFetch.componentCount = 3;
+    auto readPlan =
+        cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+            readFetch,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                VertexProgram);
+    if(!ExpectEqual(readPlan.componentMask, 0x7u,
+                    "float3 program read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 3,
+                    "float3 program decode count") ||
+       !ExpectEqual(readPlan.initialByte, 0,
+                    "float3 program initial byte"))
+    {
+        return 1;
+    }
+
+    readFetch.componentCount = 5;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::VertexProgram);
+    if(!ExpectEqual(readPlan.componentMask, 0xFu,
+                    "bounded program read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 4,
+                    "bounded program decode count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 6;
+    readFetch.componentCount = 1;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::VertexProgram);
+    if(!ExpectEqual(readPlan.componentMask, 0x1u,
+                    "packed program read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 1,
+                    "packed program decode count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 2;
+    readFetch.componentCount = 0;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::VertexProgram);
+    if(!ExpectEqual(readPlan.componentMask, 0,
+                    "disabled program read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 0,
+                    "disabled program decode count"))
+    {
+        return 1;
+    }
+
+    readFetch.componentCount = 1;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedPosition);
+    if(!ExpectEqual(readPlan.componentMask, 0x3u,
+                    "short position read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 2,
+                    "short position decode count"))
+    {
+        return 1;
+    }
+    readFetch.componentCount = 3;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedPosition);
+    if(!ExpectEqual(readPlan.componentMask, 0x7u,
+                    "float3 position read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 3,
+                    "float3 position decode count"))
+    {
+        return 1;
+    }
+    readFetch.componentCount = 4;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedPosition);
+    if(!ExpectEqual(readPlan.componentMask, 0xFu,
+                    "float4 position read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 4,
+                    "float4 position decode count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 2;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedDiffuse);
+    if(!ExpectEqual(readPlan.componentMask, 0xFu,
+                    "float diffuse read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 4,
+                    "float diffuse decode count") ||
+       !ExpectEqual(readPlan.initialByte, 0,
+                    "float diffuse initial byte"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 6;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedDiffuse);
+    if(!ExpectEqual(readPlan.componentMask, 0x1u,
+                    "packed diffuse read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 1,
+                    "packed diffuse decode count") ||
+       !ExpectEqual(readPlan.initialByte, 0xFFu,
+                    "packed diffuse initial byte"))
+    {
+        return 1;
+    }
+    const auto packedDiffuseBytes =
+        cxbx::nv2a::InitializePgraphVertexAttributeBytes(readPlan);
+    for(const std::uint8_t byte : packedDiffuseBytes)
+    {
+        if(!ExpectEqual(byte, 0xFFu,
+                        "packed diffuse initialized byte"))
+        {
+            return 1;
+        }
+    }
+
+    readFetch.componentCount = 2;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedTexture);
+    if(!ExpectEqual(readPlan.componentMask, 0x3u,
+                    "two-component texture read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 2,
+                    "two-component texture decode count") ||
+       !ExpectEqual(readPlan.initialByte, 0,
+                    "texture initial byte"))
+    {
+        return 1;
+    }
+    const auto textureBytes =
+        cxbx::nv2a::InitializePgraphVertexAttributeBytes(readPlan);
+    for(const std::uint8_t byte : textureBytes)
+    {
+        if(!ExpectEqual(byte, 0, "texture initialized byte"))
+        {
+            return 1;
+        }
+    }
+
+    readFetch.componentCount = 4;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedTexture);
+    if(!ExpectEqual(readPlan.componentMask, 0xBu,
+                    "four-component texture read mask") ||
+       !ExpectEqual(readPlan.decodeComponentCount, 4,
+                    "four-component texture decode count"))
+    {
+        return 1;
+    }
+
     cxbx::nv2a::PgraphVertexAttributeBytes attributeBytes{};
     WriteAttributeFloat(attributeBytes, 0, 1.5f);
     WriteAttributeFloat(attributeBytes, 1, -2.25f);

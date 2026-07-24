@@ -80,6 +80,21 @@ struct PgraphVertexFetchPlan
         attributes{};
 };
 
+enum class PgraphVertexAttributeReadPurpose : std::uint8_t
+{
+    VertexProgram,
+    FixedPosition,
+    FixedDiffuse,
+    FixedTexture,
+};
+
+struct PgraphVertexAttributeReadPlan
+{
+    std::uint32_t componentMask = 0;
+    std::uint32_t decodeComponentCount = 0;
+    std::uint8_t initialByte = 0;
+};
+
 using PgraphVertexAttributeBytes =
     std::array<std::uint8_t, PgraphImmediateVertexAttributeStride>;
 using PgraphVertexComponents =
@@ -136,6 +151,15 @@ struct PgraphFixedFunctionVertexInput
 
 [[nodiscard]] PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
     const PgraphVertexLayout& layout) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeReadPlan
+BuildPgraphVertexAttributeReadPlan(
+    const PgraphVertexAttributeFetch& fetch,
+    PgraphVertexAttributeReadPurpose purpose) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeBytes
+InitializePgraphVertexAttributeBytes(
+    const PgraphVertexAttributeReadPlan& plan) noexcept;
 
 [[nodiscard]] PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
     const PgraphVertexAttributeBytes& bytes,
