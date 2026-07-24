@@ -777,6 +777,77 @@ int main() noexcept
         return 1;
     }
 
+    readFetch.type = 2;
+    readFetch.componentCount = 3;
+    auto accessPlan =
+        cxbx::nv2a::BuildPgraphVertexAttributeAccessPlan(
+            readFetch,
+            cxbx::nv2a::PgraphVertexAttributeReadPurpose::
+                VertexProgram);
+    if(!ExpectEqual(accessPlan.readPlan.componentMask, 0x7u,
+                    "program access read mask") ||
+       !ExpectEqual(accessPlan.readPlan.decodeComponentCount, 3,
+                    "program access decode count") ||
+       !ExpectEqual(accessPlan.byteSpan.captureByteCount, 12,
+                    "program access capture byte count") ||
+       !ExpectEqual(accessPlan.byteSpan.stagingByteCount, 12,
+                    "program access staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.componentCount = 1;
+    accessPlan = cxbx::nv2a::BuildPgraphVertexAttributeAccessPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedPosition);
+    if(!ExpectEqual(accessPlan.readPlan.componentMask, 0x3u,
+                    "position access read mask") ||
+       !ExpectEqual(accessPlan.readPlan.decodeComponentCount, 2,
+                    "position access decode count") ||
+       !ExpectEqual(accessPlan.byteSpan.captureByteCount, 4,
+                    "position access capture byte count") ||
+       !ExpectEqual(accessPlan.byteSpan.stagingByteCount, 8,
+                    "position access staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 6;
+    readFetch.componentCount = 4;
+    accessPlan = cxbx::nv2a::BuildPgraphVertexAttributeAccessPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedDiffuse);
+    if(!ExpectEqual(accessPlan.readPlan.componentMask, 0x1u,
+                    "diffuse access read mask") ||
+       !ExpectEqual(accessPlan.readPlan.decodeComponentCount, 1,
+                    "diffuse access decode count") ||
+       !ExpectEqual(accessPlan.readPlan.initialByte, 0xFFu,
+                    "diffuse access initial byte") ||
+       !ExpectEqual(accessPlan.byteSpan.captureByteCount, 4,
+                    "diffuse access capture byte count") ||
+       !ExpectEqual(accessPlan.byteSpan.stagingByteCount, 4,
+                    "diffuse access staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 2;
+    readFetch.componentCount = 4;
+    accessPlan = cxbx::nv2a::BuildPgraphVertexAttributeAccessPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedTexture);
+    if(!ExpectEqual(accessPlan.readPlan.componentMask, 0xBu,
+                    "texture access read mask") ||
+       !ExpectEqual(accessPlan.readPlan.decodeComponentCount, 4,
+                    "texture access decode count") ||
+       !ExpectEqual(accessPlan.byteSpan.captureByteCount, 16,
+                    "texture access capture byte count") ||
+       !ExpectEqual(accessPlan.byteSpan.stagingByteCount, 16,
+                    "texture access staging byte count"))
+    {
+        return 1;
+    }
+
     cxbx::nv2a::PgraphVertexAttributeBytes attributeBytes{};
     WriteAttributeFloat(attributeBytes, 0, 1.5f);
     WriteAttributeFloat(attributeBytes, 1, -2.25f);

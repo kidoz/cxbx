@@ -343,6 +343,18 @@ PgraphVertexAttributeByteSpan BuildPgraphVertexAttributeByteSpan(
     };
 }
 
+PgraphVertexAttributeAccessPlan BuildPgraphVertexAttributeAccessPlan(
+    const PgraphVertexAttributeFetch& fetch,
+    PgraphVertexAttributeReadPurpose purpose) noexcept
+{
+    const PgraphVertexAttributeReadPlan readPlan =
+        BuildPgraphVertexAttributeReadPlan(fetch, purpose);
+    return {
+        readPlan,
+        BuildPgraphVertexAttributeByteSpan(fetch, readPlan),
+    };
+}
+
 PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
     const PgraphVertexAttributeBytes& bytes,
     std::uint32_t componentCount) noexcept
