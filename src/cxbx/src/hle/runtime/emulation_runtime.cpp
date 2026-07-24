@@ -5361,6 +5361,98 @@ extern "C" void EmuNv2aEnableHleRaster()
     g_bEmuNv2aHleRaster = true;
 }
 
+using EmuNv2aVertexAttributeScratchRow =
+    BYTE[cxbx::nv2a::PgraphImmediateVertexAttributeStride];
+
+struct EmuNv2aVertexAttributeMemoryContext
+{
+    const BYTE* InlineData;
+    ULONG VertexBase;
+    EmuNv2aVertexAttributeScratchRow* AttributeScratch;
+};
+
+static ULONG EmuNv2aResolveVertexAttributeHost(
+    const EmuNv2aVertexAttributeMemoryContext& Context,
+    ULONG Attribute,
+    const cxbx::nv2a::PgraphVertexAttributeFetchRequest& FetchRequest)
+{
+    if(!FetchRequest.fetchOffset.valid)
+    {
+        return 0;
+    }
+    if(FetchRequest.source ==
+       cxbx::nv2a::PgraphVertexFetchSource::Inline)
+    {
+        if(Context.InlineData == nullptr)
+        {
+            return 0;
+        }
+        const uintptr_t InlineBase =
+            reinterpret_cast<uintptr_t>(Context.InlineData);
+        if(FetchRequest.fetchOffset.relativeByteOffset >
+           (std::numeric_limits<uintptr_t>::max)() - InlineBase)
+        {
+            return 0;
+        }
+        const uintptr_t InlineAddress =
+            InlineBase + FetchRequest.fetchOffset.relativeByteOffset;
+        if(InlineAddress > (std::numeric_limits<ULONG>::max)())
+        {
+            return 0;
+        }
+        return static_cast<ULONG>(InlineAddress);
+    }
+    if(FetchRequest.source !=
+       cxbx::nv2a::PgraphVertexFetchSource::VertexArray)
+    {
+        return 0;
+    }
+
+    const ULONGLONG AddressValue =
+        static_cast<ULONGLONG>(Context.VertexBase) +
+        FetchRequest.fetchOffset.relativeByteOffset;
+    if(AddressValue > (std::numeric_limits<ULONG>::max)())
+    {
+        return 0;
+    }
+    const ULONG Address = static_cast<ULONG>(AddressValue);
+    const auto& ByteSpan = FetchRequest.accessPlan.byteSpan;
+    const ULONG Host = EmuNv2aHostPointer(Address);
+    if(Host != 0)
+    {
+        if(ByteSpan.captureByteCount != 0 &&
+           EmuTryReadHost(
+               Host, Context.AttributeScratch[Attribute],
+               ByteSpan.captureByteCount))
+        {
+            const ULONG CaptureAddress =
+                EmuIsPhysicalMapAddress(Address)
+                    ? Address
+                    : EmuPhysicalMapBase +
+                          (Address & EmuPhysicalRamMirrorMask);
+            EmuNv2aCaptureMemory(
+                CaptureAddress, Context.AttributeScratch[Attribute],
+                ByteSpan.captureByteCount);
+        }
+        return Host;
+    }
+
+    const ULONG PhysicalAddress =
+        EmuIsPhysicalMapAddress(Address)
+            ? Address
+            : EmuPhysicalMapBase +
+                  (Address & EmuPhysicalRamMirrorMask);
+    if(ByteSpan.stagingByteCount != 0 &&
+       EmuReadPhysicalMapBlock(
+           PhysicalAddress, Context.AttributeScratch[Attribute],
+           ByteSpan.stagingByteCount))
+    {
+        return static_cast<ULONG>(reinterpret_cast<uintptr_t>(
+            Context.AttributeScratch[Attribute]));
+    }
+    return 0;
+}
+
 static void EmuNv2aReadHostVertexComponents(
     ULONG HostAddress, std::uint32_t ComponentMask,
     cxbx::nv2a::PgraphVertexAttributeBytes& Bytes)
@@ -6580,87 +6672,10 @@ static void EmuNv2aRasterizeDrawArrays(
     const bool Inline = InlineData != nullptr;
     BYTE AttributeScratch[cxbx::nv2a::PgraphVertexAttributeCount]
                          [cxbx::nv2a::PgraphImmediateVertexAttributeStride] = {};
-    const auto AttributeHost =
-        [InlineData, VertexBase, &AttributeScratch](
-            ULONG Attribute,
-            const cxbx::nv2a::
-                PgraphVertexAttributeFetchRequest& FetchRequest)
-        -> ULONG
-    {
-        if(!FetchRequest.fetchOffset.valid)
-        {
-            return 0;
-        }
-        if(FetchRequest.source ==
-           cxbx::nv2a::PgraphVertexFetchSource::Inline)
-        {
-            if(InlineData == nullptr)
-            {
-                return 0;
-            }
-            const uintptr_t InlineBase =
-                reinterpret_cast<uintptr_t>(InlineData);
-            if(FetchRequest.fetchOffset.relativeByteOffset >
-               (std::numeric_limits<uintptr_t>::max)() - InlineBase)
-            {
-                return 0;
-            }
-            const uintptr_t InlineAddress =
-                InlineBase +
-                FetchRequest.fetchOffset.relativeByteOffset;
-            if(InlineAddress > (std::numeric_limits<ULONG>::max)())
-            {
-                return 0;
-            }
-            return static_cast<ULONG>(InlineAddress);
-        }
-        if(FetchRequest.source !=
-           cxbx::nv2a::PgraphVertexFetchSource::VertexArray)
-        {
-            return 0;
-        }
-
-        const ULONGLONG AddressValue =
-            static_cast<ULONGLONG>(VertexBase) +
-            FetchRequest.fetchOffset.relativeByteOffset;
-        if(AddressValue > (std::numeric_limits<ULONG>::max)())
-        {
-            return 0;
-        }
-        const ULONG Address = static_cast<ULONG>(AddressValue);
-        const auto& ByteSpan = FetchRequest.accessPlan.byteSpan;
-        const ULONG Host = EmuNv2aHostPointer(Address);
-        if(Host != 0)
-        {
-            if(ByteSpan.captureByteCount != 0 &&
-               EmuTryReadHost(
-                   Host, AttributeScratch[Attribute],
-                   ByteSpan.captureByteCount))
-            {
-                const ULONG CaptureAddress = EmuIsPhysicalMapAddress(Address)
-                                                 ? Address
-                                                 : EmuPhysicalMapBase +
-                                                       (Address & EmuPhysicalRamMirrorMask);
-                EmuNv2aCaptureMemory(CaptureAddress,
-                                     AttributeScratch[Attribute],
-                                     ByteSpan.captureByteCount);
-            }
-            return Host;
-        }
-
-        const ULONG PhysicalAddress = EmuIsPhysicalMapAddress(Address)
-                                          ? Address
-                                          : EmuPhysicalMapBase +
-                                                (Address & EmuPhysicalRamMirrorMask);
-        if(ByteSpan.stagingByteCount != 0 &&
-           EmuReadPhysicalMapBlock(
-               PhysicalAddress, AttributeScratch[Attribute],
-               ByteSpan.stagingByteCount))
-        {
-            return static_cast<ULONG>(reinterpret_cast<uintptr_t>(
-                AttributeScratch[Attribute]));
-        }
-        return 0;
+    const EmuNv2aVertexAttributeMemoryContext AttributeMemory = {
+        InlineData,
+        VertexBase,
+        AttributeScratch,
     };
     const ULONG PosStride = static_cast<ULONG>(Pos.stride);
     const ULONG PosType = static_cast<ULONG>(Pos.type);
@@ -6767,7 +6782,8 @@ static void EmuNv2aRasterizeDrawArrays(
                         Fetch, static_cast<std::uint32_t>(Index),
                         cxbx::nv2a::PgraphVertexAttributeReadPurpose::
                             VertexProgram);
-                ULONG Host = AttributeHost(a, FetchRequest);
+                ULONG Host = EmuNv2aResolveVertexAttributeHost(
+                    AttributeMemory, a, FetchRequest);
                 if(Host == 0)
                 {
                     continue;
@@ -6855,7 +6871,8 @@ static void EmuNv2aRasterizeDrawArrays(
                     Pos, static_cast<std::uint32_t>(Index),
                     cxbx::nv2a::PgraphVertexAttributeReadPurpose::
                         FixedPosition);
-            ULONG PosHost = AttributeHost(
+            ULONG PosHost = EmuNv2aResolveVertexAttributeHost(
+                AttributeMemory,
                 cxbx::nv2a::PgraphVertexPositionAttribute,
                 PositionFetchRequest);
             if(PosHost == 0)
@@ -6883,7 +6900,8 @@ static void EmuNv2aRasterizeDrawArrays(
                         Dif, static_cast<std::uint32_t>(Index),
                         cxbx::nv2a::PgraphVertexAttributeReadPurpose::
                             FixedDiffuse);
-                ULONG DifHost = AttributeHost(
+                ULONG DifHost = EmuNv2aResolveVertexAttributeHost(
+                    AttributeMemory,
                     cxbx::nv2a::PgraphVertexDiffuseAttribute,
                     DiffuseFetchRequest);
                 if(DifHost != 0)
@@ -6934,8 +6952,10 @@ static void EmuNv2aRasterizeDrawArrays(
                             cxbx::nv2a::
                                 PgraphVertexAttributeReadPurpose::
                                     FixedTexture);
-                ULONG TexHost = AttributeHost(
-                    TextureAttribute, TextureFetchRequest);
+                ULONG TexHost =
+                    EmuNv2aResolveVertexAttributeHost(
+                        AttributeMemory, TextureAttribute,
+                        TextureFetchRequest);
                 if(TexHost != 0)
                 {
                     auto TextureBytes =
