@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 
 namespace
 {
@@ -416,6 +417,108 @@ int main() noexcept
                     "disabled immediate fetch-plan stride") ||
        !ExpectEqual(immediateFetchPlan.attributes[1].rawFormat, 0,
                     "disabled immediate fetch-plan raw format"))
+    {
+        return 1;
+    }
+
+    cxbx::nv2a::PgraphVertexAttributeFetch addressFetch{};
+    addressFetch.source =
+        cxbx::nv2a::PgraphVertexFetchSource::VertexArray;
+    addressFetch.offset = 0x100u;
+    addressFetch.stride = 0x20u;
+    auto fetchOffset =
+        cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+            addressFetch, 3);
+    if(!Expect(fetchOffset.valid,
+               "array fetch offset was rejected") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0x160u,
+                    "array fetch relative byte offset"))
+    {
+        return 1;
+    }
+
+    addressFetch.source = cxbx::nv2a::PgraphVertexFetchSource::Inline;
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch, 3);
+    if(!Expect(fetchOffset.valid,
+               "inline fetch offset was rejected") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0x160u,
+                    "inline fetch relative byte offset"))
+    {
+        return 1;
+    }
+
+    addressFetch.stride = 0;
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch,
+        std::numeric_limits<std::uint32_t>::max());
+    if(!Expect(fetchOffset.valid,
+               "zero-stride fetch offset was rejected") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0x100u,
+                    "zero-stride fetch relative byte offset"))
+    {
+        return 1;
+    }
+
+    addressFetch.offset = 0xFFFFFFF0u;
+    addressFetch.stride = 0xFu;
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch, 1);
+    if(!Expect(fetchOffset.valid,
+               "maximum fetch offset was rejected") ||
+       !ExpectEqual(
+           fetchOffset.relativeByteOffset,
+           std::numeric_limits<std::uint32_t>::max(),
+           "maximum fetch relative byte offset"))
+    {
+        return 1;
+    }
+
+    addressFetch.offset = 0xFFFFFFF1u;
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch, 1);
+    if(!Expect(!fetchOffset.valid,
+               "fetch-offset addition overflow was accepted") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0,
+                    "addition-overflow fetch output"))
+    {
+        return 1;
+    }
+
+    addressFetch.offset = 0;
+    addressFetch.stride = 0x80000000u;
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch, 2);
+    if(!Expect(!fetchOffset.valid,
+               "fetch-offset multiplication overflow was accepted") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0,
+                    "multiplication-overflow fetch output"))
+    {
+        return 1;
+    }
+
+    addressFetch.source =
+        cxbx::nv2a::PgraphVertexFetchSource::Disabled;
+    addressFetch.offset = 0x100u;
+    addressFetch.stride = 0x20u;
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch, 3);
+    if(!Expect(!fetchOffset.valid,
+               "disabled fetch offset was accepted") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0,
+                    "disabled fetch-offset output"))
+    {
+        return 1;
+    }
+
+    addressFetch.source =
+        static_cast<cxbx::nv2a::PgraphVertexFetchSource>(0xFFu);
+    fetchOffset = cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+        addressFetch, 3);
+    if(!Expect(!fetchOffset.valid,
+               "unknown fetch source was accepted") ||
+       !ExpectEqual(fetchOffset.relativeByteOffset, 0,
+                    "unknown-source fetch-offset output"))
     {
         return 1;
     }

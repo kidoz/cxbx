@@ -80,6 +80,7 @@ namespace XTL
 #include <cstring>
 #include <fcntl.h>
 #include <io.h>
+#include <limits>
 #include <tlhelp32.h>
 #ifdef _DEBUG
 #include <crtdbg.h>
@@ -6583,8 +6584,10 @@ static void EmuNv2aRasterizeDrawArrays(
                                    ULONG Attribute, ULONG Index) -> ULONG
     {
         const auto& Fetch = VertexFetchPlan.attributes[Attribute];
-        if(Fetch.source ==
-           cxbx::nv2a::PgraphVertexFetchSource::Disabled)
+        const cxbx::nv2a::PgraphVertexFetchOffset FetchOffset =
+            cxbx::nv2a::CalculatePgraphVertexFetchOffset(
+                Fetch, static_cast<std::uint32_t>(Index));
+        if(!FetchOffset.valid)
         {
             return 0;
         }
@@ -6595,13 +6598,30 @@ static void EmuNv2aRasterizeDrawArrays(
             {
                 return 0;
             }
-            return static_cast<ULONG>(reinterpret_cast<uintptr_t>(
-                InlineData + Index * Fetch.stride + Fetch.offset));
+            const uintptr_t InlineBase =
+                reinterpret_cast<uintptr_t>(InlineData);
+            if(FetchOffset.relativeByteOffset >
+               (std::numeric_limits<uintptr_t>::max)() - InlineBase)
+            {
+                return 0;
+            }
+            const uintptr_t InlineAddress =
+                InlineBase + FetchOffset.relativeByteOffset;
+            if(InlineAddress > (std::numeric_limits<ULONG>::max)())
+            {
+                return 0;
+            }
+            return static_cast<ULONG>(InlineAddress);
         }
 
-        const ULONG Address =
-            VertexBase + static_cast<ULONG>(Fetch.offset) +
-            Index * static_cast<ULONG>(Fetch.stride);
+        const ULONGLONG AddressValue =
+            static_cast<ULONGLONG>(VertexBase) +
+            FetchOffset.relativeByteOffset;
+        if(AddressValue > (std::numeric_limits<ULONG>::max)())
+        {
+            return 0;
+        }
+        const ULONG Address = static_cast<ULONG>(AddressValue);
         const ULONG Host = EmuNv2aHostPointer(Address);
         if(Host != 0)
         {

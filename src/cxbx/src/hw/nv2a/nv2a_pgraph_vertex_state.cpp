@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 
 namespace cxbx::nv2a
 {
@@ -225,6 +226,30 @@ PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
     }
 
     return plan;
+}
+
+PgraphVertexFetchOffset CalculatePgraphVertexFetchOffset(
+    const PgraphVertexAttributeFetch& fetch,
+    std::uint32_t vertexIndex) noexcept
+{
+    if(fetch.source != PgraphVertexFetchSource::VertexArray &&
+       fetch.source != PgraphVertexFetchSource::Inline)
+    {
+        return {};
+    }
+
+    constexpr std::uint32_t MaximumOffset =
+        std::numeric_limits<std::uint32_t>::max();
+    if(fetch.stride != 0 &&
+       vertexIndex > (MaximumOffset - fetch.offset) / fetch.stride)
+    {
+        return {};
+    }
+
+    return {
+        true,
+        fetch.offset + vertexIndex * fetch.stride,
+    };
 }
 
 PgraphVertexAttributeReadPlan BuildPgraphVertexAttributeReadPlan(

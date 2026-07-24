@@ -80,6 +80,12 @@ struct PgraphVertexFetchPlan
         attributes{};
 };
 
+struct PgraphVertexFetchOffset
+{
+    bool valid = false;
+    std::uint32_t relativeByteOffset = 0;
+};
+
 enum class PgraphVertexAttributeReadPurpose : std::uint8_t
 {
     VertexProgram,
@@ -151,6 +157,10 @@ struct PgraphFixedFunctionVertexInput
 
 [[nodiscard]] PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
     const PgraphVertexLayout& layout) noexcept;
+
+[[nodiscard]] PgraphVertexFetchOffset CalculatePgraphVertexFetchOffset(
+    const PgraphVertexAttributeFetch& fetch,
+    std::uint32_t vertexIndex) noexcept;
 
 [[nodiscard]] PgraphVertexAttributeReadPlan
 BuildPgraphVertexAttributeReadPlan(
