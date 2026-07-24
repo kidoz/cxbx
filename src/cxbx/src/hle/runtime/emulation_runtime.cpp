@@ -54,6 +54,7 @@ namespace xboxkrnl
 #include "hw/nv2a_pfifo.h"
 #include "hw/nv2a_pgraph_combiner_state.h"
 #include "hw/nv2a_pgraph_render_state.h"
+#include "hw/nv2a_pgraph_semaphore_state.h"
 #include "hw/nv2a_pgraph_surface.h"
 #include "hw/nv2a_pgraph_texture_state.h"
 #include "hw/nv2a_pgraph_transform_state.h"
@@ -684,6 +685,7 @@ static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 
 static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
 static cxbx::nv2a::PgraphRenderState g_EmuNv2aRenderState{};
+static cxbx::nv2a::PgraphSemaphoreState g_EmuNv2aSemaphoreState{};
 static cxbx::nv2a::PgraphSurfaceState g_EmuNv2aSurfaceState{};
 static cxbx::nv2a::PgraphTextureState g_EmuNv2aTextureState{};
 static cxbx::nv2a::PgraphCombinerState g_EmuNv2aCombinerState{};
@@ -1760,9 +1762,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 #define NV097_SET_VERTEX_DATA2F_M            0x1880u
 #define NV097_SET_VERTEX_DATA4UB             0x1940u
 #define NV097_SET_VERTEX_DATA4F_M            0x1A00u
-#define NV097_SET_CONTEXT_DMA_SEMAPHORE     0x01A4u
-#define NV097_SET_SEMAPHORE_OFFSET          0x1D6Cu
-#define NV097_BACK_END_WRITE_SEMAPHORE_RELEASE 0x1D70u
 #define EmuNv2aAttrPosition                 0u
 #define EmuNv2aAttrDiffuse                  3u
 #define EmuNv2aAttrTexcoord0                9u
@@ -1780,8 +1779,6 @@ extern "C" bool EmuVshExecuteProgramRaster(
     const float* Const, const float* Input, float* OutPos,
     float* OutColors, float* OutTexCoords);
 
-static ULONG g_EmuNv2aContextDmaSemaphore = 0;
-static ULONG g_EmuNv2aSemaphoreOffset = 0;
 static ULONG g_EmuNv2aBeginOp = 0;
 static ULONG g_EmuNv2aElementIndices[4096] = {};
 static ULONG g_EmuNv2aElementIndexCount = 0;
@@ -1866,7 +1863,8 @@ static void EmuNv2aRasterizeDrawArrays(
     const ULONG* InlineOffsets = nullptr);
 static void EmuNv2aRasterizeInlineArray();
 static void EmuNv2aRasterizeImmediateVertices();
-static void EmuNv2aWriteBackendSemaphore(ULONG Data);
+static void EmuNv2aWriteBackendSemaphore(
+    const cxbx::nv2a::PgraphSemaphoreRelease& Release);
 static void EmuNv2aClearSurface(ULONG Flags);
 static void EmuNv2aPresentColorSurface();
 static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
@@ -2101,6 +2099,16 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
         // Phase 0 rasterizer state: track the color surface, the vertex arrays,
         // and the active primitive so a DRAW_ARRAYS can be turned into pixels.
         EmuNv2aSetRenderState(Method, Data);
+        const cxbx::nv2a::PgraphSemaphoreStep SemaphoreStep =
+            cxbx::nv2a::ApplyPgraphSemaphoreMethod(
+                g_EmuNv2aSemaphoreState,
+                static_cast<std::uint32_t>(Method),
+                static_cast<std::uint32_t>(Data));
+        if(SemaphoreStep.kind ==
+           cxbx::nv2a::PgraphSemaphoreStepKind::Release)
+        {
+            EmuNv2aWriteBackendSemaphore(SemaphoreStep.release);
+        }
         static_cast<void>(cxbx::nv2a::ApplyPgraphTransformMethod(
             g_EmuNv2aTransformState,
             static_cast<std::uint32_t>(Method),
@@ -2137,11 +2145,6 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 }
                 break;
             }
-            case NV097_SET_CONTEXT_DMA_SEMAPHORE: g_EmuNv2aContextDmaSemaphore = Data; break;
-            case NV097_SET_SEMAPHORE_OFFSET:     g_EmuNv2aSemaphoreOffset = Data; break;
-            case NV097_BACK_END_WRITE_SEMAPHORE_RELEASE:
-                EmuNv2aWriteBackendSemaphore(Data);
-                break;
             case NV097_SET_BEGIN_END:
                 if(Data == 0)
                 {
@@ -3530,15 +3533,20 @@ static ULONG EmuNv2aTextureDmaHandle(ULONG Format)
 // The bound handle has usually already been RAMHT-resolved to an instance by
 // the 0x180-0x200 rewrite in EmuNv2aHandlePgraphMethod, so try the handle path
 // first and fall back to reading the DMA object straight from RAMIN.
-static void EmuNv2aWriteBackendSemaphore(ULONG Data)
+static void EmuNv2aWriteBackendSemaphore(
+    const cxbx::nv2a::PgraphSemaphoreRelease& Release)
 {
-    ULONG DmaInstance = g_EmuNv2aContextDmaSemaphore;
+    const ULONG ContextDmaSemaphore =
+        static_cast<ULONG>(Release.contextDmaSemaphore);
+    const ULONG SemaphoreOffset = static_cast<ULONG>(Release.offset);
+    const ULONG Data = static_cast<ULONG>(Release.value);
+    ULONG DmaInstance = ContextDmaSemaphore;
     ULONG ResolvedInstance = 0;
     ULONG ObjectClass = 0;
     ULONG Base = 0;
     ULONG Flags = 0, Limit = 0, Frame = 0;
 
-    if(EmuNv2aRamhtLookup(g_EmuNv2aContextDmaSemaphore,
+    if(EmuNv2aRamhtLookup(ContextDmaSemaphore,
                           &ResolvedInstance, &ObjectClass))
     {
         DmaInstance = ResolvedInstance;
@@ -3557,22 +3565,22 @@ static void EmuNv2aWriteBackendSemaphore(ULONG Data)
         Base = static_cast<ULONG>(DmaObject->AdjustedAddress());
     }
 
-    if(g_EmuNv2aSemaphoreOffset > Limit ||
-       Limit - g_EmuNv2aSemaphoreOffset < sizeof(ULONG) - 1)
+    if(SemaphoreOffset > Limit ||
+       Limit - SemaphoreOffset < sizeof(ULONG) - 1)
     {
         printf("Emu (0x%lX): NV2A semaphore release out of range (limit=0x%.08lX off=0x%.08lX val=0x%.08lX).\n",
-               GetCurrentThreadId(), Limit, g_EmuNv2aSemaphoreOffset, Data);
+               GetCurrentThreadId(), Limit, SemaphoreOffset, Data);
         fflush(stdout);
         return;
     }
 
-    ULONG Host = EmuNv2aHostPointer(Base + g_EmuNv2aSemaphoreOffset);
+    ULONG Host = EmuNv2aHostPointer(Base + SemaphoreOffset);
 
     if(Host == 0)
     {
         printf("Emu (0x%lX): NV2A semaphore release unresolved (dma=0x%.08lX obj={0x%.08lX,0x%.08lX,0x%.08lX} base=0x%.08lX off=0x%.08lX val=0x%.08lX).\n",
-               GetCurrentThreadId(), g_EmuNv2aContextDmaSemaphore, Flags, Limit, Frame,
-               Base, g_EmuNv2aSemaphoreOffset, Data);
+               GetCurrentThreadId(), ContextDmaSemaphore, Flags, Limit, Frame,
+               Base, SemaphoreOffset, Data);
         fflush(stdout);
         return;
     }
@@ -3583,7 +3591,7 @@ static void EmuNv2aWriteBackendSemaphore(ULONG Data)
     if(s_ReleaseCount < 8 || (s_ReleaseCount % 1000) == 0)
     {
         printf("Emu (0x%lX): NV2A semaphore release #%lu: [0x%.08lX+0x%lX] <- 0x%.08lX.\n",
-               GetCurrentThreadId(), s_ReleaseCount, Base, g_EmuNv2aSemaphoreOffset, Data);
+               GetCurrentThreadId(), s_ReleaseCount, Base, SemaphoreOffset, Data);
         fflush(stdout);
     }
     s_ReleaseCount++;
