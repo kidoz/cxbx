@@ -686,6 +686,97 @@ int main() noexcept
         return 1;
     }
 
+    readFetch.type = 2;
+    readFetch.componentCount = 3;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::VertexProgram);
+    auto byteSpan = cxbx::nv2a::BuildPgraphVertexAttributeByteSpan(
+        readFetch, readPlan);
+    if(!ExpectEqual(byteSpan.captureByteCount, 12,
+                    "float3 capture byte count") ||
+       !ExpectEqual(byteSpan.stagingByteCount, 12,
+                    "float3 staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.componentCount = 5;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::VertexProgram);
+    byteSpan = cxbx::nv2a::BuildPgraphVertexAttributeByteSpan(
+        readFetch, readPlan);
+    if(!ExpectEqual(
+           byteSpan.captureByteCount,
+           cxbx::nv2a::PgraphImmediateVertexAttributeStride,
+           "clamped float capture byte count") ||
+       !ExpectEqual(
+           byteSpan.stagingByteCount,
+           cxbx::nv2a::PgraphImmediateVertexAttributeStride,
+           "clamped float staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 6;
+    readFetch.componentCount = 4;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::VertexProgram);
+    byteSpan = cxbx::nv2a::BuildPgraphVertexAttributeByteSpan(
+        readFetch, readPlan);
+    if(!ExpectEqual(byteSpan.captureByteCount, 4,
+                    "packed capture byte count") ||
+       !ExpectEqual(byteSpan.stagingByteCount, 4,
+                    "packed staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.type = 2;
+    readFetch.componentCount = 1;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedPosition);
+    byteSpan = cxbx::nv2a::BuildPgraphVertexAttributeByteSpan(
+        readFetch, readPlan);
+    if(!ExpectEqual(byteSpan.captureByteCount, 4,
+                    "short position capture byte count") ||
+       !ExpectEqual(byteSpan.stagingByteCount, 8,
+                    "short position staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.componentCount = 2;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedDiffuse);
+    byteSpan = cxbx::nv2a::BuildPgraphVertexAttributeByteSpan(
+        readFetch, readPlan);
+    if(!ExpectEqual(byteSpan.captureByteCount, 8,
+                    "short diffuse capture byte count") ||
+       !ExpectEqual(byteSpan.stagingByteCount, 16,
+                    "short diffuse staging byte count"))
+    {
+        return 1;
+    }
+
+    readFetch.componentCount = 2;
+    readPlan = cxbx::nv2a::BuildPgraphVertexAttributeReadPlan(
+        readFetch,
+        cxbx::nv2a::PgraphVertexAttributeReadPurpose::FixedTexture);
+    byteSpan = cxbx::nv2a::BuildPgraphVertexAttributeByteSpan(
+        readFetch, readPlan);
+    if(!ExpectEqual(byteSpan.captureByteCount, 8,
+                    "texture capture byte count") ||
+       !ExpectEqual(byteSpan.stagingByteCount, 8,
+                    "texture staging byte count"))
+    {
+        return 1;
+    }
+
     cxbx::nv2a::PgraphVertexAttributeBytes attributeBytes{};
     WriteAttributeFloat(attributeBytes, 0, 1.5f);
     WriteAttributeFloat(attributeBytes, 1, -2.25f);

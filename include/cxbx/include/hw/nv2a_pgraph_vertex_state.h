@@ -101,6 +101,12 @@ struct PgraphVertexAttributeReadPlan
     std::uint8_t initialByte = 0;
 };
 
+struct PgraphVertexAttributeByteSpan
+{
+    std::uint32_t captureByteCount = 0;
+    std::uint32_t stagingByteCount = 0;
+};
+
 using PgraphVertexAttributeBytes =
     std::array<std::uint8_t, PgraphImmediateVertexAttributeStride>;
 using PgraphVertexComponents =
@@ -170,6 +176,11 @@ BuildPgraphVertexAttributeReadPlan(
 [[nodiscard]] PgraphVertexAttributeBytes
 InitializePgraphVertexAttributeBytes(
     const PgraphVertexAttributeReadPlan& plan) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeByteSpan
+BuildPgraphVertexAttributeByteSpan(
+    const PgraphVertexAttributeFetch& fetch,
+    const PgraphVertexAttributeReadPlan& readPlan) noexcept;
 
 [[nodiscard]] PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
     const PgraphVertexAttributeBytes& bytes,

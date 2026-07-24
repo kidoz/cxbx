@@ -55,6 +55,21 @@ std::uint32_t BuildLowComponentMask(
     return (1u << componentCount) - 1u;
 }
 
+std::uint32_t GetPgraphVertexReadByteCount(
+    std::uint32_t componentMask) noexcept
+{
+    for(std::uint32_t component =
+            PgraphVertexAttributeComponentCount;
+        component > 0; --component)
+    {
+        if((componentMask & (1u << (component - 1u))) != 0)
+        {
+            return component * sizeof(std::uint32_t);
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 bool ApplyPgraphVertexStateMethod(
@@ -307,6 +322,25 @@ PgraphVertexAttributeBytes InitializePgraphVertexAttributeBytes(
     PgraphVertexAttributeBytes bytes{};
     bytes.fill(plan.initialByte);
     return bytes;
+}
+
+PgraphVertexAttributeByteSpan BuildPgraphVertexAttributeByteSpan(
+    const PgraphVertexAttributeFetch& fetch,
+    const PgraphVertexAttributeReadPlan& readPlan) noexcept
+{
+    const std::uint32_t captureByteCount =
+        fetch.type == 2u
+            ? std::min(
+                  fetch.componentCount,
+                  PgraphVertexAttributeComponentCount) *
+                  sizeof(std::uint32_t)
+            : sizeof(std::uint32_t);
+    return {
+        captureByteCount,
+        std::max(
+            captureByteCount,
+            GetPgraphVertexReadByteCount(readPlan.componentMask)),
+    };
 }
 
 PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
