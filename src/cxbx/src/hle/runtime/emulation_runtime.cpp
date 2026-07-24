@@ -54,6 +54,7 @@ namespace xboxkrnl
 #include "hw/nv2a_pfifo.h"
 #include "hw/nv2a_pgraph_render_state.h"
 #include "hw/nv2a_pgraph_surface.h"
+#include "hw/nv2a_pgraph_texture_state.h"
 #include "shared_runtime_state.h"
 
 // ******************************************************************
@@ -681,6 +682,7 @@ static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
 static cxbx::nv2a::PgraphRenderState g_EmuNv2aRenderState{};
 static cxbx::nv2a::PgraphSurfaceState g_EmuNv2aSurfaceState{};
+static cxbx::nv2a::PgraphTextureState g_EmuNv2aTextureState{};
 static ULONG g_EmuNv2aSubchannelClass[8] = {};
 
 static bool EmuNv2aIsMmioAddress(ULONG Address)
@@ -1622,8 +1624,6 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 // without a GPU. Triggered on SET_BEGIN_END (a primitive batch) when a stage-0
 // texture is bound.
 // ---------------------------------------------------------------------------
-#define NV097_SET_CONTEXT_DMA_A        0x1A60u
-#define NV097_SET_CONTEXT_DMA_B        0x1A64u
 #define NV097_NO_OPERATION             0x0100u
 #define NV097_SET_FLIP_READ            0x0120u
 #define NV097_SET_FLIP_WRITE           0x0124u
@@ -1631,33 +1631,8 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 #define NV097_FLIP_INCREMENT_WRITE     0x012Cu
 #define NV097_FLIP_STALL               0x0130u
 #define NV097_SET_BEGIN_END            0x17FCu
-#define NV097_SET_TEXTURE_OFFSET_0     0x1B00u
-#define NV097_SET_TEXTURE_FORMAT_0     0x1B04u
-#define NV097_SET_TEXTURE_ADDRESS_0    0x1B08u
-#define NV097_SET_TEXTURE_CONTROL0_0   0x1B0Cu
-#define NV097_SET_TEXTURE_CONTROL1_0   0x1B10u
-#define NV097_SET_TEXTURE_IMAGE_RECT_0 0x1B1Cu
-#define NV097_SET_TEXTURE_PALETTE_0    0x1B20u
-#define EmuNv2aTextureStageStride      0x40u
-#define EmuNv2aTextureStageCount       4u
-
-#define NV097_SET_TEXTURE_FILTER_0     0x1B14u
-
-struct EmuNv2aTextureState
-{
-    ULONG Offset;
-    ULONG Format;
-    ULONG Address;
-    ULONG Control0;
-    ULONG Control1;
-    ULONG ImageRect;
-    ULONG Filter;
-    ULONG Palette;
-};
-
-static EmuNv2aTextureState g_EmuNv2aTexture[EmuNv2aTextureStageCount] = {};
-static ULONG g_EmuNv2aContextDmaAHandle = 0;
-static ULONG g_EmuNv2aContextDmaBHandle = 0;
+static constexpr ULONG EmuNv2aTextureStageCount =
+    static_cast<ULONG>(cxbx::nv2a::PgraphTextureStageCount);
 static ULONG g_EmuNv2aFlipRead = 0;
 static ULONG g_EmuNv2aFlipWrite = 0;
 static ULONG g_EmuNv2aFlipModulo = 1;
@@ -2125,26 +2100,32 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
     // primitive batch begins.
     if(Class == NV_CLASS_KELVIN)
     {
-        if(Method == NV097_SET_CONTEXT_DMA_A)
+        const cxbx::nv2a::PgraphTextureStep TextureStep =
+            cxbx::nv2a::ApplyPgraphTextureMethod(
+                g_EmuNv2aTextureState,
+                static_cast<std::uint32_t>(Method),
+                static_cast<std::uint32_t>(Data));
+        if(TextureStep.kind !=
+           cxbx::nv2a::PgraphTextureStepKind::Unhandled)
         {
-            if(g_EmuNv2aContextDmaAHandle != Data)
+            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
             {
-                g_EmuNv2aContextDmaAHandle = Data;
-                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+                if((TextureStep.samplerInvalidationMask &
+                    (1u << Stage)) != 0)
                 {
                     EmuNv2aInvalidateSampler(Stage);
                 }
             }
-        }
-        else if(Method == NV097_SET_CONTEXT_DMA_B)
-        {
-            if(g_EmuNv2aContextDmaBHandle != Data)
+
+            if(TextureStep.kind ==
+                   cxbx::nv2a::PgraphTextureStepKind::TextureStage &&
+               g_EmuNv2aTextureMethodLogCount < 32)
             {
-                g_EmuNv2aContextDmaBHandle = Data;
-                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
-                {
-                    EmuNv2aInvalidateSampler(Stage);
-                }
+                printf("Emu (0x%lX): KELVIN texture[%lu] method 0x%.04lX = 0x%.08lX.\n",
+                       GetCurrentThreadId(),
+                       static_cast<ULONG>(TextureStep.stage), Method, Data);
+                fflush(stdout);
+                g_EmuNv2aTextureMethodLogCount++;
             }
         }
         else if(Method == NV097_SET_FLIP_READ)
@@ -2170,72 +2151,11 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             EmuNv2aFinishCaptureFrame(PresentedFrame);
             EmuNv2aInvalidateFrameSamplers();
         }
-        else if(Method >= NV097_SET_TEXTURE_OFFSET_0 &&
-                Method < NV097_SET_TEXTURE_OFFSET_0 + EmuNv2aTextureStageStride * EmuNv2aTextureStageCount)
-        {
-            ULONG Stage = (Method - NV097_SET_TEXTURE_OFFSET_0) / EmuNv2aTextureStageStride;
-            ULONG StageMethod = NV097_SET_TEXTURE_OFFSET_0 + Stage * EmuNv2aTextureStageStride;
-
-            ULONG* State = nullptr;
-            bool InvalidatesTexels = true;
-            if(Method == StageMethod)
-            {
-                State = &g_EmuNv2aTexture[Stage].Offset;
-            }
-            else if(Method == StageMethod + 4)
-            {
-                State = &g_EmuNv2aTexture[Stage].Format;
-            }
-            else if(Method == StageMethod + (NV097_SET_TEXTURE_ADDRESS_0 - NV097_SET_TEXTURE_OFFSET_0))
-            {
-                State = &g_EmuNv2aTexture[Stage].Address;
-                InvalidatesTexels = false;
-            }
-            else if(Method == StageMethod + (NV097_SET_TEXTURE_CONTROL0_0 - NV097_SET_TEXTURE_OFFSET_0))
-            {
-                State = &g_EmuNv2aTexture[Stage].Control0;
-                InvalidatesTexels = false;
-            }
-            else if(Method == StageMethod + (NV097_SET_TEXTURE_CONTROL1_0 - NV097_SET_TEXTURE_OFFSET_0))
-            {
-                State = &g_EmuNv2aTexture[Stage].Control1;
-            }
-            else if(Method == StageMethod + (NV097_SET_TEXTURE_IMAGE_RECT_0 - NV097_SET_TEXTURE_OFFSET_0))
-            {
-                State = &g_EmuNv2aTexture[Stage].ImageRect;
-            }
-            else if(Method == StageMethod + (NV097_SET_TEXTURE_FILTER_0 - NV097_SET_TEXTURE_OFFSET_0))
-            {
-                State = &g_EmuNv2aTexture[Stage].Filter;
-                InvalidatesTexels = false;
-            }
-            else if(Method == StageMethod + (NV097_SET_TEXTURE_PALETTE_0 - NV097_SET_TEXTURE_OFFSET_0))
-            {
-                State = &g_EmuNv2aTexture[Stage].Palette;
-                InvalidatesTexels = false;
-            }
-
-            if(State != nullptr && *State != Data)
-            {
-                *State = Data;
-                if(InvalidatesTexels)
-                {
-                    EmuNv2aInvalidateSampler(Stage);
-                }
-            }
-
-            if(g_EmuNv2aTextureMethodLogCount < 32)
-            {
-                printf("Emu (0x%lX): KELVIN texture[%lu] method 0x%.04lX = 0x%.08lX.\n",
-                       GetCurrentThreadId(), Stage, Method, Data);
-                fflush(stdout);
-                g_EmuNv2aTextureMethodLogCount++;
-            }
-        }
         else if(Method == NV097_SET_BEGIN_END && Data != 0)
         {
             if(EmuNv2aTextureDumpEnabled() &&
-               g_EmuNv2aTexture[0].Offset != 0 && g_EmuNv2aTexture[0].Format != 0)
+               g_EmuNv2aTextureState.stages[0].offset != 0 &&
+               g_EmuNv2aTextureState.stages[0].format != 0)
             {
                 EmuNv2aDumpSourceTexture(0);
             }
@@ -3726,9 +3646,8 @@ static ULONG EmuNv2aTextureDmaHandle(ULONG Format)
 {
     // NV097_SET_TEXTURE_FORMAT_CONTEXT_DMA is a two-bit field, but hardware
     // treats every non-zero value as context DMA B.
-    return (Format & 0x3) != 0
-               ? g_EmuNv2aContextDmaBHandle
-               : g_EmuNv2aContextDmaAHandle;
+    return static_cast<ULONG>(cxbx::nv2a::SelectPgraphTextureDmaHandle(
+        g_EmuNv2aTextureState, static_cast<std::uint32_t>(Format)));
 }
 
 // Execute NV097_BACK_END_WRITE_SEMAPHORE_RELEASE: real hardware writes the
@@ -3920,10 +3839,12 @@ static void EmuNv2aInvalidateFrameSamplers()
 
 static bool EmuNv2aLoadSamplerPalette(ULONG Stage, EmuNv2aSampler* Sampler)
 {
-    const ULONG PaletteState = g_EmuNv2aTexture[Stage].Palette;
-    const ULONG PaletteHandle = (PaletteState & 1u) != 0
-                                    ? g_EmuNv2aContextDmaBHandle
-                                    : g_EmuNv2aContextDmaAHandle;
+    const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
+    const ULONG PaletteState = static_cast<ULONG>(Texture.palette);
+    const ULONG PaletteHandle =
+        static_cast<ULONG>(cxbx::nv2a::SelectPgraphPaletteDmaHandle(
+            g_EmuNv2aTextureState,
+            static_cast<std::uint32_t>(PaletteState)));
     const ULONG PaletteBase = EmuNv2aResolveDmaBase(PaletteHandle);
     ULONG PaletteAddress = PaletteBase + (PaletteState & 0xFFFFFFC0u);
     const ULONG PaletteLengthIndex = (PaletteState >> 2) & 3u;
@@ -3995,16 +3916,17 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
         return false;
     }
 
-    if((g_EmuNv2aTexture[Stage].Control0 & 0x40000000u) == 0)
+    const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
+    if((Texture.control0 & 0x40000000u) == 0)
     {
         return false;
     }
 
-    ULONG Format = g_EmuNv2aTexture[Stage].Format;
+    ULONG Format = static_cast<ULONG>(Texture.format);
     ULONG Color = (Format >> 8) & 0xFF;
     ULONG SizeU = (Format >> 20) & 0xF;
     ULONG SizeV = (Format >> 24) & 0xF;
-    ULONG ImageRect = g_EmuNv2aTexture[Stage].ImageRect;
+    ULONG ImageRect = static_cast<ULONG>(Texture.imageRect);
     if(!EmuNv2aTextureFormatInfo(Color, &S->Bpp, &S->Kind, &S->Swizzled))
     {
         return false;
@@ -4035,14 +3957,14 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
 
     S->LogW = EmuNv2aLog2(S->Width);
     S->LogH = EmuNv2aLog2(S->Height);
-    S->Bilinear = (((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xF) == 2); // MAG == LINEAR
-    S->Address = g_EmuNv2aTexture[Stage].Address;
+    S->Bilinear = (((Texture.filter >> 24) & 0xF) == 2); // MAG == LINEAR
+    S->Address = static_cast<ULONG>(Texture.address);
 
     ULONG Base = EmuNv2aResolveDmaBase(EmuNv2aTextureDmaHandle(Format));
-    ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
+    ULONG Address = Base + static_cast<ULONG>(Texture.offset);
     S->SourcePitch = S->Swizzled
                          ? S->Width * S->Bpp
-                         : ((g_EmuNv2aTexture[Stage].Control1 >> 16) & 0xFFFF);
+                         : ((Texture.control1 >> 16) & 0xFFFF);
     if(S->SourcePitch < S->Width * S->Bpp)
     {
         S->SourcePitch = S->Width * S->Bpp;
@@ -4186,16 +4108,18 @@ static const EmuNv2aSampler* EmuNv2aGetSampler(ULONG Stage)
         EmuNv2aInvalidateSampler(Stage);
         return nullptr;
     }
-    g_EmuNv2aSamplerCache[Stage].Address = g_EmuNv2aTexture[Stage].Address;
+    const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
+    g_EmuNv2aSamplerCache[Stage].Address =
+        static_cast<ULONG>(Texture.address);
     g_EmuNv2aSamplerCache[Stage].Bilinear =
-        ((g_EmuNv2aTexture[Stage].Filter >> 24) & 0xFu) == 2u;
+        ((Texture.filter >> 24) & 0xFu) == 2u;
     if(g_EmuNv2aSamplerCache[Stage].Kind == 5 &&
        g_EmuNv2aSamplerCache[Stage].Source != nullptr)
     {
-        const ULONG Format = g_EmuNv2aTexture[Stage].Format;
+        const ULONG Format = static_cast<ULONG>(Texture.format);
         const ULONG Base = EmuNv2aResolveDmaBase(
             EmuNv2aTextureDmaHandle(Format));
-        const ULONG Address = Base + g_EmuNv2aTexture[Stage].Offset;
+        const ULONG Address = Base + static_cast<ULONG>(Texture.offset);
         const ULONG CaptureAddress = EmuIsPhysicalMapAddress(Address)
                                          ? Address
                                          : EmuPhysicalMapBase +
@@ -4277,11 +4201,12 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
     if(Stage >= EmuNv2aTextureStageCount || g_EmuNv2aTextureDumpIndex >= 16)
         return;
 
-    ULONG Format = g_EmuNv2aTexture[Stage].Format;
+    const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
+    ULONG Format = static_cast<ULONG>(Texture.format);
     ULONG Color = (Format >> 8) & 0xFF;
     ULONG SizeU = (Format >> 20) & 0xF;
     ULONG SizeV = (Format >> 24) & 0xF;
-    ULONG ImageRect = g_EmuNv2aTexture[Stage].ImageRect;
+    ULONG ImageRect = static_cast<ULONG>(Texture.imageRect);
 
     // Byte width and how each texel maps to RGB (see EmuNv2aTextureFormatInfo).
     ULONG Bpp = 0, Kind = 0;
@@ -4289,7 +4214,8 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
     if(!EmuNv2aTextureFormatInfo(Color, &Bpp, &Kind, &Swizzled))
     {
         printf("Emu (0x%lX): KELVIN texture[%lu] unsupported color format 0x%.02lX (offset=0x%.08lX); skipping dump.\n",
-               GetCurrentThreadId(), Stage, Color, g_EmuNv2aTexture[Stage].Offset);
+               GetCurrentThreadId(), Stage, Color,
+               static_cast<ULONG>(Texture.offset));
         fflush(stdout);
         return;
     }
@@ -4318,7 +4244,7 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
 
     ULONG TextureDmaHandle = EmuNv2aTextureDmaHandle(Format);
     ULONG Base = EmuNv2aResolveDmaBase(TextureDmaHandle);
-    ULONG TextureAddress = Base + g_EmuNv2aTexture[Stage].Offset;
+    ULONG TextureAddress = Base + static_cast<ULONG>(Texture.offset);
     ULONG SourceSize = Width * Height * Bpp;
     BYTE *Source = new BYTE[SourceSize];
     const char *SourceKind = NULL;
@@ -4408,8 +4334,8 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
         printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s format=0x%.08lX dma=0x%.08lX base=0x%.08lX offset=0x%.08lX address=0x%.08lX palette=0x%.08lX first=0x%.08lX distinct>=2:%s -> %s\n",
                GetCurrentThreadId(), Stage, Width, Height, Color,
                Swizzled ? "swizzled" : "linear", SourceKind, Format,
-               TextureDmaHandle, Base, g_EmuNv2aTexture[Stage].Offset,
-               TextureAddress, g_EmuNv2aTexture[Stage].Palette, FirstColor,
+               TextureDmaHandle, Base, static_cast<ULONG>(Texture.offset),
+               TextureAddress, static_cast<ULONG>(Texture.palette), FirstColor,
                DistinctSample >= 2 ? "yes" : "no", path);
         fflush(stdout);
         g_EmuNv2aTextureDumpIndex++;
@@ -4812,7 +4738,8 @@ static bool EmuNv2aDrawGate(const char *What, ULONG Count)
                "tex0=0x%.08lX ssp=0x%.08lX blend=%u depth=%u alpha=%u stencil=%u%s\n",
                g_EmuNv2aDebugFrame, Index, What, g_EmuNv2aBeginOp, Count,
                g_EmuNv2aVpExecMode, g_EmuNv2aVpInstrCount,
-               g_EmuNv2aTexture[0].Format, g_EmuNv2aShaderStageProgram,
+               static_cast<ULONG>(g_EmuNv2aTextureState.stages[0].format),
+               g_EmuNv2aShaderStageProgram,
                g_EmuNv2aRenderState.blendEnable ? 1u : 0u, g_EmuNv2aRenderState.depthTest ? 1u : 0u,
                g_EmuNv2aRenderState.alphaTest ? 1u : 0u, g_EmuNv2aRenderState.stencilTest ? 1u : 0u,
                Skipped ? " SKIPPED" : "");
@@ -4896,13 +4823,18 @@ static void EmuNv2aWriteDrawStateFile(const char *Path, const char *What, ULONG 
     }
     for(ULONG i = 0; i < EmuNv2aTextureStageCount; i++)
     {
+        const auto& Texture = g_EmuNv2aTextureState.stages[i];
         fprintf(f, "texture[%lu] offset=0x%.08lX format=0x%.08lX address=0x%.08lX "
                    "control0=0x%.08lX control1=0x%.08lX image_rect=0x%.08lX "
                    "filter=0x%.08lX palette=0x%.08lX\n",
-                i, g_EmuNv2aTexture[i].Offset, g_EmuNv2aTexture[i].Format,
-                g_EmuNv2aTexture[i].Address, g_EmuNv2aTexture[i].Control0,
-                g_EmuNv2aTexture[i].Control1, g_EmuNv2aTexture[i].ImageRect,
-                g_EmuNv2aTexture[i].Filter, g_EmuNv2aTexture[i].Palette);
+                i, static_cast<ULONG>(Texture.offset),
+                static_cast<ULONG>(Texture.format),
+                static_cast<ULONG>(Texture.address),
+                static_cast<ULONG>(Texture.control0),
+                static_cast<ULONG>(Texture.control1),
+                static_cast<ULONG>(Texture.imageRect),
+                static_cast<ULONG>(Texture.filter),
+                static_cast<ULONG>(Texture.palette));
     }
     for(ULONG i = 0; i < EmuNv2aVertexAttrCount; i++)
     {
@@ -6913,8 +6845,9 @@ static void EmuNv2aRasterizeDrawArrays(ULONG Start, ULONG Count,
     {
         TextureMode[Stage] =
             (g_EmuNv2aShaderStageProgram >> (Stage * 5)) & 0x1Fu;
-        const bool TextureBound = g_EmuNv2aTexture[Stage].Format != 0 &&
-                                  (g_EmuNv2aTexture[Stage].Control0 & 0x40000000u) != 0 &&
+        const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
+        const bool TextureBound = Texture.format != 0 &&
+                                  (Texture.control0 & 0x40000000u) != 0 &&
                                   TextureMode[Stage] != 0;
         if(TextureBound && (VpActive || TexStride[Stage] != 0))
         {
