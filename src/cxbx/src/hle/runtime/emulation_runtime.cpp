@@ -53,6 +53,7 @@ namespace xboxkrnl
 #include "hw/nv2a_device_state.h"
 #include "hw/nv2a_pfifo.h"
 #include "hw/nv2a_pgraph_combiner_state.h"
+#include "hw/nv2a_pgraph_flip_state.h"
 #include "hw/nv2a_pgraph_render_state.h"
 #include "hw/nv2a_pgraph_semaphore_state.h"
 #include "hw/nv2a_pgraph_surface.h"
@@ -684,6 +685,7 @@ static const ULONG EmuAciBusMasterControlRun = 0x00000001;
 static const ULONG EmuAciBusMasterControlReset = 0x00000002;
 
 static cxbx::nv2a::DeviceState g_EmuNv2aDeviceState{};
+static cxbx::nv2a::PgraphFlipState g_EmuNv2aFlipState{};
 static cxbx::nv2a::PgraphRenderState g_EmuNv2aRenderState{};
 static cxbx::nv2a::PgraphSemaphoreState g_EmuNv2aSemaphoreState{};
 static cxbx::nv2a::PgraphSurfaceState g_EmuNv2aSurfaceState{};
@@ -1633,17 +1635,9 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 // texture is bound.
 // ---------------------------------------------------------------------------
 #define NV097_NO_OPERATION             0x0100u
-#define NV097_SET_FLIP_READ            0x0120u
-#define NV097_SET_FLIP_WRITE           0x0124u
-#define NV097_SET_FLIP_MODULO          0x0128u
-#define NV097_FLIP_INCREMENT_WRITE     0x012Cu
-#define NV097_FLIP_STALL               0x0130u
 #define NV097_SET_BEGIN_END            0x17FCu
 static constexpr ULONG EmuNv2aTextureStageCount =
     static_cast<ULONG>(cxbx::nv2a::PgraphTextureStageCount);
-static ULONG g_EmuNv2aFlipRead = 0;
-static ULONG g_EmuNv2aFlipWrite = 0;
-static ULONG g_EmuNv2aFlipModulo = 1;
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
 static ULONG g_EmuNv2aTextureMethodLogCount = 0;
 static ULONG g_EmuNv2aScanoutDumpIndex = 0;
@@ -2063,30 +2057,22 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 g_EmuNv2aTextureMethodLogCount++;
             }
         }
-        else if(Method == NV097_SET_FLIP_READ)
-        {
-            g_EmuNv2aFlipRead = Data;
-        }
-        else if(Method == NV097_SET_FLIP_WRITE)
-        {
-            g_EmuNv2aFlipWrite = Data;
-        }
-        else if(Method == NV097_SET_FLIP_MODULO)
-        {
-            g_EmuNv2aFlipModulo = Data != 0 ? Data : 1;
-        }
-        else if(Method == NV097_FLIP_INCREMENT_WRITE)
-        {
-            g_EmuNv2aFlipWrite = (g_EmuNv2aFlipWrite + 1) % g_EmuNv2aFlipModulo;
-        }
-        else if(Method == NV097_FLIP_STALL)
+        const cxbx::nv2a::PgraphFlipStep FlipStep =
+            cxbx::nv2a::ApplyPgraphFlipMethod(
+                g_EmuNv2aFlipState, static_cast<std::uint32_t>(Method),
+                static_cast<std::uint32_t>(Data));
+        if(FlipStep.kind == cxbx::nv2a::PgraphFlipStepKind::Present)
         {
             const ULONG PresentedFrame = g_EmuNv2aDebugFrame;
             EmuNv2aPresentColorSurface();
             EmuNv2aFinishCaptureFrame(PresentedFrame);
             EmuNv2aInvalidateFrameSamplers();
         }
-        else if(Method == NV097_SET_BEGIN_END && Data != 0)
+        else if(TextureStep.kind ==
+                    cxbx::nv2a::PgraphTextureStepKind::Unhandled &&
+                FlipStep.kind ==
+                    cxbx::nv2a::PgraphFlipStepKind::Unhandled &&
+                Method == NV097_SET_BEGIN_END && Data != 0)
         {
             if(EmuNv2aTextureDumpEnabled() &&
                g_EmuNv2aTextureState.stages[0].offset != 0 &&
@@ -5118,8 +5104,11 @@ static void EmuNv2aPresentColorSurface()
     if(FlipLogCount < 8)
     {
         printf("Emu (0x%lX): NV2A flip read=%lu write=%lu modulo=%lu color=0x%.08lX.\n",
-               GetCurrentThreadId(), g_EmuNv2aFlipRead, g_EmuNv2aFlipWrite,
-               g_EmuNv2aFlipModulo, g_EmuNv2aScanoutAddress);
+               GetCurrentThreadId(),
+               static_cast<ULONG>(g_EmuNv2aFlipState.readIndex),
+               static_cast<ULONG>(g_EmuNv2aFlipState.writeIndex),
+               static_cast<ULONG>(g_EmuNv2aFlipState.modulo),
+               g_EmuNv2aScanoutAddress);
         fflush(stdout);
         ++FlipLogCount;
     }
