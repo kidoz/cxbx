@@ -1,5 +1,7 @@
 #include "hw/nv2a_pgraph_vertex_state.h"
 
+#include <bit>
+
 namespace cxbx::nv2a
 {
 
@@ -21,6 +23,17 @@ bool DecodeVertexAttribute(
 
     attribute = (method - baseMethod) / VertexMethodStride;
     return true;
+}
+
+std::uint32_t ReadVertexAttributeWord(
+    const PgraphVertexAttributeBytes& bytes,
+    std::uint32_t component) noexcept
+{
+    const std::uint32_t offset = component * sizeof(std::uint32_t);
+    return static_cast<std::uint32_t>(bytes[offset]) |
+           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8u) |
+           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16u) |
+           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24u);
 }
 
 } // namespace
@@ -194,6 +207,53 @@ PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
     }
 
     return plan;
+}
+
+PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
+    const PgraphVertexAttributeBytes& bytes,
+    std::uint32_t componentCount) noexcept
+{
+    PgraphVertexAttributeValue value{};
+    if(componentCount > PgraphVertexAttributeComponentCount)
+    {
+        componentCount = PgraphVertexAttributeComponentCount;
+    }
+
+    for(std::uint32_t component = 0; component < componentCount;
+        ++component)
+    {
+        value.components[component] = std::bit_cast<float>(
+            ReadVertexAttributeWord(bytes, component));
+    }
+    return value;
+}
+
+PgraphVertexAttributeValue DecodePgraphPackedColorVertexAttribute(
+    const PgraphVertexAttributeBytes& bytes) noexcept
+{
+    PgraphVertexAttributeValue value{};
+    value.packedColor = ReadVertexAttributeWord(bytes, 0);
+    value.components[0] =
+        static_cast<float>((value.packedColor >> 16u) & 0xFFu) / 255.0f;
+    value.components[1] =
+        static_cast<float>((value.packedColor >> 8u) & 0xFFu) / 255.0f;
+    value.components[2] =
+        static_cast<float>(value.packedColor & 0xFFu) / 255.0f;
+    value.components[3] =
+        static_cast<float>((value.packedColor >> 24u) & 0xFFu) / 255.0f;
+    return value;
+}
+
+PgraphVertexAttributeValue DecodePgraphVertexAttribute(
+    const PgraphVertexAttributeFetch& fetch,
+    const PgraphVertexAttributeBytes& bytes) noexcept
+{
+    if(fetch.type == 2u)
+    {
+        return DecodePgraphFloatVertexAttribute(
+            bytes, fetch.componentCount);
+    }
+    return DecodePgraphPackedColorVertexAttribute(bytes);
 }
 
 } // namespace cxbx::nv2a

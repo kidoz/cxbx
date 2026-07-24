@@ -1,6 +1,8 @@
 #include "hw/nv2a_pgraph_vertex_state.h"
 
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 
@@ -29,6 +31,38 @@ bool Expect(bool condition, const char* message) noexcept
 
     std::fprintf(stderr, "%s\n", message);
     return false;
+}
+
+bool ExpectNear(float actual, float expected, const char* message) noexcept
+{
+    if(std::fabs(actual - expected) <= 0.000001f)
+    {
+        return true;
+    }
+
+    std::fprintf(stderr, "%s: expected %g, got %g\n", message,
+                 static_cast<double>(expected),
+                 static_cast<double>(actual));
+    return false;
+}
+
+void WriteAttributeWord(
+    cxbx::nv2a::PgraphVertexAttributeBytes& bytes,
+    std::uint32_t component, std::uint32_t value) noexcept
+{
+    const std::uint32_t offset = component * sizeof(std::uint32_t);
+    bytes[offset] = static_cast<std::uint8_t>(value);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8u);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 16u);
+    bytes[offset + 3] = static_cast<std::uint8_t>(value >> 24u);
+}
+
+void WriteAttributeFloat(
+    cxbx::nv2a::PgraphVertexAttributeBytes& bytes,
+    std::uint32_t component, float value) noexcept
+{
+    WriteAttributeWord(
+        bytes, component, std::bit_cast<std::uint32_t>(value));
 }
 
 } // namespace
@@ -382,6 +416,86 @@ int main() noexcept
                     "disabled immediate fetch-plan stride") ||
        !ExpectEqual(immediateFetchPlan.attributes[1].rawFormat, 0,
                     "disabled immediate fetch-plan raw format"))
+    {
+        return 1;
+    }
+
+    cxbx::nv2a::PgraphVertexAttributeBytes attributeBytes{};
+    WriteAttributeFloat(attributeBytes, 0, 1.5f);
+    WriteAttributeFloat(attributeBytes, 1, -2.25f);
+    WriteAttributeFloat(attributeBytes, 2, 0.5f);
+    WriteAttributeFloat(attributeBytes, 3, 2.0f);
+
+    const auto float3Value =
+        cxbx::nv2a::DecodePgraphFloatVertexAttribute(
+            attributeBytes, 3);
+    if(!ExpectNear(float3Value.components[0], 1.5f,
+                   "float3 attribute x") ||
+       !ExpectNear(float3Value.components[1], -2.25f,
+                   "float3 attribute y") ||
+       !ExpectNear(float3Value.components[2], 0.5f,
+                   "float3 attribute z") ||
+       !ExpectNear(float3Value.components[3], 1.0f,
+                   "float3 attribute default w") ||
+       !ExpectEqual(float3Value.packedColor, 0,
+                    "float attribute packed color"))
+    {
+        return 1;
+    }
+
+    const auto boundedFloatValue =
+        cxbx::nv2a::DecodePgraphFloatVertexAttribute(
+            attributeBytes, 5);
+    if(!ExpectNear(boundedFloatValue.components[3], 2.0f,
+                   "bounded float attribute w"))
+    {
+        return 1;
+    }
+
+    cxbx::nv2a::PgraphVertexAttributeFetch floatFetch{};
+    floatFetch.type = 2;
+    floatFetch.componentCount = 4;
+    const auto typedFloatValue =
+        cxbx::nv2a::DecodePgraphVertexAttribute(
+            floatFetch, attributeBytes);
+    if(!ExpectNear(typedFloatValue.components[0], 1.5f,
+                   "typed float attribute x") ||
+       !ExpectNear(typedFloatValue.components[3], 2.0f,
+                   "typed float attribute w"))
+    {
+        return 1;
+    }
+
+    attributeBytes.fill(0);
+    WriteAttributeWord(attributeBytes, 0, 0x80402010u);
+    const auto packedColorValue =
+        cxbx::nv2a::DecodePgraphPackedColorVertexAttribute(
+            attributeBytes);
+    if(!ExpectEqual(packedColorValue.packedColor, 0x80402010u,
+                    "packed attribute color") ||
+       !ExpectNear(packedColorValue.components[0], 64.0f / 255.0f,
+                   "packed attribute red") ||
+       !ExpectNear(packedColorValue.components[1], 32.0f / 255.0f,
+                   "packed attribute green") ||
+       !ExpectNear(packedColorValue.components[2], 16.0f / 255.0f,
+                   "packed attribute blue") ||
+       !ExpectNear(packedColorValue.components[3], 128.0f / 255.0f,
+                   "packed attribute alpha"))
+    {
+        return 1;
+    }
+
+    cxbx::nv2a::PgraphVertexAttributeFetch packedFetch{};
+    packedFetch.type = 6;
+    packedFetch.componentCount = 1;
+    const auto typedPackedValue =
+        cxbx::nv2a::DecodePgraphVertexAttribute(
+            packedFetch, attributeBytes);
+    if(!ExpectEqual(typedPackedValue.packedColor, 0x80402010u,
+                    "typed packed attribute color") ||
+       !ExpectNear(typedPackedValue.components[3],
+                   128.0f / 255.0f,
+                   "typed packed attribute alpha"))
     {
         return 1;
     }

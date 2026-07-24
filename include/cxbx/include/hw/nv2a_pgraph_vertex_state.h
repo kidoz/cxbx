@@ -7,9 +7,10 @@ namespace cxbx::nv2a
 {
 
 inline constexpr std::uint32_t PgraphVertexAttributeCount = 16;
+inline constexpr std::uint32_t PgraphVertexAttributeComponentCount = 4;
 inline constexpr std::uint32_t PgraphVertexLayoutUnusedOffset = 0xFFFFFFFFu;
 inline constexpr std::uint32_t PgraphImmediateVertexAttributeStride =
-    4u * sizeof(std::uint32_t);
+    PgraphVertexAttributeComponentCount * sizeof(std::uint32_t);
 inline constexpr std::uint32_t PgraphImmediateVertexStride =
     PgraphVertexAttributeCount * PgraphImmediateVertexAttributeStride;
 
@@ -70,6 +71,20 @@ struct PgraphVertexFetchPlan
         attributes{};
 };
 
+using PgraphVertexAttributeBytes =
+    std::array<std::uint8_t, PgraphImmediateVertexAttributeStride>;
+
+struct PgraphVertexAttributeValue
+{
+    std::array<float, PgraphVertexAttributeComponentCount> components = {
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+    };
+    std::uint32_t packedColor = 0;
+};
+
 [[nodiscard]] bool ApplyPgraphVertexStateMethod(
     PgraphVertexState& state, std::uint32_t method,
     std::uint32_t data) noexcept;
@@ -90,6 +105,17 @@ struct PgraphVertexFetchPlan
 
 [[nodiscard]] PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
     const PgraphVertexLayout& layout) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeValue DecodePgraphFloatVertexAttribute(
+    const PgraphVertexAttributeBytes& bytes,
+    std::uint32_t componentCount) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeValue DecodePgraphPackedColorVertexAttribute(
+    const PgraphVertexAttributeBytes& bytes) noexcept;
+
+[[nodiscard]] PgraphVertexAttributeValue DecodePgraphVertexAttribute(
+    const PgraphVertexAttributeFetch& fetch,
+    const PgraphVertexAttributeBytes& bytes) noexcept;
 
 [[nodiscard]] constexpr PgraphVertexArrayFormat DecodePgraphVertexArrayFormat(
     std::uint32_t format) noexcept
