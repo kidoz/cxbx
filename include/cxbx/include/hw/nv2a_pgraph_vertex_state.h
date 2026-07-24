@@ -46,6 +46,30 @@ struct PgraphVertexLayout
     std::uint32_t stride = 0;
 };
 
+enum class PgraphVertexFetchSource : std::uint8_t
+{
+    Disabled,
+    VertexArray,
+    Inline,
+};
+
+struct PgraphVertexAttributeFetch
+{
+    PgraphVertexFetchSource source = PgraphVertexFetchSource::Disabled;
+    std::uint32_t offset = 0;
+    std::uint32_t stride = 0;
+    std::uint32_t rawFormat = 0;
+    std::uint32_t type = 0;
+    std::uint32_t componentCount = 0;
+};
+
+struct PgraphVertexFetchPlan
+{
+    std::uint32_t contextDmaVertex = 0;
+    std::array<PgraphVertexAttributeFetch, PgraphVertexAttributeCount>
+        attributes{};
+};
+
 [[nodiscard]] bool ApplyPgraphVertexStateMethod(
     PgraphVertexState& state, std::uint32_t method,
     std::uint32_t data) noexcept;
@@ -60,6 +84,12 @@ struct PgraphVertexLayout
     const PgraphVertexState& state,
     const std::array<std::uint32_t, PgraphVertexAttributeCount>&
         immediateFormats) noexcept;
+
+[[nodiscard]] PgraphVertexFetchPlan BuildPgraphVertexFetchPlan(
+    const PgraphVertexState& state) noexcept;
+
+[[nodiscard]] PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
+    const PgraphVertexLayout& layout) noexcept;
 
 [[nodiscard]] constexpr PgraphVertexArrayFormat DecodePgraphVertexArrayFormat(
     std::uint32_t format) noexcept

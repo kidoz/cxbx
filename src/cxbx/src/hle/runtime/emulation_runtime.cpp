@@ -1832,12 +1832,11 @@ extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress);
 static void EmuNv2aRasterizeDrawArrays(
-    const cxbx::nv2a::PgraphVertexState& VertexState,
+    const cxbx::nv2a::PgraphVertexFetchPlan& VertexFetchPlan,
     const cxbx::nv2a::PgraphTransformState& TransformState,
     ULONG BeginOp, ULONG Start, ULONG Count,
     const std::uint32_t* Indices = nullptr,
-    const BYTE* InlineData = nullptr, ULONG InlineStride = 0,
-    const std::uint32_t* InlineOffsets = nullptr);
+    const BYTE* InlineData = nullptr);
 static void EmuNv2aRasterizeInlineArray(
     const cxbx::nv2a::PgraphVertexBatchAction& Batch, ULONG BeginOp);
 static void EmuNv2aRasterizeImmediateVertices(
@@ -2154,7 +2153,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                         cxbx::nv2a::PgraphDrawActionKind::Indexed)
                     {
                         EmuNv2aRasterizeDrawArrays(
-                            g_EmuNv2aVertexState,
+                            cxbx::nv2a::BuildPgraphVertexFetchPlan(
+                                g_EmuNv2aVertexState),
                             g_EmuNv2aTransformState,
                             static_cast<ULONG>(DrawStep.action.beginOp),
                             static_cast<ULONG>(
@@ -2177,7 +2177,8 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                 break;
             case cxbx::nv2a::PgraphDrawMethod::DrawArrays:
                 EmuNv2aRasterizeDrawArrays(
-                    g_EmuNv2aVertexState,
+                    cxbx::nv2a::BuildPgraphVertexFetchPlan(
+                        g_EmuNv2aVertexState),
                     g_EmuNv2aTransformState,
                     static_cast<ULONG>(DrawStep.action.beginOp),
                     static_cast<ULONG>(DrawStep.action.startVertex),
@@ -6320,11 +6321,11 @@ static void EmuNv2aRasterizeInlineArray(
     }
 
     EmuNv2aRasterizeDrawArrays(
-        Layout.vertexState, g_EmuNv2aTransformState,
+        cxbx::nv2a::BuildPgraphInlineVertexFetchPlan(Layout),
+        g_EmuNv2aTransformState,
         BeginOp, 0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(
-            g_EmuNv2aVertexSubmissionState.inlineWords.data()),
-        VertexSize, Layout.offsets.data());
+            g_EmuNv2aVertexSubmissionState.inlineWords.data()));
 }
 
 static void EmuNv2aRasterizeImmediateVertices(
@@ -6351,21 +6352,20 @@ static void EmuNv2aRasterizeImmediateVertices(
 
     g_EmuNv2aRasterizingImmediate = true;
     EmuNv2aRasterizeDrawArrays(
-        Layout.vertexState, g_EmuNv2aTransformState,
+        cxbx::nv2a::BuildPgraphInlineVertexFetchPlan(Layout),
+        g_EmuNv2aTransformState,
         BeginOp, 0, VertexCount, nullptr,
         reinterpret_cast<const BYTE*>(
-            g_EmuNv2aVertexSubmissionState.immediateWords.data()),
-        static_cast<ULONG>(Layout.stride), Layout.offsets.data());
+            g_EmuNv2aVertexSubmissionState.immediateWords.data()));
     g_EmuNv2aRasterizingImmediate = false;
 }
 
 static void EmuNv2aRasterizeDrawArrays(
-    const cxbx::nv2a::PgraphVertexState& VertexState,
+    const cxbx::nv2a::PgraphVertexFetchPlan& VertexFetchPlan,
     const cxbx::nv2a::PgraphTransformState& TransformState,
     ULONG BeginOp, ULONG Start, ULONG Count,
     const std::uint32_t* Indices,
-    const BYTE* InlineData, ULONG InlineStride,
-    const std::uint32_t* InlineOffsets)
+    const BYTE* InlineData)
 {
     if(!EmuNv2aRasterEnabled() || BeginOp == 0 || Count < 3)
     {
@@ -6549,42 +6549,44 @@ static void EmuNv2aRasterizeDrawArrays(
         }
     }
 
-    const auto& Pos = VertexState.arrays[EmuNv2aAttrPosition];
-    const auto& Dif = VertexState.arrays[EmuNv2aAttrDiffuse];
-    const auto PosFormat =
-        cxbx::nv2a::DecodePgraphVertexArrayFormat(Pos.format);
-    const auto DifFormat =
-        cxbx::nv2a::DecodePgraphVertexArrayFormat(Dif.format);
+    const auto& Pos =
+        VertexFetchPlan.attributes[EmuNv2aAttrPosition];
+    const auto& Dif =
+        VertexFetchPlan.attributes[EmuNv2aAttrDiffuse];
     ULONG VertexBase = EmuNv2aResolveDmaBase(
-        static_cast<ULONG>(VertexState.contextDmaVertex));
-    bool Inline = InlineData != nullptr && InlineStride != 0 && InlineOffsets != nullptr;
+        static_cast<ULONG>(VertexFetchPlan.contextDmaVertex));
+    const bool Inline = InlineData != nullptr;
     BYTE AttributeScratch[cxbx::nv2a::PgraphVertexAttributeCount][16] = {};
-    const auto AttributeHost = [Inline, InlineData, InlineStride, InlineOffsets, VertexBase,
-                                &AttributeScratch, &VertexState](
-        ULONG Attribute, ULONG Index) -> ULONG
+    const auto AttributeHost = [InlineData, VertexBase,
+                                &AttributeScratch, &VertexFetchPlan](
+                                   ULONG Attribute, ULONG Index) -> ULONG
     {
-        if(Inline)
+        const auto& Fetch = VertexFetchPlan.attributes[Attribute];
+        if(Fetch.source ==
+           cxbx::nv2a::PgraphVertexFetchSource::Disabled)
         {
-            if(InlineOffsets[Attribute] == 0xFFFFFFFF)
+            return 0;
+        }
+        if(Fetch.source ==
+           cxbx::nv2a::PgraphVertexFetchSource::Inline)
+        {
+            if(InlineData == nullptr)
             {
                 return 0;
             }
             return static_cast<ULONG>(reinterpret_cast<uintptr_t>(
-                InlineData + Index * InlineStride + InlineOffsets[Attribute]));
+                InlineData + Index * Fetch.stride + Fetch.offset));
         }
 
-        const auto& Array = VertexState.arrays[Attribute];
-        const auto Format =
-            cxbx::nv2a::DecodePgraphVertexArrayFormat(Array.format);
-        const ULONG Stride = static_cast<ULONG>(Format.stride);
         const ULONG Address =
-            VertexBase + static_cast<ULONG>(Array.offset) + Index * Stride;
+            VertexBase + static_cast<ULONG>(Fetch.offset) +
+            Index * static_cast<ULONG>(Fetch.stride);
         const ULONG Host = EmuNv2aHostPointer(Address);
         if(Host != 0)
         {
-            const ULONG Type = static_cast<ULONG>(Format.type);
+            const ULONG Type = static_cast<ULONG>(Fetch.type);
             const ULONG Components =
-                static_cast<ULONG>(Format.componentCount);
+                static_cast<ULONG>(Fetch.componentCount);
             ULONG AttributeBytes = Type == 2u ? Components * sizeof(float)
                                               : sizeof(ULONG);
             if(AttributeBytes > sizeof(AttributeScratch[Attribute]))
@@ -6618,23 +6620,16 @@ static void EmuNv2aRasterizeDrawArrays(
         }
         return 0;
     };
-    ULONG PosStride = Inline && InlineOffsets[EmuNv2aAttrPosition] != 0xFFFFFFFF
-                          ? InlineStride
-                          : static_cast<ULONG>(PosFormat.stride);
-    ULONG PosType = static_cast<ULONG>(PosFormat.type);
-    ULONG DifStride = Inline && InlineOffsets[EmuNv2aAttrDiffuse] != 0xFFFFFFFF
-                          ? InlineStride
-                          : static_cast<ULONG>(DifFormat.stride);
-    ULONG DifType = static_cast<ULONG>(DifFormat.type);
+    const ULONG PosStride = static_cast<ULONG>(Pos.stride);
+    const ULONG PosType = static_cast<ULONG>(Pos.type);
+    const ULONG DifStride = static_cast<ULONG>(Dif.stride);
+    const ULONG DifType = static_cast<ULONG>(Dif.type);
     ULONG TexStride[EmuNv2aTextureStageCount] = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
         const ULONG Attribute = EmuNv2aAttrTexcoord0 + Stage;
-        const auto Format = cxbx::nv2a::DecodePgraphVertexArrayFormat(
-            VertexState.arrays[Attribute].format);
-        TexStride[Stage] = Inline && InlineOffsets[Attribute] != 0xFFFFFFFF
-                               ? InlineStride
-                               : static_cast<ULONG>(Format.stride);
+        TexStride[Stage] = static_cast<ULONG>(
+            VertexFetchPlan.attributes[Attribute].stride);
     }
     // Phase 2: run the loaded vertex program when execution mode is PROGRAM.
     // Otherwise the position/diffuse arrays are consumed directly (Phase 0/1),
@@ -6647,14 +6642,16 @@ static void EmuNv2aRasterizeDrawArrays(
         if(g_EmuNv2aRasterLogCount < 16)
         {
             printf("Emu (0x%lX): NV2A raster: position array not float (fmt=0x%.08lX); skipping.\n",
-                   GetCurrentThreadId(), static_cast<ULONG>(Pos.format));
+                   GetCurrentThreadId(),
+                   static_cast<ULONG>(Pos.rawFormat));
             fflush(stdout);
             g_EmuNv2aRasterLogCount++;
         }
         return;
     }
 
-    ULONG PosSize = static_cast<ULONG>(PosFormat.componentCount);
+    const ULONG PosSize =
+        static_cast<ULONG>(Pos.componentCount);
 
     ULONG TextureMode[EmuNv2aTextureStageCount] = {};
     bool SamplerReady[EmuNv2aTextureStageCount] = {};
@@ -6717,15 +6714,12 @@ static void EmuNv2aRasterizeDrawArrays(
             {
                 Input[a * 4 + 0] = 0.0f; Input[a * 4 + 1] = 0.0f;
                 Input[a * 4 + 2] = 0.0f; Input[a * 4 + 3] = 1.0f;
-                const auto Format =
-                    cxbx::nv2a::DecodePgraphVertexArrayFormat(
-                        VertexState.arrays[a].format);
-                ULONG Stride = Inline && InlineOffsets[a] != 0xFFFFFFFF
-                                   ? InlineStride
-                                   : static_cast<ULONG>(Format.stride);
-                ULONG Size =
-                    static_cast<ULONG>(Format.componentCount);
-                ULONG Type = static_cast<ULONG>(Format.type);
+                const auto& Fetch = VertexFetchPlan.attributes[a];
+                const ULONG Stride =
+                    static_cast<ULONG>(Fetch.stride);
+                const ULONG Size =
+                    static_cast<ULONG>(Fetch.componentCount);
+                const ULONG Type = static_cast<ULONG>(Fetch.type);
                 if(Stride == 0 || Size == 0)
                 {
                     continue;
@@ -6859,13 +6853,10 @@ static void EmuNv2aRasterizeDrawArrays(
                 {
                     U[Stage] = EmuNv2aReadHostFloat(TexHost);
                     V[Stage] = EmuNv2aReadHostFloat(TexHost + 4);
-                    const auto TextureFormat =
-                        cxbx::nv2a::DecodePgraphVertexArrayFormat(
-                            VertexState.arrays[
-                                EmuNv2aAttrTexcoord0 + Stage].format);
                     const ULONG TextureSize =
                         static_cast<ULONG>(
-                            TextureFormat.componentCount);
+                            VertexFetchPlan.attributes[EmuNv2aAttrTexcoord0 + Stage]
+                                .componentCount);
                     if(TextureSize >= 4)
                     {
                         Q[Stage] = EmuNv2aReadHostFloat(TexHost + 12);

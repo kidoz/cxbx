@@ -283,6 +283,109 @@ int main() noexcept
         return 1;
     }
 
+    const auto vertexArrayFetchPlan =
+        cxbx::nv2a::BuildPgraphVertexFetchPlan(layoutState);
+    if(!ExpectEqual(vertexArrayFetchPlan.contextDmaVertex,
+                    layoutState.contextDmaVertex,
+                    "array fetch-plan vertex DMA") ||
+       !ExpectEqual(
+           static_cast<std::uint32_t>(
+               vertexArrayFetchPlan.attributes[0].source),
+           static_cast<std::uint32_t>(
+               cxbx::nv2a::PgraphVertexFetchSource::VertexArray),
+           "array fetch-plan source") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[0].offset,
+                    layoutState.arrays[0].offset,
+                    "array fetch-plan offset") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[0].stride, 0x10u,
+                    "array fetch-plan stride") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[0].rawFormat,
+                    layoutState.arrays[0].format,
+                    "array fetch-plan raw format") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[0].type, 0,
+                    "array fetch-plan type") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[0].componentCount, 3,
+                    "array fetch-plan component count") ||
+       !ExpectEqual(
+           static_cast<std::uint32_t>(
+               vertexArrayFetchPlan.attributes[6].source),
+           static_cast<std::uint32_t>(
+               cxbx::nv2a::PgraphVertexFetchSource::VertexArray),
+           "disabled-format array source compatibility") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[6].stride, 0x70u,
+                    "disabled-format array stride compatibility") ||
+       !ExpectEqual(vertexArrayFetchPlan.attributes[6].componentCount, 0,
+                    "disabled-format array component count"))
+    {
+        return 1;
+    }
+
+    const auto inlineFetchPlan =
+        cxbx::nv2a::BuildPgraphInlineVertexFetchPlan(inlineLayout);
+    if(!ExpectEqual(inlineFetchPlan.contextDmaVertex,
+                    layoutState.contextDmaVertex,
+                    "inline fetch-plan vertex DMA") ||
+       !ExpectEqual(
+           static_cast<std::uint32_t>(
+               inlineFetchPlan.attributes[0].source),
+           static_cast<std::uint32_t>(
+               cxbx::nv2a::PgraphVertexFetchSource::Inline),
+           "inline fetch-plan source") ||
+       !ExpectEqual(inlineFetchPlan.attributes[0].offset, 0,
+                    "inline fetch-plan offset") ||
+       !ExpectEqual(inlineFetchPlan.attributes[0].stride,
+                    inlineLayout.stride,
+                    "inline fetch-plan stride") ||
+       !ExpectEqual(inlineFetchPlan.attributes[0].rawFormat,
+                    layoutState.arrays[0].format,
+                    "inline fetch-plan raw format") ||
+       !ExpectEqual(inlineFetchPlan.attributes[0].componentCount, 3,
+                    "inline fetch-plan component count") ||
+       !ExpectEqual(
+           static_cast<std::uint32_t>(
+               inlineFetchPlan.attributes[6].source),
+           static_cast<std::uint32_t>(
+               cxbx::nv2a::PgraphVertexFetchSource::Disabled),
+           "missing inline offset source") ||
+       !ExpectEqual(
+           inlineFetchPlan.attributes[6].offset,
+           cxbx::nv2a::PgraphVertexLayoutUnusedOffset,
+           "missing inline fetch-plan offset") ||
+       !ExpectEqual(inlineFetchPlan.attributes[6].stride, 0x70u,
+                    "missing inline stride compatibility"))
+    {
+        return 1;
+    }
+
+    const auto immediateFetchPlan =
+        cxbx::nv2a::BuildPgraphInlineVertexFetchPlan(immediateLayout);
+    if(!ExpectEqual(
+           static_cast<std::uint32_t>(
+               immediateFetchPlan.attributes[0].source),
+           static_cast<std::uint32_t>(
+               cxbx::nv2a::PgraphVertexFetchSource::Inline),
+           "immediate fetch-plan source") ||
+       !ExpectEqual(immediateFetchPlan.attributes[0].stride,
+                    cxbx::nv2a::PgraphImmediateVertexStride,
+                    "immediate fetch-plan stride") ||
+       !ExpectEqual(immediateFetchPlan.attributes[0].type, 2,
+                    "immediate fetch-plan type") ||
+       !ExpectEqual(immediateFetchPlan.attributes[0].componentCount, 4,
+                    "immediate fetch-plan component count") ||
+       !ExpectEqual(
+           static_cast<std::uint32_t>(
+               immediateFetchPlan.attributes[1].source),
+           static_cast<std::uint32_t>(
+               cxbx::nv2a::PgraphVertexFetchSource::Disabled),
+           "disabled immediate fetch-plan source") ||
+       !ExpectEqual(immediateFetchPlan.attributes[1].stride, 0,
+                    "disabled immediate fetch-plan stride") ||
+       !ExpectEqual(immediateFetchPlan.attributes[1].rawFormat, 0,
+                    "disabled immediate fetch-plan raw format"))
+    {
+        return 1;
+    }
+
     const PgraphVertexState beforeUnknown = state;
     if(!Expect(!cxbx::nv2a::ApplyPgraphVertexStateMethod(
                    state,

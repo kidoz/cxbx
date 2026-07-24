@@ -142,4 +142,58 @@ PgraphVertexLayout BuildPgraphImmediateVertexLayout(
     return layout;
 }
 
+PgraphVertexFetchPlan BuildPgraphVertexFetchPlan(
+    const PgraphVertexState& state) noexcept
+{
+    PgraphVertexFetchPlan plan{};
+    plan.contextDmaVertex = state.contextDmaVertex;
+
+    for(std::uint32_t attribute = 0;
+        attribute < PgraphVertexAttributeCount; ++attribute)
+    {
+        const PgraphVertexArrayState& array = state.arrays[attribute];
+        const PgraphVertexArrayFormat format =
+            DecodePgraphVertexArrayFormat(array.format);
+        plan.attributes[attribute] = {
+            PgraphVertexFetchSource::VertexArray,
+            array.offset,
+            format.stride,
+            array.format,
+            format.type,
+            format.componentCount,
+        };
+    }
+
+    return plan;
+}
+
+PgraphVertexFetchPlan BuildPgraphInlineVertexFetchPlan(
+    const PgraphVertexLayout& layout) noexcept
+{
+    PgraphVertexFetchPlan plan{};
+    plan.contextDmaVertex = layout.vertexState.contextDmaVertex;
+
+    for(std::uint32_t attribute = 0;
+        attribute < PgraphVertexAttributeCount; ++attribute)
+    {
+        const PgraphVertexArrayState& array =
+            layout.vertexState.arrays[attribute];
+        const PgraphVertexArrayFormat format =
+            DecodePgraphVertexArrayFormat(array.format);
+        const bool enabled =
+            layout.offsets[attribute] != PgraphVertexLayoutUnusedOffset;
+        plan.attributes[attribute] = {
+            enabled ? PgraphVertexFetchSource::Inline
+                    : PgraphVertexFetchSource::Disabled,
+            layout.offsets[attribute],
+            enabled ? layout.stride : format.stride,
+            array.format,
+            format.type,
+            format.componentCount,
+        };
+    }
+
+    return plan;
+}
+
 } // namespace cxbx::nv2a
