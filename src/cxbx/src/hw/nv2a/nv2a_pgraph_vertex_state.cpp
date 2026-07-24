@@ -36,6 +36,13 @@ std::uint32_t ReadVertexAttributeWord(
            (static_cast<std::uint32_t>(bytes[offset + 3]) << 24u);
 }
 
+std::uint32_t PackPgraphFloatColorComponent(float component) noexcept
+{
+    // Preserve the established truncate-after-bias and low-byte-mask policy.
+    // NOLINTNEXTLINE(bugprone-incorrect-roundings)
+    return static_cast<std::uint32_t>(component * 255.0f + 0.5f) & 0xFFu;
+}
+
 } // namespace
 
 bool ApplyPgraphVertexStateMethod(
@@ -277,6 +284,58 @@ PgraphVertexProgramInput BuildPgraphVertexProgramInput(
         {
             input[inputOffset + component] =
                 attributeValues[attribute].components[component];
+        }
+    }
+    return input;
+}
+
+PgraphFixedFunctionVertexInput BuildPgraphFixedFunctionVertexInput(
+    const PgraphVertexAttributeValues& attributeValues,
+    const PgraphVertexFetchPlan& fetchPlan,
+    std::uint32_t suppliedAttributeMask) noexcept
+{
+    PgraphFixedFunctionVertexInput input{};
+    if((suppliedAttributeMask &
+        (1u << PgraphVertexPositionAttribute)) != 0)
+    {
+        input.position =
+            attributeValues[PgraphVertexPositionAttribute].components;
+    }
+
+    if((suppliedAttributeMask &
+        (1u << PgraphVertexDiffuseAttribute)) != 0)
+    {
+        const PgraphVertexAttributeValue& diffuse =
+            attributeValues[PgraphVertexDiffuseAttribute];
+        if(fetchPlan.attributes[PgraphVertexDiffuseAttribute].type == 2u)
+        {
+            const std::uint32_t red =
+                PackPgraphFloatColorComponent(diffuse.components[0]);
+            const std::uint32_t green =
+                PackPgraphFloatColorComponent(diffuse.components[1]);
+            const std::uint32_t blue =
+                PackPgraphFloatColorComponent(diffuse.components[2]);
+            const std::uint32_t alpha =
+                PackPgraphFloatColorComponent(diffuse.components[3]);
+            input.diffuseColor =
+                (alpha << 24u) | (red << 16u) |
+                (green << 8u) | blue;
+        }
+        else
+        {
+            input.diffuseColor = diffuse.packedColor;
+        }
+    }
+
+    for(std::uint32_t stage = 0;
+        stage < PgraphFixedFunctionTextureCount; ++stage)
+    {
+        const std::uint32_t attribute =
+            PgraphVertexTexcoord0Attribute + stage;
+        if((suppliedAttributeMask & (1u << attribute)) != 0)
+        {
+            input.textureCoordinates[stage] =
+                attributeValues[attribute].components;
         }
     }
     return input;

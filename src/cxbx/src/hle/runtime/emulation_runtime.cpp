@@ -1752,10 +1752,6 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // edge-function triangle raster writing straight into the surface. No z-buffer,
 // no texturing, no vertex program yet. Gated behind CXBX_NV2A_RASTER so it
 // cannot perturb the working HLE-D3D8 titles or the conformance suite.
-#define EmuNv2aAttrPosition                 0u
-#define EmuNv2aAttrDiffuse                  3u
-#define EmuNv2aAttrTexcoord0                9u
-
 // CPU vertex-program interpreter (implemented in vsh_decoder.cpp): transform
 // one vertex through the loaded NV2A microcode. Inputs are the 16 attribute
 // registers (16*4 floats), constants the 192-entry constant memory (192*4
@@ -6314,11 +6310,17 @@ static void EmuNv2aRasterizeInlineArray(
                GetCurrentThreadId(), static_cast<ULONG>(Batch.wordCount),
                VertexSize, VertexCount,
                static_cast<ULONG>(
-                   g_EmuNv2aVertexState.arrays[EmuNv2aAttrPosition].format),
+                   g_EmuNv2aVertexState
+                       .arrays[cxbx::nv2a::PgraphVertexPositionAttribute]
+                       .format),
                static_cast<ULONG>(
-                   g_EmuNv2aVertexState.arrays[EmuNv2aAttrDiffuse].format),
+                   g_EmuNv2aVertexState
+                       .arrays[cxbx::nv2a::PgraphVertexDiffuseAttribute]
+                       .format),
                static_cast<ULONG>(
-                   g_EmuNv2aVertexState.arrays[EmuNv2aAttrTexcoord0].format));
+                   g_EmuNv2aVertexState
+                       .arrays[cxbx::nv2a::PgraphVertexTexcoord0Attribute]
+                       .format));
         for(ULONG Attribute = 0;
             Attribute < cxbx::nv2a::PgraphVertexAttributeCount;
             Attribute++)
@@ -6567,9 +6569,11 @@ static void EmuNv2aRasterizeDrawArrays(
     }
 
     const auto& Pos =
-        VertexFetchPlan.attributes[EmuNv2aAttrPosition];
+        VertexFetchPlan
+            .attributes[cxbx::nv2a::PgraphVertexPositionAttribute];
     const auto& Dif =
-        VertexFetchPlan.attributes[EmuNv2aAttrDiffuse];
+        VertexFetchPlan
+            .attributes[cxbx::nv2a::PgraphVertexDiffuseAttribute];
     ULONG VertexBase = EmuNv2aResolveDmaBase(
         static_cast<ULONG>(VertexFetchPlan.contextDmaVertex));
     const bool Inline = InlineData != nullptr;
@@ -6644,7 +6648,8 @@ static void EmuNv2aRasterizeDrawArrays(
     ULONG TexStride[EmuNv2aTextureStageCount] = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
-        const ULONG Attribute = EmuNv2aAttrTexcoord0 + Stage;
+        const ULONG Attribute =
+            cxbx::nv2a::PgraphVertexTexcoord0Attribute + Stage;
         TexStride[Stage] = static_cast<ULONG>(
             VertexFetchPlan.attributes[Attribute].stride);
     }
@@ -6825,7 +6830,11 @@ static void EmuNv2aRasterizeDrawArrays(
         }
         else
         {
-            ULONG PosHost = AttributeHost(EmuNv2aAttrPosition, Index);
+            cxbx::nv2a::PgraphVertexAttributeValues
+                FixedAttributeValues{};
+            std::uint32_t FixedSuppliedAttributeMask = 0;
+            ULONG PosHost = AttributeHost(
+                cxbx::nv2a::PgraphVertexPositionAttribute, Index);
             if(PosHost == 0)
             {
                 continue;
@@ -6836,21 +6845,16 @@ static void EmuNv2aRasterizeDrawArrays(
             EmuNv2aReadHostVertexComponents(
                 PosHost, (1u << PositionComponentCount) - 1u,
                 PositionBytes);
-            const cxbx::nv2a::PgraphVertexAttributeValue PositionValue =
+            FixedAttributeValues[cxbx::nv2a::PgraphVertexPositionAttribute] =
                 cxbx::nv2a::DecodePgraphFloatVertexAttribute(
                     PositionBytes, PositionComponentCount);
-            Xc = PositionValue.components[0];
-            Yc = PositionValue.components[1];
-            Zc = PositionValue.components[2];
-            W = PositionValue.components[3];
-            RawPosition[0] = Xc;
-            RawPosition[1] = Yc;
-            RawPosition[2] = Zc;
-            RawPosition[3] = W;
+            FixedSuppliedAttributeMask |=
+                1u << cxbx::nv2a::PgraphVertexPositionAttribute;
 
             if(DifStride != 0)
             {
-                ULONG DifHost = AttributeHost(EmuNv2aAttrDiffuse, Index);
+                ULONG DifHost = AttributeHost(
+                    cxbx::nv2a::PgraphVertexDiffuseAttribute, Index);
                 if(DifHost != 0)
                 {
                     if(DifType == 2 /* TYPE_F, float4 RGBA */)
@@ -6858,16 +6862,11 @@ static void EmuNv2aRasterizeDrawArrays(
                         cxbx::nv2a::PgraphVertexAttributeBytes DiffuseBytes{};
                         EmuNv2aReadHostVertexComponents(
                             DifHost, 0xFu, DiffuseBytes);
-                        const auto DiffuseValue =
+                        FixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
                             cxbx::nv2a::DecodePgraphFloatVertexAttribute(
                                 DiffuseBytes,
                                 cxbx::nv2a::
                                     PgraphVertexAttributeComponentCount);
-                        ULONG R = (ULONG)(DiffuseValue.components[0] * 255.0f + 0.5f) & 0xFF;
-                        ULONG G = (ULONG)(DiffuseValue.components[1] * 255.0f + 0.5f) & 0xFF;
-                        ULONG B = (ULONG)(DiffuseValue.components[2] * 255.0f + 0.5f) & 0xFF;
-                        ULONG A = (ULONG)(DiffuseValue.components[3] * 255.0f + 0.5f) & 0xFF;
-                        Color = (A << 24) | (R << 16) | (G << 8) | B;
                     }
                     else
                     {
@@ -6875,11 +6874,14 @@ static void EmuNv2aRasterizeDrawArrays(
                         DiffuseBytes.fill(0xFFu);
                         EmuNv2aReadHostVertexComponents(
                             DifHost, 0x1u, DiffuseBytes);
-                        Color = cxbx::nv2a::
-                                    DecodePgraphPackedColorVertexAttribute(
-                                        DiffuseBytes)
-                                        .packedColor;
+                        FixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute] =
+                            cxbx::nv2a::
+                                DecodePgraphPackedColorVertexAttribute(
+                                    DiffuseBytes);
                     }
+                    FixedSuppliedAttributeMask |=
+                        1u << cxbx::nv2a::
+                            PgraphVertexDiffuseAttribute;
                 }
             }
 
@@ -6889,25 +6891,51 @@ static void EmuNv2aRasterizeDrawArrays(
                 {
                     continue;
                 }
-                ULONG TexHost = AttributeHost(EmuNv2aAttrTexcoord0 + Stage, Index);
+                const std::uint32_t TextureAttribute =
+                    cxbx::nv2a::PgraphVertexTexcoord0Attribute + Stage;
+                ULONG TexHost = AttributeHost(TextureAttribute, Index);
                 if(TexHost != 0)
                 {
                     const ULONG TextureSize =
                         static_cast<ULONG>(
-                            VertexFetchPlan.attributes[EmuNv2aAttrTexcoord0 + Stage]
+                            VertexFetchPlan.attributes[TextureAttribute]
                                 .componentCount);
                     cxbx::nv2a::PgraphVertexAttributeBytes TextureBytes{};
                     const std::uint32_t TextureComponentMask =
                         TextureSize >= 4 ? 0xBu : 0x3u;
                     EmuNv2aReadHostVertexComponents(
                         TexHost, TextureComponentMask, TextureBytes);
-                    const auto TextureValue =
+                    FixedAttributeValues[TextureAttribute] =
                         cxbx::nv2a::DecodePgraphFloatVertexAttribute(
                             TextureBytes, TextureSize >= 4 ? 4u : 2u);
-                    U[Stage] = TextureValue.components[0];
-                    V[Stage] = TextureValue.components[1];
-                    Q[Stage] = TextureValue.components[3];
+                    FixedSuppliedAttributeMask |=
+                        1u << TextureAttribute;
                 }
+            }
+
+            const cxbx::nv2a::PgraphFixedFunctionVertexInput
+                FixedInput =
+                    cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
+                        FixedAttributeValues, VertexFetchPlan,
+                        FixedSuppliedAttributeMask);
+            Xc = FixedInput.position[0];
+            Yc = FixedInput.position[1];
+            Zc = FixedInput.position[2];
+            W = FixedInput.position[3];
+            RawPosition[0] = Xc;
+            RawPosition[1] = Yc;
+            RawPosition[2] = Zc;
+            RawPosition[3] = W;
+            Color = FixedInput.diffuseColor;
+            for(ULONG Stage = 0;
+                Stage < EmuNv2aTextureStageCount; ++Stage)
+            {
+                U[Stage] =
+                    FixedInput.textureCoordinates[Stage][0];
+                V[Stage] =
+                    FixedInput.textureCoordinates[Stage][1];
+                Q[Stage] =
+                    FixedInput.textureCoordinates[Stage][3];
             }
 
             // Fixed-function transform: object position * composite matrix ->

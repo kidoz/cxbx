@@ -8,8 +8,15 @@ namespace cxbx::nv2a
 
 inline constexpr std::uint32_t PgraphVertexAttributeCount = 16;
 inline constexpr std::uint32_t PgraphVertexAttributeComponentCount = 4;
+inline constexpr std::uint32_t PgraphVertexPositionAttribute = 0;
+inline constexpr std::uint32_t PgraphVertexDiffuseAttribute = 3;
+inline constexpr std::uint32_t PgraphVertexTexcoord0Attribute = 9;
+inline constexpr std::uint32_t PgraphFixedFunctionTextureCount = 4;
 inline constexpr std::uint32_t PgraphVertexProgramInputComponentCount =
     PgraphVertexAttributeCount * PgraphVertexAttributeComponentCount;
+static_assert(PgraphVertexTexcoord0Attribute +
+                  PgraphFixedFunctionTextureCount <=
+              PgraphVertexAttributeCount);
 inline constexpr std::uint32_t PgraphVertexLayoutUnusedOffset = 0xFFFFFFFFu;
 inline constexpr std::uint32_t PgraphImmediateVertexAttributeStride =
     PgraphVertexAttributeComponentCount * sizeof(std::uint32_t);
@@ -75,15 +82,19 @@ struct PgraphVertexFetchPlan
 
 using PgraphVertexAttributeBytes =
     std::array<std::uint8_t, PgraphImmediateVertexAttributeStride>;
+using PgraphVertexComponents =
+    std::array<float, PgraphVertexAttributeComponentCount>;
+
+inline constexpr PgraphVertexComponents PgraphDefaultVertexComponents = {
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+};
 
 struct PgraphVertexAttributeValue
 {
-    std::array<float, PgraphVertexAttributeComponentCount> components = {
-        0.0f,
-        0.0f,
-        0.0f,
-        1.0f,
-    };
+    PgraphVertexComponents components = PgraphDefaultVertexComponents;
     std::uint32_t packedColor = 0;
 };
 
@@ -91,6 +102,19 @@ using PgraphVertexAttributeValues =
     std::array<PgraphVertexAttributeValue, PgraphVertexAttributeCount>;
 using PgraphVertexProgramInput =
     std::array<float, PgraphVertexProgramInputComponentCount>;
+
+struct PgraphFixedFunctionVertexInput
+{
+    PgraphVertexComponents position = PgraphDefaultVertexComponents;
+    std::uint32_t diffuseColor = 0xFFFFFFFFu;
+    std::array<PgraphVertexComponents, PgraphFixedFunctionTextureCount>
+        textureCoordinates = {
+            PgraphDefaultVertexComponents,
+            PgraphDefaultVertexComponents,
+            PgraphDefaultVertexComponents,
+            PgraphDefaultVertexComponents,
+        };
+};
 
 [[nodiscard]] bool ApplyPgraphVertexStateMethod(
     PgraphVertexState& state, std::uint32_t method,
@@ -126,6 +150,12 @@ using PgraphVertexProgramInput =
 
 [[nodiscard]] PgraphVertexProgramInput BuildPgraphVertexProgramInput(
     const PgraphVertexAttributeValues& attributeValues,
+    std::uint32_t suppliedAttributeMask) noexcept;
+
+[[nodiscard]] PgraphFixedFunctionVertexInput
+BuildPgraphFixedFunctionVertexInput(
+    const PgraphVertexAttributeValues& attributeValues,
+    const PgraphVertexFetchPlan& fetchPlan,
     std::uint32_t suppliedAttributeMask) noexcept;
 
 [[nodiscard]] constexpr PgraphVertexArrayFormat DecodePgraphVertexArrayFormat(

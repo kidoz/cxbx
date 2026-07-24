@@ -568,6 +568,104 @@ int main() noexcept
         return 1;
     }
 
+    cxbx::nv2a::PgraphVertexAttributeValues fixedAttributeValues{};
+    fixedAttributeValues[cxbx::nv2a::PgraphVertexPositionAttribute]
+        .components = {
+        10.0f,
+        20.0f,
+        30.0f,
+        2.0f,
+    };
+    fixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute]
+        .components = {
+        1.0f,
+        0.5f,
+        0.25f,
+        0.0f,
+    };
+    fixedAttributeValues[cxbx::nv2a::PgraphVertexDiffuseAttribute]
+        .packedColor = 0x80402010u;
+    fixedAttributeValues[cxbx::nv2a::PgraphVertexTexcoord0Attribute]
+        .components = {
+        0.125f,
+        0.25f,
+        0.0f,
+        0.5f,
+    };
+    fixedAttributeValues[cxbx::nv2a::PgraphVertexTexcoord0Attribute + 1u]
+        .components = {
+        -1.0f,
+        -2.0f,
+        -3.0f,
+        -4.0f,
+    };
+    fixedAttributeValues[cxbx::nv2a::PgraphVertexTexcoord0Attribute + 3u]
+        .components = {
+        0.75f,
+        0.875f,
+        0.0f,
+        1.0f,
+    };
+
+    cxbx::nv2a::PgraphVertexFetchPlan fixedFetchPlan{};
+    const auto defaultFixedInput =
+        cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
+            fixedAttributeValues, fixedFetchPlan, 0);
+    if(!ExpectNear(defaultFixedInput.position[0], 0.0f,
+                   "default fixed position x") ||
+       !ExpectNear(defaultFixedInput.position[3], 1.0f,
+                   "default fixed position w") ||
+       !ExpectEqual(defaultFixedInput.diffuseColor, 0xFFFFFFFFu,
+                    "default fixed diffuse") ||
+       !ExpectNear(defaultFixedInput.textureCoordinates[0][0], 0.0f,
+                   "default fixed texture u") ||
+       !ExpectNear(defaultFixedInput.textureCoordinates[0][3], 1.0f,
+                   "default fixed texture q"))
+    {
+        return 1;
+    }
+
+    const std::uint32_t fixedSuppliedMask =
+        (1u << cxbx::nv2a::PgraphVertexPositionAttribute) |
+        (1u << cxbx::nv2a::PgraphVertexDiffuseAttribute) |
+        (1u << cxbx::nv2a::PgraphVertexTexcoord0Attribute) |
+        (1u << (cxbx::nv2a::PgraphVertexTexcoord0Attribute + 3u));
+    const auto packedFixedInput =
+        cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
+            fixedAttributeValues, fixedFetchPlan,
+            fixedSuppliedMask);
+    if(!ExpectNear(packedFixedInput.position[0], 10.0f,
+                   "packed fixed position x") ||
+       !ExpectNear(packedFixedInput.position[3], 2.0f,
+                   "packed fixed position w") ||
+       !ExpectEqual(packedFixedInput.diffuseColor, 0x80402010u,
+                    "packed fixed diffuse") ||
+       !ExpectNear(packedFixedInput.textureCoordinates[0][0], 0.125f,
+                   "packed fixed texture-0 u") ||
+       !ExpectNear(packedFixedInput.textureCoordinates[0][3], 0.5f,
+                   "packed fixed texture-0 q") ||
+       !ExpectNear(packedFixedInput.textureCoordinates[1][0], 0.0f,
+                   "unsupplied fixed texture-1 u") ||
+       !ExpectNear(packedFixedInput.textureCoordinates[1][3], 1.0f,
+                   "unsupplied fixed texture-1 q") ||
+       !ExpectNear(packedFixedInput.textureCoordinates[3][0], 0.75f,
+                   "packed fixed texture-3 u"))
+    {
+        return 1;
+    }
+
+    fixedFetchPlan.attributes[cxbx::nv2a::PgraphVertexDiffuseAttribute]
+        .type = 2;
+    const auto floatFixedInput =
+        cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
+            fixedAttributeValues, fixedFetchPlan,
+            fixedSuppliedMask);
+    if(!ExpectEqual(floatFixedInput.diffuseColor, 0x00FF8040u,
+                    "float fixed diffuse"))
+    {
+        return 1;
+    }
+
     const PgraphVertexState beforeUnknown = state;
     if(!Expect(!cxbx::nv2a::ApplyPgraphVertexStateMethod(
                    state,
