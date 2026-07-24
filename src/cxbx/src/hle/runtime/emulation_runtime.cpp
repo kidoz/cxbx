@@ -73,6 +73,7 @@ namespace XTL
 #include "d3d8_emulation.h"
 };
 
+#include <array>
 #include <clocale>
 #include <cmath>
 #include <cstdlib>
@@ -5677,6 +5678,66 @@ static ULONG EmuNv2aClampByte(float v)
     return (ULONG)(v + 0.5f);
 }
 
+static constexpr std::size_t
+    EmuNv2aVertexProgramColorComponentCount = 8;
+static constexpr std::size_t
+    EmuNv2aVertexProgramTextureComponentCount =
+        EmuNv2aTextureStageCount *
+        cxbx::nv2a::PgraphVertexAttributeComponentCount;
+
+struct EmuNv2aVertexProgramExecutionResult
+{
+    cxbx::nv2a::PgraphVertexProgramInput Input;
+    cxbx::nv2a::PgraphVertexComponents Position =
+        cxbx::nv2a::PgraphDefaultVertexComponents;
+    std::array<float, EmuNv2aVertexProgramColorComponentCount>
+        Colors{
+            1.0f, 1.0f, 1.0f, 1.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+    std::array<float, EmuNv2aVertexProgramTextureComponentCount>
+        TextureCoordinates{};
+    ULONG DiffuseColor;
+};
+
+static EmuNv2aVertexProgramExecutionResult
+EmuNv2aExecuteVertexProgram(
+    const EmuNv2aVertexProgramAttributeCollection& Attributes,
+    const cxbx::nv2a::PgraphTransformState& TransformState,
+    bool AnySamplerReady)
+{
+    EmuNv2aVertexProgramExecutionResult Result{};
+    Result.Input =
+        cxbx::nv2a::BuildPgraphVertexProgramInput(
+            Attributes.Values,
+            Attributes.SuppliedAttributeMask);
+    EmuVshExecuteProgramRaster(
+        TransformState.program.data(),
+        static_cast<int>(TransformState.programInstructionCount),
+        static_cast<int>(TransformState.programStart),
+        TransformState.constants.data(),
+        Result.Input.data(), Result.Position.data(),
+        Result.Colors.data(), Result.TextureCoordinates.data());
+
+    const ULONG Red =
+        EmuNv2aClampByte(Result.Colors[0] * 255.0f);
+    const ULONG Green =
+        EmuNv2aClampByte(Result.Colors[1] * 255.0f);
+    const ULONG Blue =
+        EmuNv2aClampByte(Result.Colors[2] * 255.0f);
+    const ULONG Alpha =
+        EmuNv2aClampByte(Result.Colors[3] * 255.0f);
+    Result.DiffuseColor =
+        (Alpha << 24) | (Red << 16) | (Green << 8) | Blue;
+    if(AnySamplerReady && Result.DiffuseColor == 0xFF000000)
+    {
+        // XDK passthrough programs often leave oD0 unwritten because
+        // their combiner selects texture registers directly.
+        Result.DiffuseColor = 0xFFFFFFFF;
+    }
+    return Result;
+}
+
 // Where the current draw's pixels land: color surface + optional bound depth
 // (zeta) surface and the depth-test state. Populated once per DRAW_ARRAYS.
 struct EmuNv2aRasterTarget
@@ -6955,23 +7016,10 @@ static void EmuNv2aRasterizeDrawArrays(
                 EmuNv2aCollectVertexProgramAttributes(
                     AttributeMemory, VertexFetchPlan,
                     static_cast<std::uint32_t>(Index));
-            const cxbx::nv2a::PgraphVertexProgramInput Input =
-                cxbx::nv2a::BuildPgraphVertexProgramInput(
-                    VertexProgramAttributes.Values,
-                    VertexProgramAttributes.SuppliedAttributeMask);
-
-            float OutPos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-            float OutColors[8] = {
-                1.0f, 1.0f, 1.0f, 1.0f,
-                0.0f, 0.0f, 0.0f, 1.0f
-            };
-            float OutTexCoords[16] = {};
-            EmuVshExecuteProgramRaster(
-                TransformState.program.data(),
-                static_cast<int>(TransformState.programInstructionCount),
-                static_cast<int>(TransformState.programStart),
-                TransformState.constants.data(),
-                Input.data(), OutPos, OutColors, OutTexCoords);
+            const auto VertexProgram =
+                EmuNv2aExecuteVertexProgram(
+                    VertexProgramAttributes, TransformState,
+                    AnySamplerReady);
             if(Inline)
             {
                 static int TraceEnabled = -1;
@@ -6988,34 +7036,53 @@ static void EmuNv2aRasterizeDrawArrays(
                            "v9=(%g,%g,%g,%g) opos=(%g,%g,%g,%g) "
                            "od0=(%g,%g,%g,%g) ot0=(%g,%g,%g,%g)\n",
                            g_EmuNv2aDebugFrame, DrawKind, i,
-                           Input[0], Input[1], Input[2], Input[3],
-                           Input[12], Input[13], Input[14], Input[15],
-                           Input[36], Input[37], Input[38], Input[39],
-                           OutPos[0], OutPos[1], OutPos[2], OutPos[3],
-                           OutColors[0], OutColors[1], OutColors[2], OutColors[3],
-                           OutTexCoords[0], OutTexCoords[1],
-                           OutTexCoords[2], OutTexCoords[3]);
+                           VertexProgram.Input[0],
+                           VertexProgram.Input[1],
+                           VertexProgram.Input[2],
+                           VertexProgram.Input[3],
+                           VertexProgram.Input[12],
+                           VertexProgram.Input[13],
+                           VertexProgram.Input[14],
+                           VertexProgram.Input[15],
+                           VertexProgram.Input[36],
+                           VertexProgram.Input[37],
+                           VertexProgram.Input[38],
+                           VertexProgram.Input[39],
+                           VertexProgram.Position[0],
+                           VertexProgram.Position[1],
+                           VertexProgram.Position[2],
+                           VertexProgram.Position[3],
+                           VertexProgram.Colors[0],
+                           VertexProgram.Colors[1],
+                           VertexProgram.Colors[2],
+                           VertexProgram.Colors[3],
+                           VertexProgram.TextureCoordinates[0],
+                           VertexProgram.TextureCoordinates[1],
+                           VertexProgram.TextureCoordinates[2],
+                           VertexProgram.TextureCoordinates[3]);
                     fflush(stdout);
                 }
             }
-            Xc = OutPos[0]; Yc = OutPos[1]; Zc = OutPos[2]; W = OutPos[3];
+            Xc = VertexProgram.Position[0];
+            Yc = VertexProgram.Position[1];
+            Zc = VertexProgram.Position[2];
+            W = VertexProgram.Position[3];
             for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
             {
-                U[Stage] = OutTexCoords[Stage * 4];
-                V[Stage] = OutTexCoords[Stage * 4 + 1];
-                Q[Stage] = OutTexCoords[Stage * 4 + 3];
+                const ULONG FirstComponent =
+                    Stage *
+                    cxbx::nv2a::PgraphVertexAttributeComponentCount;
+                U[Stage] =
+                    VertexProgram
+                        .TextureCoordinates[FirstComponent];
+                V[Stage] =
+                    VertexProgram
+                        .TextureCoordinates[FirstComponent + 1];
+                Q[Stage] =
+                    VertexProgram
+                        .TextureCoordinates[FirstComponent + 3];
             }
-            ULONG R = EmuNv2aClampByte(OutColors[0] * 255.0f);
-            ULONG G = EmuNv2aClampByte(OutColors[1] * 255.0f);
-            ULONG B = EmuNv2aClampByte(OutColors[2] * 255.0f);
-            ULONG A = EmuNv2aClampByte(OutColors[3] * 255.0f);
-            Color = (A << 24) | (R << 16) | (G << 8) | B;
-            if(AnySamplerReady && Color == 0xFF000000)
-            {
-                // XDK passthrough programs often leave oD0 unwritten because
-                // their combiner selects texture registers directly.
-                Color = 0xFFFFFFFF;
-            }
+            Color = VertexProgram.DiffuseColor;
         }
         else
         {
