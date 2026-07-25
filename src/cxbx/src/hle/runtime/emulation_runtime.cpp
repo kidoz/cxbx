@@ -5811,6 +5811,46 @@ EmuNv2aBuildFixedFunctionRasterVertex(
     return Result;
 }
 
+using EmuNv2aTextureModes =
+    std::array<ULONG, EmuNv2aTextureStageCount>;
+
+struct EmuNv2aRasterTextureProjection
+{
+    std::array<
+        cxbx::nv2a::ProjectedTextureCoordinates,
+        EmuNv2aTextureStageCount>
+        Stages{};
+};
+
+static EmuNv2aRasterTextureProjection
+EmuNv2aProjectRasterVertexTextures(
+    const EmuNv2aRasterVertex& Vertex,
+    const EmuNv2aTextureModes& TextureModes)
+{
+    EmuNv2aRasterTextureProjection Result{};
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        if(TextureModes[Stage] == 1u)
+        {
+            Result.Stages[Stage] =
+                cxbx::nv2a::ProjectTexture2D(
+                    Vertex.TextureU[Stage],
+                    Vertex.TextureV[Stage],
+                    Vertex.TextureQ[Stage],
+                    Vertex.InverseW);
+        }
+        else
+        {
+            Result.Stages[Stage] = {
+                Vertex.TextureU[Stage],
+                Vertex.TextureV[Stage],
+                Vertex.InverseW
+            };
+        }
+    }
+    return Result;
+}
+
 // Where the current draw's pixels land: color surface + optional bound depth
 // (zeta) surface and the depth-test state. Populated once per DRAW_ARRAYS.
 struct EmuNv2aRasterTarget
@@ -7029,7 +7069,7 @@ static void EmuNv2aRasterizeDrawArrays(
         return;
     }
 
-    ULONG TextureMode[EmuNv2aTextureStageCount] = {};
+    EmuNv2aTextureModes TextureMode{};
     bool SamplerReady[EmuNv2aTextureStageCount] = {};
     bool AnySamplerReady = false;
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
@@ -7181,26 +7221,17 @@ static void EmuNv2aRasterizeDrawArrays(
                 fflush(stdout);
             }
         }
+        const EmuNv2aRasterTextureProjection TextureProjection =
+            EmuNv2aProjectRasterVertexTextures(
+                Vertex, TextureMode);
         for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
         {
-            if(TextureMode[Stage] == 1u)
-            {
-                const cxbx::nv2a::ProjectedTextureCoordinates Projected =
-                    cxbx::nv2a::ProjectTexture2D(
-                        Vertex.TextureU[Stage],
-                        Vertex.TextureV[Stage],
-                        Vertex.TextureQ[Stage],
-                        Vertex.InverseW);
-                VU[Stage][i] = Projected.u;
-                VV[Stage][i] = Projected.v;
-                VIW[Stage][i] = Projected.interpolationWeight;
-            }
-            else
-            {
-                VU[Stage][i] = Vertex.TextureU[Stage];
-                VV[Stage][i] = Vertex.TextureV[Stage];
-                VIW[Stage][i] = Vertex.InverseW;
-            }
+            VU[Stage][i] = TextureProjection.Stages[Stage].u;
+            VV[Stage][i] = TextureProjection.Stages[Stage].v;
+            VIW[Stage][i] =
+                TextureProjection
+                    .Stages[Stage]
+                    .interpolationWeight;
         }
         VC[i] = Vertex.DiffuseColor;
     }
