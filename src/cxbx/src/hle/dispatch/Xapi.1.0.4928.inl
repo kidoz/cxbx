@@ -1,0 +1,29 @@
+// XDK 4928 XAPI entry points verified against the WhiteOut retail image.
+//
+// The input bodies are unchanged from the neighboring 3911/4361/5233 builds.
+// Every address was independently identified by XbSymbolDatabase. Keep the
+// heap, utility-drive, and dashboard-transition functions native until their
+// 4928 identities and semantics are verified separately.
+
+#ifdef _DEBUG_TRACE
+#define XAPI_4928_TRACE_NAME(Name) , #Name
+#else
+#define XAPI_4928_TRACE_NAME(Name)
+#endif
+
+OOVPATable XAPI_1_0_4928[] = {
+    { (OOVPA*)&XInitDevices_1_0_3911, XTL::EmuXInitDevices XAPI_4928_TRACE_NAME(EmuXInitDevices) },
+    { (OOVPA*)&XGetDevices_1_0_5233, XTL::EmuXGetDevices XAPI_4928_TRACE_NAME(EmuXGetDevices) },
+    { (OOVPA*)&XGetDeviceChanges_1_0_5233, XTL::EmuXGetDeviceChanges XAPI_4928_TRACE_NAME(EmuXGetDeviceChanges) },
+    { (OOVPA*)&XInputOpen_1_0_5233, XTL::EmuXInputOpen XAPI_4928_TRACE_NAME(EmuXInputOpen) },
+    { (OOVPA*)&XInputGetCapabilities_1_0_5233, XTL::EmuXInputGetCapabilities XAPI_4928_TRACE_NAME(EmuXInputGetCapabilities) },
+    { (OOVPA*)&XInputGetState_1_0_5233, XTL::EmuXInputGetState XAPI_4928_TRACE_NAME(EmuXInputGetState) },
+    { (OOVPA*)&XInputSetState_1_0_5233, XTL::EmuXInputSetState XAPI_4928_TRACE_NAME(EmuXInputSetState) },
+    { (OOVPA*)&XInputCloseInternal_1_0_5233, 0 XAPI_4928_TRACE_NAME(XInputCloseInternal) },
+    { (OOVPA*)&XInputClose_1_0_5233, XTL::EmuXInputClose XAPI_4928_TRACE_NAME(EmuXInputClose) },
+    { (OOVPA*)&XapiThreadStartup_1_0_4361, XTL::EmuXapiThreadStartup XAPI_4928_TRACE_NAME(EmuXapiThreadStartup) }
+};
+
+#undef XAPI_4928_TRACE_NAME
+
+uint32 XAPI_1_0_4928_SIZE = sizeof(XAPI_1_0_4928);

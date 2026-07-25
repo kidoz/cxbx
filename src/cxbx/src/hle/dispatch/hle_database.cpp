@@ -62,6 +62,8 @@ namespace XTL
 #include "Xapi.1.0.4361.inl"
 #include "Xapi.1.0.4627.inl"
 #include "Xapi.1.0.5233.inl"
+// The verified 4928 input entries reuse definitions from the 5233 table.
+#include "Xapi.1.0.4928.inl"
 #include "Xapi.1.0.5455.inl"
 #include "Xapi.1.0.5849.inl"
 #include "Xapi.1.0.5659.inl"
@@ -139,6 +141,13 @@ HLEData HLEDataBase[] =
         XAPI_1_0_4627,
         XAPI_1_0_4627_SIZE
     },
+    // Xapilib Version 1.0.4928: verified input and thread entry points only.
+    {
+        "XAPILIB",
+        1, 0, 4928,
+        XAPI_1_0_4928,
+        XAPI_1_0_4928_SIZE
+    },
     // Xapilib Version 1.0.5233
     {
         "XAPILIB",
@@ -215,6 +224,14 @@ HLEData HLEDataBase[] =
     {
         "D3D8",
         1, 0, 4627,
+        D3D8_1_0_4627,
+        D3D8_1_0_4627_SIZE
+    },
+    // D3D8 Version 1.0.4928: 89 entries resolve at 91 unique addresses in
+    // WhiteOut, all independently identified as the same D3D8 symbols.
+    {
+        "D3D8",
+        1, 0, 4928,
         D3D8_1_0_4627,
         D3D8_1_0_4627_SIZE
     },
@@ -386,6 +403,14 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         XG_1_0_4627,
         XG_1_0_4627_SIZE
+    },
+    // XG Version 1.0.4928: XGSwizzleRect is byte-identical to the verified
+    // 5659 image-derived body and resolves at the independent 4928 symbol.
+    {
+        "XGRAPHC",
+        1, 0, 4928,
+        XG_1_0_5659,
+        XG_1_0_5659_SIZE
     },
     // XG Version 1.0.5659
     {
