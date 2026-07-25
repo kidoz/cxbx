@@ -7147,6 +7147,20 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
         }
         break;
 
+        // Audio Flags
+        case 0x009:
+        {
+            // TODO: configurable audio flags or autodetect of some sort
+            if(Type != 0)
+            {
+                *Type = 0x04;
+            }
+
+            // Default to analog stereo with Dolby Digital and DTS disabled.
+            WriteDwordSetting(0x00000000);
+        }
+        break;
+
         case EEPROM_MISC:
         {
             if(Type != 0)
