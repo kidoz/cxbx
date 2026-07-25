@@ -1198,6 +1198,56 @@ DWORD WINAPI XTL::EmuXInputGetState
 }
 
 // ******************************************************************
+// * func: EmuXInputPoll
+// ******************************************************************
+DWORD WINAPI XTL::EmuXInputPoll(
+    IN HANDLE hDevice)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+#ifdef _DEBUG_TRACE
+    {
+        printf("EmuXapi (0x%X): EmuXInputPoll\n"
+               "(\n"
+               "   hDevice             : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), hDevice);
+    }
+#endif
+
+    DWORD ret = ERROR_INVALID_HANDLE;
+    DWORD port = 0;
+    const EmuInputHandleStatus status =
+        EmuXInputValidateHandle(hDevice, &port);
+
+    if(status == EmuInputHandleStatus::Disconnected)
+    {
+        ret = ERROR_DEVICE_NOT_CONNECTED;
+    }
+    else if(status == EmuInputHandleStatus::Connected &&
+            port == 0 && EmuXInputInjectionConfigured())
+    {
+        ret = ERROR_SUCCESS;
+    }
+    else if(status == EmuInputHandleStatus::Connected)
+    {
+        XINPUT_STATE state = {};
+        __try
+        {
+            ret = EmuDInputPoll(port, &state) ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            ret = ERROR_DEVICE_NOT_CONNECTED;
+        }
+    }
+
+    EmuSwapFS(); // XBox FS
+
+    return ret;
+}
+
+// ******************************************************************
 // * func: EmuInputGetState
 // ******************************************************************
 DWORD WINAPI XTL::EmuXInputSetState

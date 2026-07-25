@@ -414,6 +414,12 @@ DWORD WINAPI EmuXInputGetState
 );
 
 // ******************************************************************
+// * func: EmuXInputPoll
+// ******************************************************************
+DWORD WINAPI EmuXInputPoll(
+    IN HANDLE hDevice);
+
+// ******************************************************************
 // * func: EmuXInputGetState
 // ******************************************************************
 DWORD WINAPI EmuXInputSetState

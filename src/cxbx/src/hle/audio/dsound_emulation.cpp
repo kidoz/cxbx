@@ -3117,6 +3117,34 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetVolume
 }
 
 // ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetHeadroom
+// ******************************************************************
+HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetHeadroom(
+    X_CDirectSoundBuffer* pThis,
+    DWORD dwHeadroom)
+{
+    EmuSwapFS(); // Win2k/XP FS
+
+#ifdef _DEBUG_TRACE
+    {
+        printf("EmuDSound (0x%X): EmuIDirectSoundBuffer8_SetHeadroom\n"
+               "(\n"
+               "   pThis                     : 0x%.08X\n"
+               "   dwHeadroom                : 0x%.08X\n"
+               ");\n",
+               GetCurrentThreadId(), pThis, dwHeadroom);
+    }
+#endif
+
+    // DirectSound 8 has no host equivalent for the Xbox voice headroom value.
+    // Accept it at the guest boundary so the HLE-owned buffer never falls back
+    // into a native Xbox object method.
+    EmuSwapFS(); // XBox FS
+
+    return DS_OK;
+}
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetCurrentPosition
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_SetCurrentPosition

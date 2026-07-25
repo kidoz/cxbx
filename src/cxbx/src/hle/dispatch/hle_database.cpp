@@ -84,6 +84,7 @@ namespace XTL
 #include "DSound.1.0.3936.inl"
 #include "DSound.1.0.4361.inl"
 #include "DSound.1.0.4627.inl"
+#include "DSound.1.0.4928.inl"
 #include "DSound.1.0.5849.inl"
 #include "DSound.1.0.5933.inl"
 #include "DSound.1.0.5233.inl"
@@ -227,8 +228,8 @@ HLEData HLEDataBase[] =
         D3D8_1_0_4627,
         D3D8_1_0_4627_SIZE
     },
-    // D3D8 Version 1.0.4928: 89 entries resolve at 91 unique addresses in
-    // WhiteOut, all independently identified as the same D3D8 symbols.
+    // D3D8 Version 1.0.4928: verified shared entries plus image-derived
+    // texture and fence ownership redirects.
     {
         "D3D8",
         1, 0, 4928,
@@ -323,6 +324,14 @@ HLEData HLEDataBase[] =
         1, 0, 4627,
         DSound_1_0_4627,
         DSound_1_0_4627_SIZE
+    },
+    // DSound Version 1.0.4928: image-verified public device, buffer, and
+    // stream boundary. The table order preserves forward-looking signatures.
+    {
+        "DSOUND",
+        1, 0, 4928,
+        DSound_1_0_4928,
+        DSound_1_0_4928_SIZE
     },
     // DSound Version 1.0.5233
     {

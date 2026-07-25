@@ -668,6 +668,13 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_SetVolume
 );
 
 // ******************************************************************
+// * func: EmuIDirectSoundBuffer8_SetHeadroom
+// ******************************************************************
+HRESULT WINAPI EmuIDirectSoundBuffer8_SetHeadroom(
+    X_CDirectSoundBuffer* pThis,
+    DWORD dwHeadroom);
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_SetCurrentPosition
 // ******************************************************************
 HRESULT WINAPI EmuIDirectSoundBuffer8_SetCurrentPosition

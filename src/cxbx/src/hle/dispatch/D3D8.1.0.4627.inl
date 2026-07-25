@@ -2165,6 +2165,82 @@ SOOVPA<15> IDirect3DDevice8_SetRenderState_CullMode_1_0_4627 =
     }
 };
 
+// D3DDevice_SetTexture (verified XDK 4928 retail image)
+SOOVPA<8> IDirect3DDevice8_SetTexture_1_0_4928 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0x4D },
+        { 0x48, 0xDB },
+        { 0x6D, 0x40 },
+        { 0x8D, 0xA3 },
+        { 0xB6, 0x20 },
+        { 0xDA, 0x00 },
+        { 0xFF, 0x10 }
+    }
+};
+
+// D3D::SetFence (verified XDK 4928 retail image)
+SOOVPA<8> SetFence_1_0_4928 =
+{
+    0, 8, XREF_SETFENCE, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x18, 0xE8 },
+        { 0x31, 0xBA },
+        { 0x4E, 0x53 },
+        { 0x68, 0x8B },
+        { 0x82, 0x6E },
+        { 0x9C, 0x5B },
+        { 0xB2, 0x35 }
+    }
+};
+
+SOOVPA<5> D3DDevice_InsertFence_1_0_4928 =
+{
+    0, 5, -1, 1,
+    {
+        { 0x03, XREF_SETFENCE },
+        { 0x00, 0x6A },
+        { 0x01, 0x00 },
+        { 0x02, 0xE8 },
+        { 0x07, 0xC3 }
+    }
+};
+
+// D3D::BlockOnTime (verified XDK 4928 retail image)
+SOOVPA<8> BlockOnTime_1_0_4928 =
+{
+    0, 8, XREF_BLOCKONTIME, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x27, 0x07 },
+        { 0x46, 0xE8 },
+        { 0x6D, 0xD5 },
+        { 0x8E, 0x08 },
+        { 0xB6, 0x00 },
+        { 0xDA, 0x85 },
+        { 0xFF, 0x00 }
+    }
+};
+
+SOOVPA<9> D3DDevice_BlockOnFence_1_0_4928 =
+{
+    0, 9, -1, 1,
+    {
+        { 0x08, XREF_BLOCKONTIME },
+        { 0x00, 0x8B },
+        { 0x01, 0x44 },
+        { 0x02, 0x24 },
+        { 0x04, 0x6A },
+        { 0x06, 0x50 },
+        { 0x07, 0xE8 },
+        { 0x0C, 0xC2 },
+        { 0x0E, 0x00 }
+    }
+};
+
 // ******************************************************************
 OOVPATable D3D8_1_0_4627[] =
 {
@@ -2558,6 +2634,54 @@ OOVPATable D3D8_1_0_4627[] =
 
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_SetTexture"
+        #endif
+    },
+    // IDirect3DDevice8::SetTexture (XDK 4928 variant)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetTexture_1_0_4928,
+
+        XTL::EmuIDirect3DDevice8_SetTexture,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetTexture"
+        #endif
+    },
+    // IDirect3DDevice8::InsertFence (XDK 4928 XRef chain)
+    {
+        (OOVPA*)&SetFence_1_0_4928,
+
+        0,
+
+        #ifdef _DEBUG_TRACE
+        "SetFence (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_InsertFence_1_0_4928,
+
+        XTL::EmuIDirect3DDevice8_InsertFence,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_InsertFence"
+        #endif
+    },
+    // IDirect3DDevice8::BlockOnFence (XDK 4928 XRef chain)
+    {
+        (OOVPA*)&BlockOnTime_1_0_4928,
+
+        0,
+
+        #ifdef _DEBUG_TRACE
+        "BlockOnTime (XRef save)"
+        #endif
+    },
+    {
+        (OOVPA*)&D3DDevice_BlockOnFence_1_0_4928,
+
+        XTL::EmuIDirect3DDevice8_BlockOnFence,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BlockOnFence"
         #endif
     },
     // IDirect3DDevice8::GetDisplayMode
