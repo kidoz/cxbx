@@ -108,6 +108,7 @@ static void           EmuAdjustPower2(UINT *dwWidth, UINT *dwHeight);
 static void           EmuFlushTiledSurfaceLock(XTL::X_D3DResource *pResource);
 static void           EmuFlushTiledSurfaceLocks();
 static HRESULT        EmuLockTiledSurface(XTL::X_D3DResource *pResource, XTL::D3DLOCKED_RECT *pLockedRect, CONST RECT *pRect, DWORD Flags);
+static bool EmuD3DIsReadableRange(const void* base, DWORD bytes);
 
 // ******************************************************************
 // * Static Variable(s)
@@ -779,6 +780,8 @@ static constexpr DWORD EmuXboxTextureStageCount = 4;
 // resource identities whose host backing can change before replay.
 static std::array<XTL::X_D3DResource*, EmuXboxTextureStageCount>
     g_EmuBoundGuestTextures = {};
+static std::array<cxbx::d3d::RecordedTextureDescriptor, EmuXboxTextureStageCount>
+    g_EmuBoundGuestTextureDescriptors = {};
 
 struct EmuRecordedPushBufferDraw
 {
@@ -787,6 +790,8 @@ struct EmuRecordedPushBufferDraw
     UINT stride = 0;
     DWORD stateBlock = 0;
     std::array<XTL::X_D3DResource*, EmuXboxTextureStageCount> guestTextures = {};
+    std::array<cxbx::d3d::RecordedTextureDescriptor, EmuXboxTextureStageCount>
+        guestTextureDescriptors = {};
     std::vector<BYTE> vertices;
 };
 
@@ -1015,6 +1020,27 @@ static UINT EmuRecordedDrawVertexCount(XTL::D3DPRIMITIVETYPE primitiveType, UINT
     }
 }
 
+static cxbx::d3d::RecordedTextureDescriptor EmuCaptureRecordedTextureDescriptor(
+    XTL::X_D3DResource* resource)
+{
+    if(resource == nullptr ||
+       (reinterpret_cast<std::uintptr_t>(resource) & 0x80000000u) != 0 ||
+       !EmuD3DIsReadableRange(resource, sizeof(XTL::X_D3DPixelContainer)))
+    {
+        return {};
+    }
+
+    const auto* texture =
+        reinterpret_cast<const XTL::X_D3DPixelContainer*>(resource);
+    if((texture->Common & X_D3DCOMMON_TYPE_MASK) != X_D3DCOMMON_TYPE_TEXTURE)
+    {
+        return {};
+    }
+
+    return cxbx::d3d::CaptureRecordedTextureDescriptor(
+        texture->Common, texture->Data, texture->Format, texture->Size);
+}
+
 static void EmuAppendRecordedDraw(EmuRecordedPushBuffer& recording,
                                   XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
                                   const void* vertices, UINT stride)
@@ -1042,6 +1068,7 @@ static void EmuAppendRecordedDraw(EmuRecordedPushBuffer& recording,
     draw.stride = stride;
     draw.stateBlock = EmuCaptureD3DStateBlock();
     draw.guestTextures = g_EmuBoundGuestTextures;
+    draw.guestTextureDescriptors = g_EmuBoundGuestTextureDescriptors;
 
     try
     {
@@ -5991,6 +6018,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     {
         g_EmuBoundHostTextures[Stage] = pBaseTexture8;
         g_EmuBoundGuestTextures[Stage] = pTexture;
+        g_EmuBoundGuestTextureDescriptors[Stage] =
+            EmuCaptureRecordedTextureDescriptor(pTexture);
     }
 
     static int traceEnabled = -1;
@@ -11088,6 +11117,33 @@ static void EmuRestoreRecordedGuestTextures(const EmuRecordedPushBufferDraw& dra
             }
             else if(EmuD3DIsReadableRange(guestTexture, sizeof(*guestTexture)))
             {
+                const cxbx::d3d::RecordedTextureDescriptor currentDescriptor =
+                    EmuCaptureRecordedTextureDescriptor(guestTexture);
+                if(draw.stateBlock != 0 &&
+                   draw.guestTextureDescriptors[stage].valid &&
+                   !cxbx::d3d::CanRefreshRecordedTexture(
+                       draw.guestTextureDescriptors[stage], currentDescriptor))
+                {
+                    if(SUCCEEDED(g_pD3DDevice8->GetTexture(stage, &hostTexture)))
+                    {
+                        EmuFlushHostTextureLocks(hostTexture);
+                        EmuRefreshLinearTexture(hostTexture);
+                        EmuConfigureLinearTextureCoordinates(stage, hostTexture);
+                        g_EmuBoundHostTextures[stage] = hostTexture;
+                        if(hostTexture != nullptr)
+                        {
+                            hostTexture->Release();
+                        }
+                    }
+                    else
+                    {
+                        g_EmuBoundHostTextures[stage] = nullptr;
+                    }
+                    g_EmuBoundGuestTextures[stage] = guestTexture;
+                    g_EmuBoundGuestTextureDescriptors[stage] =
+                        draw.guestTextureDescriptors[stage];
+                    continue;
+                }
                 EmuVerifyResourceIsRegistered(guestTexture);
                 hostTexture = guestTexture->EmuBaseTexture8;
             }
@@ -11099,6 +11155,8 @@ static void EmuRestoreRecordedGuestTextures(const EmuRecordedPushBufferDraw& dra
         g_pD3DDevice8->SetTexture(stage, hostTexture);
         g_EmuBoundHostTextures[stage] = hostTexture;
         g_EmuBoundGuestTextures[stage] = guestTexture;
+        g_EmuBoundGuestTextureDescriptors[stage] =
+            EmuCaptureRecordedTextureDescriptor(guestTexture);
     }
 }
 

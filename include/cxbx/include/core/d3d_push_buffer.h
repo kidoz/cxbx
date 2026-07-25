@@ -36,6 +36,102 @@ enum class IndexedBatchTopology
     QuadList,
 };
 
+constexpr std::uint32_t XboxD3dResourceTypeMask = 0x00070000u;
+
+struct RecordedTextureDescriptor
+{
+    std::uint32_t resourceType = 0;
+    std::uint32_t dataAddress = 0;
+    std::uint32_t format = 0;
+    std::uint32_t size = 0;
+    bool valid = false;
+};
+
+inline constexpr RecordedTextureDescriptor CaptureRecordedTextureDescriptor(
+    std::uint32_t common, std::uint32_t data, std::uint32_t format,
+    std::uint32_t size) noexcept
+{
+    return {
+        common & XboxD3dResourceTypeMask,
+        data,
+        format,
+        size,
+        true,
+    };
+}
+
+struct RecordedTextureDimensions
+{
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+inline constexpr bool IsRecordedLinearTextureFormat(
+    std::uint32_t format) noexcept
+{
+    switch(format)
+    {
+        case 0x11u: // LIN_R5G6B5
+        case 0x12u: // LIN_A8R8G8B8
+        case 0x13u: // LIN_L8
+        case 0x17u: // LIN_G8B8
+        case 0x1Eu: // LIN_X8R8G8B8
+        case 0x20u: // LIN_A8L8
+        case 0x2Eu: // LIN_D24S8
+        case 0x30u: // LIN_D16
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline constexpr RecordedTextureDimensions DecodeRecordedTextureDimensions(
+    const RecordedTextureDescriptor& descriptor) noexcept
+{
+    constexpr std::uint32_t formatMask = 0x0000FF00u;
+    constexpr std::uint32_t formatShift = 8;
+    const std::uint32_t format =
+        (descriptor.format & formatMask) >> formatShift;
+    if(IsRecordedLinearTextureFormat(format))
+    {
+        return {
+            (descriptor.size & 0x00000FFFu) + 1,
+            ((descriptor.size & 0x00FFF000u) >> 12) + 1,
+        };
+    }
+    return {
+        1u << ((descriptor.format & 0x00F00000u) >> 20),
+        1u << ((descriptor.format & 0x0F000000u) >> 24),
+    };
+}
+
+inline constexpr bool CanRefreshRecordedTexture(
+    const RecordedTextureDescriptor& recorded,
+    const RecordedTextureDescriptor& current) noexcept
+{
+    // Data is the mutable guest backing address. A late upload may move it
+    // without changing the texture object recorded by the push buffer.
+    if(!recorded.valid || !current.valid ||
+       recorded.resourceType != current.resourceType)
+    {
+        return false;
+    }
+    if(recorded.format == current.format && recorded.size == current.size)
+    {
+        return true;
+    }
+
+    // Titles can recycle the guest header while an earlier push buffer still
+    // owns the original texture. A collapse to a 1x1/2x2 resource is a new
+    // generation, not a late backing update for the recorded texture.
+    const RecordedTextureDimensions recordedDimensions =
+        DecodeRecordedTextureDimensions(recorded);
+    const RecordedTextureDimensions currentDimensions =
+        DecodeRecordedTextureDimensions(current);
+    return currentDimensions.width > 2 || currentDimensions.height > 2 ||
+           (recordedDimensions.width <= 2 && recordedDimensions.height <= 2);
+}
+
 struct IndexedBatch
 {
     IndexedBatchTopology topology = IndexedBatchTopology::Invalid;

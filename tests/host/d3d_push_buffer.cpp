@@ -68,6 +68,52 @@ bool CheckRejectedWalk(const std::vector<std::uint32_t>& words, const char* name
 int RunPushBufferTest()
 {
     bool passed = true;
+    constexpr std::uint32_t textureType = 0x00040000u;
+    constexpr std::uint32_t dxt1_256x256 =
+        0x00000C00u | (8u << 20) | (8u << 24);
+    constexpr std::uint32_t dxt1_128x128 =
+        0x00000C00u | (7u << 20) | (7u << 24);
+    constexpr std::uint32_t dxt3_2x2 =
+        0x00000E00u | (1u << 20) | (1u << 24);
+    constexpr auto recordedTexture = cxbx::d3d::CaptureRecordedTextureDescriptor(
+        textureType | 1u, 0x01000000u, dxt1_256x256, 0);
+    constexpr auto sameTexture = cxbx::d3d::CaptureRecordedTextureDescriptor(
+        textureType | 7u, 0x01000000u, dxt1_256x256, 0);
+    constexpr auto movedBacking = cxbx::d3d::CaptureRecordedTextureDescriptor(
+        textureType | 7u, 0x02000000u, dxt1_256x256, 0);
+    constexpr auto reconfiguredLayout =
+        cxbx::d3d::CaptureRecordedTextureDescriptor(
+            textureType | 7u, 0x02000000u, dxt1_128x128, 0);
+    constexpr auto reusedTinyLayout =
+        cxbx::d3d::CaptureRecordedTextureDescriptor(
+            textureType | 7u, 0x02000000u, dxt3_2x2, 0);
+    constexpr auto recordedLinearTexture =
+        cxbx::d3d::CaptureRecordedTextureDescriptor(
+            textureType | 1u, 0x01000000u, 0x00001200u,
+            (255u << 12) | 255u);
+    constexpr auto reusedTinyLinearLayout =
+        cxbx::d3d::CaptureRecordedTextureDescriptor(
+            textureType | 7u, 0x02000000u, 0x00001200u,
+            (1u << 12) | 1u);
+    constexpr auto reusedType = cxbx::d3d::CaptureRecordedTextureDescriptor(
+        0x00050000u | 7u, 0x01000000u, dxt1_256x256, 0);
+    if(!cxbx::d3d::CanRefreshRecordedTexture(recordedTexture, sameTexture) ||
+       !cxbx::d3d::CanRefreshRecordedTexture(recordedTexture, movedBacking) ||
+       !cxbx::d3d::CanRefreshRecordedTexture(
+           recordedTexture, reconfiguredLayout) ||
+       cxbx::d3d::CanRefreshRecordedTexture(
+           recordedTexture, reusedTinyLayout) ||
+       cxbx::d3d::CanRefreshRecordedTexture(
+           recordedLinearTexture, reusedTinyLinearLayout) ||
+       cxbx::d3d::CanRefreshRecordedTexture(recordedTexture, reusedType) ||
+       cxbx::d3d::CanRefreshRecordedTexture(
+           recordedTexture, cxbx::d3d::RecordedTextureDescriptor{}))
+    {
+        std::fputs(
+            "recorded textures must refresh across backing moves, not layout reuse\n",
+            stderr);
+        passed = false;
+    }
     constexpr auto triangleStrip = cxbx::d3d::ClassifyIndexedBatch(6, 7);
     constexpr auto quadList = cxbx::d3d::ClassifyIndexedBatch(8, 8);
     constexpr auto incompleteTriangle = cxbx::d3d::ClassifyIndexedBatch(6, 2);
