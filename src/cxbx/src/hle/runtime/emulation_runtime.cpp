@@ -8547,11 +8547,12 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
             {
                 ULONG Left = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
                 ULONG Right = EmuReadMmio(FaultAddress, 4);
+                const ULONG CompareEip = (ULONG)e->ContextRecord->Eip;
                 EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
-                       GetCurrentThreadId(), Left, FaultAddress);
+                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with [0x%.08lX]=0x%.08lX (eip=0x%.08lX).\n",
+                       GetCurrentThreadId(), Left, FaultAddress, Right, CompareEip);
                 fflush(stdout);
 
                 return true;
@@ -9295,11 +9296,12 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             {
                 ULONG Left = EmuContextRegister(e->ContextRecord, (Instruction[1] >> 3) & 0x07);
                 ULONG Right = EmuReadMmio(FaultAddress, 4);
+                const ULONG CompareEip = (ULONG)e->ContextRecord->Eip;
                 EmuSetSubtractFlags(e->ContextRecord, Left, Right, Left - Right, 0x80000000);
                 e->ContextRecord->Eip += OperandLength;
 
-                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with 0x%.08lX.\n",
-                       GetCurrentThreadId(), Left, FaultAddress);
+                printf("Emu (0x%lX): Emulated MMIO compare 0x%.08lX with [0x%.08lX]=0x%.08lX (eip=0x%.08lX).\n",
+                       GetCurrentThreadId(), Left, FaultAddress, Right, CompareEip);
                 fflush(stdout);
 
                 return true;
@@ -10453,6 +10455,48 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
             else if(Stack[Slot] >= 0x00011000 && Stack[Slot] < 0x00400000)
                 printf("Emu (0x%lX): Vectored stack[%03lu] 0x%.08lX = guest\n",
                        GetCurrentThreadId(), Slot, Stack[Slot]);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    // Call-validated backtrace. The raw stack scan above lists every slot that
+    // merely resolves into a module, including stale data pointers into rdata
+    // (e.g. a format-string address), so its "callers" cannot be trusted. Filter
+    // to slots that are genuine return addresses -- their immediately preceding
+    // bytes decode as a CALL (E8 rel32 or FF /2) -- to name the real host call
+    // chain that reached the faulting instruction. Host modules are included
+    // (unlike EmuLooksLikeReturnAddress, which is guest-only), so a host-side
+    // fault such as the Turok Swap-path 0xC0000005 names its true Cxbx callers.
+    __try
+    {
+        char Where[MAX_PATH + 16];
+        DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+        ULONG Frame = 0;
+        for(ULONG Slot = 0; Slot < 256 && Frame < 24; Slot++)
+        {
+            if(!EmuIsReadableRange((ULONG)&Stack[Slot], 4))
+                break;
+
+            const ULONG Ret = Stack[Slot];
+            if(EmuHostAddressToModuleOffset(Ret, Where, sizeof(Where)) == NULL)
+                continue;
+            if(Ret < 6 || !EmuIsReadableRange(Ret - 6, 6))
+                continue;
+
+            const BYTE *p = (const BYTE*)Ret;
+            const bool bAfterCall =
+                p[-5] == 0xE8 ||                               // call rel32
+                (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) ||   // call r/m32 disp32
+                (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) ||   // call r/m32 disp8
+                (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10);     // call r/m32 / reg
+            if(bAfterCall)
+            {
+                printf("Emu (0x%lX): Vectored frame[%02lu] 0x%.08lX = %s (after call)\n",
+                       GetCurrentThreadId(), Frame, Ret, Where);
+                Frame++;
+            }
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
