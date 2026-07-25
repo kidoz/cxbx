@@ -5094,8 +5094,29 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
     // Convert Format (Xbox->PC)
     D3DFORMAT PCFormat = EmuXB2PC_D3DFormat(Format);
 
+    // On Xbox any surface can back a render target or depth buffer -- there is
+    // no separate render-target resource class. A title that renders to a
+    // texture (Turok Evolution's world passes create 512x512 RENDERTARGET
+    // colour and DEPTHSTENCIL depth textures) hands that intent in through
+    // Usage. Historically this wrapper discarded it, forced D3DPOOL_MANAGED,
+    // and rewrote depth formats to X8R8G8B8; the resulting surface then failed
+    // SetRenderTarget's host usage check and the world pass silently painted
+    // the back buffer instead. Honour the usage for these resources: create
+    // them with the matching host usage in D3DPOOL_DEFAULT and keep the real
+    // depth format, so GetSurfaceLevel hands SetRenderTarget a surface the host
+    // runtime accepts. Ordinary textures are untouched.
+    // Runtime kill-switch for A/B diagnosis: CXBX_NO_RT_TEXTURES falls back to
+    // the historical managed/usage-0/depth->X8R8G8B8 behavior so a regression
+    // can be bisected without a rebuild.
+    static int s_RenderResourceGate = -1;
+    if(s_RenderResourceGate < 0)
+        s_RenderResourceGate = EmuD3DEnvironmentEnabled("CXBX_NO_RT_TEXTURES") ? 0 : 1;
+    const bool bWantRenderTarget = s_RenderResourceGate && (Usage & D3DUSAGE_RENDERTARGET) != 0;
+    const bool bWantDepthStencil = s_RenderResourceGate && (Usage & D3DUSAGE_DEPTHSTENCIL) != 0;
+    const bool bRenderResource   = bWantRenderTarget || bWantDepthStencil;
+
     // TODO: HACK: Devices that don't support this should somehow emulate it!
-    if(PCFormat == D3DFMT_D16)
+    if(PCFormat == D3DFMT_D16 && !bRenderResource)
     {
         printf("*Warning* D3DFMT_16 is an unsupported texture format!\n");
         PCFormat = D3DFMT_X8R8G8B8;
@@ -5105,7 +5126,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
         printf("*Warning* D3DFMT_P8 is an unsupported texture format!\n");
         PCFormat = D3DFMT_X8R8G8B8;
     }
-    else if(PCFormat == D3DFMT_D24S8)
+    else if(PCFormat == D3DFMT_D24S8 && !bRenderResource)
     {
         printf("*Warning* D3DFMT_D24S8 is an unsupported texture format!\n");
         PCFormat = D3DFMT_X8R8G8B8;
@@ -5125,6 +5146,12 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
 
         *ppTexture = new X_D3DTexture();
 
+        const DWORD  HostUsage = bWantDepthStencil ? D3DUSAGE_DEPTHSTENCIL
+                               : bWantRenderTarget ? D3DUSAGE_RENDERTARGET
+                                                   : 0;
+        const D3DPOOL HostPool = bRenderResource ? D3DPOOL_DEFAULT
+                                                 : D3DPOOL_MANAGED;
+
         // ******************************************************************
         // * redirect to windows d3d
         // ******************************************************************
@@ -5133,8 +5160,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
             hRet = g_pD3DDevice8->CreateTexture
             (
                 Width, Height, Levels,
-                0,
-                PCFormat, D3DPOOL_MANAGED, &((*ppTexture)->EmuTexture8)
+                HostUsage,
+                PCFormat, HostPool, &((*ppTexture)->EmuTexture8)
             );
         }
         __except(EXCEPTION_EXECUTE_HANDLER)
@@ -5142,11 +5169,41 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
             hRet = D3DERR_INVALIDCALL;
         }
 
+        // A host device that cannot supply this depth/render-target format
+        // falls back to the historical managed texture (blank, but present)
+        // rather than leaving the title with an unbacked resource. The depth
+        // format degrades to X8R8G8B8 as before; a colour render target keeps
+        // its format and only loses the DEFAULT-pool render-target usage.
+        if(bRenderResource && (FAILED(hRet) || (*ppTexture)->EmuTexture8 == NULL))
+        {
+            EmuWarning("CreateTexture: host rejected %s texture %ux%u fmt=%d (0x%.08X); "
+                       "falling back to managed",
+                       bWantDepthStencil ? "depth-stencil" : "render-target",
+                       Width, Height, PCFormat, hRet);
+
+            const D3DFORMAT FallbackFormat = bWantDepthStencil ? D3DFMT_X8R8G8B8 : PCFormat;
+            (*ppTexture)->EmuTexture8 = NULL;
+            __try
+            {
+                hRet = g_pD3DDevice8->CreateTexture
+                (
+                    Width, Height, Levels,
+                    0,
+                    FallbackFormat, D3DPOOL_MANAGED, &((*ppTexture)->EmuTexture8)
+                );
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                hRet = D3DERR_INVALIDCALL;
+            }
+        }
+
         if(FAILED(hRet))
             printf("*Warning* CreateTexture FAILED\n");
 
         DWORD dwSwizzledBPP = 0;
         const bool bSwizzled =
+            !bRenderResource &&
             SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
             EmuXboxFormatIsSwizzled(static_cast<DWORD>(Format), &dwSwizzledBPP);
         if(bSwizzled)
@@ -5196,7 +5253,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
         }
 
         DWORD linearBPP = 0;
-        if(SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
+        if(!bRenderResource && SUCCEEDED(hRet) && (*ppTexture)->EmuTexture8 != NULL &&
            EmuXboxFormatIsLinear(static_cast<DWORD>(Format), &linearBPP))
         {
             EmuTrackLinearTexture((*ppTexture)->EmuTexture8, nullptr,

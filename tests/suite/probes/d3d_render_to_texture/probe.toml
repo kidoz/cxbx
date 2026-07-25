@@ -1,0 +1,11 @@
+# XDK-toolchain probe (see d3d_texture): pixel-exact verification of the D3D8
+# HLE render-to-texture path -- CreateTexture2 with RENDERTARGET/DEPTHSTENCIL
+# usage, GetSurfaceLevel2, SetRenderTarget of the texture surfaces, a cleared +
+# filled render pass into the texture, then sampling the texture back onto the
+# back buffer. Pins the CreateTexture usage/pool/format fix; without it the
+# host render target is never switched and the sampled texture reads blank.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
