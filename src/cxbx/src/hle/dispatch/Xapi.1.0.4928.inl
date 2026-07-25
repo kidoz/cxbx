@@ -1,9 +1,10 @@
 // XDK 4928 XAPI entry points verified against the WhiteOut retail image.
 //
-// The input bodies are unchanged from the neighboring 3911/4361/5233 builds.
-// Every address was independently identified by XbSymbolDatabase. Keep the
-// heap, utility-drive, and dashboard-transition functions native until their
-// 4928 identities and semantics are verified separately.
+// The heap and input bodies are unchanged from the neighboring 4361/4627/5233
+// builds. Every input address was independently identified by XbSymbolDatabase;
+// the heap addresses were verified against their matching archived-library
+// bodies. Keep utility-drive and dashboard-transition functions native until
+// their 4928 identities and semantics are verified separately.
 
 SOOVPA<8> XInputPoll_1_0_4928 = {
     0, 8, -1, 0, { { 0x00, 0x53 }, { 0x24, 0x25 }, { 0x48, 0x00 }, { 0x6E, 0xFE }, { 0x90, 0xB8 }, { 0xB6, 0xC3 }, { 0xDA, 0x89 }, { 0xFF, 0xF3 } }
@@ -16,6 +17,10 @@ SOOVPA<8> XInputPoll_1_0_4928 = {
 #endif
 
 OOVPATable XAPI_1_0_4928[] = {
+    { (OOVPA*)&RtlCreateHeap_1_0_4361, XTL::EmuRtlCreateHeap XAPI_4928_TRACE_NAME(EmuRtlCreateHeap) },
+    { (OOVPA*)&RtlAllocateHeap_1_0_4361, XTL::EmuRtlAllocateHeap XAPI_4928_TRACE_NAME(EmuRtlAllocateHeap) },
+    { (OOVPA*)&RtlFreeHeap_1_0_4627, XTL::EmuRtlFreeHeap XAPI_4928_TRACE_NAME(EmuRtlFreeHeap) },
+    { (OOVPA*)&RtlSizeHeap_1_0_4627, XTL::EmuRtlSizeHeap XAPI_4928_TRACE_NAME(EmuRtlSizeHeap) },
     { (OOVPA*)&XInitDevices_1_0_3911, XTL::EmuXInitDevices XAPI_4928_TRACE_NAME(EmuXInitDevices) },
     { (OOVPA*)&XGetDevices_1_0_5233, XTL::EmuXGetDevices XAPI_4928_TRACE_NAME(EmuXGetDevices) },
     { (OOVPA*)&XGetDeviceChanges_1_0_5233, XTL::EmuXGetDeviceChanges XAPI_4928_TRACE_NAME(EmuXGetDeviceChanges) },

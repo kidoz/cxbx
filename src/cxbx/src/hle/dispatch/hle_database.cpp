@@ -142,7 +142,7 @@ HLEData HLEDataBase[] =
         XAPI_1_0_4627,
         XAPI_1_0_4627_SIZE
     },
-    // Xapilib Version 1.0.4928: verified input and thread entry points only.
+    // Xapilib Version 1.0.4928: verified heap, input, and thread entry points.
     {
         "XAPILIB",
         1, 0, 4928,
