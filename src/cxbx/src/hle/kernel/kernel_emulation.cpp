@@ -136,11 +136,21 @@ static bool EmuIsThreadObjectType(PVOID ObjectType)
 
 static ULONG EmuProbeThreadSuspendCount(HANDLE ThreadHandle)
 {
+    if(GetThreadId(ThreadHandle) == GetCurrentThreadId())
+    {
+        return 0;
+    }
+
     DWORD Previous = SuspendThread(ThreadHandle);
     if(Previous == (DWORD)-1)
+    {
         return 0;
+    }
 
-    ResumeThread(ThreadHandle);
+    if(ResumeThread(ThreadHandle) == (DWORD)-1)
+    {
+        return 0;
+    }
     return Previous;
 }
 
@@ -148,6 +158,7 @@ struct EmuThreadSuspendState
 {
     ULONG LogicalCount = 0;
     ULONG HostCount = 0;
+    bool SelfSuspendPending = false;
 };
 
 // Handles can be duplicated, so suspend state is shared by host thread ID.
@@ -578,10 +589,31 @@ static bool EmuResumeThreadState(
         return true;
     }
 
+    if(SuspendState.SelfSuspendPending)
+    {
+        // The suspending thread publishes its intent before calling the host
+        // API. A resumer can arrive in that narrow interval, so wait until the
+        // host count becomes observable rather than losing the resume.
+        DWORD HostPreviousCount = 0;
+        do
+        {
+            HostPreviousCount = ResumeThread(ThreadHandle);
+            if(HostPreviousCount == (DWORD)-1)
+            {
+                return false;
+            }
+            if(HostPreviousCount == 0)
+            {
+                SwitchToThread();
+            }
+        } while(HostPreviousCount == 0);
+
+        SuspendState.SelfSuspendPending = false;
+    }
     // Logical-only suspensions sit above any real host suspension. Resume the
     // host only when the final logical layer covering it is removed.
-    if(SuspendState.HostCount == SuspendState.LogicalCount &&
-       SuspendState.HostCount != 0)
+    else if(SuspendState.HostCount == SuspendState.LogicalCount &&
+            SuspendState.HostCount != 0)
     {
         if(ResumeThread(ThreadHandle) == (DWORD)-1)
         {
@@ -591,6 +623,23 @@ static bool EmuResumeThreadState(
     }
 
     SuspendState.LogicalCount--;
+    return true;
+}
+
+static bool EmuSuspendCurrentThread(
+    HANDLE ThreadHandle, std::unique_lock<std::mutex>& Lock,
+    EmuThreadSuspendState& SuspendState)
+{
+    SuspendState.SelfSuspendPending = true;
+    Lock.unlock();
+    const DWORD HostPreviousCount = SuspendThread(ThreadHandle);
+    Lock.lock();
+    if(HostPreviousCount == (DWORD)-1)
+    {
+        SuspendState.SelfSuspendPending = false;
+        return false;
+    }
+
     return true;
 }
 
@@ -6342,7 +6391,7 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
         return 0;
     }
 
-    const std::lock_guard<std::mutex> Lock(
+    std::unique_lock<std::mutex> Lock(
         g_EmuThreadSuspendCountsMutex);
     EmuThreadSuspendState& SuspendState =
         EmuThreadSuspendStateForHandleLocked(ThreadHeader->HostHandle);
@@ -6374,12 +6423,27 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
         return PreviousCount;
     }
 
-    if(EmuSuspendThreadAtGuestBoundary(ThreadHeader->HostHandle))
+    const DWORD ThreadId = GetThreadId(ThreadHeader->HostHandle);
+    if(ThreadId == GetCurrentThreadId())
     {
-        SuspendState.HostCount++;
+        SuspendState.LogicalCount++;
+        ThreadHeader->SuspendCount = SuspendState.LogicalCount;
+        if(!EmuSuspendCurrentThread(
+               ThreadHeader->HostHandle, Lock, SuspendState))
+        {
+            SuspendState.LogicalCount--;
+        }
+        ThreadHeader->SuspendCount = SuspendState.LogicalCount;
     }
-    SuspendState.LogicalCount++;
-    ThreadHeader->SuspendCount = SuspendState.LogicalCount;
+    else
+    {
+        if(EmuSuspendThreadAtGuestBoundary(ThreadHeader->HostHandle))
+        {
+            SuspendState.HostCount++;
+        }
+        SuspendState.LogicalCount++;
+        ThreadHeader->SuspendCount = SuspendState.LogicalCount;
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -10843,7 +10907,7 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
     }
     else
     {
-        const std::lock_guard<std::mutex> Lock(
+        std::unique_lock<std::mutex> Lock(
             g_EmuThreadSuspendCountsMutex);
         EmuThreadSuspendState& SuspendState =
             EmuThreadSuspendStateForHandleLocked(ThreadHandle);
@@ -10860,11 +10924,25 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
         }
         else
         {
-            if(EmuSuspendThreadAtGuestBoundary(ThreadHandle))
+            const DWORD ThreadId = GetThreadId(ThreadHandle);
+            if(ThreadId == GetCurrentThreadId())
             {
-                SuspendState.HostCount++;
+                SuspendState.LogicalCount++;
+                if(!EmuSuspendCurrentThread(
+                       ThreadHandle, Lock, SuspendState))
+                {
+                    SuspendState.LogicalCount--;
+                    ret = 0xC0000008;
+                }
             }
-            SuspendState.LogicalCount++;
+            else
+            {
+                if(EmuSuspendThreadAtGuestBoundary(ThreadHandle))
+                {
+                    SuspendState.HostCount++;
+                }
+                SuspendState.LogicalCount++;
+            }
         }
     }
 
