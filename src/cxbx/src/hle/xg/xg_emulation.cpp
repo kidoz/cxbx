@@ -337,15 +337,25 @@ VOID WINAPI XTL::EmuXGUnswizzleRect
 	DWORD dwV = dwSV;
 	DWORD dwU = dwSU;
 
-	for(DWORD z=0; z<dwDepth; z++) 
+	// A title can register a texture whose declared dimensions imply more
+	// swizzled source bytes than its actual data buffer holds; the Morton walk
+	// below then reads past the source and faults (Turok's Resource_Register
+	// path, EmuXGUnswizzleRect source overrun). pSrcBuff is a host pointer above
+	// the guest-physical window, so an SEH guard catches the overrun without
+	// disturbing the MMIO/physical fault path -- abandon the copy and keep the
+	// partially unswizzled texture rather than killing the process (one wrong
+	// texture beats a dead title, matching Resource_Register's other guards).
+	__try
+	{
+	for(DWORD z=0; z<dwDepth; z++)
 	{
 		dwV = dwSV;
 
-		for(DWORD y=0; y<dwHeight; y++) 
+		for(DWORD y=0; y<dwHeight; y++)
 		{
 			dwU = dwSU;
 
-			for (DWORD x=0; x<dwWidth; x++) 
+			for (DWORD x=0; x<dwWidth; x++)
 			{
 				memcpy(pDstBuff, &((BYTE*)pSrcBuff)[(dwU|dwV|dwW)*dwBPP], dwBPP);
 				pDstBuff=(PVOID)(((DWORD)pDstBuff)+dwBPP);
@@ -356,5 +366,9 @@ VOID WINAPI XTL::EmuXGUnswizzleRect
 			dwV = (dwV - dwMaskV) & dwMaskV;
 		}
 		dwW = (dwW - dwMaskW) & dwMaskW;
+	}
+	}
+	__except(EXCEPTION_EXECUTE_HANDLER)
+	{
 	}
 }
