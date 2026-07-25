@@ -11195,15 +11195,26 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                     ++drawIndex;
                     if(supported && XTL::VshShaderRegistry::Current() != nullptr)
                     {
-                        const XTL::VshCpuDeviceState::IndexBinding indexBinding =
-                            XTL::VshCpuDeviceState::IndexBuffer();
-                        rendered = EmuVshTryDrawCpuBound(
-                            quadList, primitiveType, batch.primitiveCount,
-                            indexBinding.baseVertex,
-                            static_cast<UINT>(indices.size()), indices.data());
-                        EmuVshLogCpuDraw("RunPushBuffer", beginEndOperation,
-                                         static_cast<UINT>(indices.size()), rendered,
-                                         rendered ? "none" : "cpu_push_draw_failed");
+                        const bool drawEnabled = EmuD3DDrawGate(
+                            "RunPushBuffer", primitiveType,
+                            batch.primitiveCount);
+                        if(drawEnabled)
+                        {
+                            const XTL::VshCpuDeviceState::IndexBinding indexBinding =
+                                XTL::VshCpuDeviceState::IndexBuffer();
+                            rendered = EmuVshTryDrawCpuBound(
+                                quadList, primitiveType, batch.primitiveCount,
+                                indexBinding.baseVertex,
+                                static_cast<UINT>(indices.size()), indices.data());
+                            EmuVshLogCpuDraw(
+                                "RunPushBuffer", beginEndOperation,
+                                static_cast<UINT>(indices.size()), rendered,
+                                rendered ? "none" : "cpu_push_draw_failed");
+                            if(rendered)
+                            {
+                                EmuD3DDrawPost();
+                            }
+                        }
                     }
 
                     beginEndOperation = 0;
