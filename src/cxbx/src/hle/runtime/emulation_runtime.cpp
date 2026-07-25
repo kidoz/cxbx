@@ -5851,6 +5851,55 @@ EmuNv2aProjectRasterVertexTextures(
     return Result;
 }
 
+static constexpr std::size_t
+    EmuNv2aRasterVertexCapacity = 4096;
+
+struct EmuNv2aRasterVertexStorage
+{
+    std::array<float, EmuNv2aRasterVertexCapacity> X{};
+    std::array<float, EmuNv2aRasterVertexCapacity> Y{};
+    std::array<float, EmuNv2aRasterVertexCapacity> Z{};
+    std::array<float, EmuNv2aRasterVertexCapacity> W{};
+    std::array<
+        std::array<float, EmuNv2aRasterVertexCapacity>,
+        EmuNv2aTextureStageCount>
+        TextureU{};
+    std::array<
+        std::array<float, EmuNv2aRasterVertexCapacity>,
+        EmuNv2aTextureStageCount>
+        TextureV{};
+    std::array<
+        std::array<float, EmuNv2aRasterVertexCapacity>,
+        EmuNv2aTextureStageCount>
+        TextureInverseW{};
+    std::array<ULONG, EmuNv2aRasterVertexCapacity>
+        DiffuseColor{};
+};
+
+static void EmuNv2aCommitRasterVertex(
+    EmuNv2aRasterVertexStorage& Storage,
+    std::size_t Index,
+    const EmuNv2aRasterVertex& Vertex,
+    const EmuNv2aRasterTextureProjection& TextureProjection)
+{
+    Storage.W[Index] = Vertex.Position[3];
+    Storage.X[Index] = Vertex.Position[0];
+    Storage.Y[Index] = Vertex.Position[1];
+    Storage.Z[Index] = Vertex.Position[2];
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        Storage.TextureU[Stage][Index] =
+            TextureProjection.Stages[Stage].u;
+        Storage.TextureV[Stage][Index] =
+            TextureProjection.Stages[Stage].v;
+        Storage.TextureInverseW[Stage][Index] =
+            TextureProjection
+                .Stages[Stage]
+                .interpolationWeight;
+    }
+    Storage.DiffuseColor[Index] = Vertex.DiffuseColor;
+}
+
 // Where the current draw's pixels land: color surface + optional bound depth
 // (zeta) surface and the depth-test state. Populated once per DRAW_ARRAYS.
 struct EmuNv2aRasterTarget
@@ -7089,17 +7138,20 @@ static void EmuNv2aRasterizeDrawArrays(
         }
     }
 
-    static float VX[4096];
-    static float VY[4096];
-    static float VZ[4096];
-    static float VW[4096];
-    static float VU[EmuNv2aTextureStageCount][4096];
-    static float VV[EmuNv2aTextureStageCount][4096];
-    static float VIW[EmuNv2aTextureStageCount][4096];
-    static ULONG VC[4096];
-    if(Count > 4096)
+    static EmuNv2aRasterVertexStorage RasterVertices{};
+    float* const VX = RasterVertices.X.data();
+    float* const VY = RasterVertices.Y.data();
+    float* const VZ = RasterVertices.Z.data();
+    float* const VW = RasterVertices.W.data();
+    auto& VU = RasterVertices.TextureU;
+    auto& VV = RasterVertices.TextureV;
+    auto& VIW = RasterVertices.TextureInverseW;
+    ULONG* const VC = RasterVertices.DiffuseColor.data();
+    if(static_cast<std::size_t>(Count) >
+       EmuNv2aRasterVertexCapacity)
     {
-        Count = 4096;
+        Count = static_cast<ULONG>(
+            EmuNv2aRasterVertexCapacity);
     }
 
     static int VertexTraceEnabled = -1;
@@ -7197,10 +7249,12 @@ static void EmuNv2aRasterizeDrawArrays(
                     FixedInput, TransformState);
         }
 
-        VW[i] = Vertex.Position[3];
-        VX[i] = Vertex.Position[0];
-        VY[i] = Vertex.Position[1];
-        VZ[i] = Vertex.Position[2];
+        const EmuNv2aRasterTextureProjection TextureProjection =
+            EmuNv2aProjectRasterVertexTextures(
+                Vertex, TextureMode);
+        EmuNv2aCommitRasterVertex(
+            RasterVertices, static_cast<std::size_t>(i),
+            Vertex, TextureProjection);
         if(!VpActive)
         {
             if(VertexTraceEnabled == 1 && i < 4)
@@ -7221,27 +7275,15 @@ static void EmuNv2aRasterizeDrawArrays(
                 fflush(stdout);
             }
         }
-        const EmuNv2aRasterTextureProjection TextureProjection =
-            EmuNv2aProjectRasterVertexTextures(
-                Vertex, TextureMode);
-        for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
-        {
-            VU[Stage][i] = TextureProjection.Stages[Stage].u;
-            VV[Stage][i] = TextureProjection.Stages[Stage].v;
-            VIW[Stage][i] =
-                TextureProjection
-                    .Stages[Stage]
-                    .interpolationWeight;
-        }
-        VC[i] = Vertex.DiffuseColor;
     }
 
     EmuNv2aTextureCoordinateArrays TextureCoordinates = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
-        TextureCoordinates.U[Stage] = VU[Stage];
-        TextureCoordinates.V[Stage] = VV[Stage];
-        TextureCoordinates.InverseW[Stage] = VIW[Stage];
+        TextureCoordinates.U[Stage] = VU[Stage].data();
+        TextureCoordinates.V[Stage] = VV[Stage].data();
+        TextureCoordinates.InverseW[Stage] =
+            VIW[Stage].data();
     }
 
     if(VertexTraceEnabled == 1 && Count != 0)
