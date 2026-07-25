@@ -106,6 +106,70 @@ int main()
         return 1;
     }
 
+    cxbx::nv2a::PalettedTextPass palettedText = {};
+    palettedText.inlineVertices = true;
+    palettedText.primitive = 8;
+    palettedText.vertexCount = 36;
+    palettedText.textureOffset = 0x01E19580u;
+    palettedText.textureFormat = 0x0A910B29u;
+    palettedText.texturePalette = 0x01E15540u;
+    palettedText.blend = true;
+    palettedText.blendSourceFactor = 0x0302u;
+    palettedText.blendDestinationFactor = 0x0303u;
+    palettedText.blendEquation = 0x8006u;
+    palettedText.alphaTest = true;
+    palettedText.depthTest = true;
+    palettedText.normalizedCoordinates = true;
+    palettedText.minU = 0.125f;
+    palettedText.maxU = 0.875f;
+    palettedText.minV = 0.25f;
+    palettedText.maxV = 0.75f;
+    if(!cxbx::nv2a::IsLegacyPalettedTextPass(palettedText))
+    {
+        std::fputs(
+            "disabled context-restored P8 font quads must be recognized\n",
+            stderr);
+        return 1;
+    }
+
+    palettedText.textureControl0 = 0x40000000u;
+    if(cxbx::nv2a::IsLegacyPalettedTextPass(palettedText))
+    {
+        std::fputs("enabled P8 textures are not text-state fallbacks\n", stderr);
+        return 1;
+    }
+    palettedText.textureControl0 = 0;
+    palettedText.texturePalette = 0;
+    if(cxbx::nv2a::IsLegacyPalettedTextPass(palettedText))
+    {
+        std::fputs("paletted text fallback requires a palette\n", stderr);
+        return 1;
+    }
+    palettedText.texturePalette = 0x01E15540u;
+    palettedText.blendDestinationFactor = 1;
+    if(cxbx::nv2a::IsLegacyPalettedTextPass(palettedText))
+    {
+        std::fputs("paletted text fallback requires source-alpha blending\n",
+                   stderr);
+        return 1;
+    }
+    palettedText.blendDestinationFactor = 0x0303u;
+    palettedText.maxU = palettedText.minU;
+    if(cxbx::nv2a::IsLegacyPalettedTextPass(palettedText))
+    {
+        std::fputs("paletted text fallback requires varying normalized UVs\n",
+                   stderr);
+        return 1;
+    }
+    palettedText.maxU = 0.875f;
+    palettedText.normalizedCoordinates = false;
+    if(cxbx::nv2a::IsLegacyPalettedTextPass(palettedText))
+    {
+        std::fputs("paletted text fallback rejects non-normalized UV batches\n",
+                   stderr);
+        return 1;
+    }
+
     if(!cxbx::nv2a::IsFinalCombinerPassthroughR0(
            0x0000000Cu, 0x00001C80u) ||
        cxbx::nv2a::IsFinalCombinerPassthroughR0(

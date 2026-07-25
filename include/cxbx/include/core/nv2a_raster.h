@@ -59,6 +59,86 @@ struct LinearDisplayFilterPlan
     float sourceHeight = 0.0f;
 };
 
+struct PalettedTextPass
+{
+    bool inlineVertices = false;
+    std::uint32_t primitive = 0;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t textureOffset = 0;
+    std::uint32_t textureFormat = 0;
+    std::uint32_t textureControl0 = 0;
+    std::uint32_t texturePalette = 0;
+    std::uint32_t shaderStageProgram = 0;
+    std::uint32_t combinerControl = 0;
+    bool blend = false;
+    std::uint32_t blendSourceFactor = 0;
+    std::uint32_t blendDestinationFactor = 0;
+    std::uint32_t blendEquation = 0;
+    bool alphaTest = false;
+    bool depthTest = false;
+    bool stencilTest = false;
+    bool normalizedCoordinates = false;
+    float minU = 0.0f;
+    float maxU = 0.0f;
+    float minV = 0.0f;
+    float maxV = 0.0f;
+};
+
+// Some XDK text batches rely on pixel state restored from a GPU context rather
+// than resubmitting it in the method stream. Restrict reconstruction to
+// normalized P8 font-atlas quads with the complete observed render-state shape.
+inline constexpr bool IsLegacyPalettedTextState(
+    const PalettedTextPass& pass) noexcept
+{
+    constexpr std::uint32_t Quads = 8u;
+    constexpr std::uint32_t TextureEnable = 0x40000000u;
+    constexpr std::uint32_t Texture2D = 2u;
+    constexpr std::uint32_t Paletted8 = 0x0Bu;
+    constexpr std::uint32_t SourceAlpha = 0x0302u;
+    constexpr std::uint32_t OneMinusSourceAlpha = 0x0303u;
+    constexpr std::uint32_t Add = 0x8006u;
+
+    const std::uint32_t dimension = (pass.textureFormat >> 4) & 0xFu;
+    const std::uint32_t colorFormat = (pass.textureFormat >> 8) & 0xFFu;
+    const std::uint32_t sizeU = (pass.textureFormat >> 20) & 0xFu;
+    const std::uint32_t sizeV = (pass.textureFormat >> 24) & 0xFu;
+    if(!pass.inlineVertices || pass.primitive != Quads ||
+       pass.vertexCount < 4u || (pass.vertexCount % 4u) != 0u ||
+       pass.textureOffset == 0u || pass.texturePalette == 0u ||
+       dimension != Texture2D || colorFormat != Paletted8 ||
+       sizeU == 0u || sizeU > 12u || sizeV == 0u || sizeV > 12u ||
+       (pass.textureControl0 & TextureEnable) != 0u ||
+       pass.shaderStageProgram != 0u ||
+       (pass.combinerControl & 0xFFu) != 0u ||
+       !pass.blend || pass.blendSourceFactor != SourceAlpha ||
+       pass.blendDestinationFactor != OneMinusSourceAlpha ||
+       pass.blendEquation != Add || !pass.alphaTest || !pass.depthTest ||
+       pass.stencilTest)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+inline constexpr bool IsLegacyPalettedTextPass(
+    const PalettedTextPass& pass) noexcept
+{
+    if(!IsLegacyPalettedTextState(pass) || !pass.normalizedCoordinates)
+    {
+        return false;
+    }
+
+    constexpr float CoordinateEpsilon = 1.0e-4f;
+    constexpr float MinimumSpan = 1.0e-6f;
+    return pass.minU >= -CoordinateEpsilon &&
+           pass.maxU <= 1.0f + CoordinateEpsilon &&
+           pass.minV >= -CoordinateEpsilon &&
+           pass.maxV <= 1.0f + CoordinateEpsilon &&
+           pass.maxU - pass.minU > MinimumSpan &&
+           pass.maxV - pass.minV > MinimumSpan;
+}
+
 // XDK software display filtering is submitted as a disabled linear-texture
 // descriptor plus an oversized immediate triangle. The texture/combiner state
 // normally restored from the GPU context is absent from a raw method replay, so

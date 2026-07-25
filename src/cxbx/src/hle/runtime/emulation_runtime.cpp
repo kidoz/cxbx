@@ -7460,6 +7460,90 @@ static void EmuNv2aRasterizeDrawArrays(
         }
     }
 
+    cxbx::nv2a::PalettedTextPass PalettedText = {};
+    PalettedText.inlineVertices = InlineData != nullptr;
+    PalettedText.primitive = BeginOp;
+    PalettedText.vertexCount = Count;
+    PalettedText.textureOffset =
+        static_cast<std::uint32_t>(DisplayTexture.offset);
+    PalettedText.textureFormat =
+        static_cast<std::uint32_t>(DisplayTexture.format);
+    PalettedText.textureControl0 =
+        static_cast<std::uint32_t>(DisplayTexture.control0);
+    PalettedText.texturePalette =
+        static_cast<std::uint32_t>(DisplayTexture.palette);
+    PalettedText.shaderStageProgram =
+        static_cast<std::uint32_t>(
+            g_EmuNv2aCombinerState.shaderStageProgram);
+    PalettedText.combinerControl =
+        static_cast<std::uint32_t>(g_EmuNv2aCombinerState.control);
+    PalettedText.blend = Target.BlendEnable;
+    PalettedText.blendSourceFactor =
+        static_cast<std::uint32_t>(Target.BlendSFactor);
+    PalettedText.blendDestinationFactor =
+        static_cast<std::uint32_t>(Target.BlendDFactor);
+    PalettedText.blendEquation =
+        static_cast<std::uint32_t>(Target.BlendEquation);
+    PalettedText.alphaTest = Target.AlphaTest;
+    PalettedText.depthTest = Target.DepthTest;
+    PalettedText.stencilTest = Target.StencilTest;
+    if(cxbx::nv2a::IsLegacyPalettedTextState(PalettedText))
+    {
+        constexpr float PalettedTextCoordinateEpsilon = 1.0e-4f;
+        PalettedText.normalizedCoordinates =
+            VU[0][0] >= -PalettedTextCoordinateEpsilon &&
+            VU[0][0] <= 1.0f + PalettedTextCoordinateEpsilon &&
+            VV[0][0] >= -PalettedTextCoordinateEpsilon &&
+            VV[0][0] <= 1.0f + PalettedTextCoordinateEpsilon;
+        PalettedText.minU = VU[0][0];
+        PalettedText.maxU = VU[0][0];
+        PalettedText.minV = VV[0][0];
+        PalettedText.maxV = VV[0][0];
+        for(ULONG VertexIndex = 1; VertexIndex < Count; ++VertexIndex)
+        {
+            const float U = VU[0][VertexIndex];
+            const float V = VV[0][VertexIndex];
+            PalettedText.normalizedCoordinates =
+                PalettedText.normalizedCoordinates &&
+                U >= -PalettedTextCoordinateEpsilon &&
+                U <= 1.0f + PalettedTextCoordinateEpsilon &&
+                V >= -PalettedTextCoordinateEpsilon &&
+                V <= 1.0f + PalettedTextCoordinateEpsilon;
+            PalettedText.minU =
+                (std::min)(PalettedText.minU, U);
+            PalettedText.maxU =
+                (std::max)(PalettedText.maxU, U);
+            PalettedText.minV =
+                (std::min)(PalettedText.minV, V);
+            PalettedText.maxV =
+                (std::max)(PalettedText.maxV, V);
+        }
+        if(cxbx::nv2a::IsLegacyPalettedTextPass(PalettedText))
+        {
+            Target.Sampler[0] = EmuNv2aGetSampler(0, true);
+            SamplerReady[0] = Target.Sampler[0] != nullptr;
+            if(SamplerReady[0])
+            {
+                Target.CombinerMode = EmuNv2aCombinerModulate;
+                Target.FinalCombiner = false;
+
+                static ULONG PalettedTextLogCount = 0;
+                if(PalettedTextLogCount < 8)
+                {
+                    printf(
+                        "Emu (0x%lX): NV2A restored paletted text sampler "
+                        "0x%.08lX palette=0x%.08lX vertices=%lu.\n",
+                        GetCurrentThreadId(),
+                        static_cast<ULONG>(DisplayTexture.offset),
+                        static_cast<ULONG>(DisplayTexture.palette),
+                        Count);
+                    fflush(stdout);
+                    ++PalettedTextLogCount;
+                }
+            }
+        }
+    }
+
     EmuNv2aTextureCoordinateArrays TextureCoordinates = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
