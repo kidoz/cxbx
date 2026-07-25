@@ -48,6 +48,64 @@ int main()
         return 1;
     }
 
+    cxbx::nv2a::LinearDisplayFilterPass displayFilter = {};
+    displayFilter.immediate = true;
+    displayFilter.primitive = 5;
+    displayFilter.vertexCount = 3;
+    displayFilter.sourceOffset = 0x0127C000u;
+    displayFilter.sourceFormat = 0x00011229u;
+    displayFilter.sourceControl1 = 0x0A000000u;
+    displayFilter.sourceImageRect = 0x028003C0u;
+    displayFilter.destinationOffset = 0x014D4000u;
+    displayFilter.destinationPitch = 2560;
+    displayFilter.destinationWidth = 640;
+    displayFilter.destinationHeight = 480;
+    displayFilter.x[1] = 2560.0f;
+    displayFilter.y[2] = 1920.0f;
+    displayFilter.u[1] = 2560.0f;
+    displayFilter.v[2] = 3415.71435546875f;
+    const auto displayFilterPlan =
+        cxbx::nv2a::BuildLinearDisplayFilterPlan(displayFilter);
+    if(!displayFilterPlan.valid ||
+       !Near(displayFilterPlan.sourceWidth, 640.0f) ||
+       !Near(displayFilterPlan.sourceHeight, 853.9285888671875f) ||
+       !Near(cxbx::nv2a::NormalizeLinearTextureCoordinate(
+                 displayFilterPlan.sourceWidth, 640),
+             1.0f) ||
+       !Near(cxbx::nv2a::NormalizeLinearTextureCoordinate(
+                 displayFilterPlan.sourceHeight, 960),
+             0.8895089626312256f))
+    {
+        std::fputs(
+            "linear display filter must map its active source into scanout\n",
+            stderr);
+        return 1;
+    }
+
+    displayFilter.sourceControl0 = 0x40000000u;
+    if(cxbx::nv2a::BuildLinearDisplayFilterPlan(displayFilter).valid)
+    {
+        std::fputs("ordinary enabled textures are not display-filter fallbacks\n",
+                   stderr);
+        return 1;
+    }
+    displayFilter.sourceControl0 = 0;
+    displayFilter.sourceOffset = displayFilter.destinationOffset;
+    if(cxbx::nv2a::BuildLinearDisplayFilterPlan(displayFilter).valid)
+    {
+        std::fputs("display-filter fallback must not sample its destination\n",
+                   stderr);
+        return 1;
+    }
+    displayFilter.sourceOffset = 0x0127C000u;
+    displayFilter.v[2] = 9000.0f;
+    if(cxbx::nv2a::BuildLinearDisplayFilterPlan(displayFilter).valid)
+    {
+        std::fputs("display-filter source coverage must stay inside its image\n",
+                   stderr);
+        return 1;
+    }
+
     if(!cxbx::nv2a::IsFinalCombinerPassthroughR0(
            0x0000000Cu, 0x00001C80u) ||
        cxbx::nv2a::IsFinalCombinerPassthroughR0(

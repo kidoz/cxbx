@@ -3796,7 +3796,8 @@ static bool EmuNv2aLoadSamplerPalette(ULONG Stage, EmuNv2aSampler* Sampler)
                                    PaletteBytes);
 }
 
-static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
+static bool EmuNv2aSetupSampler(
+    ULONG Stage, EmuNv2aSampler* S, bool AllowDisabled = false)
 {
     ZeroMemory(S, sizeof(*S));
     if(Stage >= EmuNv2aTextureStageCount)
@@ -3805,7 +3806,7 @@ static bool EmuNv2aSetupSampler(ULONG Stage, EmuNv2aSampler *S)
     }
 
     const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
-    if((Texture.control0 & 0x40000000u) == 0)
+    if(!AllowDisabled && (Texture.control0 & 0x40000000u) == 0)
     {
         return false;
     }
@@ -3974,7 +3975,8 @@ static ULONG EmuNv2aFetchTexel(const EmuNv2aSampler* S, int X, int Y)
     return Pixel;
 }
 
-static const EmuNv2aSampler* EmuNv2aGetSampler(ULONG Stage)
+static const EmuNv2aSampler* EmuNv2aGetSampler(
+    ULONG Stage, bool AllowDisabled = false)
 {
     if(Stage >= EmuNv2aTextureStageCount)
     {
@@ -3984,7 +3986,8 @@ static const EmuNv2aSampler* EmuNv2aGetSampler(ULONG Stage)
     if(!g_EmuNv2aSamplerCacheValid[Stage])
     {
         EmuNv2aInvalidateSampler(Stage);
-        if(!EmuNv2aSetupSampler(Stage, &g_EmuNv2aSamplerCache[Stage]))
+        if(!EmuNv2aSetupSampler(
+               Stage, &g_EmuNv2aSamplerCache[Stage], AllowDisabled))
         {
             return nullptr;
         }
@@ -7363,6 +7366,85 @@ static void EmuNv2aRasterizeDrawArrays(
                        Vertex.HomogeneousPosition[3],
                        VX[i], VY[i], VZ[i]);
                 fflush(stdout);
+            }
+        }
+    }
+
+    // The XDK display-filter pass relies on pixel state restored from its GPU
+    // context, which is not present in the direct method stream. Reconstruct
+    // only the fully classified linear-source fullscreen triangle; ordinary
+    // disabled textures continue through the untextured path above.
+    cxbx::nv2a::LinearDisplayFilterPass DisplayFilter = {};
+    DisplayFilter.immediate = g_EmuNv2aRasterizingImmediate;
+    DisplayFilter.primitive = BeginOp;
+    DisplayFilter.vertexCount = Count;
+    const auto& DisplayTexture = g_EmuNv2aTextureState.stages[0];
+    DisplayFilter.sourceOffset =
+        static_cast<std::uint32_t>(DisplayTexture.offset);
+    DisplayFilter.sourceFormat =
+        static_cast<std::uint32_t>(DisplayTexture.format);
+    DisplayFilter.sourceControl0 =
+        static_cast<std::uint32_t>(DisplayTexture.control0);
+    DisplayFilter.sourceControl1 =
+        static_cast<std::uint32_t>(DisplayTexture.control1);
+    DisplayFilter.sourceImageRect =
+        static_cast<std::uint32_t>(DisplayTexture.imageRect);
+    DisplayFilter.destinationOffset =
+        static_cast<std::uint32_t>(g_EmuNv2aSurfaceState.colorOffset);
+    DisplayFilter.destinationPitch = static_cast<std::uint32_t>(PitchB);
+    DisplayFilter.destinationWidth = static_cast<std::uint32_t>(Width);
+    DisplayFilter.destinationHeight = static_cast<std::uint32_t>(Height);
+    DisplayFilter.shaderStageProgram =
+        static_cast<std::uint32_t>(
+            g_EmuNv2aCombinerState.shaderStageProgram);
+    DisplayFilter.combinerControl =
+        static_cast<std::uint32_t>(g_EmuNv2aCombinerState.control);
+    DisplayFilter.depthTest = Target.DepthTest;
+    DisplayFilter.blend = Target.BlendEnable;
+    DisplayFilter.alphaTest = Target.AlphaTest;
+    DisplayFilter.stencilTest = Target.StencilTest;
+    for(std::size_t VertexIndex = 0; VertexIndex < 3; ++VertexIndex)
+    {
+        DisplayFilter.x[VertexIndex] = VX[VertexIndex];
+        DisplayFilter.y[VertexIndex] = VY[VertexIndex];
+        DisplayFilter.u[VertexIndex] = VU[0][VertexIndex];
+        DisplayFilter.v[VertexIndex] = VV[0][VertexIndex];
+    }
+    const cxbx::nv2a::LinearDisplayFilterPlan DisplayFilterPlan =
+        cxbx::nv2a::BuildLinearDisplayFilterPlan(DisplayFilter);
+    if(DisplayFilterPlan.valid)
+    {
+        Target.Sampler[0] = EmuNv2aGetSampler(0, true);
+        SamplerReady[0] = Target.Sampler[0] != nullptr;
+        if(SamplerReady[0])
+        {
+            for(ULONG VertexIndex = 0; VertexIndex < Count; ++VertexIndex)
+            {
+                VU[0][VertexIndex] =
+                    cxbx::nv2a::NormalizeLinearTextureCoordinate(
+                        VU[0][VertexIndex], Target.Sampler[0]->Width);
+                VV[0][VertexIndex] =
+                    cxbx::nv2a::NormalizeLinearTextureCoordinate(
+                        VV[0][VertexIndex], Target.Sampler[0]->Height);
+            }
+            Target.CombinerMode = EmuNv2aCombinerTexture;
+            Target.FinalCombiner = false;
+
+            static ULONG DisplayFilterLogCount = 0;
+            if(DisplayFilterLogCount < 8)
+            {
+                printf(
+                    "Emu (0x%lX): NV2A linear display filter "
+                    "0x%.08lX %.1fx%.1f -> 0x%.08lX %dx%d.\n",
+                    GetCurrentThreadId(),
+                    static_cast<ULONG>(DisplayTexture.offset),
+                    DisplayFilterPlan.sourceWidth,
+                    DisplayFilterPlan.sourceHeight,
+                    static_cast<ULONG>(
+                        g_EmuNv2aSurfaceState.colorOffset),
+                    Width, Height);
+                fflush(stdout);
+                ++DisplayFilterLogCount;
             }
         }
     }

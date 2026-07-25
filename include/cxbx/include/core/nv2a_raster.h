@@ -26,6 +26,105 @@ struct ProjectedTextureCoordinates
     float interpolationWeight;
 };
 
+struct LinearDisplayFilterPass
+{
+    bool immediate = false;
+    std::uint32_t primitive = 0;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t sourceOffset = 0;
+    std::uint32_t sourceFormat = 0;
+    std::uint32_t sourceControl0 = 0;
+    std::uint32_t sourceControl1 = 0;
+    std::uint32_t sourceImageRect = 0;
+    std::uint32_t destinationOffset = 0;
+    std::uint32_t destinationPitch = 0;
+    std::uint32_t destinationWidth = 0;
+    std::uint32_t destinationHeight = 0;
+    std::uint32_t shaderStageProgram = 0;
+    std::uint32_t combinerControl = 0;
+    bool depthTest = false;
+    bool blend = false;
+    bool alphaTest = false;
+    bool stencilTest = false;
+    float x[3] = {};
+    float y[3] = {};
+    float u[3] = {};
+    float v[3] = {};
+};
+
+struct LinearDisplayFilterPlan
+{
+    bool valid = false;
+    float sourceWidth = 0.0f;
+    float sourceHeight = 0.0f;
+};
+
+// XDK software display filtering is submitted as a disabled linear-texture
+// descriptor plus an oversized immediate triangle. The texture/combiner state
+// normally restored from the GPU context is absent from a raw method replay, so
+// recognize the complete geometry and state signature before reconstructing it.
+inline constexpr LinearDisplayFilterPlan BuildLinearDisplayFilterPlan(
+    const LinearDisplayFilterPass& pass) noexcept
+{
+    constexpr std::uint32_t TextureEnable = 0x40000000u;
+    constexpr std::uint32_t LinearA8R8G8B8 = 0x12u;
+    const std::uint32_t sourceColor = (pass.sourceFormat >> 8) & 0xFFu;
+    const std::uint32_t sourcePitch = pass.sourceControl1 >> 16;
+    const std::uint32_t sourceWidth = pass.sourceImageRect >> 16;
+    const std::uint32_t sourceHeight = pass.sourceImageRect & 0xFFFFu;
+    if(!pass.immediate || pass.primitive != 5u || pass.vertexCount != 3u ||
+       pass.sourceOffset == 0u ||
+       pass.sourceOffset == pass.destinationOffset ||
+       sourceColor != LinearA8R8G8B8 ||
+       (pass.sourceControl0 & TextureEnable) != 0u ||
+       sourcePitch != pass.destinationPitch ||
+       sourceWidth != pass.destinationWidth ||
+       sourceHeight <= pass.destinationHeight ||
+       pass.destinationWidth == 0u || pass.destinationHeight == 0u ||
+       pass.shaderStageProgram != 0u ||
+       (pass.combinerControl & 0xFFu) != 0u ||
+       pass.depthTest || pass.blend || pass.alphaTest || pass.stencilTest)
+    {
+        return {};
+    }
+
+    constexpr float Epsilon = 1.0e-3f;
+    const auto nearZero = [](float value)
+    {
+        return value > -Epsilon && value < Epsilon;
+    };
+    if(!nearZero(pass.x[0]) || !nearZero(pass.y[0]) ||
+       !nearZero(pass.y[1]) || !nearZero(pass.x[2]) ||
+       !nearZero(pass.u[0]) || !nearZero(pass.v[0]) ||
+       !nearZero(pass.v[1]) || !nearZero(pass.u[2]) ||
+       pass.x[1] < static_cast<float>(pass.destinationWidth) * 2.0f ||
+       pass.y[2] < static_cast<float>(pass.destinationHeight) * 2.0f ||
+       pass.u[1] <= 0.0f || pass.v[2] <= 0.0f)
+    {
+        return {};
+    }
+
+    const float usedSourceWidth =
+        pass.u[1] * static_cast<float>(pass.destinationWidth) / pass.x[1];
+    const float usedSourceHeight =
+        pass.v[2] * static_cast<float>(pass.destinationHeight) / pass.y[2];
+    if(usedSourceWidth < static_cast<float>(pass.destinationWidth) - 1.0f ||
+       usedSourceWidth > static_cast<float>(sourceWidth) + 1.0f ||
+       usedSourceHeight < static_cast<float>(pass.destinationHeight) ||
+       usedSourceHeight > static_cast<float>(sourceHeight) + 1.0f)
+    {
+        return {};
+    }
+
+    return { true, usedSourceWidth, usedSourceHeight };
+}
+
+inline constexpr float NormalizeLinearTextureCoordinate(
+    float coordinate, std::uint32_t dimension) noexcept
+{
+    return dimension != 0u ? coordinate / static_cast<float>(dimension) : 0.0f;
+}
+
 inline constexpr ProjectedTextureCoordinates ProjectTexture2D(
     float s, float t, float q, float inverseW) noexcept
 {
