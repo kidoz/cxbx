@@ -89,6 +89,7 @@
 #define NV_PTIMER_TIME_0             0x009400u
 #define NV_PCRTC_INTR_0              0x600100u
 #define NV_PCRTC_START               0x600800u
+#define NV_PCRTC_RASTER              0x600808u
 
 // ---------------------------------------------------------------------------
 // PGRAPH object classes used by the NV2A (nouveau nv_object.h numbering). The
@@ -193,6 +194,7 @@ static inline const char* nv2a_reg_name(uint32_t off)
         { NV_PTIMER_TIME_0, "PTIMER_TIME_0" },
         { NV_PCRTC_INTR_0, "PCRTC_INTR_0" },
         { NV_PCRTC_START, "PCRTC_START" },
+        { NV_PCRTC_RASTER, "PCRTC_RASTER" },
     };
     for(unsigned i = 0; i < sizeof(kRegs) / sizeof(kRegs[0]); i++)
         if(kRegs[i].off == off) return kRegs[i].name;

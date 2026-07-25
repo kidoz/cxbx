@@ -2401,6 +2401,16 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
             Value = EmuNv2aCachedRegister(Offset, EmuNv2aPgraphFifoAccess) | EmuNv2aPgraphFifoAccess;
             break;
 
+        case NV_PCRTC_RASTER:
+        {
+            // Native D3D polls raster position while pacing presentation. A
+            // fixed zero stalls titles before their next pushbuffer submission.
+            // Observable monotonic scan progress is sufficient for this model.
+            static volatile LONG Raster = 0;
+            Value = static_cast<ULONG>(InterlockedIncrement(&Raster)) - 1u;
+            break;
+        }
+
         case NV_PFB_CFG0:
             // Framebuffer memory config. The low two bits report the RAM type/
             // config; nxdk pbkit requires them set (CFG0 & 3 == 3) to proceed with
