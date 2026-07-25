@@ -44,11 +44,14 @@ namespace xboxkrnl
 
 #include <cstdio>
 #include <clocale>
+#include <cstdint>
 #include <cstring>
 #include <cstdarg>
 #include <intrin.h>
 #include <malloc.h>
 #include <map>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -147,8 +150,30 @@ static std::map<PVOID, BYTE*> g_EmuObjectAllocations;
 static std::map<PVOID, HANDLE> g_EmuObjectHandles;
 static std::map<PVOID, std::string> g_EmuObjectNames;
 static std::map<std::string, PVOID> g_EmuNamedObjects;
+static std::mutex g_EmuUnbufferedFileHandlesMutex;
+static std::set<HANDLE> g_EmuUnbufferedFileHandles;
 static PVOID g_EmuPsThreadNotifyRoutines[8] = {};
 static ULONG g_EmuPsThreadNotifyRoutineCount = 0;
+
+static bool EmuIsUnbufferedFileHandle(HANDLE Handle)
+{
+    const std::lock_guard<std::mutex> Lock(g_EmuUnbufferedFileHandlesMutex);
+    return g_EmuUnbufferedFileHandles.find(Handle) !=
+           g_EmuUnbufferedFileHandles.end();
+}
+
+static void EmuSetUnbufferedFileHandle(HANDLE Handle, bool IsUnbuffered)
+{
+    const std::lock_guard<std::mutex> Lock(g_EmuUnbufferedFileHandlesMutex);
+    if(IsUnbuffered)
+    {
+        g_EmuUnbufferedFileHandles.insert(Handle);
+    }
+    else
+    {
+        g_EmuUnbufferedFileHandles.erase(Handle);
+    }
+}
 
 extern "C"
 {
@@ -8921,6 +8946,10 @@ XBSYSAPI EXPORTNUM(187) NTSTATUS NTAPI xboxkrnl::NtClose
     else
     {
         ret = NtDll::NtClose(Handle);
+        if(ret == STATUS_SUCCESS)
+        {
+            EmuSetUnbufferedFileHandle(Handle, false);
+        }
     }
 
     EmuSwapFS();   // Xbox FS
@@ -9272,6 +9301,13 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile
         FileHandle, NtDesiredAccess, &NtObjAttr, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock,
         (NtDll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess, CreateDisposition, CreateOptions, NULL, NULL
     );
+
+    if(ret == STATUS_SUCCESS && FileHandle != NULL)
+    {
+        EmuSetUnbufferedFileHandle(
+            *FileHandle,
+            (CreateOptions & FILE_NO_INTERMEDIATE_BUFFERING) != 0);
+    }
 
     if(FAILED(ret))
     {
@@ -9723,6 +9759,12 @@ XBSYSAPI EXPORTNUM(197) NTSTATUS NTAPI xboxkrnl::NtDuplicateObject
 
     if(ret != STATUS_SUCCESS)
         printf("*Warning* Object was not duplicated\n");
+
+    if(ret == STATUS_SUCCESS && TargetHandle != NULL)
+    {
+        EmuSetUnbufferedFileHandle(
+            *TargetHandle, EmuIsUnbufferedFileHandle(SourceHandle));
+    }
 
     if(EmuFileIoTraceEnabled())
     {
@@ -10373,6 +10415,40 @@ XBSYSAPI EXPORTNUM(219) NTSTATUS NTAPI xboxkrnl::NtReadFile
     //    _asm int 3
 
     NTSTATUS ret = NtDll::NtReadFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, (NtDll::LARGE_INTEGER*)ByteOffset, 0);
+
+    // Directory-backed host files do not reproduce the optical drive's
+    // completion timing. Some titles reuse one OVERLAPPED/IO_STATUS_BLOCK as
+    // soon as an unbuffered disc read returns and take their dirty-disc path
+    // when Windows reports STATUS_PENDING. Complete only this event-based,
+    // non-APC form inline; immediate completion is already a valid outcome for
+    // the Xbox ReadFile contract.
+    if(ret == STATUS_PENDING && Event != NULL && ApcRoutine == NULL &&
+       IoStatusBlock != NULL && EmuIsUnbufferedFileHandle(FileHandle))
+    {
+        const HANDLE CompletionEvent = reinterpret_cast<HANDLE>(
+            reinterpret_cast<std::uintptr_t>(Event) &
+            ~static_cast<std::uintptr_t>(1));
+        const NTSTATUS WaitStatus =
+            NtDll::NtWaitForSingleObject(CompletionEvent, FALSE, NULL);
+        if(WaitStatus == STATUS_SUCCESS)
+        {
+            xboxkrnl::PIO_STATUS_BLOCK IoStatus =
+                static_cast<xboxkrnl::PIO_STATUS_BLOCK>(IoStatusBlock);
+            ret = IoStatus->u1.Status;
+
+            // NtWaitForSingleObject consumes a synchronization event. Restore
+            // the completed state expected by GetOverlappedResult and callers
+            // that wait after ReadFile returns.
+            NtDll::NtSetEvent(CompletionEvent, NULL);
+
+            if(EmuFileIoTraceEnabled())
+            {
+                printf("FIO| read-inline tid=0x%X handle=0x%X event=0x%X status=0x%.08X info=0x%X\n",
+                       (uint32)GetCurrentThreadId(), FileHandle, Event,
+                       (uint32)ret, (uint32)IoStatus->Information);
+            }
+        }
+    }
 
     // A failed read is a prime "dirty disc" trigger for titles — log it even
     // without the opt-in trace. STATUS_PENDING (0x103) is not a failure.
