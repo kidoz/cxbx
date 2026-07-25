@@ -144,9 +144,16 @@ static ULONG EmuProbeThreadSuspendCount(HANDLE ThreadHandle)
     return Previous;
 }
 
-// Keep the logical count and the corresponding host transition atomic.
+struct EmuThreadSuspendState
+{
+    ULONG LogicalCount = 0;
+    ULONG HostCount = 0;
+};
+
+// Handles can be duplicated, so suspend state is shared by host thread ID.
+// Keep each logical count change and its host transition atomic.
 static std::mutex g_EmuThreadSuspendCountsMutex;
-static std::map<HANDLE, ULONG> g_EmuThreadSuspendCounts;
+static std::map<DWORD, EmuThreadSuspendState> g_EmuThreadSuspendCounts;
 static std::map<std::string, std::string> g_EmuSymbolicLinks;
 static std::map<PVOID, BYTE*> g_EmuObjectAllocations;
 static std::map<PVOID, HANDLE> g_EmuObjectHandles;
@@ -476,13 +483,115 @@ static bool EmuIsValidHostThread(HANDLE ThreadHandle)
            GetThreadId(ThreadHandle) != 0;
 }
 
-static ULONG& EmuThreadSuspendCountForHandleLocked(HANDLE ThreadHandle)
+static EmuThreadSuspendState&
+EmuThreadSuspendStateForHandleLocked(HANDLE ThreadHandle)
 {
-    auto Entry = g_EmuThreadSuspendCounts.find(ThreadHandle);
+    const DWORD ThreadId = GetThreadId(ThreadHandle);
+    auto Entry = g_EmuThreadSuspendCounts.find(ThreadId);
     if(Entry == g_EmuThreadSuspendCounts.end())
-        Entry = g_EmuThreadSuspendCounts.emplace(ThreadHandle, EmuProbeThreadSuspendCount(ThreadHandle)).first;
+    {
+        const ULONG SuspendCount =
+            EmuProbeThreadSuspendCount(ThreadHandle);
+        Entry = g_EmuThreadSuspendCounts.emplace(
+                                            ThreadId,
+                                            EmuThreadSuspendState{ SuspendCount, SuspendCount })
+                    .first;
+    }
 
     return Entry->second;
+}
+
+static bool EmuIsGuestExecutionAddress(ULONG Address)
+{
+    if(Address < 0x00010000 || Address >= 0x80000000)
+    {
+        return false;
+    }
+
+    MEMORY_BASIC_INFORMATION Memory = {};
+    if(VirtualQuery(reinterpret_cast<const void*>(Address), &Memory,
+                    sizeof(Memory)) != sizeof(Memory) ||
+       Memory.State != MEM_COMMIT)
+    {
+        return false;
+    }
+
+    const DWORD Protection = Memory.Protect & 0xFF;
+    if(Protection != PAGE_EXECUTE &&
+       Protection != PAGE_EXECUTE_READ &&
+       Protection != PAGE_EXECUTE_READWRITE &&
+       Protection != PAGE_EXECUTE_WRITECOPY)
+    {
+        return false;
+    }
+
+    // Guest code lives in executable anonymous mappings. Host modules must run
+    // to a guest boundary before they can be suspended safely.
+    char ModulePath[MAX_PATH] = {};
+    return GetModuleFileNameA(
+               static_cast<HMODULE>(Memory.AllocationBase),
+               ModulePath, sizeof(ModulePath)) == 0;
+}
+
+static bool EmuSuspendThreadAtGuestBoundary(HANDLE ThreadHandle)
+{
+    // Suspending host-side emulator or CRT code can strand a lock forever.
+    // Retry briefly until the target is executing guest code. If no safe
+    // boundary is observed, the caller records a logical-only suspension.
+    if(GetThreadId(ThreadHandle) == GetCurrentThreadId())
+    {
+        return false;
+    }
+
+    constexpr ULONG MaximumAttempts = 64;
+    for(ULONG Attempt = 0; Attempt < MaximumAttempts; ++Attempt)
+    {
+        const DWORD HostPreviousCount = SuspendThread(ThreadHandle);
+        if(HostPreviousCount == (DWORD)-1)
+        {
+            return false;
+        }
+
+        CONTEXT Context = {};
+        Context.ContextFlags = CONTEXT_CONTROL;
+        if(GetThreadContext(ThreadHandle, &Context) &&
+           EmuIsGuestExecutionAddress(Context.Eip))
+        {
+            return true;
+        }
+
+        if(ResumeThread(ThreadHandle) == (DWORD)-1)
+        {
+            return false;
+        }
+        SwitchToThread();
+    }
+
+    return false;
+}
+
+static bool EmuResumeThreadState(
+    HANDLE ThreadHandle, EmuThreadSuspendState& SuspendState)
+{
+    if(SuspendState.LogicalCount == 0)
+    {
+        return true;
+    }
+
+    // Logical-only suspensions sit above any real host suspension. Resume the
+    // host only when the final logical layer covering it is removed.
+    if(SuspendState.HostCount == SuspendState.LogicalCount &&
+       SuspendState.HostCount != 0)
+    {
+        if(ResumeThread(ThreadHandle) == (DWORD)-1)
+        {
+            return false;
+        }
+        SuspendState.HostCount--;
+    }
+
+    SuspendState.LogicalCount--;
+    return true;
 }
 
 static EmuThreadObjectHeader *EmuThreadHeaderFromThread(xboxkrnl::PKTHREAD Thread)
@@ -645,7 +754,13 @@ extern "C" NTSTATUS NTAPI EmuObReferenceObjectByHandle(HANDLE ObjectHandle, PVOI
         ThreadHeader->Type = ObjectType;
         ThreadHeader->Flags = EmuThreadObjectMagic;
         ThreadHeader->HostHandle = ObjectHandle;
-        ThreadHeader->SuspendCount = EmuProbeThreadSuspendCount(ObjectHandle);
+        {
+            const std::lock_guard<std::mutex> Lock(
+                g_EmuThreadSuspendCountsMutex);
+            const EmuThreadSuspendState& SuspendState =
+                EmuThreadSuspendStateForHandleLocked(ObjectHandle);
+            ThreadHeader->SuspendCount = SuspendState.LogicalCount;
+        }
         ThreadHeader->Thread.UniqueThread = GetThreadId(ObjectHandle);
         *Object = &ThreadHeader->Thread;
         return STATUS_SUCCESS;
@@ -6141,12 +6256,26 @@ extern "C" ULONG NTAPI EmuKeResumeThread(xboxkrnl::PKTHREAD Thread)
     EmuSwapFS();   // Win2k/XP FS
 
     EmuThreadObjectHeader *ThreadHeader = EmuThreadHeaderFromThread(Thread);
-    ULONG PreviousCount = ThreadHeader->SuspendCount;
+    if(ThreadHeader == NULL ||
+       !EmuIsValidHostThread(ThreadHeader->HostHandle))
+    {
+        EmuSwapFS(); // Xbox FS
+        return 0;
+    }
 
+    const std::lock_guard<std::mutex> Lock(
+        g_EmuThreadSuspendCountsMutex);
+    EmuThreadSuspendState& SuspendState =
+        EmuThreadSuspendStateForHandleLocked(ThreadHeader->HostHandle);
+    const ULONG PreviousCount = SuspendState.LogicalCount;
     if(PreviousCount != 0)
     {
-        ResumeThread(ThreadHeader->HostHandle);
-        ThreadHeader->SuspendCount--;
+        if(EmuResumeThreadState(
+               ThreadHeader->HostHandle, SuspendState))
+        {
+            ThreadHeader->SuspendCount =
+                SuspendState.LogicalCount;
+        }
     }
 
     EmuSwapFS();   // Xbox FS
@@ -6163,13 +6292,23 @@ extern "C" ULONG NTAPI EmuKeAlertResumeThread(xboxkrnl::PKTHREAD Thread)
 
     ULONG PreviousCount = 0;
     EmuThreadObjectHeader *ThreadHeader = EmuThreadHeaderFromThread(Thread);
-    if(ThreadHeader != NULL)
+    if(ThreadHeader != NULL &&
+       EmuIsValidHostThread(ThreadHeader->HostHandle))
     {
-        PreviousCount = ThreadHeader->SuspendCount;
+        const std::lock_guard<std::mutex> Lock(
+            g_EmuThreadSuspendCountsMutex);
+        EmuThreadSuspendState& SuspendState =
+            EmuThreadSuspendStateForHandleLocked(
+                ThreadHeader->HostHandle);
+        PreviousCount = SuspendState.LogicalCount;
         if(PreviousCount != 0)
         {
-            ResumeThread(ThreadHeader->HostHandle);
-            ThreadHeader->SuspendCount--;
+            if(EmuResumeThreadState(
+                   ThreadHeader->HostHandle, SuspendState))
+            {
+                ThreadHeader->SuspendCount =
+                    SuspendState.LogicalCount;
+            }
         }
     }
 
@@ -6196,8 +6335,18 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
     EmuSwapFS();   // Win2k/XP FS
 
     EmuThreadObjectHeader *ThreadHeader = EmuThreadHeaderFromThread(Thread);
-    ULONG PreviousCount = ThreadHeader->SuspendCount;
+    if(ThreadHeader == NULL ||
+       !EmuIsValidHostThread(ThreadHeader->HostHandle))
+    {
+        EmuSwapFS(); // Xbox FS
+        return 0;
+    }
 
+    const std::lock_guard<std::mutex> Lock(
+        g_EmuThreadSuspendCountsMutex);
+    EmuThreadSuspendState& SuspendState =
+        EmuThreadSuspendStateForHandleLocked(ThreadHeader->HostHandle);
+    const ULONG PreviousCount = SuspendState.LogicalCount;
     if(PreviousCount >= 0x7F)
     {
         ULONG GuestEip;
@@ -6225,8 +6374,12 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
         return PreviousCount;
     }
 
-    SuspendThread(ThreadHeader->HostHandle);
-    ThreadHeader->SuspendCount++;
+    if(EmuSuspendThreadAtGuestBoundary(ThreadHeader->HostHandle))
+    {
+        SuspendState.HostCount++;
+    }
+    SuspendState.LogicalCount++;
+    ThreadHeader->SuspendCount = SuspendState.LogicalCount;
 
     EmuSwapFS();   // Xbox FS
 
@@ -10652,25 +10805,19 @@ XBSYSAPI EXPORTNUM(224) NTSTATUS NTAPI xboxkrnl::NtResumeThread
     {
         const std::lock_guard<std::mutex> Lock(
             g_EmuThreadSuspendCountsMutex);
-        ULONG& SuspendCount =
-            EmuThreadSuspendCountForHandleLocked(ThreadHandle);
-        ULONG PreviousCount = SuspendCount;
+        EmuThreadSuspendState& SuspendState =
+            EmuThreadSuspendStateForHandleLocked(ThreadHandle);
+        const ULONG PreviousCount = SuspendState.LogicalCount;
 
-        if(SuspendCount != 0)
+        if(!EmuResumeThreadState(ThreadHandle, SuspendState))
         {
-            const DWORD HostPreviousCount = ResumeThread(ThreadHandle);
-            if(HostPreviousCount == (DWORD)-1)
-            {
-                ret = 0xC0000008;
-            }
-            else
-            {
-                SuspendCount--;
-            }
+            ret = 0xC0000008;
         }
 
         if(PreviousSuspendCount != NULL)
+        {
             *PreviousSuspendCount = PreviousCount;
+        }
     }
 
     EmuSwapFS();   // Xbox FS
@@ -10698,28 +10845,26 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
     {
         const std::lock_guard<std::mutex> Lock(
             g_EmuThreadSuspendCountsMutex);
-        ULONG& SuspendCount =
-            EmuThreadSuspendCountForHandleLocked(ThreadHandle);
-        ULONG PreviousCount = SuspendCount;
+        EmuThreadSuspendState& SuspendState =
+            EmuThreadSuspendStateForHandleLocked(ThreadHandle);
+        const ULONG PreviousCount = SuspendState.LogicalCount;
 
         if(PreviousSuspendCount != NULL)
+        {
             *PreviousSuspendCount = PreviousCount;
+        }
 
-        if(SuspendCount >= 0x7F)
+        if(SuspendState.LogicalCount >= 0x7F)
         {
             ret = EmuStatusSuspendCountExceeded;
         }
         else
         {
-            const DWORD HostPreviousCount = SuspendThread(ThreadHandle);
-            if(HostPreviousCount == (DWORD)-1)
+            if(EmuSuspendThreadAtGuestBoundary(ThreadHandle))
             {
-                ret = 0xC0000008;
+                SuspendState.HostCount++;
             }
-            else
-            {
-                SuspendCount++;
-            }
+            SuspendState.LogicalCount++;
         }
     }
 
@@ -11176,8 +11321,11 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx
         {
             const std::lock_guard<std::mutex> Lock(
                 g_EmuThreadSuspendCountsMutex);
-            g_EmuThreadSuspendCounts[*ThreadHandle] =
-                CreateSuspended ? 1 : 0;
+            const ULONG SuspendCount = CreateSuspended ? 1 : 0;
+            g_EmuThreadSuspendCounts[dwThreadId] = {
+                SuspendCount,
+                SuspendCount,
+            };
         }
 
         if(ThreadId != NULL)
