@@ -86,6 +86,10 @@ PgraphVertexSubmissionStep ApplyPgraphVertexSubmissionMethod(
         const std::size_t component = (relative & 7u) / 4;
         state.immediateAttributes[attribute][component] = data;
         state.immediateFormats[attribute] = PgraphImmediateFormatFloat2;
+        if(attribute == PgraphPositionAttribute && component == 1)
+        {
+            return CompleteImmediateVertex(state);
+        }
         return { PgraphVertexSubmissionStepKind::State, 0, 0 };
     }
 
@@ -98,6 +102,10 @@ PgraphVertexSubmissionStep ApplyPgraphVertexSubmissionMethod(
         state.immediateAttributes[attribute][0] = data;
         state.immediateFormats[attribute] =
             PgraphImmediateFormatUnsignedByte4;
+        if(attribute == PgraphPositionAttribute)
+        {
+            return CompleteImmediateVertex(state);
+        }
         return { PgraphVertexSubmissionStepKind::State, 0, 0 };
     }
 
@@ -111,6 +119,11 @@ PgraphVertexSubmissionStep ApplyPgraphVertexSubmissionMethod(
         const std::size_t component = (relative & 15u) / 4;
         state.immediateAttributes[attribute][component] = data;
         state.immediateFormats[attribute] = PgraphImmediateFormatFloat4;
+        if(attribute == PgraphPositionAttribute &&
+           component == PgraphImmediateComponentCount - 1)
+        {
+            return CompleteImmediateVertex(state);
+        }
         return { PgraphVertexSubmissionStepKind::State, 0, 0 };
     }
 

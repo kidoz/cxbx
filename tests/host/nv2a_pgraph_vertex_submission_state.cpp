@@ -112,6 +112,92 @@ int main() noexcept
         return 1;
     }
 
+    static PgraphVertexSubmissionState float2PositionState{};
+    static_cast<void>(cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
+        float2PositionState,
+        PgraphVertexSubmissionMethod::SetVertexData2FM + 9u * 8u,
+        0x3F800000u));
+    const auto float2PositionXStep =
+        cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
+            float2PositionState,
+            PgraphVertexSubmissionMethod::SetVertexData2FM,
+            0x44200000u);
+    const auto float2PositionYStep =
+        cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
+            float2PositionState,
+            PgraphVertexSubmissionMethod::SetVertexData2FM + 4u,
+            0x43F00000u);
+    const auto float2PositionBatch =
+        cxbx::nv2a::SnapshotPgraphVertexBatch(float2PositionState);
+    if(!ExpectKind(float2PositionXStep.kind,
+                   PgraphVertexSubmissionStepKind::State,
+                   "float2 position x step") ||
+       !ExpectKind(float2PositionYStep.kind,
+                   PgraphVertexSubmissionStepKind::ImmediateVertex,
+                   "float2 position completion") ||
+       !ExpectKind(float2PositionBatch.kind,
+                   PgraphVertexBatchKind::Immediate,
+                   "float2 position batch") ||
+       !ExpectSize(float2PositionBatch.wordCount,
+                   PgraphImmediateWordsPerVertex,
+                   "float2 position batch word count") ||
+       !ExpectEqual(float2PositionState.immediateWords[0], 0x44200000u,
+                    "float2 position x snapshot") ||
+       !ExpectEqual(float2PositionState.immediateWords[1], 0x43F00000u,
+                    "float2 position y snapshot") ||
+       !ExpectEqual(float2PositionState.immediateWords[9u * 4u],
+                    0x3F800000u, "float2 attribute snapshot"))
+    {
+        return 1;
+    }
+
+    static PgraphVertexSubmissionState float4PositionState{};
+    for(std::uint32_t component = 0; component < 3; ++component)
+    {
+        const auto componentStep =
+            cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
+                float4PositionState,
+                PgraphVertexSubmissionMethod::SetVertexData4FM +
+                    component * 4u,
+                component + 1u);
+        if(!ExpectKind(componentStep.kind,
+                       PgraphVertexSubmissionStepKind::State,
+                       "float4 position component step"))
+        {
+            return 1;
+        }
+    }
+    const auto float4PositionStep =
+        cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
+            float4PositionState,
+            PgraphVertexSubmissionMethod::SetVertexData4FM + 12u,
+            0x00000004u);
+    if(!ExpectKind(float4PositionStep.kind,
+                   PgraphVertexSubmissionStepKind::ImmediateVertex,
+                   "float4 position completion") ||
+       !ExpectSize(float4PositionState.immediateWordCount,
+                   PgraphImmediateWordsPerVertex,
+                   "float4 position vertex count"))
+    {
+        return 1;
+    }
+
+    static PgraphVertexSubmissionState byte4PositionState{};
+    const auto byte4PositionStep =
+        cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
+            byte4PositionState,
+            PgraphVertexSubmissionMethod::SetVertexData4Ub,
+            0xAABBCCDDu);
+    if(!ExpectKind(byte4PositionStep.kind,
+                   PgraphVertexSubmissionStepKind::ImmediateVertex,
+                   "byte4 position completion") ||
+       !ExpectSize(byte4PositionState.immediateWordCount,
+                   PgraphImmediateWordsPerVertex,
+                   "byte4 position vertex count"))
+    {
+        return 1;
+    }
+
     static_cast<void>(cxbx::nv2a::ApplyPgraphVertexSubmissionMethod(
         state, PgraphVertexSubmissionMethod::SetVertex4F | 0xA0000003u,
         0x00000001u));

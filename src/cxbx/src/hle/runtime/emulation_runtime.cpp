@@ -1647,6 +1647,9 @@ static constexpr ULONG EmuNv2aTextureStageCount =
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
 static ULONG g_EmuNv2aTextureMethodLogCount = 0;
 static ULONG g_EmuNv2aScanoutDumpIndex = 0;
+static std::array<cxbx::nv2a::PfifoInsertedCallbackState, 8>
+    g_EmuNv2aInsertedCallbackStates = {};
+static ULONG g_EmuNv2aInsertedCallbackCount = 0;
 // Draw-level debug counters (see the NV2A draw-debug aids below): the frame
 // index advances at each FLIP_STALL present, the draw index at each rasterized
 // draw or clear and resets at the frame boundary.
@@ -1848,6 +1851,92 @@ static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
 static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress);
 static void EmuNv2aInvalidateSampler(ULONG Stage);
 static void EmuNv2aInvalidateFrameSamplers();
+
+static bool EmuNv2aIsExecutableGuestAddress(ULONG Address)
+{
+    if(g_pXbeHeader == NULL || Address < g_pXbeHeader->dwBaseAddr ||
+       Address >= g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage)
+    {
+        return false;
+    }
+
+    MEMORY_BASIC_INFORMATION Memory = {};
+    if(VirtualQuery(reinterpret_cast<const void*>(Address), &Memory,
+                    sizeof(Memory)) != sizeof(Memory) ||
+       Memory.State != MEM_COMMIT ||
+       (Memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+    {
+        return false;
+    }
+
+    const DWORD Access = Memory.Protect & 0xFF;
+    return Access == PAGE_EXECUTE || Access == PAGE_EXECUTE_READ ||
+           Access == PAGE_EXECUTE_READWRITE ||
+           Access == PAGE_EXECUTE_WRITECOPY;
+}
+
+static void EmuNv2aDispatchInsertedCallback(
+    ULONG Subchannel, ULONG Method, ULONG Data)
+{
+    const ULONG Index = Subchannel & 0x07;
+    ULONG Class = g_EmuNv2aSubchannelClass[Index];
+    if(Class == 0)
+    {
+        Class = NV_CLASS_KELVIN;
+    }
+    if(Class != NV_CLASS_KELVIN)
+    {
+        g_EmuNv2aInsertedCallbackStates[Index] = {};
+        return;
+    }
+
+    const cxbx::nv2a::PfifoInsertedCallback Callback =
+        cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+            g_EmuNv2aInsertedCallbackStates[Index],
+            static_cast<std::uint32_t>(Method),
+            static_cast<std::uint32_t>(Data));
+    if(!Callback.ready)
+    {
+        return;
+    }
+
+    if(!EmuNv2aIsExecutableGuestAddress(
+           static_cast<ULONG>(Callback.address)))
+    {
+        printf("Emu (0x%lX): NV2A rejected inserted callback "
+               "address 0x%.08lX context=0x%.08lX.\n",
+               GetCurrentThreadId(),
+               static_cast<ULONG>(Callback.address),
+               static_cast<ULONG>(Callback.context));
+        fflush(stdout);
+        return;
+    }
+
+    if(g_EmuNv2aInsertedCallbackCount < 8)
+    {
+        printf("Emu (0x%lX): NV2A inserted callback "
+               "address=0x%.08lX context=0x%.08lX.\n",
+               GetCurrentThreadId(),
+               static_cast<ULONG>(Callback.address),
+               static_cast<ULONG>(Callback.context));
+        fflush(stdout);
+    }
+    ++g_EmuNv2aInsertedCallbackCount;
+
+    using InsertedCallback = void (__cdecl*)(DWORD);
+    const bool WasXboxFs = EmuIsXboxFS();
+    if(!WasXboxFs)
+    {
+        EmuSwapFS();
+    }
+    reinterpret_cast<InsertedCallback>(
+        static_cast<uintptr_t>(Callback.address))(
+            static_cast<DWORD>(Callback.context));
+    if(!WasXboxFs)
+    {
+        EmuSwapFS();
+    }
+}
 
 static bool EmuNv2aTextureDumpEnabled()
 {
@@ -2188,6 +2277,7 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
     }
 
     EmuNv2aStoreRegister(NV_PGRAPH + (Method & 0x1FFC), Data);
+    EmuNv2aDispatchInsertedCallback(Subchannel, Method, Data);
 
     if(Class == NV_CLASS_KELVIN && Method == NV097_NO_OPERATION && Data != 0)
     {
@@ -10689,6 +10779,58 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                     found = true;
 
                     printf("Found\n");
+
+                    // XDK 5455 moved the process-heap operands relative to
+                    // the older XapiInitProcess bodies. Capture them before
+                    // EmuInstallWrappers overwrites the function prologue.
+                    if(bXRefFirstPass &&
+                       strcmp("XAPILIB", szLibraryName) == 0 &&
+                       MajorVersion == 1 &&
+                       MinorVersion == 0 &&
+                       BuildVersion == 5455)
+                    {
+                        const uint32 lower = pXbeHeader->dwBaseAddr;
+                        const uint32 upper =
+                            pXbeHeader->dwBaseAddr +
+                            pXbeHeader->dwSizeofImage;
+                        uint08 *pFunc = (uint08*)EmuLocateFunction(
+                            (OOVPA*)&XapiInitProcess_1_0_5455,
+                            lower,
+                            upper);
+
+                        if(pFunc != NULL &&
+                           pFunc[0x49] == 0xE8 &&
+                           pFunc[0x50] == 0xA3)
+                        {
+                            const int32 rtlCreateHeapRelative =
+                                *(const int32*)(pFunc + 0x4A);
+                            XTL::g_pRtlCreateHeap =
+                                (XTL::pfRtlCreateHeap)(
+                                    pFunc +
+                                    0x4E +
+                                    rtlCreateHeapRelative);
+                            XTL::EmuXapiProcessHeap =
+                                *(PVOID**)(pFunc + 0x51);
+
+                            printf(
+                                "Emu (0x%X): 0x%.08X -> "
+                                "EmuXapiProcessHeap\n",
+                                GetCurrentThreadId(),
+                                XTL::EmuXapiProcessHeap);
+                            printf(
+                                "Emu (0x%X): 0x%.08X -> RtlCreateHeap\n",
+                                GetCurrentThreadId(),
+                                XTL::g_pRtlCreateHeap);
+                        }
+                        else
+                        {
+                            XTL::EmuXapiProcessHeap = NULL;
+                            XTL::g_pRtlCreateHeap = NULL;
+                            EmuWarning(
+                                "XDK 5455 XapiInitProcess operands "
+                                "were not found!");
+                        }
+                    }
 
                     EmuInstallWrappers(HLEDataBase[d].OovpaTable, HLEDataBase[d].OovpaTableSize, Entry, pXbeHeader);
                 }

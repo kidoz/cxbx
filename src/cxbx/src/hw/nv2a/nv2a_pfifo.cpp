@@ -26,6 +26,12 @@ constexpr std::uint32_t MethodHeaderMask = 0xE0030003u;
 constexpr std::uint32_t IncreasingHeader = 0x00000000u;
 constexpr std::uint32_t NonIncreasingHeader = 0x40000000u;
 constexpr std::uint32_t SubroutineActive = 0x00000001u;
+constexpr std::uint32_t InsertedCallbackAddressMethod = 0x1D8Cu;
+constexpr std::uint32_t InsertedCallbackContextMethod = 0x1D90u;
+constexpr std::uint32_t InsertedCallbackNotifyMethod = 0x0110u;
+constexpr std::uint32_t InsertedCallbackMarkerMethod = 0x0100u;
+constexpr std::uint32_t InsertedCallbackWriteMarker = 6u;
+constexpr std::uint32_t InsertedCallbackReadMarker = 7u;
 
 } // namespace
 
@@ -130,6 +136,83 @@ PfifoPusherStep StepPfifoPusher(PfifoPusherState& state,
     }
 
     return { PfifoPusherStepKind::Error, PfifoPusherError::Reserved };
+}
+
+PfifoInsertedCallback ApplyPfifoInsertedCallbackMethod(
+    PfifoInsertedCallbackState& state, std::uint32_t method,
+    std::uint32_t data) noexcept
+{
+    const auto RestartOrReset = [&state, method, data]()
+    {
+        if(method == InsertedCallbackAddressMethod)
+        {
+            state.phase = PfifoInsertedCallbackPhase::Address;
+            state.address = data;
+            state.context = 0;
+        }
+        else
+        {
+            state = {};
+        }
+    };
+
+    switch(state.phase)
+    {
+        case PfifoInsertedCallbackPhase::Idle:
+            RestartOrReset();
+            break;
+
+        case PfifoInsertedCallbackPhase::Address:
+            if(method == InsertedCallbackContextMethod)
+            {
+                state.phase = PfifoInsertedCallbackPhase::Context;
+                state.context = data;
+            }
+            else
+            {
+                RestartOrReset();
+            }
+            break;
+
+        case PfifoInsertedCallbackPhase::Context:
+            if(method == InsertedCallbackMarkerMethod &&
+               data == InsertedCallbackWriteMarker)
+            {
+                const PfifoInsertedCallback callback{
+                    true,
+                    state.address,
+                    state.context,
+                };
+                state = {};
+                return callback;
+            }
+            if(method == InsertedCallbackNotifyMethod && data == 0)
+            {
+                state.phase = PfifoInsertedCallbackPhase::Notify;
+            }
+            else
+            {
+                RestartOrReset();
+            }
+            break;
+
+        case PfifoInsertedCallbackPhase::Notify:
+            if(method == InsertedCallbackMarkerMethod &&
+               data == InsertedCallbackReadMarker)
+            {
+                const PfifoInsertedCallback callback{
+                    true,
+                    state.address,
+                    state.context,
+                };
+                state = {};
+                return callback;
+            }
+            RestartOrReset();
+            break;
+    }
+
+    return {};
 }
 
 } // namespace cxbx::nv2a

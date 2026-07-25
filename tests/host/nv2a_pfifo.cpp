@@ -36,6 +36,7 @@ bool ExpectKind(cxbx::nv2a::PfifoPusherStepKind actual,
 
 int main() noexcept
 {
+    using cxbx::nv2a::PfifoInsertedCallbackState;
     using cxbx::nv2a::PfifoPusherError;
     using cxbx::nv2a::PfifoPusherState;
     using cxbx::nv2a::PfifoPusherStepKind;
@@ -170,6 +171,54 @@ int main() noexcept
                0xF2345678u, PfifoPusherError::Reserved),
            0x92345678u, "reserved error state"))
     {
+        return 1;
+    }
+
+    PfifoInsertedCallbackState callbackState{};
+    auto callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D8Cu, 0x00032850u);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D90u, 0x01000001u);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x0110u, 0);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x0100u, 7);
+    if(!callback.ready ||
+       !ExpectEqual(callback.address, 0x00032850u,
+                    "read callback address") ||
+       !ExpectEqual(callback.context, 0x01000001u,
+                    "read callback context"))
+    {
+        return 1;
+    }
+
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D8Cu, 0x00045670u);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D90u, 0x05000002u);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x0100u, 6);
+    if(!callback.ready ||
+       !ExpectEqual(callback.address, 0x00045670u,
+                    "write callback address") ||
+       !ExpectEqual(callback.context, 0x05000002u,
+                    "write callback context"))
+    {
+        return 1;
+    }
+
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D8Cu, 0xFFFFFFFFu);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D90u, 0);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x1D94u, 3);
+    callback = cxbx::nv2a::ApplyPfifoInsertedCallbackMethod(
+        callbackState, 0x0100u, 7);
+    if(callback.ready)
+    {
+        std::fputs("ordinary clear methods decoded as an inserted callback\n",
+                   stderr);
         return 1;
     }
 

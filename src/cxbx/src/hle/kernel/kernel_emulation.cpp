@@ -7030,6 +7030,17 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
     #endif
 
     NTSTATUS ret = STATUS_SUCCESS;
+    auto WriteDwordSetting = [&](DWORD Setting)
+    {
+        if(Value != NULL)
+        {
+            const SIZE_T CopyLength = ValueLength < sizeof(Setting) ? ValueLength : sizeof(Setting);
+            memcpy(Value, &Setting, CopyLength);
+        }
+
+        if(ResultLength != NULL)
+            *ResultLength = sizeof(Setting);
+    };
 
     // ******************************************************************
     // * handle eeprom read
@@ -7060,11 +7071,7 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
             if(Type != 0)
                 *Type = 0x04;
 
-            if(Value != 0)
-                *Value = 0x01;  // North America
-
-            if(ResultLength != 0)
-                *ResultLength = 0x04;
+            WriteDwordSetting(0x00000001);  // North America
         }
         break;
 
@@ -7075,11 +7082,8 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
             if(Type != 0)
                 *Type = 0x04;
 
-            if(Value != 0)
-                *Value = 0x01; // NTSC_M
-
-            if(ResultLength != 0)
-                *ResultLength = 0x04;
+            // XGetVideoStandard reads the video standard from bits 8-15.
+            WriteDwordSetting(0x00000100);  // NTSC_M
         }
         break;
 
@@ -7090,11 +7094,7 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
             if(Type != 0)
                 *Type = 0x04;
 
-            if(Value != 0)
-                *Value = 0x01;  // English
-
-            if(ResultLength != 0)
-                *ResultLength = 0x04;
+            WriteDwordSetting(0x00000001);  // English
         }
         break;
 
@@ -7105,11 +7105,9 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
             if(Type != 0)
                 *Type = 0x04;
 
-            if(Value != 0)
-                *Value = 0x10;  // Letterbox
-
-            if(ResultLength != 0)
-                *ResultLength = 0x04;
+            // XGetVideoFlags reads optional dashboard flags from bits 16-22.
+            // The default standard-pack configuration is NTSC 4:3.
+            WriteDwordSetting(0x00000000);
         }
         break;
 
@@ -7118,11 +7116,7 @@ XBSYSAPI EXPORTNUM(24) NTSTATUS NTAPI xboxkrnl::ExQueryNonVolatileSetting
             if(Type != 0)
                 *Type  = 0x04;
 
-            if(Value != 0)
-                *Value = 0;
-
-            if(ResultLength != 0)
-                *ResultLength = 0x04;
+            WriteDwordSetting(0x00000000);
         }
         break;
 
@@ -11538,4 +11532,7 @@ XBSYSAPI EXPORTNUM(337) VOID NTAPI xboxkrnl::XcSHAFinal(UCHAR *pbSHAContext, UCH
 // * HalBootSMCVideoMode
 // ******************************************************************
 // TODO: Verify this!
-XBSYSAPI EXPORTNUM(356) xboxkrnl::DWORD xboxkrnl::HalBootSMCVideoMode = 1;
+// XGetAVPack returns this exported boot value. Match the encoder capabilities
+// above: XC_AV_PACK_STANDARD is 6, while 1 advertises an HDTV pack and makes
+// titles request progressive modes that the standard encoder cannot supply.
+XBSYSAPI EXPORTNUM(356) xboxkrnl::DWORD xboxkrnl::HalBootSMCVideoMode = 6;

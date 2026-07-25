@@ -62,6 +62,7 @@ namespace XTL
 #include "Xapi.1.0.4361.inl"
 #include "Xapi.1.0.4627.inl"
 #include "Xapi.1.0.5233.inl"
+#include "Xapi.1.0.5455.inl"
 #include "Xapi.1.0.5849.inl"
 #include "Xapi.1.0.5659.inl"
 #include "D3D8.1.0.3925.inl"
@@ -144,6 +145,13 @@ HLEData HLEDataBase[] =
         1, 0, 5233,
         XAPI_1_0_5233,
         XAPI_1_0_5233_SIZE
+    },
+    // Xapilib Version 1.0.5455
+    {
+        "XAPILIB",
+        1, 0, 5455,
+        XAPI_1_0_5455,
+        XAPI_1_0_5455_SIZE
     },
     // Xapilib Version 1.0.5659
     {
