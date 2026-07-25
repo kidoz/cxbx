@@ -28,6 +28,7 @@ constexpr DWORD FALSE = 0;
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <limits>
@@ -3237,6 +3238,15 @@ static float *VshExecOutputDst(DWORD Addr, float Reg[13][4], float Col[2][4],
     }
 }
 
+// Kill-switch for the per-program-analysis memoization below, so the pre-memo
+// per-vertex re-analysis cost can be A/B'd against a live title without a
+// rebuild (CXBX_NO_VSH_MEMO forces every call to miss the cache).
+static bool VshMemoDisabled()
+{
+    static const bool disabled = std::getenv("CXBX_NO_VSH_MEMO") != nullptr;
+    return disabled;
+}
+
 static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int Start,
                                       const float* Const, const float* Input,
                                       float* OutPos, float* OutColors,
@@ -3265,10 +3275,26 @@ static bool VshExecuteProgramInternal(const DWORD* Program, int InstrCount, int 
     std::uint8_t PtsWriteMask = 0;
     int A0 = 0;
 
-    const VshScreenSpaceSuffix screenSpaceSuffix =
-        VshClassifyScreenSpaceSuffix(Program, static_cast<std::size_t>(InstrCount));
-    const VshViewportPair viewportPair =
-        VshFindViewportScaleAddPair(Program, static_cast<std::size_t>(InstrCount));
+    // Both scans are pure functions of (Program, InstrCount) and identical for
+    // every vertex of a draw, so memoize them the same way ExecuteXboxVertexShader
+    // memoizes classification -- otherwise the per-vertex path rescans the whole
+    // program twice per vertex.
+    static thread_local const DWORD* s_ScanKey = nullptr;
+    static thread_local int s_ScanInstr = 0;
+    static thread_local DWORD s_ScanFront = 0;
+    static thread_local VshScreenSpaceSuffix s_ScanSuffix{};
+    static thread_local VshViewportPair s_ScanViewport{};
+    if(VshMemoDisabled() || s_ScanKey != Program || s_ScanInstr != InstrCount ||
+       s_ScanFront != Program[0])
+    {
+        s_ScanSuffix = VshClassifyScreenSpaceSuffix(Program, static_cast<std::size_t>(InstrCount));
+        s_ScanViewport = VshFindViewportScaleAddPair(Program, static_cast<std::size_t>(InstrCount));
+        s_ScanKey = Program;
+        s_ScanInstr = InstrCount;
+        s_ScanFront = Program[0];
+    }
+    const VshScreenSpaceSuffix screenSpaceSuffix = s_ScanSuffix;
+    const VshViewportPair viewportPair = s_ScanViewport;
 
     if(Start < 0) Start = 0;
     for(int pc = Start; pc < InstrCount; pc++)
@@ -3431,14 +3457,46 @@ bool XTL::VshDiagnostics::ExecuteXboxVertexShader(ShaderWordView xboxFunction,
     {
         return false;
     }
-    std::string dispositionReason;
-    if(ClassifyXboxFunction(xboxFunction, dispositionReason) == XboxFunctionDisposition::Reject)
+    // The vertices of one draw are executed back-to-back with the same program,
+    // so ClassifyXboxFunction -- which heap-allocates a std::string and scans
+    // the whole program -- and VshXboxInstructionCount are invariant across
+    // them. Recomputing both per vertex made the CPU vertex-shader fallback pin
+    // a core on Turok's attract geometry (draws of 5000+ vertices). Memoize by
+    // program identity so a draw classifies once, not once per vertex. The
+    // failure mode of a stale key is a single mis-classified draw, never a
+    // crash, so a cheap O(1) key (pointer + size + first/last word) suffices.
+    struct ClassifyMemo
+    {
+        const DWORD* key;
+        std::size_t size;
+        DWORD front;
+        DWORD back;
+        bool rejected;
+        std::size_t instructionCount;
+    };
+    static thread_local ClassifyMemo memo{nullptr, 0, 0, 0, false, 0};
+
+    const DWORD* const memoKey = xboxFunction.data();
+    const std::size_t memoSize = xboxFunction.size();
+    const DWORD memoBack = xboxFunction[memoSize - 1];
+    if(VshMemoDisabled() || memo.key != memoKey || memo.size != memoSize ||
+       memo.front != xboxFunction[0] || memo.back != memoBack)
+    {
+        std::string dispositionReason;
+        memo.rejected =
+            ClassifyXboxFunction(xboxFunction, dispositionReason) == XboxFunctionDisposition::Reject;
+        memo.instructionCount = VshXboxInstructionCount(xboxFunction);
+        memo.key = memoKey;
+        memo.size = memoSize;
+        memo.front = xboxFunction[0];
+        memo.back = memoBack;
+    }
+    if(memo.rejected)
     {
         return false;
     }
-    const std::size_t instructionCount = VshXboxInstructionCount(xboxFunction);
     return VshExecuteProgramInternal(xboxFunction.data() + 1,
-                                     static_cast<int>(instructionCount), 0, constants,
+                                     static_cast<int>(memo.instructionCount), 0, constants,
                                      inputRegisters, outputPosition, outputColors,
                                      outputColorFloatCount, outputTexCoords,
                                      outputTexCoordFloatCount, outputRaster, true);

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -2009,11 +2010,72 @@ void TestShaderCreationPlanning()
 }
 } // namespace
 
+// Quantify the per-program-analysis memoization added to
+// ExecuteXboxVertexShader / VshExecuteProgramInternal. Turok's CPU vertex-shader
+// fallback calls ExecuteXboxVertexShader once per vertex; before the memo each
+// call re-ran ClassifyXboxFunction (which heap-allocates a std::string) plus ~4
+// full-program scans -- program-invariant work that dominated on 5000+-vertex
+// draws. "Warm" reuses one program so the memo hits (current behavior); "cold"
+// alternates two identical-content programs at different addresses so every call
+// misses the memo (the pre-memo behavior). The ratio is the redundant per-vertex
+// analysis the memo removes.
+void RunExecuteMemoBenchmark()
+{
+    constexpr int kVertices = 200000;
+
+    std::vector<float> constants(192 * 4, 0.0f); // 192 vec4 constant file
+    std::vector<float> inputs(16 * 4, 0.0f);     // 16 vec4 input registers
+
+    const std::vector<DWORD> programA(std::begin(kXboxProgram), std::end(kXboxProgram));
+    const std::vector<DWORD> programB(std::begin(kXboxProgram), std::end(kXboxProgram));
+
+    auto runOne = [&](const std::vector<DWORD>& program, ShaderOutputs& out) {
+        XTL::VshDiagnostics::RasterOutputs raster{};
+        return XTL::VshDiagnostics::ExecuteXboxVertexShader(
+            program, constants.data(), inputs.data(), out.position.data(),
+            out.colors.data(), out.colors.size(), out.texCoords.data(),
+            out.texCoords.size(), &raster);
+    };
+
+    ShaderOutputs warmOut{};
+    ShaderOutputs coldOut{};
+
+    const bool warmOk = runOne(programA, warmOut);
+    const bool coldOk = runOne(programB, coldOut);
+    Check(warmOk && coldOk, "benchmark program executes on CPU");
+    // The memo must not change results: warm and cold execute identical programs.
+    Check(OutputsEqual(warmOut, coldOut), "memoized and cold execution paths agree");
+
+    const auto t0 = std::chrono::steady_clock::now();
+    for(int i = 0; i < kVertices; ++i)
+    {
+        runOne(programA, warmOut); // same pointer every call -> memo hits
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    for(int i = 0; i < kVertices; ++i)
+    {
+        runOne((i & 1) ? programB : programA, coldOut); // alternates -> memo misses
+    }
+    const auto t2 = std::chrono::steady_clock::now();
+
+    const double warmNs = std::chrono::duration<double, std::nano>(t1 - t0).count() / kVertices;
+    const double coldNs = std::chrono::duration<double, std::nano>(t2 - t1).count() / kVertices;
+    std::printf("BENCH ExecuteXboxVertexShader: warm(memoized)=%.1f ns/vertex "
+                "cold(per-vertex re-analysis)=%.1f ns/vertex speedup=%.2fx (n=%d)\n",
+                warmNs, coldNs, coldNs / (warmNs > 0.0 ? warmNs : 1.0), kVertices);
+
+    // Non-flaky invariant: the memoized path never does more work than the cold
+    // path, so it must not be slower. A 10% margin absorbs timing jitter on a
+    // loaded host while still catching a memo that regressed to per-vertex work.
+    Check(warmNs <= coldNs * 1.10, "memoized path is not slower than cold path");
+}
+
 int RunTests()
 {
     TestShaderRegistry();
     TestCpuDeviceState();
     TestShaderCreationPlanning();
+    RunExecuteMemoBenchmark();
     const XTL::VshDiagnostics::FunctionTranslationResult translation =
         XTL::VshDiagnostics::TranslateXboxFunction(kXboxProgram, ReportTranslationWarning);
     Check(!translation.tokens.empty(), "owned recompiler returns bytecode");
