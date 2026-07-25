@@ -3485,9 +3485,24 @@ static void *EmuAllocateContiguousLow(ULONG Size, ULONG Alignment)
     return p;
 }
 
-// True for blocks handed out by EmuAllocateContiguousLow (VirtualAlloc-backed);
-// those must not be released with delete[]. The bump allocator has no free list,
-// so freeing simply decommits the pages back to the reservation.
+static void* EmuAllocateContiguous(ULONG Size, ULONG Alignment)
+{
+    void* Address = EmuAllocateContiguousLow(Size, Alignment);
+    if(Address == NULL)
+    {
+        // Contiguous allocations remain page-aligned after the low Xbox-RAM
+        // arena is exhausted. Plain new[] only guarantees fundamental
+        // alignment on 32-bit Windows, which is insufficient for guest SSE
+        // data and the kernel's page-aligned contiguous-memory contract.
+        Address = VirtualAlloc(NULL, Size, MEM_COMMIT | MEM_RESERVE,
+                               PAGE_READWRITE);
+    }
+    return Address;
+}
+
+// True for blocks committed inside the shared low Xbox-RAM reservation. They
+// cannot be released individually; only fallback allocations are standalone
+// VirtualAlloc reservations.
 static bool EmuIsLowXboxRam(PVOID Address)
 {
     const ULONG Value = (ULONG)Address;
@@ -3505,11 +3520,7 @@ extern "C" PVOID EmuAllocateContiguousMemoryHost(ULONG NumberOfBytes, ULONG Alig
         return NULL;
     }
 
-    PVOID Address = EmuAllocateContiguousLow(AllocationSize, Alignment);
-    if(Address == NULL)
-    {
-        Address = (PVOID)new unsigned char[AllocationSize];
-    }
+    PVOID Address = EmuAllocateContiguous(AllocationSize, Alignment);
     EmuTrackContiguousMemoryAllocation(Address, AllocationSize);
     return Address;
 }
@@ -8136,15 +8147,11 @@ XBSYSAPI EXPORTNUM(165) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
     }
     #endif
 
-    // TODO: Make this much more efficient and correct if necessary!
-    // HACK: Should be aligned!!
     const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
     PVOID pRet = NULL;
     if(AllocationSize != 0)
     {
-        pRet = EmuAllocateContiguousLow(AllocationSize, 0x4000);   // low Xbox-RAM window
-        if(pRet == NULL)
-            pRet = (PVOID)new unsigned char[AllocationSize];       // window exhausted -> heap
+        pRet = EmuAllocateContiguous(AllocationSize, 0x4000);
     }
     EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
 
@@ -8203,15 +8210,11 @@ XBSYSAPI EXPORTNUM(166) xboxkrnl::PVOID NTAPI xboxkrnl::MmAllocateContiguousMemo
     }
     #endif
 
-    // TODO: Make this much more efficient and correct if necessary!
-    // HACK: Should be aligned!!
     const ULONG AllocationSize = EmuRoundToPageSize(NumberOfBytes);
     PVOID pRet = NULL;
     if(AllocationSize != 0)
     {
-        pRet = EmuAllocateContiguousLow(AllocationSize, 0x4000);   // low Xbox-RAM window
-        if(pRet == NULL)
-            pRet = (PVOID)new unsigned char[AllocationSize];       // window exhausted -> heap
+        pRet = EmuAllocateContiguous(AllocationSize, Alignment);
     }
     EmuTrackContiguousMemoryAllocation(pRet, AllocationSize);
 
@@ -8485,7 +8488,14 @@ XBSYSAPI EXPORTNUM(171) VOID NTAPI xboxkrnl::MmFreeContiguousMemory
     }
     else
     {
-        delete[](unsigned char*)AllocationAddress;
+        if(!VirtualFree(AllocationAddress, 0, MEM_RELEASE))
+        {
+            printf("EmuKrnl (0x%lX): MmFreeContiguousMemory failed to release "
+                   "fallback allocation 0x%.08lX (error=%lu).\n",
+                   GetCurrentThreadId(), (ULONG)AllocationAddress,
+                   GetLastError());
+            fflush(stdout);
+        }
     }
 
     EmuSwapFS();   // Xbox FS
