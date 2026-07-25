@@ -3066,8 +3066,19 @@ static bool EmuMaybeSatisfyNv2aNotifier(ULONG Address, ULONG ComparedValue, ULON
 
 // Opt-in thread-EIP watchdog: after a delay, suspend every other thread in the
 // process and log its EIP/ESP, so a stalled title's thread landscape is visible.
+// Thread id of the fence-dump watchdog. It inspects other threads' stacks with
+// SEH-guarded probes (EmuLooksLikeReturnAddress) that intentionally touch
+// possibly-unmapped or guest-physical-range addresses. The first-chance VEH
+// must NOT route those probe faults through MMIO/physical emulation or the dump
+// path -- that hijacks the probe's own __except and churns an endless fault
+// storm (misdiagnosed as a Turok "Swap" hang). The VEH checks this id and
+// defers such faults to frame SEH instead.
+static volatile LONG g_EmuWatchdogThreadId = 0;
+
 static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
 {
+    g_EmuWatchdogThreadId = (LONG)GetCurrentThreadId();
+
     // CXBX_FENCE_DUMP holds the snapshot interval in seconds; anything
     // unparsable keeps the legacy one-shot-ish default of 14s. Snapshots
     // repeat so a stall that develops minutes in (e.g. after a title's asset
@@ -9917,6 +9928,19 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     if(EmuTryContinueStackGuard(e))
     {
         return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    // The fence-dump watchdog probes arbitrary suspended-thread stack words with
+    // SEH-guarded reads (EmuLooksLikeReturnAddress) that may land on unmapped or
+    // guest-physical-range addresses. Those faults are expected and handled by
+    // the probe's own __except; routing them through the physical/MMIO emulator
+    // or the dump path below defeats that guard and produces an endless fault
+    // storm that burns a core and masquerades as a title hang. Defer any fault
+    // on the watchdog thread to frame SEH.
+    if(g_EmuWatchdogThreadId != 0 &&
+       (LONG)GetCurrentThreadId() == g_EmuWatchdogThreadId)
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
     }
 
     // Opt-in pre-dispatch trace. The normal mode omits expected aperture and
