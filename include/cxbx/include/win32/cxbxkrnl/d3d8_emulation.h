@@ -184,6 +184,10 @@ inline D3DFORMAT EmuXB2PC_D3DFormat(X_D3DFORMAT Format)
         case 0x04: // Swizzled   (X_D3DFMT_A4R4G4B4)
             return D3DFMT_A4R4G4B4;
 
+        case 0x10: // Linear     (X_D3DFMT_LIN_A1R5G5B5)
+        case 0x02: // Swizzled   (X_D3DFMT_A1R5G5B5)
+            return D3DFMT_A1R5G5B5;
+
         case 0x11: // Linear     (X_D3DFMT_LIN_R5G6B5)
         case 0x05: // Swizzled   (X_D3DFMT_R5G6B5)
             return D3DFMT_R5G6B5;
@@ -193,6 +197,7 @@ inline D3DFORMAT EmuXB2PC_D3DFormat(X_D3DFORMAT Format)
             return D3DFMT_A8R8G8B8;
 
         case 0x07: // Swizzled   (X_D3DFMT_X8R8G8B8)
+        case 0x1E: // Linear     (X_D3DFMT_LIN_X8R8G8B8)
             return D3DFMT_X8R8G8B8;
 
         case 0x0B: // Swizzled   (X_D3DFMT_P8)
@@ -253,6 +258,8 @@ inline X_D3DFORMAT EmuPC2XB_D3DFormat(D3DFORMAT Format)
     {
         case D3DFMT_A4R4G4B4:
             return 0x04;
+        case D3DFMT_A1R5G5B5:
+            return 0x02;
         case D3DFMT_YUY2:
             return 0x24;
         case D3DFMT_R5G6B5:

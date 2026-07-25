@@ -104,6 +104,7 @@ static LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 static DWORD WINAPI   EmuUpdateTickCount(LPVOID);
 static DWORD          EmuCheckAllocationSize(LPVOID);
 static inline void    EmuVerifyResourceIsRegistered(XTL::X_D3DResource *pResource);
+static void           EmuRememberOwnedGuestResource(XTL::X_D3DResource *pResource);
 static void           EmuAdjustPower2(UINT *dwWidth, UINT *dwHeight);
 static void           EmuFlushTiledSurfaceLock(XTL::X_D3DResource *pResource);
 static void           EmuFlushTiledSurfaceLocks();
@@ -1687,9 +1688,11 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
             // ******************************************************************
             {
                 g_pCachedRenderTarget = new XTL::X_D3DSurface();
+                EmuRememberOwnedGuestResource(g_pCachedRenderTarget);
                 g_pD3DDevice8->GetRenderTarget(&g_pCachedRenderTarget->EmuSurface8);
 
                 g_pCachedZStencilSurface = new XTL::X_D3DSurface();
+                EmuRememberOwnedGuestResource(g_pCachedZStencilSurface);
                 g_pD3DDevice8->GetDepthStencilSurface(&g_pCachedZStencilSurface->EmuSurface8);
             }
 
@@ -1830,6 +1833,7 @@ static bool EmuD3DCopyReadableRange(const void* source, DWORD bytes,
 // interface hands garbage to the host device (silently no-ops under the SEH
 // guards) and the resource renders black.
 static std::vector<void*> g_EmuKnownHostResources;
+static std::vector<XTL::X_D3DResource*> g_EmuOwnedGuestResources;
 
 static void EmuRememberHostResource(void *pHostResource)
 {
@@ -1846,6 +1850,42 @@ static bool EmuIsKnownHostResource(void *pHostResource)
     for(void *known : g_EmuKnownHostResources)
         if(known == pHostResource)
             return true;
+    return false;
+}
+
+static void EmuForgetHostResource(void *pHostResource)
+{
+    for(auto resource = g_EmuKnownHostResources.begin();
+        resource != g_EmuKnownHostResources.end(); ++resource)
+    {
+        if(*resource == pHostResource)
+        {
+            g_EmuKnownHostResources.erase(resource);
+            return;
+        }
+    }
+}
+
+static void EmuRememberOwnedGuestResource(XTL::X_D3DResource *pResource)
+{
+    if(pResource != NULL)
+    {
+        g_EmuOwnedGuestResources.push_back(pResource);
+    }
+}
+
+static bool EmuForgetOwnedGuestResource(XTL::X_D3DResource *pResource)
+{
+    for(auto resource = g_EmuOwnedGuestResources.begin();
+        resource != g_EmuOwnedGuestResources.end(); ++resource)
+    {
+        if(*resource == pResource)
+        {
+            g_EmuOwnedGuestResources.erase(resource);
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -2458,6 +2498,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateImageSurface
     #endif
 
     *ppBackBuffer = new X_D3DSurface();
+    EmuRememberOwnedGuestResource(*ppBackBuffer);
 
     D3DFORMAT PCFormat = EmuXB2PC_D3DFormat(Format);
 
@@ -2527,6 +2568,7 @@ XTL::X_D3DSurface* WINAPI XTL::EmuIDirect3DDevice8_GetBackBuffer2
     */
 
     X_D3DSurface *pBackBuffer = new X_D3DSurface();
+    EmuRememberOwnedGuestResource(pBackBuffer);
 
     if(BackBuffer == -1)
         BackBuffer = 0;
@@ -5211,6 +5253,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateTexture
         EmuAdjustPower2(&Width, &Height);
 
         *ppTexture = new X_D3DTexture();
+        EmuRememberOwnedGuestResource(*ppTexture);
 
         const DWORD  HostUsage = bWantDepthStencil ? D3DUSAGE_DEPTHSTENCIL
                                : bWantRenderTarget ? D3DUSAGE_RENDERTARGET
@@ -5421,6 +5464,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVolumeTexture
         EmuAdjustPower2(&Width, &Height);
 
         *ppVolumeTexture = new X_D3DVolumeTexture();
+        EmuRememberOwnedGuestResource(*ppVolumeTexture);
 
         // ******************************************************************
         // * redirect to windows d3d
@@ -5507,6 +5551,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateCubeTexture
     }
 
     *ppCubeTexture = new X_D3DCubeTexture();
+    EmuRememberOwnedGuestResource(*ppCubeTexture);
 
     // ******************************************************************
     // * redirect to windows d3d
@@ -7444,6 +7489,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 dwBPP = 4;
             }
             else if(X_Format == 0x05 /* X_D3DFMT_R5G6B5 */ || X_Format == 0x04 /* X_D3DFMT_A4R4G4B4 */ ||
+                    X_Format == 0x02 /* X_D3DFMT_A1R5G5B5 */ ||
                     X_Format == 0x28 /* X_D3DFMT_G8B8 */   || X_Format == 0x1A /* X_D3DFMT_A8L8 */)
             {
                 bSwizzled = TRUE;
@@ -7455,7 +7501,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 dwPitch  = dwWidth*2;
                 dwBPP = 2;
             }
-            else if(X_Format == 0x12 /* X_D3DFORMAT_A8R8G8B8 */ || X_Format == 0x2E /* D3DFMT_LIN_D24S8 */)
+            else if(X_Format == 0x12 /* X_D3DFORMAT_A8R8G8B8 */ ||
+                    X_Format == 0x1E /* X_D3DFMT_LIN_X8R8G8B8 */ ||
+                    X_Format == 0x2E /* D3DFMT_LIN_D24S8 */)
             {
                 // Linear 32 Bit
                 dwWidth  = (pPixelContainer->Size & X_D3DSIZE_WIDTH_MASK) + 1;
@@ -7463,7 +7511,8 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 dwPitch  = (((pPixelContainer->Size & X_D3DSIZE_PITCH_MASK) >> X_D3DSIZE_PITCH_SHIFT)+1)*64;
                 dwBPP = 4;
             }
-            else if(X_Format == 0x11 /* D3DFMT_LIN_R5G6B5 */)
+            else if(X_Format == 0x11 /* D3DFMT_LIN_R5G6B5 */ ||
+                    X_Format == 0x10 /* D3DFMT_LIN_A1R5G5B5 */)
             {
                 // Linear 16 Bit
                 dwWidth  = (pPixelContainer->Size & X_D3DSIZE_WIDTH_MASK) + 1;
@@ -7982,6 +8031,7 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
 
         if(uRet == 0)
         {
+            EmuForgetHostResource(pResource8);
             #ifdef _DEBUG_TRACE
             printf("EmuIDirect3DResource8_Release (0x%X): Cleaned up a Resource!\n", GetCurrentThreadId());
             #endif
@@ -7997,7 +8047,10 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
             EmuDiscardLinearTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
-            delete pThis;
+            if(EmuForgetOwnedGuestResource(pThis))
+            {
+                delete pThis;
+            }
         }
     }
 
@@ -8550,6 +8603,7 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel
         IDirect3DTexture8 *pTexture8 = pThis->EmuTexture8;
 
         *ppSurfaceLevel = new X_D3DSurface();
+        EmuRememberOwnedGuestResource(*ppSurfaceLevel);
 
         hRet = pTexture8->GetSurfaceLevel(Level, &((*ppSurfaceLevel)->EmuSurface8));
 
@@ -8748,6 +8802,7 @@ XTL::X_D3DVertexBuffer* WINAPI XTL::EmuIDirect3DDevice8_CreateVertexBuffer2
     #endif
 
     X_D3DVertexBuffer *pD3DVertexBuffer = new X_D3DVertexBuffer();
+    EmuRememberOwnedGuestResource(pD3DVertexBuffer);
 
     IDirect3DVertexBuffer8 *ppVertexBuffer=NULL;
 
@@ -13358,6 +13413,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePalette
     #endif
 
     *ppPalette = new X_D3DPalette();
+    EmuRememberOwnedGuestResource(*ppPalette);
 
     static int lk[4] =
     {

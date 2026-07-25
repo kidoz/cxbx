@@ -161,7 +161,7 @@ static bool EmuUntrackHeapAllocation(HANDLE Heap, PVOID Memory)
     return Found;
 }
 
-static bool EmuProcessHeapOwns(PVOID Memory)
+static bool EmuHeapOwns(HANDLE Heap, PVOID Memory)
 {
     if(Memory == NULL)
     {
@@ -170,12 +170,17 @@ static bool EmuProcessHeapOwns(PVOID Memory)
 
     __try
     {
-        return HeapValidate(GetProcessHeap(), 0, Memory) != FALSE;
+        return HeapValidate(Heap, 0, Memory) != FALSE;
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
         return false;
     }
+}
+
+static bool EmuProcessHeapOwns(PVOID Memory)
+{
+    return EmuHeapOwns(GetProcessHeap(), Memory);
 }
 
 static bool EmuXInputInjectionConfigured()
@@ -563,17 +568,10 @@ BOOL WINAPI XTL::EmuRtlFreeHeap
 
     const bool Tracked = EmuUntrackHeapAllocation(hHeap, lpMem);
     const bool ProcessOwned = !Tracked && EmuProcessHeapOwns(lpMem);
-    bool Valid = true;
-    if(EmuHeapTraceEnabled() && lpMem != NULL)
+    const bool Valid = Tracked || ProcessOwned || lpMem == NULL ||
+                       EmuHeapOwns(hHeap, lpMem);
+    if(EmuHeapTraceEnabled())
     {
-        __try
-        {
-            Valid = HeapValidate(hHeap, 0, lpMem) != FALSE;
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Valid = false;
-        }
         printf("HEAP| free heap=0x%.08lX flags=0x%.08lX ptr=0x%.08lX valid=%u tracked=%u process=%u\n",
                reinterpret_cast<ULONG>(hHeap), dwFlags,
                reinterpret_cast<ULONG>(lpMem), Valid ? 1u : 0u,
