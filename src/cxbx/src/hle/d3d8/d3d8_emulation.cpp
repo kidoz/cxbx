@@ -3815,6 +3815,60 @@ static bool EmuD3DDumpBackbuffer(const char* path)
     return dumped;
 }
 
+// Dump the CURRENTLY BOUND render target (not the swap-chain back buffer), so a
+// render-to-texture pass can be inspected directly -- e.g. is Turok's world
+// actually landing in its 512x512 RT, or is the RT black? A D3DPOOL_DEFAULT
+// render target is not lockable, so copy it into a system-memory scratch
+// surface (CopyRects) before locking.
+static bool EmuD3DDumpCurrentRenderTarget(const char* path)
+{
+    XTL::IDirect3DSurface8* renderTarget = nullptr;
+    XTL::IDirect3DSurface8* scratch = nullptr;
+    bool dumped = false;
+    __try
+    {
+        if(g_pD3DDevice8 != 0 &&
+           SUCCEEDED(g_pD3DDevice8->GetRenderTarget(&renderTarget)) &&
+           renderTarget != nullptr)
+        {
+            XTL::D3DSURFACE_DESC description{};
+            XTL::D3DLOCKED_RECT locked{};
+            if(SUCCEEDED(renderTarget->GetDesc(&description)))
+            {
+                if(SUCCEEDED(renderTarget->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+                {
+                    dumped = EmuD3DWriteBmp(path, description.Width, description.Height,
+                                            locked.Pitch, locked.pBits, description.Format);
+                    renderTarget->UnlockRect();
+                }
+                else if(SUCCEEDED(g_pD3DDevice8->CreateImageSurface(
+                            description.Width, description.Height, description.Format, &scratch)) &&
+                        scratch != nullptr &&
+                        SUCCEEDED(g_pD3DDevice8->CopyRects(renderTarget, nullptr, 0, scratch, nullptr)) &&
+                        SUCCEEDED(scratch->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+                {
+                    dumped = EmuD3DWriteBmp(path, description.Width, description.Height,
+                                            locked.Pitch, locked.pBits, description.Format);
+                    scratch->UnlockRect();
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dumped = false;
+    }
+    if(scratch != nullptr)
+    {
+        scratch->Release();
+    }
+    if(renderTarget != nullptr)
+    {
+        renderTarget->Release();
+    }
+    return dumped;
+}
+
 // D3DPERF (PIX-style) event bridge. The host device is d3d8, which has no
 // event API of its own; the D3DPERF_* exports live in d3d9.dll and are
 // process-wide, so capture tools that honor them (apitrace, DXVK's d3d9
@@ -3995,6 +4049,18 @@ static void EmuD3DDrawPost(void)
         printf("DRAW| dumped %s\n", path);
     else
         printf("DRAW| backbuffer dump failed (%s)\n", path);
+
+    // Also dump the currently bound render target, so a render-to-texture pass
+    // (Turok's 512x512 world RT) can be inspected directly instead of only the
+    // composited back buffer.
+    char rtFile[64];
+    snprintf(rtFile, sizeof(rtFile), "f%05lu_d%04lu_rt.bmp",
+             static_cast<unsigned long>(g_D3DDebugFrame),
+             static_cast<unsigned long>(index));
+    char rtPath[MAX_PATH * 2];
+    EmuD3DDebugDumpPath(rtPath, sizeof(rtPath), "cxbx_rt", rtFile);
+    if(EmuD3DDumpCurrentRenderTarget(rtPath))
+        printf("DRAW| dumped RT %s\n", rtPath);
 }
 
 // Combiner programs the ps.1.1 translator compiled to real host shaders,
@@ -12088,6 +12154,37 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                 // later UI draws and cover title logos or text.
                 EmuRecordPushBufferDraw(primitiveType, primitiveCount, drawVertices,
                                         sizeof(EmuVshCpuVertex));
+
+                // Diagnostic (CXBX_D3D_DUMP_DRAWS): dump the render target this
+                // CPU-fallback draw landed in. Render-to-texture world passes go
+                // through this path, so the currently bound target here is the
+                // title's 512x512 RT (not the swap back buffer the standard
+                // EmuD3DDrawPost hook sees) -- this tells a black RT (world never
+                // rendered) from a black sample (RT has the world but the later
+                // sampling pass reads the wrong/stale host texture).
+                static int s_CpuRtDumpEnabled = -1;
+                if(s_CpuRtDumpEnabled < 0)
+                {
+                    char value[8] = {};
+                    s_CpuRtDumpEnabled =
+                        EmuD3DReadEnvironment("CXBX_D3D_DUMP_DRAWS", value, sizeof(value)) ? 1 : 0;
+                }
+                static LONG s_CpuRtDumpIndex = 0;
+                if(s_CpuRtDumpEnabled == 1 && s_CpuRtDumpIndex < 128)
+                {
+                    char file[64];
+                    snprintf(file, sizeof(file), "cpu_f%05lu_%04ld_rt.bmp",
+                             static_cast<unsigned long>(g_D3DDebugFrame),
+                             static_cast<long>(s_CpuRtDumpIndex));
+                    char rtPath[MAX_PATH * 2];
+                    EmuD3DDebugDumpPath(rtPath, sizeof(rtPath), "cxbx_rt", file);
+                    if(EmuD3DDumpCurrentRenderTarget(rtPath))
+                    {
+                        printf("VSH| cpu_rt_dump %s\n", rtPath);
+                        fflush(stdout);
+                    }
+                    s_CpuRtDumpIndex++;
+                }
             }
         }
     }
