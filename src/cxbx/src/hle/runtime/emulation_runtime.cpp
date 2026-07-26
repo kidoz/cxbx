@@ -2762,6 +2762,18 @@ static bool EmuIsWritableHostRange(ULONG Address, ULONG Size)
     return true;
 }
 
+static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size);
+
+// D3D-visible resolver for physically-aliased guest pointers. A title library
+// can hand a hooked D3D entry a resource pointer in the 0x8xxxxxxx alias range
+// (Turok's XMV movie player does this for its video overlay surface); host
+// code cannot trap-and-emulate its own dereference the way guest code can, so
+// the wrapper must translate before touching any field.
+extern "C" BYTE *EmuResolvePhysicalHostSpan(ULONG Address, ULONG Size)
+{
+    return EmuPhysicalHostSpan(Address, Size);
+}
+
 static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
 {
     // Kill switch for A/B attribution: CXBX_PHYS_NO_HOST_SPAN=1 restores the

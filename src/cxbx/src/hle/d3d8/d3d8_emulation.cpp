@@ -682,6 +682,9 @@ struct EmuYuy2TextureInfo
 #define EMU_YUY2_TAIL_SLOP  0x4000
 #define EMU_YUY2_TAIL_FILL  0xC5
 
+extern "C" BYTE *EmuResolvePhysicalHostSpan(ULONG Address, ULONG Size); // emulation_runtime.cpp
+static bool EmuD3DTexTraceEnabled();
+
 static EmuYuy2TextureInfo g_Yuy2Textures[EMU_YUY2_TEXTURE_SLOTS] = {};
 
 static EmuYuy2TextureInfo *EmuFindYuy2Texture(const XTL::X_D3DResource *pHandle)
@@ -714,9 +717,71 @@ static HRESULT EmuRegisterYuy2Texture(XTL::X_D3DResource *pHandle,
     }
 
     const DWORD DataSize = Pitch * Height;
+
+    if(EmuD3DTexTraceEnabled())
+    {
+        printf("TEX| yuy2-register handle=0x%.08lX pixels=0x%.08lX %lux%lu pitch=%lu\n",
+               (unsigned long)(uintptr_t)pHandle, (unsigned long)(uintptr_t)pPixels,
+               (unsigned long)Width, (unsigned long)Height, (unsigned long)Pitch);
+        fflush(stdout);
+    }
+
+    // The Xbox header's Data field carries a PHYSICAL address, and the movie
+    // decoder writes its frames through the 0x8xxxxxxx physical alias -- so
+    // trap-emulated stores land wherever the physical-span resolver sends
+    // them. Registration must resolve the buffer the same way, with the same
+    // helper, or the display converts from a different backing than the
+    // decoder writes (observed as Turok's solid-green intro: the display read
+    // untouched memory while frames landed in the tracked contiguous block).
+    // Identity-mapped blocks resolve to the same pointer, so the historical
+    // working cases are unchanged.
+    {
+        const ULONG RawAddress = (ULONG)(uintptr_t)pPixels;
+        BYTE *pResolved = NULL;
+
+        if(RawAddress < 0x10000000)
+        {
+            pResolved = EmuResolvePhysicalHostSpan(0x80000000u | RawAddress, DataSize);
+        }
+        if(pResolved == NULL)
+        {
+            pResolved = EmuResolvePhysicalHostSpan(RawAddress, DataSize);
+        }
+
+        if(pResolved != NULL && (BYTE *)(uintptr_t)RawAddress != pResolved &&
+           EmuD3DIsReadableRange(pResolved, DataSize))
+        {
+            printf("EmuD3D8 (0x%X): YUY2 register resolved frame buffer 0x%.08X -> 0x%.08X (+0x%X).\n",
+                   GetCurrentThreadId(), RawAddress,
+                   (DWORD)(uintptr_t)pResolved, DataSize);
+            fflush(stdout);
+            pPixels = pResolved;
+        }
+    }
+
     if(!EmuD3DIsReadableRange(pPixels, DataSize))
     {
-        return D3DERR_INVALIDCALL;
+        // Nothing resolved and the raw range is not host-committed either:
+        // back it on demand as a last resort so registration cannot fail
+        // silently (an unregistered movie surface dies later on the unfilled
+        // host-surface field).
+        void *pCommitted = VirtualAlloc(pPixels, DataSize, MEM_COMMIT, PAGE_READWRITE);
+        if(pCommitted == NULL)
+        {
+            pCommitted = VirtualAlloc(pPixels, DataSize, MEM_RESERVE | MEM_COMMIT,
+                                      PAGE_READWRITE);
+        }
+
+        if(pCommitted == NULL || !EmuD3DIsReadableRange(pPixels, DataSize))
+        {
+            EmuWarning("YUY2 register: could not back frame buffer 0x%.08X (+0x%X)",
+                       (DWORD)(uintptr_t)pPixels, DataSize);
+            return D3DERR_INVALIDCALL;
+        }
+
+        printf("EmuD3D8 (0x%X): YUY2 register backed frame buffer 0x%.08X (+0x%X) on demand.\n",
+               GetCurrentThreadId(), (DWORD)(uintptr_t)pPixels, DataSize);
+        fflush(stdout);
     }
 
     EmuYuy2TextureInfo *pInfo = EmuFindYuy2Texture(pHandle);
