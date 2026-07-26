@@ -9481,6 +9481,22 @@ XBSYSAPI EXPORTNUM(187) NTSTATUS NTAPI xboxkrnl::NtClose
     return ret;
 }
 
+// Opt-in guest sync-object audit (CXBX_SYNC_TRACE=1). One line per Nt-level
+// object create/signal/wait with the guest caller, to answer "which handle is
+// this thread parked on and who was supposed to signal it".
+static bool EmuSyncTraceEnabled()
+{
+    static int Enabled = -1;
+    if(Enabled < 0)
+    {
+        char Buffer[8] = {};
+        const ::DWORD Length =
+            GetEnvironmentVariableA("CXBX_SYNC_TRACE", Buffer, sizeof(Buffer));
+        Enabled = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
+    }
+    return Enabled == 1;
+}
+
 // ******************************************************************
 // * 0x00BD - NtCreateEvent
 // ******************************************************************
@@ -9538,6 +9554,15 @@ XBSYSAPI EXPORTNUM(189) NTSTATUS NTAPI xboxkrnl::NtCreateEvent
     {
         *EventHandle = CreateEvent(NULL, EventType == NotificationEvent, InitialState, NULL);
         ret = (*EventHandle != NULL) ? STATUS_SUCCESS : 0xC0000008;
+    }
+
+    if(EmuSyncTraceEnabled())
+    {
+        printf("SYNC| create-event tid=0x%lX handle=0x%X type=%u initial=%u name=\"%s\" caller=0x%08lX status=0x%08lX\n",
+               GetCurrentThreadId(), EventHandle != NULL ? (uint32)(uintptr_t)*EventHandle : 0,
+               (unsigned)EventType, (unsigned)InitialState,
+               szBuffer != 0 ? szBuffer : "", (ULONG)(uintptr_t)_ReturnAddress(), (ULONG)ret);
+        fflush(stdout);
     }
 
     EmuSwapFS();   // Xbox FS
@@ -11265,6 +11290,14 @@ XBSYSAPI EXPORTNUM(225) NTSTATUS NTAPI xboxkrnl::NtSetEvent
 
     NTSTATUS ret = NtDll::NtSetEvent(EventHandle, PreviousState);
 
+    if(EmuSyncTraceEnabled())
+    {
+        printf("SYNC| set-event tid=0x%lX handle=0x%X caller=0x%08lX\n",
+               GetCurrentThreadId(), (uint32)EventHandle,
+               (ULONG)(uintptr_t)_ReturnAddress());
+        fflush(stdout);
+    }
+
     EmuSwapFS();   // Xbox FS
 
     return ret;
@@ -11425,6 +11458,20 @@ XBSYSAPI EXPORTNUM(233) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObject
 {
     EmuSwapFS();   // Win2k/XP FS
 
+    if(EmuSyncTraceEnabled())
+    {
+        static volatile LONG WaitCount = 0;
+        const LONG Call = InterlockedIncrement(&WaitCount);
+        if(Call <= 400 || (Call & 0x3FF) == 0)
+        {
+            printf("SYNC| wait tid=0x%lX handle=0x%X timeout=%s caller=0x%08lX (call %ld)\n",
+                   GetCurrentThreadId(), (uint32)(uintptr_t)Handle,
+                   Timeout != NULL ? "yes" : "inf",
+                   (ULONG)(uintptr_t)_ReturnAddress(), Call);
+            fflush(stdout);
+        }
+    }
+
     // Honor Alertable only outside an apc routine (APC_LEVEL serialization,
     // see NtUserIoApcDispatcher).
     NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable && g_EmuUserApcDepth == 0, (NtDll::PLARGE_INTEGER)Timeout);
@@ -11462,6 +11509,20 @@ XBSYSAPI EXPORTNUM(234) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObjectEx
                GetCurrentThreadId(), Handle, WaitMode, Alertable, Timeout);
     }
     #endif
+
+    if(EmuSyncTraceEnabled())
+    {
+        static volatile LONG WaitCount = 0;
+        const LONG Call = InterlockedIncrement(&WaitCount);
+        if(Call <= 400 || (Call & 0x3FF) == 0)
+        {
+            printf("SYNC| wait tid=0x%lX handle=0x%X timeout=%s caller=0x%08lX (call %ld)\n",
+                   GetCurrentThreadId(), (uint32)(uintptr_t)Handle,
+                   Timeout != NULL ? "yes" : "inf",
+                   (ULONG)(uintptr_t)_ReturnAddress(), Call);
+            fflush(stdout);
+        }
+    }
 
     // Honor Alertable only outside an apc routine (APC_LEVEL serialization,
     // see NtUserIoApcDispatcher).
@@ -11722,6 +11783,14 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx
                 SuspendCount,
                 SuspendCount,
             };
+        }
+
+        if(EmuSyncTraceEnabled())
+        {
+            printf("SYNC| create-thread tid=0x%lX handle=0x%X newtid=0x%lX start=0x%08lX\n",
+                   GetCurrentThreadId(), (uint32)(uintptr_t)*ThreadHandle,
+                   dwThreadId, (ULONG)(uintptr_t)StartRoutine);
+            fflush(stdout);
         }
 
         if(ThreadId != NULL)
