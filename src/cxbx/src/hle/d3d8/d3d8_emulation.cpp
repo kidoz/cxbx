@@ -8878,6 +8878,64 @@ VOID WINAPI XTL::EmuGet2DSurfaceDescD
     return;
 }
 
+extern "C" BYTE *EmuResolvePhysicalHostSpan(ULONG Address, ULONG Size); // emulation_runtime.cpp
+
+// A guest library can pass a resource pointer through the 0x8xxxxxxx physical
+// alias (Xbox D3D's CPU-visible AGP convention -- Turok's XMV movie player
+// hands its overlay surface to LockRect/GetDesc this way). Guest code gets
+// such reads trap-emulated; host wrapper code does not, so translate to the
+// host-visible span before the first field access. Returns NULL when the
+// alias resolves to nothing readable.
+static bool EmuIsReadableResourceHeader(const void *Pointer)
+{
+    MEMORY_BASIC_INFORMATION Memory = {};
+    return VirtualQuery(Pointer, &Memory, sizeof(Memory)) == sizeof(Memory) &&
+           Memory.State == MEM_COMMIT &&
+           (Memory.Protect & (PAGE_READONLY | PAGE_READWRITE |
+                              PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                              PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+
+static XTL::X_D3DResource *EmuResolveAliasedResource(XTL::X_D3DResource *pThis)
+{
+    // A registered YUY2 handle IS an aliased value by design (the fake movie
+    // texture is the host pixel buffer with the high bit set, and the
+    // registry keys on exactly that value). Translating it before the lookup
+    // made every YUY2 LockRect/GetDesc miss the registry and fall into the
+    // host-surface path -- the movie decoder then never received its real
+    // write pointer and the intro stayed a solid green (zeroed YUY2). Honor
+    // the registry identity first; translate only unknown aliases.
+    if(EmuFindYuy2Texture(pThis) != NULL)
+        return pThis;
+
+    // Physically-aliased pointers (Xbox D3D's CPU-visible AGP convention)
+    // translate to their host span first.
+    if((DWORD)(uintptr_t)pThis >= 0x80000000)
+    {
+        pThis = (XTL::X_D3DResource *)EmuResolvePhysicalHostSpan(
+            (ULONG)(uintptr_t)pThis, sizeof(XTL::X_D3DPixelContainer));
+        if(pThis == NULL)
+        {
+            EmuWarning("Aliased resource did not resolve to host memory");
+            return NULL;
+        }
+    }
+
+    // Require committed, readable memory before the wrapper dereferences the
+    // header. Turok's XMV player builds its video surface header inside a
+    // buffer whose guest address is not always host-committed (the value
+    // shifts with module layout, so some builds crash and others do not);
+    // refusing the pointer drops one call instead of killing the title.
+    if(!EmuIsReadableResourceHeader(pThis))
+    {
+        EmuWarning("Resource header 0x%.08X is not readable host memory",
+                   (DWORD)(uintptr_t)pThis);
+        return NULL;
+    }
+
+    return pThis;
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DSurface8_GetDesc
 // ******************************************************************
@@ -8906,7 +8964,20 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_GetDesc
 
     HRESULT hRet;
 
+    // YUY2 movie handles are raw pixel pointers with the high bit set; the
+    // registry lookup must run before any translation or header dereference
+    // (EmuResolveYuy2Texture is deref-safe for them).
     EmuYuy2TextureInfo *pYuy2 = EmuResolveYuy2Texture(pThis);
+    if(pYuy2 == NULL)
+    {
+        pThis = EmuResolveAliasedResource(pThis);
+        if(pThis == NULL)
+        {
+            EmuSwapFS();   // XBox FS
+            return D3DERR_INVALIDCALL;
+        }
+    }
+
     if(pYuy2 != NULL)
     {
         pDesc->Format = EmuPC2XB_D3DFormat(D3DFMT_YUY2);
@@ -8923,9 +8994,28 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_GetDesc
     {
         D3DSURFACE_DESC SurfaceDesc;
 
+        // The host-interface field is a union with the Xbox header's Lock
+        // slot, which the title owns. A resource built by guest code that was
+        // never (successfully) registered still carries the TITLE's value
+        // there -- Turok's XMV player hands such a surface straight to
+        // GetDesc, and calling through it is a wild vtable jump. Only
+        // dereference interfaces this emulator actually created.
         X_D3DPixelContainer* pPixelContainer =
             reinterpret_cast<X_D3DPixelContainer*>(pThis);
-        if((pPixelContainer->Format & X_D3DFORMAT_CUBEMAP) != 0)
+        const bool bCubemap = (pPixelContainer->Format & X_D3DFORMAT_CUBEMAP) != 0;
+        void *pHostInterface = bCubemap
+            ? (void*)pPixelContainer->EmuCubeTexture8
+            : (void*)pThis->EmuSurface8;
+        if(!EmuIsKnownHostResource(pHostInterface))
+        {
+            EmuWarning("Surface_GetDesc on unregistered resource 0x%.08X "
+                       "(host field 0x%.08X); refusing",
+                       (DWORD)(uintptr_t)pThis, (DWORD)(uintptr_t)pHostInterface);
+            EmuSwapFS();   // XBox FS
+            return D3DERR_INVALIDCALL;
+        }
+
+        if(bCubemap)
         {
             hRet = pPixelContainer->EmuCubeTexture8->GetLevelDesc(
                 0, &SurfaceDesc);
@@ -8998,6 +9088,27 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
     HRESULT hRet = D3DERR_INVALIDCALL;
 
     if(pThis == NULL || pLockedRect == NULL)
+    {
+        EmuSwapFS();   // XBox FS
+        return hRet;
+    }
+
+    // The YUY2 short-circuit MUST precede every header dereference: a movie
+    // texture handle is a raw pixel pointer with the high bit set, not a
+    // readable X_D3DResource (EmuResolveYuy2Texture itself is deref-safe).
+    {
+        EmuYuy2TextureInfo *pYuy2Early = EmuResolveYuy2Texture(pThis);
+        if(pYuy2Early != NULL)
+        {
+            ZeroMemory(pLockedRect, sizeof(*pLockedRect));
+            hRet = EmuLockYuy2Texture(pYuy2Early, pLockedRect, pRect);
+            EmuSwapFS();   // XBox FS
+            return hRet;
+        }
+    }
+
+    pThis = EmuResolveAliasedResource(pThis);
+    if(pThis == NULL)
     {
         EmuSwapFS();   // XBox FS
         return hRet;
