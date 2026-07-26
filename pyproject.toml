@@ -2,18 +2,18 @@
 name = "cxbx-tools"
 version = "0.1.0"
 description = "Developer tooling for the CXBX project"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = []
 
 [dependency-groups]
 dev = [
-    "mypy>=1.16",
-    "ruff>=0.12",
+    "mypy>=2.3",
+    "ruff>=0.16",
 ]
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py314"
 src = ["tools/xtest"]
 extend-exclude = [
     "tools/xtest/out",
@@ -35,7 +35,7 @@ select = [
 line-ending = "lf"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 files = ["tools/xtest"]
 strict = true
 exclude = [
