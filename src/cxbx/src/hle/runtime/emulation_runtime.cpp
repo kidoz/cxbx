@@ -10736,6 +10736,10 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     g_pTLSData   = pTLSData;
 	g_pXbeHeader = pXbeHeader;
 
+    // This process runs title code from here on: never persist configuration
+    // from it at exit (see EmuShared::Cleanup).
+    cxbx::platform::DisableSharedRuntimePersist();
+
 	// For Unicode Conversions
 	setlocale(LC_ALL, "English");
 

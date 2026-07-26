@@ -52,6 +52,10 @@ CXBXKRNL_API int        g_EmuSharedRefCount = 0;
 // ******************************************************************
 HANDLE hMapObject = NULL;
 
+// The guest process opts out of persisting configuration at exit (see
+// EmuShared::DisablePersist below).
+static bool g_EmuSharedPersistDisabled = false;
+
 // ******************************************************************
 // * func: EmuShared::EmuSharedInit
 // ******************************************************************
@@ -116,13 +120,33 @@ CXBXKRNL_API void EmuShared::Init()
 }
 
 // ******************************************************************
+// * func: EmuShared::DisablePersist
+// ******************************************************************
+CXBXKRNL_API void EmuShared::DisablePersist()
+{
+    g_EmuSharedPersistDisabled = true;
+}
+
+// ******************************************************************
 // * func: EmuSharedCleanup
 // ******************************************************************
 CXBXKRNL_API void EmuShared::Cleanup()
 {
     g_EmuSharedRefCount--;
 
-    if(g_EmuSharedRefCount == 0)
+    // The refcount is per-process, so the destructor -- which persists the
+    // controller/video configuration to the registry via XBController::Save --
+    // used to run in EVERY process, including the guest. The guest never edits
+    // configuration, and by exit time arbitrary title code has been running in
+    // this address space for minutes: XBController's lookup tables live in
+    // plain Cxbx.dll .data a runaway guest write can stomp. When that
+    // happened, Save's sprintf("%s") faulted on the stomped pointer, the fault
+    // re-entered Save through exception dispatch until the stack was
+    // exhausted, and the process died with 0xC0000005 as its exit code --
+    // masking the title's real exit status on every voluntary exit (observed
+    // with NFS Underground). Persisting is the launcher/GUI's job; the guest
+    // opts out via DisablePersist at EmuInit.
+    if(g_EmuSharedRefCount == 0 && !g_EmuSharedPersistDisabled)
         g_EmuShared->EmuShared::~EmuShared();
 
     UnmapViewOfFile(g_EmuShared);

@@ -63,6 +63,13 @@ class EmuShared : public Mutex
         CXBXKRNL_API static void Cleanup();
 
         // ******************************************************************
+        // * The guest process calls this so Cleanup does not persist
+        // * configuration (registry writes are the launcher's job, and the
+        // * guest's Cxbx.dll data may have been stomped by title code)
+        // ******************************************************************
+        CXBXKRNL_API static void DisablePersist();
+
+        // ******************************************************************
         // * Xbox Video Accessors
         // ******************************************************************
         CXBXKRNL_API void GetXBVideo(      XBVideo *video) { Lock(); memcpy(video, &m_XBVideo, sizeof(XBVideo)); Unlock(); }

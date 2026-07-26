@@ -16,6 +16,11 @@ void ShutdownSharedRuntime()
     EmuShared::Cleanup();
 }
 
+void DisableSharedRuntimePersist()
+{
+    EmuShared::DisablePersist();
+}
+
 void GetSharedXbePath(char (&path)[kSharedXbePathCapacity])
 {
     g_EmuShared->GetXbePath(path);
