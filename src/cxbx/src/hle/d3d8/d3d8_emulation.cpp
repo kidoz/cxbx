@@ -875,6 +875,17 @@ struct EmuRegisteredVertexBuffer
     XTL::X_D3DVertexBuffer* resource = nullptr;
     const BYTE* guestData = nullptr;
     DWORD byteSize = 0;
+    DWORD sourceHash = 0;
+    bool sourceHashValid = false;
+};
+
+struct EmuRegisteredIndexBuffer
+{
+    XTL::X_D3DIndexBuffer* resource = nullptr;
+    const BYTE* guestData = nullptr;
+    DWORD byteSize = 0;
+    DWORD sourceHash = 0;
+    bool sourceHashValid = false;
 };
 
 struct EmuCreatedIndexBuffer
@@ -886,6 +897,7 @@ struct EmuCreatedIndexBuffer
 
 static std::vector<EmuRecordedPushBuffer> g_EmuRecordedPushBuffers;
 static std::vector<EmuRegisteredVertexBuffer> g_EmuRegisteredVertexBuffers;
+static std::vector<EmuRegisteredIndexBuffer> g_EmuRegisteredIndexBuffers;
 static std::vector<EmuCreatedIndexBuffer> g_EmuCreatedIndexBuffers;
 constexpr std::size_t EMU_RECORDED_DRAW_LIMIT = 256;
 constexpr std::size_t EMU_RECORDED_BYTE_LIMIT = 16 * 1024 * 1024;
@@ -966,13 +978,65 @@ static void EmuResetRegisteredVertexBuffer(XTL::X_D3DVertexBuffer* vertexBuffer,
     {
         registration->guestData = static_cast<const BYTE*>(guestData);
         registration->byteSize = byteSize;
+        registration->sourceHash = 0;
+        registration->sourceHashValid = false;
         return;
     }
 
     try
     {
         g_EmuRegisteredVertexBuffers.push_back(
-            { vertexBuffer, static_cast<const BYTE*>(guestData), byteSize });
+            { vertexBuffer, static_cast<const BYTE*>(guestData), byteSize, 0, false });
+    }
+    catch(...)
+    {
+    }
+}
+
+static EmuRegisteredIndexBuffer* EmuFindRegisteredIndexBuffer(
+    XTL::X_D3DIndexBuffer* indexBuffer)
+{
+    for(EmuRegisteredIndexBuffer& registration : g_EmuRegisteredIndexBuffers)
+    {
+        if(registration.resource == indexBuffer)
+        {
+            return &registration;
+        }
+    }
+    return nullptr;
+}
+
+static void EmuDiscardRegisteredIndexBuffer(XTL::X_D3DIndexBuffer* indexBuffer)
+{
+    for(auto registration = g_EmuRegisteredIndexBuffers.begin();
+        registration != g_EmuRegisteredIndexBuffers.end(); ++registration)
+    {
+        if(registration->resource == indexBuffer)
+        {
+            g_EmuRegisteredIndexBuffers.erase(registration);
+            return;
+        }
+    }
+}
+
+static void EmuResetRegisteredIndexBuffer(XTL::X_D3DIndexBuffer* indexBuffer,
+                                          const void* guestData, DWORD byteSize)
+{
+    EmuRegisteredIndexBuffer* registration =
+        EmuFindRegisteredIndexBuffer(indexBuffer);
+    if(registration != nullptr)
+    {
+        registration->guestData = static_cast<const BYTE*>(guestData);
+        registration->byteSize = byteSize;
+        registration->sourceHash = 0;
+        registration->sourceHashValid = false;
+        return;
+    }
+
+    try
+    {
+        g_EmuRegisteredIndexBuffers.push_back(
+            { indexBuffer, static_cast<const BYTE*>(guestData), byteSize, 0, false });
     }
     catch(...)
     {
@@ -3641,18 +3705,6 @@ static void EmuApplyPixelShaderFallback(cxbx::d3d::PixelShaderFallback fallback,
 static DWORD g_D3DDebugFrame = 0;     // increments at Swap
 static DWORD g_D3DDebugDrawIndex = 0; // resets at Swap
 
-static DWORD EmuD3DHashBytes(const void* data, std::size_t size)
-{
-    const BYTE* bytes = static_cast<const BYTE*>(data);
-    DWORD hash = 2166136261u;
-    for(std::size_t i = 0; i < size; ++i)
-    {
-        hash ^= bytes[i];
-        hash *= 16777619u;
-    }
-    return hash;
-}
-
 static bool EmuD3DParseDrawRange(const char* value, DWORD& begin, DWORD& end)
 {
     if(value == NULL || *value == '\0')
@@ -4345,7 +4397,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
                    pHandle)))
             {
                 const DWORD hash =
-                    EmuD3DHashBytes(definition.data(), sizeof(definition));
+                    cxbx::d3d::TextureContentHash(
+                        definition.data(), sizeof(definition));
                 printf("PSH| translated handle=0x%08lX hash=0x%08lX combiners=%lu "
                        "arith=%u tex=%u const=%u\n",
                        static_cast<unsigned long>(*pHandle),
@@ -4378,7 +4431,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreatePixelShader
             // The combiner was approximated, not translated -- always say
             // which approximation each shader got and why translation bailed,
             // so a wrong material is attributable without a rebuild.
-            const DWORD hash = EmuD3DHashBytes(definition.data(), sizeof(definition));
+            const DWORD hash = cxbx::d3d::TextureContentHash(
+                definition.data(), sizeof(definition));
             const cxbx::d3d::PixelShaderFallback fallback =
                 cxbx::d3d::ClassifyPixelShaderFallback(definition);
             printf("PSH| fallback_create handle=0x%08lX hash=0x%08lX combiners=%lu class=%s reason=%s\n",
@@ -4785,8 +4839,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
 // unswizzled before the host samples them. Track every swizzled-format
 // texture created through the D3D wrappers; a writable LockRect marks the
 // level dirty, and the pending block is unswizzled in place right before the
-// host lock is released (SetTexture's flush, or a re-lock). The Register
-// path has its own unswizzle and does not use this.
+// host lock is released (SetTexture's flush, or a re-lock). Registered
+// resources retain title-owned backing and use the live-refresh path below.
 struct EmuSwizzledTextureLevelLock
 {
     void *pBits;
@@ -4904,6 +4958,150 @@ static bool EmuD3DTexTraceEnabled()
     if(s_Enabled < 0)
         s_Enabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
     return s_Enabled == 1;
+}
+
+// Register copies an Xbox texture into a separate host D3D resource, but the
+// title still owns and can modify the original UMA backing afterward. Asset
+// loaders commonly register a header before asynchronous I/O has filled every
+// swizzled row. Preserve that source independently and refresh the host texture
+// when its content changes at the next SetTexture boundary.
+struct EmuRegisteredSwizzledTextureRefresh
+{
+    XTL::IDirect3DBaseTexture8* pHostTexture;
+    const BYTE* pGuestData;
+    DWORD dwGuestSize;
+    DWORD dwWidth;
+    DWORD dwHeight;
+    DWORD dwBPP;
+    DWORD dwSourceHash;
+    bool bSourceHashValid;
+};
+
+static std::vector<EmuRegisteredSwizzledTextureRefresh>
+    g_EmuRegisteredSwizzledTextureRefreshes;
+
+static void EmuTrackRegisteredSwizzledTexture(
+    XTL::IDirect3DBaseTexture8* pHostTexture, const BYTE* pGuestData,
+    DWORD dwGuestSize, DWORD dwWidth, DWORD dwHeight, DWORD dwBPP,
+    const std::vector<BYTE>& sourceCopy)
+{
+    if(pHostTexture == nullptr || pGuestData == nullptr || dwGuestSize == 0)
+    {
+        return;
+    }
+
+    const bool sourceHashValid = sourceCopy.size() == dwGuestSize;
+    const DWORD sourceHash =
+        sourceHashValid
+            ? cxbx::d3d::TextureContentHash(sourceCopy.data(), sourceCopy.size())
+            : 0;
+    const EmuRegisteredSwizzledTextureRefresh refresh = {
+        pHostTexture, pGuestData, dwGuestSize, dwWidth, dwHeight, dwBPP,
+        sourceHash, sourceHashValid
+    };
+    for(auto& entry : g_EmuRegisteredSwizzledTextureRefreshes)
+    {
+        if(entry.pHostTexture == pHostTexture)
+        {
+            entry = refresh;
+            return;
+        }
+    }
+    g_EmuRegisteredSwizzledTextureRefreshes.push_back(refresh);
+
+    if(EmuD3DTexTraceEnabled())
+    {
+        printf("TEX| registered-swizzled-track host=0x%.08lX guest=0x%.08lX "
+               "%lux%lu bpp=%lu bytes=%lu hash=0x%.08lX\n",
+               reinterpret_cast<unsigned long>(pHostTexture),
+               reinterpret_cast<unsigned long>(pGuestData),
+               static_cast<unsigned long>(dwWidth),
+               static_cast<unsigned long>(dwHeight),
+               static_cast<unsigned long>(dwBPP),
+               static_cast<unsigned long>(dwGuestSize),
+               static_cast<unsigned long>(sourceHash));
+        fflush(stdout);
+    }
+}
+
+static void EmuDiscardRegisteredSwizzledTexture(
+    XTL::IDirect3DBaseTexture8* pHostTexture)
+{
+    for(auto it = g_EmuRegisteredSwizzledTextureRefreshes.begin();
+        it != g_EmuRegisteredSwizzledTextureRefreshes.end(); ++it)
+    {
+        if(it->pHostTexture == pHostTexture)
+        {
+            g_EmuRegisteredSwizzledTextureRefreshes.erase(it);
+            return;
+        }
+    }
+}
+
+static void EmuRefreshRegisteredSwizzledTexture(
+    XTL::IDirect3DBaseTexture8* pBaseTexture)
+{
+    if(pBaseTexture == nullptr)
+    {
+        return;
+    }
+
+    for(auto& entry : g_EmuRegisteredSwizzledTextureRefreshes)
+    {
+        if(entry.pHostTexture != pBaseTexture)
+        {
+            continue;
+        }
+
+        std::vector<BYTE> sourceCopy;
+        if(!EmuD3DCopyReadableRange(
+               entry.pGuestData, entry.dwGuestSize, sourceCopy))
+        {
+            return;
+        }
+
+        const DWORD sourceHash =
+            cxbx::d3d::TextureContentHash(sourceCopy.data(), sourceCopy.size());
+        if(entry.bSourceHashValid && entry.dwSourceHash == sourceHash)
+        {
+            return;
+        }
+
+        auto* texture =
+            static_cast<XTL::IDirect3DTexture8*>(entry.pHostTexture);
+        XTL::D3DLOCKED_RECT lock = {};
+        __try
+        {
+            if(FAILED(texture->LockRect(0, &lock, NULL, 0)))
+            {
+                return;
+            }
+
+            RECT sourceRect = { 0, 0, 0, 0 };
+            POINT destinationPoint = { 0, 0 };
+            XTL::EmuXGUnswizzleRect(
+                sourceCopy.data(), entry.dwWidth, entry.dwHeight, 1,
+                lock.pBits, lock.Pitch, sourceRect, destinationPoint,
+                entry.dwBPP);
+            texture->UnlockRect(0);
+
+            if(EmuD3DTexTraceEnabled())
+            {
+                printf("TEX| registered-swizzled-refresh host=0x%.08lX "
+                       "old=0x%.08lX new=0x%.08lX\n",
+                       reinterpret_cast<unsigned long>(entry.pHostTexture),
+                       static_cast<unsigned long>(entry.dwSourceHash),
+                       static_cast<unsigned long>(sourceHash));
+                fflush(stdout);
+            }
+            entry.dwSourceHash = sourceHash;
+            entry.bSourceHashValid = true;
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        return;
+    }
 }
 
 // LINEAR texture metadata serves two purposes: registered resources with guest
@@ -6249,7 +6447,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture
     // guest Unlock call. End any host lock before sampling the resource.
     EmuFlushHostTextureLocks(pBaseTexture8);
 
-    // Linear textures stream from live guest memory; re-upload current pixels.
+    // Registered texture resources retain live guest backing; re-upload
+    // current pixels when that backing changed after registration.
+    EmuRefreshRegisteredSwizzledTexture(pBaseTexture8);
     EmuRefreshLinearTexture(pBaseTexture8);
     EmuConfigureLinearTextureCoordinates(Stage, pBaseTexture8);
 
@@ -8170,7 +8370,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                                                    dwSourceHeight;
 
             std::vector<BYTE> sourceCopy;
-            bool copiedSource = EmuD3DCopyReadableRange(pBase, dwSourceSize, sourceCopy);
+            const BYTE* liveSource = static_cast<const BYTE*>(pBase);
+            bool copiedSource =
+                EmuD3DCopyReadableRange(pBase, dwSourceSize, sourceCopy);
             if(!copiedSource && dwUnmaskedDataAddress != reinterpret_cast<DWORD>(pBase))
             {
                 // Register may receive a directly readable host alias that does not
@@ -8179,6 +8381,11 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 copiedSource = EmuD3DCopyReadableRange(
                     reinterpret_cast<const void*>(dwUnmaskedDataAddress), dwSourceSize,
                     sourceCopy);
+                if(copiedSource)
+                {
+                    liveSource =
+                        reinterpret_cast<const BYTE*>(dwUnmaskedDataAddress);
+                }
             }
             if(!copiedSource)
             {
@@ -8194,6 +8401,13 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 XTL::EmuXGUnswizzleRect(
                     sourceCopy.data(), dwSourceWidth, dwSourceHeight, dwDepth, LockedRect.pBits,
                     LockedRect.Pitch, iRect, iPoint, dwBPP);
+                if(dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
+                   pResource->EmuTexture8 != nullptr)
+                {
+                    EmuTrackRegisteredSwizzledTexture(
+                        pResource->EmuTexture8, liveSource, dwSourceSize,
+                        dwSourceWidth, dwSourceHeight, dwBPP, sourceCopy);
+                }
             }
             else if(bCompressed)
             {
@@ -8256,7 +8470,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 {
                     const DWORD sourceHash = sourceCopy.empty()
                                                  ? 0
-                                                 : EmuD3DHashBytes(sourceCopy.data(), sourceCopy.size());
+                                                 : cxbx::d3d::TextureContentHash(
+                                                       sourceCopy.data(),
+                                                       sourceCopy.size());
                     char fileName[96];
                     snprintf(fileName, sizeof(fileName), "%s_%08lX_x%02lX_%lux%lu.bmp",
                              dwCommonType == X_D3DCOMMON_TYPE_SURFACE ? "surf" : "tex",
@@ -8524,6 +8740,8 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release
                 EmuDiscardCreatedIndexBuffer(static_cast<X_D3DIndexBuffer*>(pThis));
             }
             EmuDiscardSwizzledTexture(
+                reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
+            EmuDiscardRegisteredSwizzledTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
             EmuDiscardLinearTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));

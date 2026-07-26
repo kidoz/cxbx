@@ -6,6 +6,22 @@
 
 int main()
 {
+    const unsigned char resourceBytes[] = { 0x00, 0x10, 0x20, 0x30 };
+    const unsigned char changedResourceBytes[] = { 0x00, 0x10, 0x21, 0x30 };
+    if(cxbx::d3d::ResourceContentHash(nullptr, 0) != 2166136261u ||
+       cxbx::d3d::ResourceContentHash(resourceBytes, sizeof(resourceBytes)) !=
+           0x4D7A5915u ||
+       cxbx::d3d::ResourceContentHash(
+           changedResourceBytes, sizeof(changedResourceBytes)) != 0xC777478Cu ||
+       cxbx::d3d::ResourceContentHash(resourceBytes, sizeof(resourceBytes)) ==
+           cxbx::d3d::ResourceContentHash(
+               changedResourceBytes, sizeof(changedResourceBytes)))
+    {
+        std::fputs("registered resource refreshes must detect changed guest content\n",
+                   stderr);
+        return 1;
+    }
+
     cxbx::d3d::XboxPixelShaderDefinition pixelShader{};
     pixelShader[53] = 1;
     pixelShader[54] = 1;

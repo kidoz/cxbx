@@ -8,6 +8,19 @@
 namespace cxbx::d3d
 {
 
+inline std::uint32_t ResourceContentHash(
+    const void* data, std::size_t size) noexcept
+{
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    std::uint32_t hash = 2166136261u;
+    for(std::size_t index = 0; index < size; ++index)
+    {
+        hash ^= bytes[index];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
 inline constexpr std::size_t CompressedTextureLevelSize(
     std::size_t width, std::size_t height, std::size_t bytesPerBlock) noexcept
 {
