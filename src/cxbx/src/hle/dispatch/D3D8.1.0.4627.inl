@@ -2165,6 +2165,26 @@ SOOVPA<15> IDirect3DDevice8_SetRenderState_CullMode_1_0_4627 =
     }
 };
 
+// D3DDevice_SetPixelShader (verified XDK 4928 retail image)
+SOOVPA<12> IDirect3DDevice8_SetPixelShader_1_0_4928 =
+{
+    0, 12, -1, 0,
+    {
+        { 0x00, 0x51 },
+        { 0x17, 0xC0 },
+        { 0x2D, 0x0D },
+        { 0x43, 0xA3 },
+        { 0x5B, 0xE8 },
+        { 0x79, 0x89 },
+        { 0x8B, 0x75 },
+        { 0xA2, 0x8B },
+        { 0xB9, 0x03 },
+        { 0xCC, 0x0D },
+        { 0xE7, 0x1A },
+        { 0xFF, 0x8E }
+    }
+};
+
 // D3DDevice_SetTexture (verified XDK 4928 retail image)
 SOOVPA<8> IDirect3DDevice8_SetTexture_1_0_4928 =
 {
@@ -2519,6 +2539,16 @@ OOVPATable D3D8_1_0_4627[] =
     // IDirect3DDevice8::SetPixelShader
     {
         (OOVPA*)&IDirect3DDevice8_SetPixelShader_1_0_4627,
+
+        XTL::EmuIDirect3DDevice8_SetPixelShader,
+
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_SetPixelShader"
+        #endif
+    },
+    // IDirect3DDevice8::SetPixelShader (XDK 4928 variant)
+    {
+        (OOVPA*)&IDirect3DDevice8_SetPixelShader_1_0_4928,
 
         XTL::EmuIDirect3DDevice8_SetPixelShader,
 
