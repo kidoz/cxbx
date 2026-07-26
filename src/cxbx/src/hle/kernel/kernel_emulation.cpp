@@ -5821,6 +5821,17 @@ static DWORD WINAPI EmuTimerDpcThread(LPVOID)
         FireTimer->Header.SignalState = 1;
         FireTimer->Header.Inserted = 0;
 
+        // A periodic timer re-arms itself on every expiry (KeSetTimerEx
+        // stores Period in milliseconds). Without this a title's tick timer
+        // fires exactly once and its WaitAny(work, tick) pump never wakes
+        // again.
+        if(FireTimer->Period != 0)
+        {
+            FireTimer->Header.Inserted = 1;
+            EmuScheduleTimerDpc(FireTimer, FireDpc,
+                                -((LONGLONG)FireTimer->Period * 10000));
+        }
+
         if(FireDpc != NULL)
         {
             EmuSwapFS();   // Xbox FS: the DPC routine is guest code
@@ -8025,9 +8036,11 @@ XBSYSAPI EXPORTNUM(149) xboxkrnl::BOOLEAN NTAPI xboxkrnl::KeSetTimer
 
     // Re-fire the DPC when the due time actually arrives (see the timer DPC
     // thread); a future-scheduled consumer (DSOUND deferred commands) no-ops
-    // the immediate fire below and relies on the timed one.
-    if(Dpc != NULL)
-        EmuScheduleTimerDpc(Timer, Dpc, DueTime.QuadPart);
+    // the immediate fire below and relies on the timed one. Schedule even
+    // without a DPC: a dpc-less timer is a pure WAITABLE timer, and expiry
+    // must still raise SignalState or a WaitAny(work-event, tick-timer) pump
+    // never wakes (NFS Underground's loader parks exactly like that).
+    EmuScheduleTimerDpc(Timer, Dpc, DueTime.QuadPart);
 
     EmuSwapFS();   // Xbox FS
 
@@ -8302,9 +8315,9 @@ static bool EmuTrySatisfyDispatcherWait(xboxkrnl::DISPATCHER_HEADER* Header)
         return false;
     }
 
-    // Notification events remain signalled until KeResetEvent. Synchronization
-    // events and semaphores consume one signal when a waiter succeeds.
-    if(Header->Type == 0)
+    // Notification events/timers remain signalled until reset. Synchronization
+    // events/timers and semaphores consume one signal when a waiter succeeds.
+    if(Header->Type == 0 || Header->Type == 0x08)
     {
         return true;
     }
