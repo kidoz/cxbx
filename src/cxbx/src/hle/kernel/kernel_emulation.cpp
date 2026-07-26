@@ -161,6 +161,11 @@ struct EmuThreadSuspendState
     bool SelfSuspendPending = false;
 };
 
+// Per-thread user-apc nesting depth (defined at NtUserIoApcDispatcher). All
+// host alertable waits honor Alertable only when this is zero, serializing
+// apc delivery the way APC_LEVEL does on hardware.
+extern thread_local ULONG g_EmuUserApcDepth;
+
 // Handles can be duplicated, so suspend state is shared by host thread ID.
 // Keep each logical count change and its host transition atomic.
 static std::mutex g_EmuThreadSuspendCountsMutex;
@@ -7863,7 +7868,9 @@ XBSYSAPI EXPORTNUM(99) NTSTATUS NTAPI xboxkrnl::KeDelayExecutionThread
     }
     #endif
 
-    NTSTATUS ret = NtDll::NtDelayExecution(Alertable, (NtDll::LARGE_INTEGER*)Interval);
+    // Honor Alertable only outside an apc routine: delivery is serialized at
+    // APC_LEVEL on hardware (see NtUserIoApcDispatcher).
+    NTSTATUS ret = NtDll::NtDelayExecution(Alertable && g_EmuUserApcDepth == 0, (NtDll::LARGE_INTEGER*)Interval);
 
     EmuSwapFS();   // Xbox FS
 
@@ -8324,7 +8331,20 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject
         // Keep Win32 FS active while invoking the host scheduler. The previous
         // implementation swapped to Xbox FS before Sleep, making a Win32 API
         // run with guest thread state installed.
-        Sleep(1);
+        //
+        // The sleep must be alertable: on the Xbox an NtReadFile/NtWriteFile
+        // completion routine is a KERNEL apc, delivered during any wait at
+        // PASSIVE irql regardless of the Alertable argument. The host models
+        // it as a USER apc (NtUserIoApcDispatcher), which only fires in an
+        // alertable state. A non-alertable poll here therefore deadlocked any
+        // title whose overlapped-IO completion signals the very event this
+        // wait is polling -- WhiteOut's streaming loader parks exactly like
+        // that. NtUserIoApcDispatcher expects Win2k/XP FS on entry, which is
+        // the state this loop maintains. Delivery is serialized: while an apc
+        // routine is running on this thread the sleep goes non-alertable,
+        // matching the APC_LEVEL block on hardware (unbounded nesting killed
+        // NFS Underground by stack exhaustion).
+        SleepEx(1, g_EmuUserApcDepth == 0);
     }
 }
 
@@ -11142,6 +11162,16 @@ XBSYSAPI EXPORTNUM(226) NTSTATUS NTAPI xboxkrnl::NtSetInformationFile
 // ******************************************************************
 // * 0x00E8 - NtUserIoApcDispatcher
 // ******************************************************************
+// On the Xbox an IO completion routine runs as a KERNEL apc at APC_LEVEL,
+// which blocks delivery of further apcs until it returns. The host models it
+// as a USER apc, and those nest: if the completion routine below enters an
+// alertable wait, the next queued apc is delivered inside it, recursively --
+// NFS Underground chained ~28k deliveries this way and died of stack
+// exhaustion. Track the per-thread apc depth; the dispatcher-wait polls go
+// non-alertable while it is nonzero, which serializes delivery exactly like
+// APC_LEVEL does.
+thread_local ULONG g_EmuUserApcDepth = 0;
+
 XBSYSAPI EXPORTNUM(232) VOID NTAPI xboxkrnl::NtUserIoApcDispatcher
 (
     PVOID            ApcContext,
@@ -11184,6 +11214,8 @@ XBSYSAPI EXPORTNUM(232) VOID NTAPI xboxkrnl::NtUserIoApcDispatcher
     else
         dwBytes = (ULONG)IoStatusBlock->Information;
 
+    g_EmuUserApcDepth++;
+
     EmuSwapFS();   // Xbox FS
 
     __asm
@@ -11204,6 +11236,8 @@ XBSYSAPI EXPORTNUM(232) VOID NTAPI xboxkrnl::NtUserIoApcDispatcher
 
     EmuSwapFS();   // Win2k/XP FS
 
+    g_EmuUserApcDepth--;
+
     #ifdef _DEBUG_TRACE
     printf("EmuKrnl (0x%X): NtUserIoApcDispatcher Completed\n", GetCurrentThreadId());
     #endif
@@ -11223,7 +11257,9 @@ XBSYSAPI EXPORTNUM(233) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObject
 {
     EmuSwapFS();   // Win2k/XP FS
 
-    NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable, (NtDll::PLARGE_INTEGER)Timeout);
+    // Honor Alertable only outside an apc routine (APC_LEVEL serialization,
+    // see NtUserIoApcDispatcher).
+    NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable && g_EmuUserApcDepth == 0, (NtDll::PLARGE_INTEGER)Timeout);
 
     EmuSwapFS();   // Xbox FS
 
@@ -11259,7 +11295,9 @@ XBSYSAPI EXPORTNUM(234) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObjectEx
     }
     #endif
 
-    NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable, (NtDll::PLARGE_INTEGER)Timeout);
+    // Honor Alertable only outside an apc routine (APC_LEVEL serialization,
+    // see NtUserIoApcDispatcher).
+    NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable && g_EmuUserApcDepth == 0, (NtDll::PLARGE_INTEGER)Timeout);
 
     EmuSwapFS();   // Xbox FS
 
