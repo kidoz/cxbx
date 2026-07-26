@@ -181,6 +181,13 @@ extern void *EmuGetCurrentThread();
 extern void EmuAdjustCurrentThreadKernelApcDisable(long Delta);
 
 // ******************************************************************
+// * func: EmuGetThreadKernelApcDisable
+// * Cross-thread read of a target thread's KernelApcDisable count
+// * (0 when the thread is unknown or outside any critical region)
+// ******************************************************************
+extern long EmuGetThreadKernelApcDisable(DWORD ThreadId);
+
+// ******************************************************************
 // * func: EmuIsXboxFS
 // ******************************************************************
 // *

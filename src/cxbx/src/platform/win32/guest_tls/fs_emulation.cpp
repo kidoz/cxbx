@@ -52,6 +52,8 @@ namespace xboxkrnl
 #include "emu_stack_precommit.h"
 #include <cstdio>
 #include <cstdlib>
+#include <map>
+#include <mutex>
 
 // ******************************************************************
 // * data: EmuAutoSleepRate
@@ -66,6 +68,35 @@ static thread_local uint08 *g_pEmuCurrentTLS = NULL;
 static thread_local uint08 *g_pEmuCurrentTLSAllocation = NULL;
 static thread_local PVOID g_pEmuHostStackBase = NULL;
 
+// Cross-thread ETHREAD lookup. The suspend path must read a TARGET thread's
+// KernelApcDisable (Tcb+0x68) to know whether it sits inside a critical
+// region, but the ETHREAD itself is thread-local. Registered on creation,
+// removed before the owning thread deletes it; reads copy the value while the
+// lock is held, so a concurrent teardown cannot free the object mid-read.
+static std::mutex g_EmuThreadRegistryMutex;
+static std::map<DWORD, xboxkrnl::ETHREAD*> g_EmuThreadRegistry;
+
+static void EmuRegisterCurrentThread()
+{
+    const std::lock_guard<std::mutex> Lock(g_EmuThreadRegistryMutex);
+    g_EmuThreadRegistry[GetCurrentThreadId()] = g_pEmuCurrentThread;
+}
+
+static void EmuDeregisterCurrentThread()
+{
+    const std::lock_guard<std::mutex> Lock(g_EmuThreadRegistryMutex);
+    g_EmuThreadRegistry.erase(GetCurrentThreadId());
+}
+
+long EmuGetThreadKernelApcDisable(DWORD ThreadId)
+{
+    const std::lock_guard<std::mutex> Lock(g_EmuThreadRegistryMutex);
+    auto Entry = g_EmuThreadRegistry.find(ThreadId);
+    if(Entry == g_EmuThreadRegistry.end() || Entry->second == NULL)
+        return 0;
+    return *(long*)((uint08*)&Entry->second->Tcb + 0x68);
+}
+
 static void EmuSetCurrentThread(uint08 *pTLSData, uint08 *pTLSAllocation)
 {
     if(g_pEmuCurrentThread != NULL)
@@ -78,6 +109,7 @@ static void EmuSetCurrentThread(uint08 *pTLSData, uint08 *pTLSAllocation)
     g_pEmuCurrentThread->UniqueThread = GetCurrentThreadId();
     g_pEmuCurrentTLS = pTLSData;
     g_pEmuCurrentTLSAllocation = pTLSAllocation;
+    EmuRegisterCurrentThread();
 }
 
 void *EmuGetCurrentThread()
@@ -381,6 +413,7 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
         g_pEmuCurrentThread = EThread;
         g_pEmuCurrentTLS = pNewTLS;
         g_pEmuCurrentTLSAllocation = pNewTLSAllocation;
+        EmuRegisterCurrentThread();
 
         memcpy(&NewPcr->NtTib, OrgNtTib, sizeof(NT_TIB));
 
@@ -464,6 +497,7 @@ void EmuCleanupFS()
         g_pEmuCurrentTLSAllocation = NULL;
         g_pEmuCurrentTLS = NULL;
 
+        EmuDeregisterCurrentThread();
         delete g_pEmuCurrentThread;
         g_pEmuCurrentThread = NULL;
         return;

@@ -616,6 +616,24 @@ static bool EmuIsGuestExecutionAddress(ULONG Address)
 
 static bool EmuSuspendThreadAtGuestBoundary(HANDLE ThreadHandle)
 {
+    // Escape hatch (CXBX_SUSPEND_LOGICAL=1): record every suspension as
+    // logical-only, the pre-boundary-fix behavior. Soul Calibur 2's
+    // self-suspend scheduler wedges black once suspends take real effect --
+    // even with the critical-region deferral below -- and needs this while
+    // the wedge is investigated.
+    {
+        static int LogicalOnly = -1;
+        if(LogicalOnly < 0)
+        {
+            char Buffer[8] = {};
+            const ::DWORD Length = GetEnvironmentVariableA(
+                "CXBX_SUSPEND_LOGICAL", Buffer, sizeof(Buffer));
+            LogicalOnly = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
+        }
+        if(LogicalOnly == 1)
+            return false;
+    }
+
     // Suspending host-side emulator or CRT code can strand a lock forever.
     // Retry briefly until the target is executing guest code. If no safe
     // boundary is observed, the caller records a logical-only suspension.
@@ -637,8 +655,19 @@ static bool EmuSuspendThreadAtGuestBoundary(HANDLE ThreadHandle)
         CONTEXT Context = {};
         Context.ContextFlags = CONTEXT_CONTROL;
         if(GetThreadContext(ThreadHandle, &Context) &&
-           EmuIsGuestExecutionAddress(Context.Eip))
+           EmuIsGuestExecutionAddress(Context.Eip) &&
+           EmuGetThreadKernelApcDisable(GetThreadId(ThreadHandle)) == 0)
         {
+            // Guest code AND outside any critical region. On hardware a
+            // suspend is a kernel apc, and apc delivery is deferred while the
+            // target holds KernelApcDisable (KeEnterCriticalRegion /
+            // RtlEnterCriticalSectionAndRegion) -- suspending such a thread
+            // here froze it INSIDE a critical section and wedged every other
+            // thread that needed the lock (Soul Calibur 2's self-suspend
+            // scheduler went permanently black once suspends took real
+            // effect). If no safe window is observed the caller records a
+            // logical-only suspension, which is exactly the deferral the
+            // hardware would perform.
             return true;
         }
         LastEip = Context.Eip;
