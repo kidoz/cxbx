@@ -215,7 +215,7 @@ extern "C" VOID NTAPI EmuKeStallExecutionProcessor(ULONG Microseconds);
 extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread);
 extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait);
 extern "C" BOOLEAN NTAPI EmuKeTestAlertThread(UCHAR AlertMode);
-extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects(ULONG Count, PVOID Object[], ULONG WaitType, UCHAR WaitMode, BOOLEAN Alertable, xboxkrnl::PLARGE_INTEGER Timeout, PVOID WaitBlockArray);
+extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects(ULONG Count, PVOID Object[], ULONG WaitType, ULONG WaitReason, UCHAR WaitMode, BOOLEAN Alertable, xboxkrnl::PLARGE_INTEGER Timeout, PVOID WaitBlockArray);
 extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject(PVOID Object, ULONG WaitReason, UCHAR WaitMode, BOOLEAN Alertable, xboxkrnl::PLARGE_INTEGER Timeout);
 extern "C" UCHAR __fastcall EmuKfRaiseIrql(UCHAR NewIrql);
 extern "C" VOID __fastcall EmuKfLowerIrql(UCHAR NewIrql);

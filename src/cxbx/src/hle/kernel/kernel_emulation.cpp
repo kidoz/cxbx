@@ -8138,11 +8138,22 @@ extern "C" BOOLEAN NTAPI EmuKeTestAlertThread(UCHAR AlertMode)
     return FALSE;
 }
 
+static bool EmuDispatcherObjectSupportsWait(const xboxkrnl::DISPATCHER_HEADER* Header);
+static bool EmuTrySatisfyDispatcherWait(xboxkrnl::DISPATCHER_HEADER* Header);
+static DWORD EmuDispatcherTimeoutMilliseconds(const xboxkrnl::LARGE_INTEGER& Timeout);
+
+// Xbox ABI: 8 stdcall parameters, `ret 0x20`. This implementation previously
+// omitted WaitReason (7 parameters, `ret 0x1C`), so every call leaked 4 bytes
+// of the caller's stack and shifted WaitMode/Alertable/Timeout/WaitBlockArray
+// into the wrong slots -- a polling title bled its stack dry at a rate set by
+// its loop (NFS Underground's loader died of stack exhaustion after ~28k
+// calls on a 124 KiB stack, wherever the committed floor happened to be).
 extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects
 (
     IN ULONG Count,
     IN PVOID Object[],
     IN ULONG WaitType,
+    IN ULONG WaitReason,
     IN UCHAR WaitMode,
     IN BOOLEAN Alertable,
     IN xboxkrnl::PLARGE_INTEGER Timeout,
@@ -8151,19 +8162,134 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects
 {
     EmuSwapFS();   // Win2k/XP FS
 
-    printf("EmuKrnl (0x%lX): KeWaitForMultipleObjects count=%lu waitType=0x%.08lX alertable=%lu.\n",
-           GetCurrentThreadId(), Count, WaitType, (ULONG)Alertable);
+    // Rate-limit the entry trace: a title that polls (NFS Underground pumps a
+    // two-event WaitAny tens of thousands of times) otherwise floods the log.
+    bool TraceThisCall = false;
+    {
+        static volatile LONG CallCount = 0;
+        const LONG Call = InterlockedIncrement(&CallCount);
+        TraceThisCall = Call <= 20 || (Call & 0xFFF) == 0;
+        if(TraceThisCall)
+        {
+            printf("EmuKrnl (0x%lX): KeWaitForMultipleObjects count=%lu waitType=0x%.08lX alertable=%lu (call %ld).\n",
+                   GetCurrentThreadId(), Count, WaitType, (ULONG)Alertable, Call);
+            for(ULONG Index = 0; Index < Count && Index < 8 && Object != NULL; Index++)
+            {
+                const xboxkrnl::DISPATCHER_HEADER *Header =
+                    (const xboxkrnl::DISPATCHER_HEADER*)Object[Index];
+                if(Header != NULL && EmuIsWritableMemoryRange((PVOID)Header, sizeof(*Header)))
+                    printf("EmuKrnl (0x%lX):   object[%lu]=%p type=%u signal=%ld\n",
+                           GetCurrentThreadId(), Index, Object[Index],
+                           (unsigned)Header->Type, (LONG)Header->SignalState);
+                else
+                    printf("EmuKrnl (0x%lX):   object[%lu]=%p (unreadable)\n",
+                           GetCurrentThreadId(), Index, Object[Index]);
+            }
+            fflush(stdout);
+        }
+    }
 
-    EmuSwapFS();   // Xbox FS
+    // The previous stub returned STATUS_SUCCESS unconditionally, i.e. "object
+    // 0 signalled" for a WaitAny. A title that parks a worker on job events
+    // then spins through the phantom completions and consumes state that was
+    // never produced (NFS Underground crashed within seconds of its first
+    // two-event WaitAny). Model the wait with the same dispatcher poll as
+    // KeWaitForSingleObject.
+    bool AllSupported = Count > 0 && Count <= 64 && Object != NULL;
+    for(ULONG Index = 0; AllSupported && Index < Count; Index++)
+    {
+        xboxkrnl::DISPATCHER_HEADER *Header =
+            (xboxkrnl::DISPATCHER_HEADER*)Object[Index];
+        if(Header == NULL || !EmuIsWritableMemoryRange(Header, sizeof(*Header)) ||
+           !EmuDispatcherObjectSupportsWait(Header))
+        {
+            AllSupported = false;
+        }
+    }
 
-    return STATUS_SUCCESS;
+    if(!AllSupported)
+    {
+        // Preserve the legacy permissive result for object types the HLE does
+        // not model: blocking them would introduce a new indefinite hang
+        // without implementing their wake mechanism.
+        EmuSwapFS();   // Xbox FS
+        return STATUS_SUCCESS;
+    }
+
+    const DWORD Started = GetTickCount();
+    const bool HasTimeout = Timeout != NULL;
+    const DWORD TimeoutMilliseconds =
+        HasTimeout ? EmuDispatcherTimeoutMilliseconds(*Timeout) : 0;
+
+    for(;;)
+    {
+        if(WaitType == 1)   // WaitAny
+        {
+            for(ULONG Index = 0; Index < Count; Index++)
+            {
+                if(EmuTrySatisfyDispatcherWait(
+                       (xboxkrnl::DISPATCHER_HEADER*)Object[Index]))
+                {
+                    if(TraceThisCall)
+                    {
+                        printf("EmuKrnl (0x%lX):   satisfied by object[%lu]\n",
+                               GetCurrentThreadId(), Index);
+                        fflush(stdout);
+                    }
+                    EmuSwapFS();   // Xbox FS
+                    return STATUS_WAIT_0 + Index;
+                }
+            }
+        }
+        else                // WaitAll
+        {
+            // Peek every object before consuming any so a partial set of
+            // signals is not eaten by an unsatisfied wait.
+            bool AllSignaled = true;
+            for(ULONG Index = 0; AllSignaled && Index < Count; Index++)
+            {
+                const xboxkrnl::DISPATCHER_HEADER *Header =
+                    (const xboxkrnl::DISPATCHER_HEADER*)Object[Index];
+                AllSignaled = Header->SignalState > 0;
+            }
+
+            if(AllSignaled)
+            {
+                for(ULONG Index = 0; Index < Count; Index++)
+                {
+                    EmuTrySatisfyDispatcherWait(
+                        (xboxkrnl::DISPATCHER_HEADER*)Object[Index]);
+                }
+                EmuSwapFS();   // Xbox FS
+                return STATUS_SUCCESS;
+            }
+        }
+
+        if(HasTimeout && GetTickCount() - Started >= TimeoutMilliseconds)
+        {
+            EmuSwapFS();   // Xbox FS
+            return STATUS_TIMEOUT;
+        }
+
+        // Alertable for the same reason as KeWaitForSingleObject: host user
+        // APCs stand in for Xbox kernel IO-completion APCs. Non-alertable
+        // while an apc routine is already running on this thread -- delivery
+        // is serialized at APC_LEVEL on hardware (see NtUserIoApcDispatcher).
+        SleepEx(1, g_EmuUserApcDepth == 0);
+    }
 }
 
 static bool EmuDispatcherObjectSupportsWait(const xboxkrnl::DISPATCHER_HEADER* Header)
 {
-    // NotificationEvent, SynchronizationEvent, and SemaphoreObject are the
-    // dispatcher types whose signal semantics are modelled by this HLE.
-    return Header->Type == 0 || Header->Type == 1 || Header->Type == 0x05;
+    // NotificationEvent, SynchronizationEvent, SemaphoreObject, and both timer
+    // types are the dispatcher types whose signal semantics are modelled by
+    // this HLE (the timer DPC thread raises SignalState on expiry). Timers
+    // matter for the WaitAny(work-event, tick-timer) pump shape: refusing them
+    // sent the whole wait down the permissive instant-success fallback, and a
+    // title's scheduler loop span at full speed on phantom completions
+    // (NFS Underground's loader starved its producers this way).
+    return Header->Type == 0 || Header->Type == 1 || Header->Type == 0x05 ||
+           Header->Type == 0x08 || Header->Type == 0x09;
 }
 
 static bool EmuTrySatisfyDispatcherWait(xboxkrnl::DISPATCHER_HEADER* Header)
