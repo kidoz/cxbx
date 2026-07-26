@@ -494,6 +494,57 @@ static bool EmuIsValidHostThread(HANDLE ThreadHandle)
            GetThreadId(ThreadHandle) != 0;
 }
 
+// Opt-in suspend/resume audit (CXBX_SUSPEND_TRACE=1). A title that uses
+// self-suspend as a scheduler primitive parks its worker threads and relies on
+// a dispatcher to resume them; a single lost resume strands one thread forever
+// and the log goes quiet with no fault. One line per transition, plus a
+// snapshot of every thread still carrying a logical count, is enough to name
+// the thread whose count never returns to zero.
+static bool EmuSuspendTraceEnabled()
+{
+    static int Enabled = -1;
+
+    if(Enabled < 0)
+    {
+        char Buffer[8] = {};
+        const ::DWORD Length =
+            GetEnvironmentVariableA("CXBX_SUSPEND_TRACE", Buffer, sizeof(Buffer));
+        Enabled = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
+    }
+
+    return Enabled == 1;
+}
+
+// Callers hold g_EmuThreadSuspendCountsMutex.
+static void EmuTraceSuspendLocked(
+    const char *Operation, DWORD TargetThreadId,
+    const EmuThreadSuspendState& SuspendState)
+{
+    if(!EmuSuspendTraceEnabled())
+        return;
+
+    printf("SUSP| %-10s target=0x%.04lX by=0x%.04lX logical=%lu host=%lu selfpending=%d\n",
+           Operation, TargetThreadId, GetCurrentThreadId(),
+           SuspendState.LogicalCount, SuspendState.HostCount,
+           SuspendState.SelfSuspendPending ? 1 : 0);
+
+    ULONG Outstanding = 0;
+    for(const auto& Entry : g_EmuThreadSuspendCounts)
+    {
+        if(Entry.second.LogicalCount != 0)
+        {
+            printf("SUSP|   outstanding tid=0x%.04lX logical=%lu host=%lu\n",
+                   Entry.first, Entry.second.LogicalCount,
+                   Entry.second.HostCount);
+            Outstanding++;
+        }
+    }
+    if(Outstanding == 0)
+        printf("SUSP|   outstanding none\n");
+
+    fflush(stdout);
+}
+
 static EmuThreadSuspendState&
 EmuThreadSuspendStateForHandleLocked(HANDLE ThreadHandle)
 {
@@ -536,8 +587,22 @@ static bool EmuIsGuestExecutionAddress(ULONG Address)
         return false;
     }
 
-    // Guest code lives in executable anonymous mappings. Host modules must run
-    // to a guest boundary before they can be suspended safely.
+    // The loaded XBE image is guest code even though it is a real module: the
+    // XBE is converted to a PE and run as the main executable, so every address
+    // in it answers GetModuleFileNameA. Testing "has no module" alone therefore
+    // rejected all ordinary guest code and no suspension could ever take
+    // effect -- the guest saw its suspend counts rise while the target kept
+    // running. Accept the image range first.
+    if(g_pXbeHeader != NULL &&
+       Address >= g_pXbeHeader->dwBaseAddr &&
+       Address < g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage)
+    {
+        return true;
+    }
+
+    // Guest code also lives in executable anonymous mappings (thunks and
+    // memory the title generates itself). Host modules must still run to a
+    // guest boundary before they can be suspended safely.
     char ModulePath[MAX_PATH] = {};
     return GetModuleFileNameA(
                static_cast<HMODULE>(Memory.AllocationBase),
@@ -555,6 +620,7 @@ static bool EmuSuspendThreadAtGuestBoundary(HANDLE ThreadHandle)
     }
 
     constexpr ULONG MaximumAttempts = 64;
+    ULONG LastEip = 0;
     for(ULONG Attempt = 0; Attempt < MaximumAttempts; ++Attempt)
     {
         const DWORD HostPreviousCount = SuspendThread(ThreadHandle);
@@ -570,12 +636,33 @@ static bool EmuSuspendThreadAtGuestBoundary(HANDLE ThreadHandle)
         {
             return true;
         }
+        LastEip = Context.Eip;
 
         if(ResumeThread(ThreadHandle) == (DWORD)-1)
         {
             return false;
         }
         SwitchToThread();
+    }
+
+    // Name where the target was parked instead. A thread that is never caught
+    // at a guest boundary is sitting in host code -- usually a wait entered on
+    // the guest's behalf -- and the caller then records a logical-only
+    // suspension that the guest cannot observe as taking effect.
+    if(EmuSuspendTraceEnabled())
+    {
+        MEMORY_BASIC_INFORMATION Memory = {};
+        char ModulePath[MAX_PATH] = "<guest/anonymous>";
+        if(VirtualQuery(reinterpret_cast<const void*>(LastEip), &Memory,
+                        sizeof(Memory)) == sizeof(Memory))
+        {
+            GetModuleFileNameA(static_cast<HMODULE>(Memory.AllocationBase),
+                               ModulePath, sizeof(ModulePath));
+        }
+
+        printf("SUSP| no-boundary target=0x%.04lX eip=0x%.08lX in=%s\n",
+               GetThreadId(ThreadHandle), LastEip, ModulePath);
+        fflush(stdout);
     }
 
     return false;
@@ -6326,6 +6413,8 @@ extern "C" ULONG NTAPI EmuKeResumeThread(xboxkrnl::PKTHREAD Thread)
                 SuspendState.LogicalCount;
         }
     }
+    EmuTraceSuspendLocked("Ke-resume", GetThreadId(ThreadHeader->HostHandle),
+                          SuspendState);
 
     EmuSwapFS();   // Xbox FS
 
@@ -6426,6 +6515,7 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
     const DWORD ThreadId = GetThreadId(ThreadHeader->HostHandle);
     if(ThreadId == GetCurrentThreadId())
     {
+        EmuTraceSuspendLocked("Ke-self<", ThreadId, SuspendState);
         SuspendState.LogicalCount++;
         ThreadHeader->SuspendCount = SuspendState.LogicalCount;
         if(!EmuSuspendCurrentThread(
@@ -6434,6 +6524,8 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
             SuspendState.LogicalCount--;
         }
         ThreadHeader->SuspendCount = SuspendState.LogicalCount;
+        // Reached once the thread is running again.
+        EmuTraceSuspendLocked("Ke-self>", ThreadId, SuspendState);
     }
     else
     {
@@ -6443,6 +6535,7 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
         }
         SuspendState.LogicalCount++;
         ThreadHeader->SuspendCount = SuspendState.LogicalCount;
+        EmuTraceSuspendLocked("Ke-susp", ThreadId, SuspendState);
     }
 
     EmuSwapFS();   // Xbox FS
@@ -10877,6 +10970,8 @@ XBSYSAPI EXPORTNUM(224) NTSTATUS NTAPI xboxkrnl::NtResumeThread
         {
             ret = 0xC0000008;
         }
+        EmuTraceSuspendLocked("Nt-resume", GetThreadId(ThreadHandle),
+                              SuspendState);
 
         if(PreviousSuspendCount != NULL)
         {
@@ -10927,6 +11022,7 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
             const DWORD ThreadId = GetThreadId(ThreadHandle);
             if(ThreadId == GetCurrentThreadId())
             {
+                EmuTraceSuspendLocked("Nt-self<", ThreadId, SuspendState);
                 SuspendState.LogicalCount++;
                 if(!EmuSuspendCurrentThread(
                        ThreadHandle, Lock, SuspendState))
@@ -10934,6 +11030,8 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
                     SuspendState.LogicalCount--;
                     ret = 0xC0000008;
                 }
+                // Reached once the thread is running again.
+                EmuTraceSuspendLocked("Nt-self>", ThreadId, SuspendState);
             }
             else
             {
@@ -10942,6 +11040,7 @@ extern "C" NTSTATUS NTAPI EmuNtSuspendThread
                     SuspendState.HostCount++;
                 }
                 SuspendState.LogicalCount++;
+                EmuTraceSuspendLocked("Nt-susp", ThreadId, SuspendState);
             }
         }
     }
