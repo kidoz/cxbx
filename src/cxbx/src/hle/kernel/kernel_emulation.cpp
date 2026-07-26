@@ -3319,6 +3319,23 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
     ULONG CurrentThread = (ULONG)(::ULONG_PTR)EmuGetCurrentThread();
     CRITICAL_SECTION *HostLock = EmuHostLockForGuestCriticalSection((ULONG)CriticalSection);
 
+    // A guest critical section is the one blocking primitive the SYNC wait
+    // audit cannot see (it never reaches NtWaitForSingleObject), so a thread
+    // stuck acquiring one just goes quiet. Log the attempt and the
+    // acquisition separately: an "enter" with no matching "held" is a thread
+    // blocked on the lock, and the owner recorded in the guest structure names
+    // who is holding it.
+    const bool Trace = EmuSyncTraceEnabled();
+    if(Trace)
+    {
+        printf("SYNC| cs-enter tid=0x%lX cs=0x%.08lX owner=0x%.08lX recursion=%ld caller=0x%08lX\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)CriticalSection,
+               (ULONG)CriticalSection->OwningThread,
+               (LONG)CriticalSection->RecursionCount,
+               (ULONG)(uintptr_t)_ReturnAddress());
+        fflush(stdout);
+    }
+
     EmuSwapFS();   // Win2k/XP FS: the wait can block on the host lock's event
     EnterCriticalSection(HostLock);
     EmuSwapFS();   // Xbox FS
@@ -3326,6 +3343,14 @@ extern "C" VOID NTAPI EmuRtlEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION
     CriticalSection->OwningThread = CurrentThread;
     CriticalSection->RecursionCount++;
     CriticalSection->LockCount++;
+
+    if(Trace)
+    {
+        printf("SYNC| cs-held  tid=0x%lX cs=0x%.08lX recursion=%ld\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)CriticalSection,
+               (LONG)CriticalSection->RecursionCount);
+        fflush(stdout);
+    }
 }
 
 extern "C" BOOLEAN NTAPI EmuRtlTryEnterCriticalSection(xboxkrnl::PRTL_CRITICAL_SECTION CriticalSection)
