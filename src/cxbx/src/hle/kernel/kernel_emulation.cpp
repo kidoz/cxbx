@@ -9455,6 +9455,14 @@ XBSYSAPI EXPORTNUM(187) NTSTATUS NTAPI xboxkrnl::NtClose
     }
     #endif
 
+    if(EmuSyncTraceEnabled())
+    {
+        printf("SYNC| close tid=0x%lX handle=0x%X caller=0x%08lX\n",
+               GetCurrentThreadId(), (uint32)(uintptr_t)Handle,
+               (ULONG)(uintptr_t)_ReturnAddress());
+        fflush(stdout);
+    }
+
     NTSTATUS ret = STATUS_SUCCESS;
 
     if(Handle == NULL || Handle == (HANDLE)-1 || Handle == (HANDLE)-2)
@@ -9977,6 +9985,14 @@ extern "C" NTSTATUS NTAPI EmuNtCreateSemaphore
         return 0xC0000008;
 
     *SemaphoreHandle = CreateSemaphore(NULL, InitialCount, MaximumCount, NULL);
+
+    if(EmuSyncTraceEnabled())
+    {
+        printf("SYNC| create-semaphore tid=0x%lX handle=0x%X initial=%ld max=%ld caller=0x%08lX\n",
+               GetCurrentThreadId(), (uint32)(uintptr_t)*SemaphoreHandle,
+               (LONG)InitialCount, (LONG)MaximumCount, (ULONG)(uintptr_t)_ReturnAddress());
+        fflush(stdout);
+    }
 
     return (*SemaphoreHandle != NULL) ? STATUS_SUCCESS : 0xC0000008;
 }
@@ -11089,6 +11105,13 @@ extern "C" NTSTATUS NTAPI EmuNtReleaseMutant
 
     if(NtDll::NtReleaseMutant != 0)
         ret = NtDll::NtReleaseMutant(MutantHandle, PreviousCount);
+        if(EmuSyncTraceEnabled())
+        {
+            printf("SYNC| release-mutant tid=0x%lX handle=0x%X caller=0x%08lX\n",
+                   GetCurrentThreadId(), (uint32)(uintptr_t)MutantHandle,
+                   (ULONG)(uintptr_t)_ReturnAddress());
+            fflush(stdout);
+        }
 
     if(ret != STATUS_SUCCESS)
         printf("EmuKrnl (0x%X): NtReleaseMutant failed with status 0x%.08X.\n", (uint32)GetCurrentThreadId(), (uint32)ret);
@@ -11111,6 +11134,13 @@ extern "C" NTSTATUS NTAPI EmuNtReleaseSemaphore
 
     if(NtDll::NtReleaseSemaphore != 0)
         ret = NtDll::NtReleaseSemaphore(SemaphoreHandle, ReleaseCount, PreviousCount);
+        if(EmuSyncTraceEnabled())
+        {
+            printf("SYNC| release-semaphore tid=0x%lX handle=0x%X count=%ld caller=0x%08lX\n",
+                   GetCurrentThreadId(), (uint32)(uintptr_t)SemaphoreHandle,
+                   (LONG)ReleaseCount, (ULONG)(uintptr_t)_ReturnAddress());
+            fflush(stdout);
+        }
 
     if(ret != STATUS_SUCCESS)
         printf("EmuKrnl (0x%X): NtReleaseSemaphore failed with status 0x%.08X.\n", (uint32)GetCurrentThreadId(), (uint32)ret);
@@ -11475,6 +11505,7 @@ XBSYSAPI EXPORTNUM(233) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObject
 {
     EmuSwapFS();   // Win2k/XP FS
 
+    LONG TraceCall = 0;
     if(EmuSyncTraceEnabled())
     {
         static volatile LONG WaitCount = 0;
@@ -11487,11 +11518,19 @@ XBSYSAPI EXPORTNUM(233) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObject
                    (ULONG)(uintptr_t)_ReturnAddress(), Call);
             fflush(stdout);
         }
+        TraceCall = Call;
     }
 
     // Honor Alertable only outside an apc routine (APC_LEVEL serialization,
     // see NtUserIoApcDispatcher).
     NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable && g_EmuUserApcDepth == 0, (NtDll::PLARGE_INTEGER)Timeout);
+
+    if(TraceCall != 0)
+    {
+        printf("SYNC| wait-exit  tid=0x%lX handle=0x%X status=0x%08lX (call %ld)\n",
+               GetCurrentThreadId(), (uint32)(uintptr_t)Handle, (ULONG)ret, TraceCall);
+        fflush(stdout);
+    }
 
     EmuSwapFS();   // Xbox FS
 
@@ -11527,6 +11566,7 @@ XBSYSAPI EXPORTNUM(234) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObjectEx
     }
     #endif
 
+    LONG TraceCall = 0;
     if(EmuSyncTraceEnabled())
     {
         static volatile LONG WaitCount = 0;
@@ -11539,11 +11579,19 @@ XBSYSAPI EXPORTNUM(234) NTSTATUS NTAPI xboxkrnl::NtWaitForSingleObjectEx
                    (ULONG)(uintptr_t)_ReturnAddress(), Call);
             fflush(stdout);
         }
+        TraceCall = Call;
     }
 
     // Honor Alertable only outside an apc routine (APC_LEVEL serialization,
     // see NtUserIoApcDispatcher).
     NTSTATUS ret = NtDll::NtWaitForSingleObject(Handle, Alertable && g_EmuUserApcDepth == 0, (NtDll::PLARGE_INTEGER)Timeout);
+
+    if(TraceCall != 0)
+    {
+        printf("SYNC| wait-exit  tid=0x%lX handle=0x%X status=0x%08lX (call %ld)\n",
+               GetCurrentThreadId(), (uint32)(uintptr_t)Handle, (ULONG)ret, TraceCall);
+        fflush(stdout);
+    }
 
     EmuSwapFS();   // Xbox FS
 
