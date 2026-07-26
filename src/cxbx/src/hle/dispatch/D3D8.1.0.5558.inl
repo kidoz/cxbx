@@ -1157,6 +1157,67 @@ SOOVPA<8> IDirect3DDevice8_SetTileNoWait_1_0_5558 =
     }
 };
 
+// image-derived from NFS Underground (no lib body matches this build)
+SOOVPA<8> CDevice_KickOff_1_0_5558 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x24, 0x0F },
+        { 0x4D, 0x8E },
+        { 0x6D, 0x81 },
+        { 0x91, 0x1C },
+        { 0xB6, 0x74 },
+        { 0xD6, 0x90 },
+        { 0xFF, 0x1C }
+    }
+};
+// image-derived from NFS Underground (no lib body matches this build)
+SOOVPA<8> D3D_SetFence_1_0_5558 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x18, 0x00 },
+        { 0x34, 0x0B },
+        { 0x4F, 0xC7 },
+        { 0x68, 0xE9 },
+        { 0x82, 0xCD },
+        { 0x9C, 0xC2 },
+        { 0xB7, 0x00 }
+    }
+};
+// image-derived from NFS Underground (no lib body matches this build)
+SOOVPA<8> IDirect3DDevice8_BlockOnFence_1_0_5558 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x10, 0x8B },
+        { 0x20, 0xFF },
+        { 0x30, 0x54 },
+        { 0x40, 0x75 },
+        { 0x51, 0x8B },
+        { 0x60, 0x74 },
+        { 0x70, 0x00 }
+    }
+};
+// image-derived from NFS Underground (no lib body matches this build)
+SOOVPA<8> CMiniport_IsFlipPending_1_0_5558 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8B },
+        { 0x02, 0xBC },
+        { 0x04, 0x00 },
+        { 0x06, 0x83 },
+        { 0x09, 0x8D },
+        { 0x0B, 0x40 },
+        { 0x0D, 0x8B },
+        { 0x10, 0xC3 }
+    }
+};
+
 OOVPATable D3D8_1_0_5558[] =
 {
     // D3D::SetTileNoWait (internal funnel; same stdcall (ULONG, D3DTILE*)
@@ -1181,6 +1242,22 @@ OOVPATable D3D8_1_0_5558[] =
         XTL::EmuIDirect3DDevice8_MakeSpace,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_MakeSpace"
+        #endif
+    },
+    // IDirect3DDevice8_BlockOnFence
+    {
+        (OOVPA*)&IDirect3DDevice8_BlockOnFence_1_0_5558,
+        XTL::EmuIDirect3DDevice8_BlockOnFence,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_BlockOnFence"
+        #endif
+    },
+    // CMiniport_IsFlipPending
+    {
+        (OOVPA*)&CMiniport_IsFlipPending_1_0_5558,
+        XTL::EmuCMiniport_IsFlipPending,
+        #ifdef _DEBUG_TRACE
+        "EmuCMiniport_IsFlipPending"
         #endif
     },
     // IDirect3DDevice8_GetDisplayFieldStatus

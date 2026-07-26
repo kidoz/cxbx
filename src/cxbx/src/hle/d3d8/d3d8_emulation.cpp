@@ -14425,3 +14425,79 @@ HRESULT WINAPI XTL::EmuIDirect3DPalette8_Lock
     
     return D3D_OK;
 }
+
+// ******************************************************************
+// * func: EmuD3D_MakeRequestedSpace
+// ******************************************************************
+// D3D::MakeRequestedSpace(RequestedSpace, RequestedSpaceEnd) is the pushbuffer
+// reservation the inlined/un-hooked title paths call directly. Un-hooked it
+// walks the guest CDevice fields that this HLE never initialises and faults
+// (NFS Underground died in it right after SetTexture). Hand back discardable
+// per-thread storage, exactly as EmuIDirect3DDevice8_MakeSpace does: callers
+// still emit packets through the returned cursor, and the HLE renders through
+// the host device instead of the emitted stream.
+DWORD* WINAPI XTL::EmuD3D_MakeRequestedSpace(DWORD RequestedSpace, DWORD RequestedSpaceEnd)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("D3D_MakeRequestedSpace");
+
+    alignas(64) static thread_local std::array<DWORD, 16 * 1024> requestedScratch{};
+    DWORD* const pushBuffer = requestedScratch.data();
+
+    EmuSwapFS();   // XBox FS
+
+    return pushBuffer;
+}
+
+// ******************************************************************
+// * func: EmuD3D_SetFence
+// ******************************************************************
+// Writes a fence token into the pushbuffer and hands it to the GPU. With no
+// guest-visible pushbuffer there is nothing to write and nothing to kick.
+VOID WINAPI XTL::EmuD3D_SetFence(DWORD Value)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("D3D_SetFence");
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
+// * func: EmuCDevice_KickOff
+// ******************************************************************
+// Submits the accumulated pushbuffer to the NV2A. The HLE has already issued
+// the equivalent work through the host device, so completing immediately is
+// correct; running the guest body instead dereferences the emulator-owned
+// device through guest CDevice offsets and faults.
+VOID WINAPI XTL::EmuCDevice_KickOff(VOID)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CDevice_KickOff");
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
+// * func: EmuD3DResource8_BlockUntilNotBusy
+// ******************************************************************
+// Waits until the GPU has stopped reading a resource. Host D3D owns resource
+// lifetime and has already serialised the access, so nothing is ever busy.
+VOID WINAPI XTL::EmuD3DResource8_BlockUntilNotBusy(XTL::X_D3DResource *pThis)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("D3DResource_BlockUntilNotBusy");
+    EmuSwapFS();   // XBox FS
+}
+
+// ******************************************************************
+// * func: EmuCMiniport_IsFlipPending
+// ******************************************************************
+// Reports whether a queued flip is still outstanding. The host present path is
+// synchronous by the time it returns, so a flip is never pending -- reporting
+// otherwise is what leaves a title spinning on its own idle poll.
+BOOL WINAPI XTL::EmuCMiniport_IsFlipPending(VOID)
+{
+    EmuSwapFS();   // Win2k/XP FS
+    D3D_TRACE("CMiniport_IsFlipPending");
+    EmuSwapFS();   // XBox FS
+
+    return FALSE;
+}

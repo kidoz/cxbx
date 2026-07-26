@@ -1608,6 +1608,31 @@ BOOL WINAPI EmuIDirect3DDevice8_IsFencePending(DWORD Fence);
 HRESULT WINAPI EmuIDirect3DDevice8_BlockOnFence(DWORD Fence);
 
 // ******************************************************************
+// * func: EmuD3D_MakeRequestedSpace
+// ******************************************************************
+DWORD* WINAPI EmuD3D_MakeRequestedSpace(DWORD RequestedSpace, DWORD RequestedSpaceEnd);
+
+// ******************************************************************
+// * func: EmuD3D_SetFence
+// ******************************************************************
+VOID WINAPI EmuD3D_SetFence(DWORD Value);
+
+// ******************************************************************
+// * func: EmuCDevice_KickOff
+// ******************************************************************
+VOID WINAPI EmuCDevice_KickOff(VOID);
+
+// ******************************************************************
+// * func: EmuD3DResource8_BlockUntilNotBusy
+// ******************************************************************
+VOID WINAPI EmuD3DResource8_BlockUntilNotBusy(X_D3DResource *pThis);
+
+// ******************************************************************
+// * func: EmuCMiniport_IsFlipPending
+// ******************************************************************
+BOOL WINAPI EmuCMiniport_IsFlipPending(VOID);
+
+// ******************************************************************
 // * func: EmuIDirect3DDevice8_KickPushBuffer
 // ******************************************************************
 HRESULT WINAPI EmuIDirect3DDevice8_KickPushBuffer(VOID);
