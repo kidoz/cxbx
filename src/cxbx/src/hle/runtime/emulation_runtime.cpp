@@ -10688,6 +10688,33 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
     
     if(fdwReason == DLL_PROCESS_DETACH)
     {
+        // Name the ExitProcess caller. A title that dies with an access-violation
+        // EXIT CODE but no exception through any handler (no VEH line, no
+        // EmuException banner, no WER dump) exited voluntarily -- this runs on
+        // ExitProcess (lpvReserved != NULL) but not on TerminateProcess, and the
+        // backtrace points at whoever called it.
+        {
+            PVOID Frames[12] = {};
+            const USHORT Captured = CaptureStackBackTrace(0, 12, Frames, NULL);
+            printf("DETACH| tid=0x%lX reserved=%p frames:", GetCurrentThreadId(), lpvReserved);
+            for(USHORT Index = 0; Index < Captured; Index++)
+            {
+                MEMORY_BASIC_INFORMATION Memory = {};
+                char ModulePath[MAX_PATH] = {};
+                const char *ModuleName = "?";
+                if(VirtualQuery(Frames[Index], &Memory, sizeof(Memory)) == sizeof(Memory) &&
+                   GetModuleFileNameA(static_cast<HMODULE>(Memory.AllocationBase),
+                                      ModulePath, sizeof(ModulePath)) != 0)
+                {
+                    const char *Slash = strrchr(ModulePath, '\\');
+                    ModuleName = Slash != NULL ? Slash + 1 : ModulePath;
+                }
+                printf(" %p(%s+0x%lX)", Frames[Index], ModuleName,
+                       (ULONG)((BYTE*)Frames[Index] - (BYTE*)Memory.AllocationBase));
+            }
+            printf("\n");
+            fflush(stdout);
+        }
         if(g_hEmuVectoredExceptionHandler != NULL)
         {
             RemoveVectoredExceptionHandler(g_hEmuVectoredExceptionHandler);
