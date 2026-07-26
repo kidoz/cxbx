@@ -114,6 +114,7 @@ static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
 static bool  EmuIsNestopiaX13(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
+static void  EmuInstallCallTrace(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader);
@@ -11021,6 +11022,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         EmuInstallDsoundApuDestructorPatch(pXbeHeader);
         EmuInstallXapiRdtscQpcPatch(pXbeHeader);
         EmuInstallAutoBootLaunchData(pXbeHeader);
+        EmuInstallCallTrace(pXbeHeader);   // opt-in, last: displaces prologues
 
         uint32 dwLibraryVersions = pXbeHeader->dwLibraryVersions;
         uint32 dwHLEEntries      = HLEDataBaseSize/sizeof(HLEData);
@@ -11789,6 +11791,137 @@ static void EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader)
     {
         printf("Emu (0x%lX): FCEUltra DSOUND APU accounting signature NOT matched at 0x0010C1D7.\n",
                GetCurrentThreadId());
+    }
+
+    fflush(stdout);
+}
+
+// Opt-in guest-function call tracer (CXBX_CALL_TRACE="hexva[,hexva...]",
+// up to 8). Each listed guest function gets its first 5 bytes replaced by a
+// jmp to a per-slot host stub that logs entry (and the caller), runs the
+// displaced bytes, and returns. Answers "is this init even called, and does
+// it return" for a title whose flow is otherwise invisible -- NFS
+// Underground's frame-callback registrar hunt needs exactly this.
+//
+// Only whole-instruction prologues are safe to displace; the tracer therefore
+// requires the first bytes to be a recognised 5-byte-or-longer prologue and
+// refuses otherwise rather than corrupt the function.
+static const ULONG EmuCallTraceMaxSlots = 8;
+
+struct EmuCallTraceSlot
+{
+    ULONG GuestAddress;
+    ULONG ReturnAddress;      // guest address just past the displaced bytes
+    uint08 Displaced[16];
+    ULONG DisplacedLength;
+    volatile LONG Hits;
+};
+
+static EmuCallTraceSlot g_EmuCallTraceSlots[EmuCallTraceMaxSlots] = {};
+static uint08 *g_EmuCallTraceStubs = NULL;
+
+extern "C" void EmuCallTraceReport(ULONG SlotIndex, ULONG CallerAddress)
+{
+    if(SlotIndex >= EmuCallTraceMaxSlots)
+        return;
+
+    EmuCallTraceSlot &Slot = g_EmuCallTraceSlots[SlotIndex];
+    const LONG Hit = InterlockedIncrement(&Slot.Hits);
+    if(Hit <= 4 || (Hit % 256) == 0)
+    {
+        printf("CALL| enter guest=0x%.08lX caller=0x%.08lX hit=%ld tid=0x%lX\n",
+               Slot.GuestAddress, CallerAddress, Hit, GetCurrentThreadId());
+        fflush(stdout);
+    }
+}
+
+// Length of the instruction(s) covering at least 5 bytes at Address, using a
+// small table of prologue forms actually seen in title code. 0 = unsupported.
+static ULONG EmuCallTracePrologueLength(const uint08 *Code)
+{
+    ULONG Length = 0;
+    for(ULONG Guard = 0; Guard < 8 && Length < 5; Guard++)
+    {
+        const uint08 *Op = Code + Length;
+        if(Op[0] == 0x55) { Length += 1; continue; }                     // push ebp
+        if(Op[0] == 0x53 || Op[0] == 0x56 || Op[0] == 0x57) { Length += 1; continue; } // push ebx/esi/edi
+        if(Op[0] == 0x8B && Op[1] == 0xEC) { Length += 2; continue; }    // mov ebp,esp
+        if(Op[0] == 0x83 && Op[1] == 0xEC) { Length += 3; continue; }    // sub esp,imm8
+        if(Op[0] == 0x81 && Op[1] == 0xEC) { Length += 6; continue; }    // sub esp,imm32
+        if(Op[0] == 0xB8) { Length += 5; continue; }                     // mov eax,imm32
+        if(Op[0] == 0x6A) { Length += 2; continue; }                     // push imm8
+        if(Op[0] == 0x68) { Length += 5; continue; }                     // push imm32
+        if(Op[0] == 0xA1) { Length += 5; continue; }                     // mov eax,[imm32]
+        if(Op[0] == 0x8B && (Op[1] & 0xC7) == 0x44) { Length += 4; continue; } // mov r32,[esp+disp8]
+        return 0;
+    }
+
+    return Length >= 5 ? Length : 0;
+}
+
+static void EmuInstallCallTrace(Xbe::Header *pXbeHeader)
+{
+    char Value[256] = {};
+    if(GetEnvironmentVariableA("CXBX_CALL_TRACE", Value, sizeof(Value)) == 0)
+        return;
+
+    g_EmuCallTraceStubs = (uint08*)VirtualAlloc(
+        NULL, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if(g_EmuCallTraceStubs == NULL)
+        return;
+
+    ULONG SlotIndex = 0;
+    for(char *Token = strtok(Value, ","); Token != NULL && SlotIndex < EmuCallTraceMaxSlots;
+        Token = strtok(NULL, ","))
+    {
+        const ULONG Address = strtoul(Token, NULL, 16);
+        if(Address < pXbeHeader->dwBaseAddr ||
+           Address >= pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage)
+        {
+            printf("CALL| skip 0x%.08lX (outside image)\n", Address);
+            continue;
+        }
+
+        const ULONG Length = EmuCallTracePrologueLength((const uint08*)Address);
+        if(Length == 0)
+        {
+            printf("CALL| skip 0x%.08lX (unsupported prologue %.02X %.02X %.02X)\n",
+                   Address, ((const uint08*)Address)[0], ((const uint08*)Address)[1],
+                   ((const uint08*)Address)[2]);
+            continue;
+        }
+
+        EmuCallTraceSlot &Slot = g_EmuCallTraceSlots[SlotIndex];
+        Slot.GuestAddress = Address;
+        Slot.ReturnAddress = Address + Length;
+        Slot.DisplacedLength = Length;
+        memcpy(Slot.Displaced, (const void*)Address, Length);
+
+        // Stub: pushad ; push [esp+32] (caller) ; push slot ; call report ;
+        //       add esp,8 ; popad ; <displaced bytes> ; jmp back
+        uint08 *Stub = g_EmuCallTraceStubs + SlotIndex * 128;
+        ULONG At = 0;
+        Stub[At++] = 0x60;                                        // pushad
+        Stub[At++] = 0xFF; Stub[At++] = 0x74; Stub[At++] = 0x24;
+        Stub[At++] = 0x20;                                        // push [esp+32] = return addr
+        Stub[At++] = 0x68; *(ULONG*)&Stub[At] = SlotIndex; At += 4;
+        Stub[At++] = 0xE8;
+        *(LONG*)&Stub[At] = (LONG)((uint08*)&EmuCallTraceReport - (Stub + At + 4)); At += 4;
+        Stub[At++] = 0x83; Stub[At++] = 0xC4; Stub[At++] = 0x08;  // add esp,8
+        Stub[At++] = 0x61;                                        // popad
+        memcpy(Stub + At, Slot.Displaced, Length); At += Length;
+        Stub[At++] = 0xE9;
+        *(LONG*)&Stub[At] = (LONG)(Slot.ReturnAddress - (ULONG)(uintptr_t)(Stub + At + 4)); At += 4;
+
+        uint08 Patch[16];
+        memset(Patch, 0x90, Length);
+        Patch[0] = 0xE9;
+        *(LONG*)&Patch[1] = (LONG)((ULONG)(uintptr_t)Stub - (Address + 5));
+        EmuWriteBytes(Address, Patch, Length);
+
+        printf("CALL| traced guest=0x%.08lX displaced=%lu stub=%p\n",
+               Address, Length, Stub);
+        SlotIndex++;
     }
 
     fflush(stdout);
