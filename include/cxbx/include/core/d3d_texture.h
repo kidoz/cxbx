@@ -35,6 +35,26 @@ inline constexpr std::size_t CompressedTextureMipChainSize(
     return size;
 }
 
+inline constexpr std::size_t TextureMipChainSize(
+    std::size_t width, std::size_t height, std::size_t bytesPerPixel,
+    std::size_t levelCount) noexcept
+{
+    std::size_t size = 0;
+    for(std::size_t level = 0; level < levelCount; ++level)
+    {
+        size += width * height * bytesPerPixel;
+        width = width > 1 ? width / 2 : 1;
+        height = height > 1 ? height / 2 : 1;
+    }
+    return size;
+}
+
+inline constexpr std::size_t AlignTextureSize(
+    std::size_t size, std::size_t alignment) noexcept
+{
+    return alignment == 0 ? size : ((size + alignment - 1) / alignment) * alignment;
+}
+
 inline constexpr std::size_t HostTextureMipLevelCount(
     std::size_t width, std::size_t height, std::size_t requestedLevelCount) noexcept
 {

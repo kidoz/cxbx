@@ -62,12 +62,17 @@ int main()
        cxbx::d3d::CompressedTextureLevelSize(4, 5, 16) != 32 ||
        cxbx::d3d::CompressedTextureMipChainSize(8, 4, 8, 4) != 40 ||
        cxbx::d3d::CompressedTextureMipChainSize(1, 2, 8, 3) != 24 ||
+       cxbx::d3d::TextureMipChainSize(128, 128, 2, 1) != 32768 ||
+       cxbx::d3d::TextureMipChainSize(8, 4, 2, 4) != 86 ||
+       cxbx::d3d::AlignTextureSize(0, 128) != 0 ||
+       cxbx::d3d::AlignTextureSize(86, 128) != 128 ||
+       cxbx::d3d::AlignTextureSize(32768, 128) != 32768 ||
        cxbx::d3d::HostTextureMipLevelCount(4, 4, 5) != 3 ||
        cxbx::d3d::HostTextureMipLevelCount(4, 2, 6) != 3 ||
        cxbx::d3d::HostTextureMipLevelCount(32, 2, 6) != 6 ||
        cxbx::d3d::HostTextureMipLevelCount(4, 4, 0) != 0)
     {
-        std::fputs("compressed texture sizes and host mip counts must be valid\n", stderr);
+        std::fputs("texture sizes, alignment, and host mip counts must be valid\n", stderr);
         return 1;
     }
 

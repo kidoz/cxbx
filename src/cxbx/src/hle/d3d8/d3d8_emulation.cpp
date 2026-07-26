@@ -7298,6 +7298,304 @@ DWORD* WINAPI XTL::EmuIDirect3DDevice8_MakeSpace()
 // ******************************************************************
 // * func: EmuIDirect3DResource8_Register
 // ******************************************************************
+struct EmuRegisteredCubemapSurface
+{
+    XTL::X_D3DResource* Resource;
+    XTL::IDirect3DCubeTexture8* HostTexture;
+    DWORD Face;
+};
+
+struct EmuRegisteredCubemapGroup
+{
+    XTL::IDirect3DCubeTexture8* HostTexture;
+    std::uintptr_t SourceBase;
+    std::size_t FaceStride;
+};
+
+static std::vector<EmuRegisteredCubemapSurface>
+    g_EmuRegisteredCubemapSurfaces;
+static std::vector<EmuRegisteredCubemapGroup> g_EmuRegisteredCubemapGroups;
+
+static void EmuRememberRegisteredCubemapSurface(
+    XTL::X_D3DResource* resource,
+    XTL::IDirect3DCubeTexture8* hostTexture,
+    const void* source,
+    std::size_t faceStride)
+{
+    if(resource == nullptr || hostTexture == nullptr ||
+       source == nullptr || faceStride == 0)
+    {
+        return;
+    }
+
+    const std::uintptr_t sourceAddress =
+        reinterpret_cast<std::uintptr_t>(source);
+    DWORD face = 0;
+    bool foundGroup = false;
+    for(const EmuRegisteredCubemapGroup& group :
+        g_EmuRegisteredCubemapGroups)
+    {
+        if(group.HostTexture != hostTexture ||
+           group.FaceStride != faceStride ||
+           sourceAddress < group.SourceBase)
+        {
+            continue;
+        }
+
+        const std::uintptr_t offset = sourceAddress - group.SourceBase;
+        if(offset < faceStride * 6 && offset % faceStride == 0)
+        {
+            face = static_cast<DWORD>(offset / faceStride);
+            foundGroup = true;
+            break;
+        }
+    }
+
+    if(!foundGroup)
+    {
+        g_EmuRegisteredCubemapGroups.push_back(
+            { hostTexture, sourceAddress, faceStride });
+    }
+
+    for(EmuRegisteredCubemapSurface& surface :
+        g_EmuRegisteredCubemapSurfaces)
+    {
+        if(surface.Resource == resource)
+        {
+            surface.HostTexture = hostTexture;
+            surface.Face = face;
+            return;
+        }
+    }
+
+    g_EmuRegisteredCubemapSurfaces.push_back(
+        { resource, hostTexture, face });
+}
+
+static DWORD EmuRegisteredCubemapSurfaceFace(
+    const XTL::X_D3DResource* resource)
+{
+    for(const EmuRegisteredCubemapSurface& surface :
+        g_EmuRegisteredCubemapSurfaces)
+    {
+        if(surface.Resource == resource)
+        {
+            return surface.Face;
+        }
+    }
+    return 0;
+}
+
+static HRESULT EmuRegisterCubeTexture(
+    XTL::X_D3DResource* pResource,
+    const void* pSource,
+    const void* pAlternateSource,
+    DWORD EdgeLength,
+    DWORD MipLevels,
+    XTL::D3DFORMAT Format,
+    BOOL Swizzled,
+    DWORD BytesPerPixel,
+    BOOL Compressed,
+    DWORD BytesPerBlock)
+{
+    constexpr std::uint64_t CubeFaceCount = 6;
+    constexpr std::uint64_t CubeFaceAlignment = 128;
+
+    if(pResource == NULL || EdgeLength == 0 || MipLevels == 0 ||
+       (!Swizzled && !Compressed) ||
+       (Swizzled && BytesPerPixel == 0) ||
+       (Compressed && BytesPerBlock == 0))
+    {
+        return D3DERR_INVALIDCALL;
+    }
+
+    std::uint64_t faceBytes64 = 0;
+    DWORD levelWidth = EdgeLength;
+    DWORD levelHeight = EdgeLength;
+    for(DWORD level = 0; level < MipLevels; ++level)
+    {
+        const std::uint64_t levelBytes =
+            Compressed
+                ? static_cast<std::uint64_t>((levelWidth + 3) / 4) *
+                      ((levelHeight + 3) / 4) * BytesPerBlock
+                : static_cast<std::uint64_t>(levelWidth) * levelHeight *
+                      BytesPerPixel;
+        faceBytes64 += levelBytes;
+        levelWidth = levelWidth > 1 ? levelWidth / 2 : 1;
+        levelHeight = levelHeight > 1 ? levelHeight / 2 : 1;
+    }
+
+    const std::uint64_t faceStride64 =
+        ((faceBytes64 + CubeFaceAlignment - 1) / CubeFaceAlignment) *
+        CubeFaceAlignment;
+    const std::uint64_t sourceBytes64 = faceStride64 * CubeFaceCount;
+    if(faceBytes64 == 0 ||
+       faceBytes64 > (std::numeric_limits<std::size_t>::max)() ||
+       sourceBytes64 > MAXDWORD)
+    {
+        return D3DERR_INVALIDCALL;
+    }
+
+    const std::size_t faceBytes =
+        Compressed
+            ? cxbx::d3d::CompressedTextureMipChainSize(
+                  EdgeLength, EdgeLength, BytesPerBlock, MipLevels)
+            : cxbx::d3d::TextureMipChainSize(
+                  EdgeLength, EdgeLength, BytesPerPixel, MipLevels);
+    const std::size_t faceStride =
+        cxbx::d3d::AlignTextureSize(faceBytes, CubeFaceAlignment);
+    if(faceBytes != faceBytes64 || faceStride != faceStride64)
+    {
+        return D3DERR_INVALIDCALL;
+    }
+
+    const DWORD hostMipLevels = static_cast<DWORD>(
+        cxbx::d3d::HostTextureMipLevelCount(
+            EdgeLength, EdgeLength, MipLevels));
+
+    HRESULT result = D3DERR_INVALIDCALL;
+    __try
+    {
+        result = g_pD3DDevice8->CreateCubeTexture(
+            EdgeLength, hostMipLevels, 0, Format, XTL::D3DPOOL_MANAGED,
+            &pResource->EmuCubeTexture8);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        result = D3DERR_INVALIDCALL;
+    }
+
+    if(FAILED(result) || pResource->EmuCubeTexture8 == NULL)
+    {
+        EmuWarning("Resource_Register: CreateCubeTexture(%lu, %lu, format=0x%.08lX) "
+                   "failed (0x%.08lX); using a blank placeholder",
+                   static_cast<unsigned long>(EdgeLength),
+                   static_cast<unsigned long>(hostMipLevels),
+                   static_cast<unsigned long>(Format),
+                   static_cast<unsigned long>(result));
+
+        pResource->EmuCubeTexture8 = NULL;
+        __try
+        {
+            result = g_pD3DDevice8->CreateCubeTexture(
+                4, 1, 0, XTL::D3DFMT_A8R8G8B8, XTL::D3DPOOL_MANAGED,
+                &pResource->EmuCubeTexture8);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            result = D3DERR_INVALIDCALL;
+        }
+
+        if(FAILED(result) || pResource->EmuCubeTexture8 == NULL)
+        {
+            EmuWarning("Resource_Register: cubemap placeholder creation failed "
+                       "(0x%.08lX); resource left unbacked",
+                       static_cast<unsigned long>(result));
+            return result;
+        }
+
+        EmuRememberHostResource(pResource->EmuCubeTexture8);
+        return D3D_OK;
+    }
+
+    EmuRememberHostResource(pResource->EmuCubeTexture8);
+
+    const DWORD sourceBytes = static_cast<DWORD>(sourceBytes64);
+    std::vector<BYTE> sourceCopy;
+    bool copiedSource = EmuD3DCopyReadableRange(
+        pSource, sourceBytes, sourceCopy);
+    if(!copiedSource && pAlternateSource != pSource)
+    {
+        copiedSource = EmuD3DCopyReadableRange(
+            pAlternateSource, sourceBytes, sourceCopy);
+    }
+    if(!copiedSource)
+    {
+        EmuWarning("Resource_Register: cubemap source is unreadable "
+                   "(edge=%lu levels=%lu bytes=0x%.08lX); texture left blank",
+                   static_cast<unsigned long>(EdgeLength),
+                   static_cast<unsigned long>(MipLevels),
+                   static_cast<unsigned long>(sourceBytes));
+        return D3D_OK;
+    }
+
+    const DWORD copyMipLevels = (std::min)(MipLevels, pResource->EmuCubeTexture8->GetLevelCount());
+    for(DWORD face = 0; face < CubeFaceCount; ++face)
+    {
+        std::size_t sourceOffset = face * faceStride;
+        levelWidth = EdgeLength;
+        levelHeight = EdgeLength;
+
+        for(DWORD level = 0; level < copyMipLevels; ++level)
+        {
+            const DWORD levelBytes =
+                Compressed
+                    ? static_cast<DWORD>(
+                          cxbx::d3d::CompressedTextureLevelSize(
+                              levelWidth, levelHeight, BytesPerBlock))
+                    : levelWidth * levelHeight * BytesPerPixel;
+            XTL::D3DLOCKED_RECT lockedRect = {};
+            result = pResource->EmuCubeTexture8->LockRect(
+                static_cast<XTL::D3DCUBEMAP_FACES>(face), level,
+                &lockedRect, NULL, 0);
+            if(FAILED(result))
+            {
+                EmuWarning("Resource_Register: cubemap face %lu level %lu lock "
+                           "failed (0x%.08lX)",
+                           static_cast<unsigned long>(face),
+                           static_cast<unsigned long>(level),
+                           static_cast<unsigned long>(result));
+                return D3D_OK;
+            }
+
+            BYTE* levelSource = sourceCopy.data() + sourceOffset;
+            if(Swizzled)
+            {
+                RECT sourceRect = { 0, 0, 0, 0 };
+                POINT destinationPoint = { 0, 0 };
+                XTL::EmuXGUnswizzleRect(
+                    levelSource, levelWidth, levelHeight, 1,
+                    lockedRect.pBits, lockedRect.Pitch,
+                    sourceRect, destinationPoint, BytesPerPixel);
+            }
+            else
+            {
+                const DWORD rowBytes =
+                    ((levelWidth + 3) / 4) * BytesPerBlock;
+                const DWORD blockRows = (levelHeight + 3) / 4;
+                BYTE* destination = static_cast<BYTE*>(lockedRect.pBits);
+                const BYTE* source = levelSource;
+                for(DWORD row = 0; row < blockRows; ++row)
+                {
+                    memcpy(destination, source, rowBytes);
+                    destination += lockedRect.Pitch;
+                    source += rowBytes;
+                }
+            }
+
+            pResource->EmuCubeTexture8->UnlockRect(
+                static_cast<XTL::D3DCUBEMAP_FACES>(face), level);
+            sourceOffset += levelBytes;
+            levelWidth = levelWidth > 1 ? levelWidth / 2 : 1;
+            levelHeight = levelHeight > 1 ? levelHeight / 2 : 1;
+        }
+    }
+
+    if(EmuD3DTexTraceEnabled())
+    {
+        printf("TEX| cubemap-registered resource=0x%.08lX host=0x%.08lX "
+               "edge=%lu levels=%lu face_stride=0x%.08lX bytes=0x%.08lX\n",
+               reinterpret_cast<unsigned long>(pResource),
+               reinterpret_cast<unsigned long>(pResource->EmuCubeTexture8),
+               static_cast<unsigned long>(EdgeLength),
+               static_cast<unsigned long>(copyMipLevels),
+               static_cast<unsigned long>(faceStride),
+               static_cast<unsigned long>(sourceBytes));
+    }
+
+    return D3D_OK;
+}
+
 HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
 (
     X_D3DResource      *pThis,
@@ -7546,14 +7844,26 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 Format   = D3DFMT_A8R8G8B8;
             }
 
-            DWORD dwWidth, dwHeight, dwBPP, dwDepth = 1, dwPitch = 0, dwMipMapLevels = 1;
+            DWORD dwWidth = 0, dwHeight = 0, dwBPP = 0;
+            DWORD dwDepth = 1, dwPitch = 0, dwMipMapLevels = 1;
             DWORD dwCompressedSize = 0;
             DWORD dwCompressedBytesPerBlock = 0;
             BOOL  bSwizzled = FALSE, bCompressed = FALSE;
             BOOL  bCubemap = pPixelContainer->Format & X_D3DFORMAT_CUBEMAP;
 
-            if(bCubemap)
-                EmuCleanup("Cubemaps are temporarily unsupported");
+            if(bCubemap && EmuD3DTexTraceEnabled())
+            {
+                printf("TEX| cubemap-register resource=0x%.08lX common=0x%.08lX "
+                       "format=0x%.08lX size=0x%.08lX data=0x%.08lX "
+                       "base=0x%.08lX resolved=0x%.08lX\n",
+                       reinterpret_cast<unsigned long>(pResource),
+                       static_cast<unsigned long>(pResource->Common),
+                       static_cast<unsigned long>(pPixelContainer->Format),
+                       static_cast<unsigned long>(pPixelContainer->Size),
+                       static_cast<unsigned long>(pResource->Data),
+                       static_cast<unsigned long>(dwRegisterBase),
+                       reinterpret_cast<unsigned long>(pBase));
+            }
 
             // ******************************************************************
             // * Interpret Width/Height/BPP
@@ -7639,6 +7949,14 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                 pBase = NULL;   // the source-validation guard below skips the copy
             }
 
+            if(bCubemap)
+            {
+                const DWORD encodedMipLevels =
+                    (pPixelContainer->Format & X_D3DFORMAT_MIPMAP_MASK) >>
+                    X_D3DFORMAT_MIPMAP_SHIFT;
+                dwMipMapLevels = (std::max)(1ul, encodedMipLevels);
+            }
+
             const DWORD dwSourceWidth = dwWidth;
             const DWORD dwSourceHeight = dwHeight;
             const DWORD dwSourceMipMapLevels =
@@ -7669,6 +7987,51 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register
                        bSwizzled ? "swizzled" : (bCompressed ? "compressed" : "linear"),
                        static_cast<unsigned long>(dwMipMapLevels),
                        reinterpret_cast<unsigned long>(pBase));
+            }
+
+            if(bCubemap)
+            {
+                if(dwWidth != dwHeight)
+                {
+                    EmuWarning("Resource_Register: cubemap faces are not square "
+                               "(%lux%lu); resource left unbacked",
+                               static_cast<unsigned long>(dwWidth),
+                               static_cast<unsigned long>(dwHeight));
+                    hRet = D3DERR_INVALIDCALL;
+                    break;
+                }
+
+                hRet = EmuRegisterCubeTexture(
+                    pResource,
+                    pBase,
+                    reinterpret_cast<const void*>(dwUnmaskedDataAddress),
+                    dwWidth,
+                    dwMipMapLevels,
+                    Format,
+                    bSwizzled,
+                    dwBPP,
+                    bCompressed,
+                    dwCompressedBytesPerBlock);
+                if(SUCCEEDED(hRet) &&
+                   dwCommonType == X_D3DCOMMON_TYPE_SURFACE &&
+                   pResource->EmuCubeTexture8 != NULL)
+                {
+                    const std::size_t faceBytes =
+                        bCompressed
+                            ? cxbx::d3d::CompressedTextureMipChainSize(
+                                  dwWidth, dwHeight,
+                                  dwCompressedBytesPerBlock,
+                                  dwMipMapLevels)
+                            : cxbx::d3d::TextureMipChainSize(
+                                  dwWidth, dwHeight, dwBPP,
+                                  dwMipMapLevels);
+                    const std::size_t faceStride =
+                        cxbx::d3d::AlignTextureSize(faceBytes, 128);
+                    EmuRememberRegisteredCubemapSurface(
+                        pResource, pResource->EmuCubeTexture8,
+                        pBase, faceStride);
+                }
+                break;
             }
 
             if(X_Format == 0x24)
@@ -8245,10 +8608,20 @@ VOID WINAPI XTL::EmuGet2DSurfaceDesc
 
     HRESULT hRet;
 
-    if(dwLevel == 0xFEFEFEFE)
+    if((pPixelContainer->Format & X_D3DFORMAT_CUBEMAP) != 0)
+    {
+        const DWORD cubeLevel = dwLevel == 0xFEFEFEFE ? 0 : dwLevel;
+        hRet = pPixelContainer->EmuCubeTexture8->GetLevelDesc(
+            cubeLevel, &SurfaceDesc);
+    }
+    else if(dwLevel == 0xFEFEFEFE)
+    {
         hRet = pPixelContainer->EmuSurface8->GetDesc(&SurfaceDesc);
+    }
     else
+    {
         hRet = pPixelContainer->EmuTexture8->GetLevelDesc(dwLevel, &SurfaceDesc);
+    }
 
     // ******************************************************************
     // * Rearrange into windows format (remove D3DPool)
@@ -8353,11 +8726,19 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_GetDesc
     }
     else
     {
-        IDirect3DSurface8 *pSurface8 = pThis->EmuSurface8;
-
         D3DSURFACE_DESC SurfaceDesc;
 
-        hRet = pSurface8->GetDesc(&SurfaceDesc);
+        X_D3DPixelContainer* pPixelContainer =
+            reinterpret_cast<X_D3DPixelContainer*>(pThis);
+        if((pPixelContainer->Format & X_D3DFORMAT_CUBEMAP) != 0)
+        {
+            hRet = pPixelContainer->EmuCubeTexture8->GetLevelDesc(
+                0, &SurfaceDesc);
+        }
+        else
+        {
+            hRet = pThis->EmuSurface8->GetDesc(&SurfaceDesc);
+        }
 
         // ******************************************************************
         // * Rearrange into windows format (remove D3DPool)
@@ -8427,12 +8808,82 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
         return hRet;
     }
 
+    const X_D3DPixelContainer* pPixelContainer =
+        reinterpret_cast<const X_D3DPixelContainer*>(pThis);
+    const bool isCubemapSurface =
+        (pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_SURFACE &&
+        (pPixelContainer->Format & X_D3DFORMAT_CUBEMAP) != 0;
+
+    if(isCubemapSurface && EmuD3DTexTraceEnabled())
+    {
+        printf("TEX| surface-lock resource=0x%.08lX common=0x%.08lX "
+               "format=0x%.08lX data=0x%.08lX host=0x%.08lX "
+               "face=%lu rect=0x%.08lX flags=0x%.08lX\n",
+               reinterpret_cast<unsigned long>(pThis),
+               static_cast<unsigned long>(pThis->Common),
+               static_cast<unsigned long>(pPixelContainer->Format),
+               static_cast<unsigned long>(pThis->Data),
+               reinterpret_cast<unsigned long>(pThis->EmuSurface8),
+               static_cast<unsigned long>(
+                   EmuRegisteredCubemapSurfaceFace(pThis)),
+               reinterpret_cast<unsigned long>(pRect),
+               static_cast<unsigned long>(Flags));
+    }
+
     ZeroMemory(pLockedRect, sizeof(*pLockedRect));
 
     EmuYuy2TextureInfo *pYuy2 = EmuResolveYuy2Texture(pThis);
     if(pYuy2 != NULL)
     {
         hRet = EmuLockYuy2Texture(pYuy2, pLockedRect, pRect);
+    }
+    else if(isCubemapSurface)
+    {
+        DWORD newFlags = 0;
+        if((Flags & EMU_D3DLOCK_READONLY) != 0)
+        {
+            newFlags |= D3DLOCK_READONLY;
+        }
+
+        if((Flags & ~(EMU_D3DLOCK_READONLY | EMU_D3DLOCK_TILED)) != 0)
+        {
+            EmuCleanup(
+                "EmuIDirect3DSurface8_LockRect: Unknown Flags! (0x%.08X)",
+                Flags);
+        }
+
+        if((Flags & EMU_D3DLOCK_TILED) != 0)
+        {
+            EmuWarning(
+                "Surface_LockRect rejected a tiled lock on registered cubemap "
+                "0x%.08X",
+                reinterpret_cast<DWORD>(pThis));
+        }
+        else
+        {
+            const XTL::D3DCUBEMAP_FACES face =
+                static_cast<XTL::D3DCUBEMAP_FACES>(
+                    EmuRegisteredCubemapSurfaceFace(pThis));
+            __try
+            {
+                // A surface-tagged cubemap header exposes the first contiguous
+                // face through the surface LockRect ABI. Release a previous
+                // host lock just like the ordinary surface path, then map that
+                // view to the host cube's positive-X face.
+                pThis->EmuCubeTexture8->UnlockRect(face, 0);
+                hRet = pThis->EmuCubeTexture8->LockRect(
+                    face, 0, pLockedRect, pRect, newFlags);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ZeroMemory(pLockedRect, sizeof(*pLockedRect));
+                hRet = D3DERR_INVALIDCALL;
+                EmuWarning(
+                    "Surface_LockRect caught a host fault for registered "
+                    "cubemap 0x%.08X",
+                    reinterpret_cast<DWORD>(pThis));
+            }
+        }
     }
     else
     {
