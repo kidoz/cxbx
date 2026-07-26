@@ -11669,7 +11669,20 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx
         iPCSTProxyParam->StartContext2 = StartContext2;
         iPCSTProxyParam->StartRoutine  = StartRoutine;
 
-        *ThreadHandle = CreateThread(NULL, NULL, &PCSTProxy, iPCSTProxyParam, CreateSuspended ? CREATE_SUSPENDED : NULL, &dwThreadId);
+        // The title sizes KernelStackSize for Xbox-side frames only, but under
+        // emulation the same stack also carries host wrapper frames (Emu*
+        // implementations, VirtualQuery, printf, apc dispatch). A stack that
+        // was adequate on hardware then dies of exhaustion inside host code --
+        // NFS Underground's loader thread ran ~120 KiB deep in its own frames
+        // and faulted at the committed floor during a host-side VirtualQuery.
+        // Reserve a full host-sized stack instead; EmuGenerateFS pre-commits
+        // the whole reservation on first entry to guest code.
+        const SIZE_T GuestThreadStackReserve = 2 * 1024 * 1024;
+        *ThreadHandle = CreateThread(NULL, GuestThreadStackReserve, &PCSTProxy,
+                                     iPCSTProxyParam,
+                                     (CreateSuspended ? CREATE_SUSPENDED : 0) |
+                                         STACK_SIZE_PARAM_IS_A_RESERVATION,
+                                     &dwThreadId);
 
         if(*ThreadHandle != NULL)
         {

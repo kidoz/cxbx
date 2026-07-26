@@ -140,8 +140,17 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
         SIZE_T Precommitted = EmuPrecommitThreadStack();
         if(Precommitted != 0)
         {
-            printf("EmuFS (0x%X): pre-committed 0x%X stack bytes for guest code\n",
-                   (uint32)GetCurrentThreadId(), (uint32)Precommitted);
+            // Include the resulting geometry: a title-sized reservation that
+            // is too small for guest frames PLUS host wrapper frames shows up
+            // here as a small span (NFS Underground exhausted a ~124 KiB
+            // guest-thread stack inside a host-side VirtualQuery).
+            NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+            printf("EmuFS (0x%X): pre-committed 0x%X stack bytes for guest code "
+                   "(base=%p limit=%p reserve=0x%X)\n",
+                   (uint32)GetCurrentThreadId(), (uint32)Precommitted,
+                   Tib->StackBase, Tib->StackLimit,
+                   (uint32)((BYTE*)Tib->StackBase -
+                            *(BYTE**)((BYTE*)Tib + 0xE0C)));
         }
     }
 
