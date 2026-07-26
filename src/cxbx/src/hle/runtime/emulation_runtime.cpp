@@ -637,8 +637,20 @@ static const ULONG EmuUsbOhciRevision = 0x00000010;
 // guest's port poll terminates instead of spinning on stale change bits.
 static const ULONG EmuUsbHcCommandStatus = 0x00000008;
 static const ULONG EmuUsbHcCommandStatusReset = 0x00000001; // HCR (self-clearing)
+static const ULONG EmuUsbHcRhDescriptorA = 0x00000048;
 static const ULONG EmuUsbHcRhPortStatus0 = 0x00000054;
 static const ULONG EmuUsbPortCount = 4;
+// HcRhDescriptorA carries the downstream-port count in its low byte. The field
+// is read-only on real hardware, but this model only had a write-through cache
+// behind the offset, so it read back as 0 -- and a driver that does
+// "ports = roothub_a & RH_A_NDP" (the stock OHCI hub scan) then believes the
+// controller has no ports and never looks at HcRhPortStatus again. Report the
+// port count this model actually implements. NPS/NOCP advertise always-on power
+// and no over-current reporting, and POTPGT stays 0 so the driver's
+// power-on-to-power-good delay is a no-op.
+static const ULONG EmuUsbRhDescriptorANdpMask = 0x000000FF;
+static const ULONG EmuUsbRhDescriptorANps = 1u << 9;    // NoPowerSwitching
+static const ULONG EmuUsbRhDescriptorANocp = 1u << 12;  // NoOverCurrentProtection
 // HcRhPortStatus bit fields.
 static const ULONG EmuUsbPortCCS  = 1u << 0;   // CurrentConnectStatus
 static const ULONG EmuUsbPortPES  = 1u << 1;   // PortEnableStatus
@@ -879,6 +891,14 @@ static ULONG EmuUsb0ReadRegister32(ULONG Address)
     else if(EmuUsb0IsPortStatus(Offset, &PortIndex))
     {
         Value = g_EmuUsb0PortStatus[PortIndex];
+    }
+    else if(Offset == EmuUsbHcRhDescriptorA)
+    {
+        // Keep whatever the driver wrote back (it read-modify-writes this
+        // register during init) but always report the real port count.
+        Value = EmuUsb0CachedRegister(Address, 0);
+        Value &= ~EmuUsbRhDescriptorANdpMask;
+        Value |= EmuUsbPortCount | EmuUsbRhDescriptorANps | EmuUsbRhDescriptorANocp;
     }
     else if(Offset == EmuUsbHcCommandStatus)
     {
