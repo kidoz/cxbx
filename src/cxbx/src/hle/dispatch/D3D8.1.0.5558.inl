@@ -1100,7 +1100,9 @@ SOOVPA<8> IDirect3DTexture8_LockRect_1_0_5558 =
 };
 
 // ?MakeRequestedSpace@D3D@@YGPCKKK@Z (d3d8.lib 5558, 310 bytes)
-// XRef-save signature (chain leaf, byte-unique): locates the internal so the
+// Image-derived (the shipped body diverges from the lib from +0x6D on, so the
+// lib-cut signature missed). XRef-save signature (chain leaf, byte-unique):
+// locates the internal so the
 // 15-byte MakeSpace thunk below can be discriminated by its call target.
 SOOVPA<8> D3D_MakeSpaceInt_1_0_5558 =
 {
@@ -1109,11 +1111,11 @@ SOOVPA<8> D3D_MakeSpaceInt_1_0_5558 =
         { 0x00, 0x51 },
         { 0x24, 0x89 },
         { 0x48, 0x6C },
-        { 0x6D, 0x24 },
-        { 0x91, 0x8D },
-        { 0xB6, 0xD1 },
-        { 0xDA, 0x46 },
-        { 0xFF, 0x8B }
+        { 0x6D, 0x40 },
+        { 0x91, 0x8B },
+        { 0xB7, 0x8B },
+        { 0xDA, 0x3B },
+        { 0xF8, 0x05 }
     }
 };
 
