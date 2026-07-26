@@ -82,32 +82,18 @@ static void EmuXGCopyToGuest(void *Destination, const void *Source, size_t Size)
     memcpy(Destination, Source, Size);
 }
 
-static DWORD EmuXGSwizzleTexelIndex(DWORD X, DWORD Y, DWORD Width, DWORD Height)
+static bool EmuXGTextureTraceEnabled()
 {
-    DWORD Result = 0;
-    DWORD OutputBit = 0;
-
-    for(DWORD InputBit = 1; InputBit < Width || InputBit < Height; InputBit <<= 1)
+    static int enabled = -1;
+    if(enabled < 0)
     {
-        if(InputBit < Width)
-        {
-            if((X & InputBit) != 0)
-            {
-                Result |= 1u << OutputBit;
-            }
-            OutputBit++;
-        }
-        if(InputBit < Height)
-        {
-            if((Y & InputBit) != 0)
-            {
-                Result |= 1u << OutputBit;
-            }
-            OutputBit++;
-        }
+        char value[2] = {};
+        enabled = GetEnvironmentVariableA(
+                      "CXBX_TEX_TRACE", value, sizeof(value)) != 0
+                      ? 1
+                      : 0;
     }
-
-    return Result;
+    return enabled == 1;
 }
 
 // ******************************************************************
@@ -153,6 +139,21 @@ VOID WINAPI XTL::EmuXGSwizzleRect
 {
     EmuSwapFS();   // Win2k/XP FS
 
+    if(EmuXGTextureTraceEnabled())
+    {
+        printf("TEX| xg-swizzle source=0x%.08lX pitch=%lu dest=0x%.08lX "
+               "%lux%lu bpp=%lu rect=0x%.08lX point=0x%.08lX\n",
+               reinterpret_cast<unsigned long>(pSource),
+               static_cast<unsigned long>(Pitch),
+               reinterpret_cast<unsigned long>(pDest),
+               static_cast<unsigned long>(Width),
+               static_cast<unsigned long>(Height),
+               static_cast<unsigned long>(BytesPerPixel),
+               reinterpret_cast<unsigned long>(pRect),
+               reinterpret_cast<unsigned long>(pPoint));
+        fflush(stdout);
+    }
+
     // ******************************************************************
     // * debug trace
     // ******************************************************************
@@ -174,78 +175,54 @@ VOID WINAPI XTL::EmuXGSwizzleRect
     }
     #endif
 
-    const LONG SrcLeft = (pRect != NULL) ? pRect->left : 0;
-    const LONG SrcTop = (pRect != NULL) ? pRect->top : 0;
-    LONG CopyWidth = (pRect != NULL) ? (pRect->right - pRect->left) : (LONG)Width;
-    LONG CopyHeight = (pRect != NULL) ? (pRect->bottom - pRect->top) : (LONG)Height;
-    const LONG DstLeft = (pPoint != NULL) ? pPoint->x : 0;
-    const LONG DstTop = (pPoint != NULL) ? pPoint->y : 0;
-    const DWORD SrcPitch = (Pitch != 0) ? Pitch : (DWORD)CopyWidth * BytesPerPixel;
+    const LONG sourceLeft = (pRect != NULL) ? pRect->left : 0;
+    const LONG sourceTop = (pRect != NULL) ? pRect->top : 0;
+    LONG copyWidth = (pRect != NULL) ? pRect->right - pRect->left
+                                     : static_cast<LONG>(Width);
+    LONG copyHeight = (pRect != NULL) ? pRect->bottom - pRect->top
+                                      : static_cast<LONG>(Height);
+    const LONG destinationLeft = (pPoint != NULL) ? pPoint->x : 0;
+    const LONG destinationTop = (pPoint != NULL) ? pPoint->y : 0;
 
-    if(DstLeft < 0 || DstTop < 0 || CopyWidth <= 0 || CopyHeight <= 0 ||
-       DstLeft >= (LONG)Width || DstTop >= (LONG)Height || BytesPerPixel == 0)
+    if(pSource == nullptr || pDest == nullptr || sourceLeft < 0 || sourceTop < 0 ||
+       destinationLeft < 0 || destinationTop < 0 || copyWidth <= 0 ||
+       copyHeight <= 0 || destinationLeft >= static_cast<LONG>(Width) ||
+       destinationTop >= static_cast<LONG>(Height) || BytesPerPixel == 0)
     {
         EmuSwapFS();   // Xbox FS
         return;
     }
 
-    if(DstLeft + CopyWidth > (LONG)Width)
+    if(destinationLeft + copyWidth > static_cast<LONG>(Width))
     {
-        CopyWidth = (LONG)Width - DstLeft;
+        copyWidth = static_cast<LONG>(Width) - destinationLeft;
     }
-    if(DstTop + CopyHeight > (LONG)Height)
+    if(destinationTop + copyHeight > static_cast<LONG>(Height))
     {
-        CopyHeight = (LONG)Height - DstTop;
+        copyHeight = static_cast<LONG>(Height) - destinationTop;
     }
 
-    const bool FullTexture = SrcLeft == 0 && SrcTop == 0 && DstLeft == 0 && DstTop == 0 &&
-                             CopyWidth == (LONG)Width && CopyHeight == (LONG)Height;
-    if(FullTexture)
+    // Host D3D textures expose linear LockRect storage. XGSwizzleRect normally
+    // produces Xbox Morton-order bytes, but the HLE hook must translate that
+    // result into the host representation instead. Copy the selected source
+    // rectangle into the packed linear destination and preserve the physical
+    // map fallback used when the destination is guest-visible memory.
+    const DWORD sourcePitch =
+        Pitch != 0 ? Pitch : static_cast<DWORD>(copyWidth) * BytesPerPixel;
+    const DWORD destinationPitch = Width * BytesPerPixel;
+    const std::size_t rowBytes =
+        static_cast<std::size_t>(copyWidth) * BytesPerPixel;
+    for(LONG y = 0; y < copyHeight; ++y)
     {
-        const size_t TexelCount = (size_t)Width * Height;
-        const size_t DestinationSize = (size_t)Width * Height * BytesPerPixel;
-        std::vector<BYTE> Swizzled(DestinationSize);
-        for(DWORD Y = 0; Y < Height; Y++)
-        {
-            for(DWORD X = 0; X < Width; X++)
-            {
-                const DWORD DestinationTexel = EmuXGSwizzleTexelIndex(X, Y, Width, Height);
-                if(DestinationTexel >= TexelCount)
-                {
-                    EmuWarning("XGSwizzleRect: swizzled texel %lu exceeds %lu x %lu destination",
-                               DestinationTexel, Width, Height);
-                    EmuSwapFS();   // Xbox FS
-                    return;
-                }
-                memcpy(Swizzled.data() + (size_t)DestinationTexel * BytesPerPixel,
-                       (const BYTE*)pSource + (size_t)Y * SrcPitch + (size_t)X * BytesPerPixel,
-                       BytesPerPixel);
-            }
-        }
-        EmuXGCopyToGuest(pDest, Swizzled.data(), DestinationSize);
-    }
-    else
-    {
-        for(LONG Y = 0; Y < CopyHeight; Y++)
-        {
-            for(LONG X = 0; X < CopyWidth; X++)
-            {
-                const DWORD DestinationTexel = EmuXGSwizzleTexelIndex(
-                    (DWORD)(DstLeft + X), (DWORD)(DstTop + Y), Width, Height);
-                if(DestinationTexel >= (size_t)Width * Height)
-                {
-                    EmuWarning("XGSwizzleRect: swizzled texel %lu exceeds %lu x %lu destination",
-                               DestinationTexel, Width, Height);
-                    EmuSwapFS();   // Xbox FS
-                    return;
-                }
-                EmuXGCopyToGuest(
-                    (BYTE*)pDest + (size_t)DestinationTexel * BytesPerPixel,
-                    (const BYTE*)pSource + (size_t)(SrcTop + Y) * SrcPitch +
-                        (size_t)(SrcLeft + X) * BytesPerPixel,
-                    BytesPerPixel);
-            }
-        }
+        BYTE* destination =
+            static_cast<BYTE*>(pDest) +
+            static_cast<std::size_t>(destinationTop + y) * destinationPitch +
+            static_cast<std::size_t>(destinationLeft) * BytesPerPixel;
+        const BYTE* source =
+            static_cast<const BYTE*>(pSource) +
+            static_cast<std::size_t>(sourceTop + y) * sourcePitch +
+            static_cast<std::size_t>(sourceLeft) * BytesPerPixel;
+        EmuXGCopyToGuest(destination, source, rowBytes);
     }
 
     EmuSwapFS();   // Xbox FS
