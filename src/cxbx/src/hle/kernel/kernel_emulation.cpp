@@ -161,6 +161,8 @@ struct EmuThreadSuspendState
     bool SelfSuspendPending = false;
 };
 
+static bool EmuSyncTraceEnabled();   // defined near the file-IO trace helpers
+
 // Per-thread user-apc nesting depth (defined at NtUserIoApcDispatcher). All
 // host alertable waits honor Alertable only when this is zero, serializing
 // apc delivery the way APC_LEVEL does on hardware.
@@ -7311,6 +7313,21 @@ static DWORD WINAPI PCSTProxy
     printf("EmuKrnl (0x%X): PCSTProxy start StartRoutine=0x%.08X Context1=0x%.08X Context2=0x%.08X.\n",
            (uint32)GetCurrentThreadId(), StartRoutine, StartContext1, StartContext2);
     fflush(stdout);
+
+    // A trampoline start routine hides the real task behind a context struct;
+    // dump its head so the actual guest function is identifiable from the log
+    // (EA titles wrap every thread this way -- NFS Underground's boot joins a
+    // worker whose task never returns, and the trampoline made the task
+    // invisible).
+    if(EmuSyncTraceEnabled() && StartContext2 != NULL &&
+       EmuIsWritableMemoryRange((PVOID)StartContext2, 16))
+    {
+        const DWORD *Ctx = (const DWORD *)StartContext2;
+        printf("SYNC| thread-ctx tid=0x%lX ctx=0x%.08X [0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX]\n",
+               GetCurrentThreadId(), (uint32)(uintptr_t)StartContext2,
+               Ctx[0], Ctx[1], Ctx[2], Ctx[3]);
+        fflush(stdout);
+    }
 
     EmuGenerateFS(g_pTLS, g_pTLSData);
 
