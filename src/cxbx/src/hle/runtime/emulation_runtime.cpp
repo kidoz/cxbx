@@ -115,6 +115,7 @@ static bool  EmuIsNestopiaX13(Xbe::Header *pXbeHeader);
 static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
 static void  EmuInstallCallTrace(Xbe::Header *pXbeHeader);
+static void  EmuInstallDsoundDspMailboxPatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader);
 static void  EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader);
@@ -11016,6 +11017,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         // extracts), which destroys the signatures these scans look for.
         EmuInstallNestopiaX13Bootstrap(pXbeHeader);
         EmuInstallFceultraBootstrap(pXbeHeader);
+        EmuInstallDsoundDspMailboxPatch(pXbeHeader);
         EmuInstallCdxLaunchBootstrap(pXbeHeader);
         EmuInstallDsoundApuAccountingPatch(pXbeHeader);
         EmuInstallDsoundApuContextReleasePatch(pXbeHeader);
@@ -11736,6 +11738,51 @@ static void EmuInstallFakeKernelImage()
 // itself forever via XLaunchNewImage (guest 0x000AFCC4). Neutralise that function
 // to a no-op return so the title stops rebooting and proceeds into its emulator.
 // This is the same targeted-patch approach as EmuInstallNestopiaX13Bootstrap.
+// DSOUND's IDirectSound_DownloadEffectsImage uploads DSP microcode and then
+// hands the audio DSP a command through a mailbox word in ordinary guest RAM:
+//
+//     mov  [ebx], eax        ; post command (3)
+//     cmp  dword ptr [ebx], 0
+//     jne  $-5               ; spin until the DSP firmware acknowledges
+//
+// Real hardware clears the word from the DSP side. This HLE has no DSP, and
+// the mailbox is plain memory (observed live at guest 0x01048810, not MMIO),
+// so nothing can ever clear it and the spin never ends -- while holding the
+// DirectSound critical section, which strands every other DSOUND caller and
+// with it the title's boot handshake (NFS Underground: audio init never
+// returns, so no frames and no file IO are ever issued).
+//
+// Acknowledge on the DSP's behalf by turning the backward branch into two
+// NOPs: the command is still posted, the poll simply falls through once.
+// Signature-matched at a fixed address, so a mismatch reports and patches
+// nothing.
+static void EmuInstallDsoundDspMailboxPatch(Xbe::Header *pXbeHeader)
+{
+    if(pXbeHeader->dwBaseAddr != 0x00010000)
+        return;
+
+    // Identified by the exact instruction sequence at a fixed address rather
+    // than by title id: the certificate is not populated this early in boot
+    // (dwTitleId still reads 0), and the byte pattern plus address is far more
+    // specific than a title check anyway.
+    //
+    //     mov  [ebx], eax        ; post command
+    //     cmp  dword ptr [ebx], 0
+    //     jne  $-5               ; spin until the DSP acknowledges
+    const uint08 MailboxSpinSig[] = { 0x89, 0x03, 0x83, 0x3B, 0x00, 0x75, 0xFB };
+    const uint32 SpinAddress = 0x001E4E06;
+
+    if(!EmuBytesMatch(SpinAddress, MailboxSpinSig, sizeof(MailboxSpinSig), pXbeHeader))
+        return;
+
+    const uint08 MailboxAckPatch[] = { 0x90, 0x90 };   // nop ; nop (was jne -5)
+    EmuWriteBytes(SpinAddress + 5, MailboxAckPatch, sizeof(MailboxAckPatch));
+
+    printf("Emu (0x%lX): DSOUND DSP mailbox spin (0x%.08lX) acknowledged on the DSP's behalf.\n",
+           GetCurrentThreadId(), SpinAddress + 5);
+    fflush(stdout);
+}
+
 static bool EmuIsFceultra(Xbe::Header *pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000)
