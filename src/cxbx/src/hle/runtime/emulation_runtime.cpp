@@ -9864,6 +9864,358 @@ extern "C" void EmuCrc32TraceRearm()
            GetCurrentThreadId());
     fflush(stdout);
 }
+
+// --------------------------------------------------------------------------
+// Guest-RAM watchpoints (CXBX_WATCH_ADDR=ADDR[,ADDR...], hex, up to 8 words):
+// page-protect each watched dword's page and log every writer as
+//   WATCH| write eip=... tid=... addr=... old=... new=...
+// via AV -> restore protection -> trap-flag single step -> re-protect (the
+// CRC32 hook's re-arm pattern, applied to a page instead of an int3). This
+// answers "who should write this guest word" for plain-RAM state nothing
+// traps -- GPU-idle poll words, singleton flags -- where MMIO emulation and
+// HLE tracing both see nothing. CXBX_WATCH_READS=1 upgrades the pages to
+// PAGE_NOACCESS so readers of the watched words are logged too (heavy: a
+// polling loop faults per iteration; per-(eip,addr) hits are deduped after
+// the first few). A page not yet committed when the emulator boots is
+// re-tried from the fault path every 500 ms until it arms.
+// Known limits: a second thread's write while a first thread's step holds
+// the page open is not logged, and a guest VirtualProtect over a watched
+// page disarms it silently.
+
+#define EMU_WATCH_MAX 8
+
+struct EmuWatchWordDef
+{
+    ULONG Addr;     // 4-byte aligned guest VA
+    ULONG PageIdx;
+};
+
+struct EmuWatchPageDef
+{
+    ULONG Base;
+    DWORD GuardProtect;   // protection while armed
+    DWORD OpenProtect;    // original protection, restored for the step
+    volatile LONG Armed;
+};
+
+static EmuWatchWordDef g_WatchWords[EMU_WATCH_MAX];
+static ULONG g_WatchWordCount = 0;
+static EmuWatchPageDef g_WatchPages[EMU_WATCH_MAX];
+static ULONG g_WatchPageCount = 0;
+static int g_WatchReads = 0;
+static volatile LONG g_WatchPendingPages = 0;
+
+struct EmuWatchStepState
+{
+    volatile LONG Tid;    // 0 = free slot
+    ULONG PageIdx;
+    ULONG Eip;
+    ULONG FaultAddr;
+    ULONG AccessType;
+    ULONG PrevVals[EMU_WATCH_MAX];
+};
+static EmuWatchStepState g_WatchSteps[16];
+
+static void EmuWatchLogHit(const char *Kind, ULONG Eip, ULONG Addr,
+                           ULONG OldVal, ULONG NewVal, bool ShowNew)
+{
+    // Dedup per (eip, addr): full lines for the first 8 hits, then every
+    // 4096th with the running count -- a poll loop under CXBX_WATCH_READS
+    // otherwise floods the log at MHz rates.
+    struct Stat { ULONG Eip; ULONG Addr; ULONG Count; };
+    static Stat Stats[64];
+    ULONG Count = 1;
+
+    for(ULONG i = 0; i < 64; i++)
+    {
+        if(Stats[i].Eip == Eip && Stats[i].Addr == Addr)
+        {
+            Count = ++Stats[i].Count;
+            break;
+        }
+        if(Stats[i].Eip == 0 && Stats[i].Addr == 0)
+        {
+            Stats[i].Eip = Eip;
+            Stats[i].Addr = Addr;
+            Stats[i].Count = 1;
+            break;
+        }
+    }
+    if(Count > 8 && (Count & 0xFFF) != 0)
+    {
+        return;
+    }
+
+    if(ShowNew)
+    {
+        printf("WATCH| %s eip=0x%08lX tid=0x%lX addr=0x%08lX old=0x%08lX new=0x%08lX hits=%lu\n",
+               Kind, Eip, GetCurrentThreadId(), Addr, OldVal, NewVal, Count);
+    }
+    else
+    {
+        printf("WATCH| %s eip=0x%08lX tid=0x%lX addr=0x%08lX val=0x%08lX hits=%lu\n",
+               Kind, Eip, GetCurrentThreadId(), Addr, OldVal, Count);
+    }
+    fflush(stdout);
+}
+
+static BOOL EmuWatchArmPage(EmuWatchPageDef *Page)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if(VirtualQuery((LPCVOID)Page->Base, &mbi, sizeof(mbi)) != sizeof(mbi) ||
+       mbi.State != MEM_COMMIT)
+    {
+        return FALSE;
+    }
+
+    DWORD Cur = mbi.Protect & 0xFF;
+    DWORD Guard;
+    if(g_WatchReads)
+    {
+        Guard = PAGE_NOACCESS;
+    }
+    else if(Cur == PAGE_EXECUTE_READWRITE || Cur == PAGE_EXECUTE_WRITECOPY)
+    {
+        Guard = PAGE_EXECUTE_READ;
+    }
+    else
+    {
+        Guard = PAGE_READONLY;
+    }
+
+    DWORD Old = 0;
+    if(!VirtualProtect((LPVOID)Page->Base, 0x1000, Guard, &Old))
+    {
+        return FALSE;
+    }
+    Page->OpenProtect = Old;
+    Page->GuardProtect = Guard;
+    InterlockedExchange(&Page->Armed, 1);
+    printf("Emu (0x%lX): WATCH page 0x%08lX armed (protect 0x%lX -> 0x%lX).\n",
+           GetCurrentThreadId(), Page->Base, Old, Guard);
+    fflush(stdout);
+    return TRUE;
+}
+
+static void EmuWatchRetryArm(void)
+{
+    static volatile ULONGLONG NextTick = 0;
+
+    if(g_WatchPendingPages <= 0)
+    {
+        return;
+    }
+    ULONGLONG Now = GetTickCount64();
+    if(Now < NextTick)
+    {
+        return;
+    }
+    NextTick = Now + 500;
+
+    for(ULONG i = 0; i < g_WatchPageCount; i++)
+    {
+        if(g_WatchPages[i].Armed == 0 && EmuWatchArmPage(&g_WatchPages[i]))
+        {
+            InterlockedDecrement(&g_WatchPendingPages);
+        }
+    }
+}
+
+static void EmuWatchInit(void)
+{
+    char Value[256];
+    if(GetEnvironmentVariableA("CXBX_WATCH_ADDR", Value, sizeof(Value)) == 0)
+    {
+        return;
+    }
+    char Reads[8];
+    g_WatchReads = GetEnvironmentVariableA("CXBX_WATCH_READS", Reads, sizeof(Reads)) != 0 &&
+                   Reads[0] != '0' ? 1 : 0;
+
+    char *Cursor = Value;
+    while(*Cursor != '\0' && g_WatchWordCount < EMU_WATCH_MAX)
+    {
+        while(*Cursor == ',' || *Cursor == ';' || *Cursor == ' ')
+        {
+            Cursor++;
+        }
+        if(*Cursor == '\0')
+        {
+            break;
+        }
+        char *End = Cursor;
+        ULONG Addr = (ULONG)strtoul(Cursor, &End, 16) & ~3UL;
+        if(End == Cursor || Addr == 0)
+        {
+            break;
+        }
+        Cursor = End;
+
+        ULONG PageBase = Addr & ~0xFFFUL;
+        ULONG PageIdx = g_WatchPageCount;
+        for(ULONG i = 0; i < g_WatchPageCount; i++)
+        {
+            if(g_WatchPages[i].Base == PageBase)
+            {
+                PageIdx = i;
+                break;
+            }
+        }
+        if(PageIdx == g_WatchPageCount)
+        {
+            g_WatchPages[g_WatchPageCount].Base = PageBase;
+            g_WatchPages[g_WatchPageCount].Armed = 0;
+            g_WatchPageCount++;
+        }
+        g_WatchWords[g_WatchWordCount].Addr = Addr;
+        g_WatchWords[g_WatchWordCount].PageIdx = PageIdx;
+        g_WatchWordCount++;
+    }
+
+    for(ULONG i = 0; i < g_WatchPageCount; i++)
+    {
+        if(!EmuWatchArmPage(&g_WatchPages[i]))
+        {
+            InterlockedIncrement(&g_WatchPendingPages);
+            printf("Emu (0x%lX): WATCH page 0x%08lX not committed yet -- arming deferred.\n",
+                   GetCurrentThreadId(), g_WatchPages[i].Base);
+        }
+    }
+    printf("Emu (0x%lX): WATCH %lu word(s) on %lu page(s), mode=%s.\n",
+           GetCurrentThreadId(), g_WatchWordCount, g_WatchPageCount,
+           g_WatchReads ? "read+write" : "write");
+    fflush(stdout);
+}
+
+static bool EmuWatchTryHandleAccessViolation(LPEXCEPTION_POINTERS e)
+{
+    if(g_WatchWordCount == 0)
+    {
+        return false;
+    }
+    EmuWatchRetryArm();
+    if(e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
+       e->ExceptionRecord->NumberParameters < 2)
+    {
+        return false;
+    }
+    const ULONG AccessType = (ULONG)e->ExceptionRecord->ExceptionInformation[0];
+    const ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
+    if(AccessType > 1)
+    {
+        return false; // DEP fault, not a protection trap of ours
+    }
+
+    const ULONG PageBase = FaultAddress & ~0xFFFUL;
+    EmuWatchPageDef *Page = NULL;
+    ULONG PageIdx = 0;
+    for(ULONG i = 0; i < g_WatchPageCount; i++)
+    {
+        if(g_WatchPages[i].Base == PageBase && g_WatchPages[i].Armed != 0)
+        {
+            Page = &g_WatchPages[i];
+            PageIdx = i;
+            break;
+        }
+    }
+    if(Page == NULL)
+    {
+        return false;
+    }
+    if(!g_WatchReads && AccessType != 1)
+    {
+        return false; // read fault can't come from a write-only guard
+    }
+    if(!g_WatchReads && Page->GuardProtect == Page->OpenProtect)
+    {
+        return false; // page was never writable: a genuine fault, not ours
+    }
+
+    LONG Tid = (LONG)GetCurrentThreadId();
+    EmuWatchStepState *Slot = NULL;
+    for(int i = 0; i < 16; i++)
+    {
+        if(InterlockedCompareExchange(&g_WatchSteps[i].Tid, Tid, 0) == 0)
+        {
+            Slot = &g_WatchSteps[i];
+            break;
+        }
+    }
+    if(Slot == NULL)
+    {
+        return false; // table full; fall through to normal fault reporting
+    }
+
+    DWORD Old = 0;
+    if(!VirtualProtect((LPVOID)Page->Base, 0x1000, Page->OpenProtect, &Old))
+    {
+        InterlockedExchange(&Slot->Tid, 0);
+        return false;
+    }
+    Slot->PageIdx = PageIdx;
+    Slot->Eip = (ULONG)e->ContextRecord->Eip;
+    Slot->FaultAddr = FaultAddress;
+    Slot->AccessType = AccessType;
+    for(ULONG w = 0; w < g_WatchWordCount; w++)
+    {
+        Slot->PrevVals[w] = g_WatchWords[w].PageIdx == PageIdx ?
+                            *(volatile ULONG*)(uintptr_t)g_WatchWords[w].Addr : 0;
+    }
+    e->ContextRecord->EFlags |= 0x100; // step the access, then re-protect
+    return true;
+}
+
+static bool EmuWatchTryHandleSingleStep(LPEXCEPTION_POINTERS e)
+{
+    if(g_WatchWordCount == 0 ||
+       e->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
+    {
+        return false;
+    }
+    LONG Tid = (LONG)GetCurrentThreadId();
+    EmuWatchStepState *Slot = NULL;
+    for(int i = 0; i < 16; i++)
+    {
+        if(g_WatchSteps[i].Tid == Tid)
+        {
+            Slot = &g_WatchSteps[i];
+            break;
+        }
+    }
+    if(Slot == NULL)
+    {
+        return false;
+    }
+
+    EmuWatchPageDef *Page = &g_WatchPages[Slot->PageIdx];
+    for(ULONG w = 0; w < g_WatchWordCount; w++)
+    {
+        if(g_WatchWords[w].PageIdx != Slot->PageIdx)
+        {
+            continue;
+        }
+        ULONG Addr = g_WatchWords[w].Addr;
+        ULONG Cur = *(volatile ULONG*)(uintptr_t)Addr;
+        bool InWord = Slot->FaultAddr >= Addr && Slot->FaultAddr < Addr + 4;
+        if(Cur != Slot->PrevVals[w])
+        {
+            EmuWatchLogHit("write", Slot->Eip, Addr, Slot->PrevVals[w], Cur, true);
+        }
+        else if(InWord && Slot->AccessType == 1)
+        {
+            EmuWatchLogHit("touch", Slot->Eip, Addr, Cur, Cur, false);
+        }
+        else if(InWord && Slot->AccessType == 0)
+        {
+            EmuWatchLogHit("read", Slot->Eip, Addr, Cur, Cur, false);
+        }
+    }
+
+    DWORD Old = 0;
+    VirtualProtect((LPVOID)Page->Base, 0x1000, Page->GuardProtect, &Old);
+    InterlockedExchange(&Slot->Tid, 0);
+    return true;
+}
 static const uint32_t crc32_table[256] = {
     0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,0xE963A535,0x9E6495A3,
     0x0EDB8832,0x79DCB8A4,0xE0D5E91E,0x97D2D988,0x09B64C2B,0x7EB17CBD,0xE7B82D07,0x90BF1D91,
@@ -10209,6 +10561,19 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
                 Tib->ExceptionList = (struct _EXCEPTION_REGISTRATION_RECORD*)(void*)Head;
             }
         }
+    }
+
+    // Guest-RAM watchpoints (CXBX_WATCH_ADDR): complete a pending step first
+    // -- before the CRC32 single-step block below, so an active CRC trace
+    // chain cannot consume a watch thread's step -- then claim new faults on
+    // watched pages.
+    if(EmuWatchTryHandleSingleStep(e))
+    {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if(EmuWatchTryHandleAccessViolation(e))
+    {
+        return EXCEPTION_CONTINUE_EXECUTION;
     }
 
     // CRC32 trace resume, step 2 of 2: the trap-flag single-step armed below
@@ -10868,6 +11233,11 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
     if(g_hEmuVectoredExceptionHandler == NULL)
         g_hEmuVectoredExceptionHandler = AddVectoredExceptionHandler(1, EmuVectoredExceptionHandler);
+
+    // Guest-RAM watchpoints (CXBX_WATCH_ADDR) arm as soon as the handler that
+    // services their faults is registered; not-yet-committed pages defer and
+    // re-arm from the fault path.
+    EmuWatchInit();
 
     // Thread-EIP watchdog (opt-in via CXBX_FENCE_DUMP=<interval seconds>):
     // periodic snapshots of every thread's EIP so a stalled title's thread
