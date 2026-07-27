@@ -35,6 +35,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nv2a_capture
@@ -75,12 +76,12 @@ NVCRC_RE = re.compile(
 NVDRAW_RE = re.compile(r"NVDRAW\| frame=(\d+) draw=(\d+)\s+(\w+)")
 
 
-def die(msg):
+def die(msg: str) -> NoReturn:
     print(f"run_title: error: {msg}", file=sys.stderr)
     sys.exit(2)
 
 
-def resolve_xbe(repo, target):
+def resolve_xbe(repo: Path, target: str) -> Path:
     p = Path(target)
     if p.suffix.lower() == ".xbe" and p.is_file():
         return p.resolve()
@@ -95,15 +96,15 @@ def resolve_xbe(repo, target):
         "(pass an .xbe, a folder, or a name under other/games/)")
 
 
-def slugify(name):
+def slugify(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name).strip("-").lower() or "title"
 
 
-def temp_dir():
+def temp_dir() -> Path:
     return Path(os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp")
 
 
-def clear_temp_exe(seconds=3.0):
+def clear_temp_exe(seconds: float = 3.0) -> None:
     """Delete the leftover %TEMP%\\default.exe (retry through the lock)."""
     p = temp_dir() / GUEST_IMAGE
     deadline = time.time() + seconds
@@ -114,7 +115,7 @@ def clear_temp_exe(seconds=3.0):
             time.sleep(0.1)
 
 
-def clear_dumps():
+def clear_dumps() -> None:
     t = temp_dir()
     for g in DUMP_GLOBS:
         for m in t.glob(g):
@@ -127,7 +128,7 @@ def clear_dumps():
                 pass
 
 
-def child_guest_pid(parent_pid):
+def child_guest_pid(parent_pid: int) -> int | None:
     """The guest default.exe spawned by our launcher, by PARENT PID (never by
     name -- so a concurrent unrelated Cxbx session is never touched)."""
     ps = (f"(Get-CimInstance Win32_Process -Filter \"ParentProcessId={parent_pid}\" "
@@ -142,13 +143,13 @@ def child_guest_pid(parent_pid):
     return int(out) if out.isdigit() else None
 
 
-def pid_alive(pid):
+def pid_alive(pid: int) -> bool:
     r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                        capture_output=True, text=True)
     return str(pid) in r.stdout
 
 
-def kill_tree(launcher_pid, guest_pid):
+def kill_tree(launcher_pid: int, guest_pid: int | None) -> None:
     """Kill only our own processes, by PID. /T takes the launcher's child tree
     (the guest); the explicit guest kill is a belt-and-suspenders backup."""
     subprocess.run(["taskkill", "/PID", str(launcher_pid), "/T", "/F"],
@@ -163,14 +164,14 @@ def kill_tree(launcher_pid, guest_pid):
         time.sleep(0.15)
 
 
-def parse_capture_result(raw):
+def parse_capture_result(raw: str) -> dict[str, Any]:
     match = CAPTURE_RE.match(raw)
     if match is None:
         return {"saved": False, "status": raw or "capture-failed"}
     values = match.groupdict()
     bbox = (None if values["bbox"] == "none"
             else [int(v) for v in values["bbox"].split(",")])
-    result = {
+    result: dict[str, Any] = {
         "saved": True,
         "status": "saved",
         "source": values["source"],
@@ -191,7 +192,7 @@ def parse_capture_result(raw):
     return result
 
 
-def capture_window(helper, guest_pid, out_png):
+def capture_window(helper: Path, guest_pid: int | None, out_png: Path) -> dict[str, Any]:
     if guest_pid is None:
         return {"saved": False, "status": "no-guest"}
     try:
@@ -205,13 +206,13 @@ def capture_window(helper, guest_pid, out_png):
         return {"saved": False, "status": "capture-failed"}
 
 
-def capture_is_visible(capture, minimum_colors):
-    return (capture.get("saved", False) and
-            capture.get("sampled_colors", 0) >= minimum_colors and
-            capture.get("nonblack_fraction", 0.0) >= 0.01)
+def capture_is_visible(capture: dict[str, Any], minimum_colors: int) -> bool:
+    return bool(capture.get("saved", False) and
+                capture.get("sampled_colors", 0) >= minimum_colors and
+                capture.get("nonblack_fraction", 0.0) >= 0.01)
 
 
-def nv2a_capture_complete(path):
+def nv2a_capture_complete(path: Path | None) -> bool:
     if path is None or not path.is_file() or path.stat().st_size < 28:
         return False
     try:
@@ -222,7 +223,7 @@ def nv2a_capture_complete(path):
         return False
 
 
-def select_representative_shot(shots):
+def select_representative_shot(shots: list[dict[str, Any]]) -> dict[str, Any] | None:
     saved = [shot for shot in shots if shot.get("saved", False)]
     if not saved:
         return None
@@ -232,7 +233,7 @@ def select_representative_shot(shots):
     ))
 
 
-def collect_dumps(dest):
+def collect_dumps(dest: Path) -> int:
     """Copy this run's emulator BMP dumps out of %TEMP% into the run dir."""
     t = temp_dir()
     n = 0
@@ -259,8 +260,8 @@ def collect_dumps(dest):
     return n
 
 
-def summarize_log(logpath):
-    summary = {
+def summarize_log(logpath: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {
         "lines": 0,
         "exception_lines": 0,
         "fatal_lines": 0,
@@ -300,25 +301,30 @@ def summarize_log(logpath):
     return summary
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="run_title", description="Boot an Xbox title in Cxbx and collect artifacts.")
-    ap.add_argument("target", help="an .xbe, a folder holding default.xbe, or a name under other/games/")
+    ap.add_argument("target",
+                    help="an .xbe, a folder holding default.xbe, or a name under other/games/")
     ap.add_argument("--seconds", type=float, default=30, help="run duration (default 30)")
-    ap.add_argument("--shots", type=int, default=3, help="window screenshots, evenly spread (0=none)")
+    ap.add_argument("--shots", type=int, default=3,
+                    help="window screenshots, evenly spread (0=none)")
     ap.add_argument("--until-visible", action="store_true",
                     help="stop after a captured client frame has meaningful color variation")
     ap.add_argument("--visible-colors", type=int, default=32, metavar="N",
                     help="sampled client colors required by --until-visible (default 32)")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="default", help="env recipe")
-    ap.add_argument("--env", action="append", default=[], metavar="K=V", help="extra env var (repeatable)")
+    ap.add_argument("--env", action="append", default=[], metavar="K=V",
+                    help="extra env var (repeatable)")
     ap.add_argument("--dump-frames", action="store_true",
-                    help="enable the emulator's backbuffer BMP dumps and collect them (ground truth)")
+                    help="enable the emulator's backbuffer BMP dumps and collect them "
+                         "(ground truth)")
     ap.add_argument("--capture-pushbuffer", type=int, default=None, metavar="FRAME",
                     help="capture PFIFO commands/resources through FRAME to a replay bundle")
     ap.add_argument("--out", default=None, help="base output dir (default: tools/run)")
     ap.add_argument("--exe", default=None, help="cxbx.exe path (default: from tools/config.toml)")
-    ap.add_argument("--keep-temp", action="store_true", help="don't pre-clean %%TEMP%%\\default.exe")
+    ap.add_argument("--keep-temp", action="store_true",
+                    help="don't pre-clean %%TEMP%%\\default.exe")
     args = ap.parse_args(argv)
 
     repo = tool_config.repo_root()
@@ -350,7 +356,7 @@ def main(argv=None):
 
     env = dict(os.environ)
     env.update(PROFILES[args.profile])
-    env_overrides = {}
+    env_overrides: dict[str, str] = {}
     for kv in args.env:
         if "=" not in kv:
             die(f"--env expects K=V, got {kv!r}")
@@ -360,7 +366,7 @@ def main(argv=None):
     if args.dump_frames:
         env.setdefault("CXBX_D3D_DUMP_DRAWS", "0:1")
         env.setdefault("CXBX_D3D_DUMP_FRAMES", "1:100000")
-    capture_path = None
+    capture_path: Path | None = None
     if args.capture_pushbuffer is not None:
         if args.capture_pushbuffer < 0:
             die("--capture-pushbuffer expects a non-negative frame index")
@@ -386,7 +392,7 @@ def main(argv=None):
     p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     print(f"  launcher pid {p.pid}; locating guest child...")
 
-    guest = None
+    guest: int | None = None
     for _ in range(20):                       # guest spawns after XBE->exe convert (~1-2s)
         if p.poll() is not None:
             break
@@ -401,14 +407,14 @@ def main(argv=None):
         print("           title runs at a time), or the launch errored. Check run.log.")
 
     # Schedule shots evenly across the run; always sample near the end too.
-    shot_times = []
+    shot_times: list[float] = []
     if args.shots > 0:
         step = args.seconds / (args.shots + 1)
         shot_times = [step * (i + 1) for i in range(args.shots)]
 
-    shots = []
+    shots: list[dict[str, Any]] = []
     shots_taken, exited_early, stopped_on_visible = 0, False, False
-    for i, when in enumerate(shot_times + [args.seconds]):
+    for i, when in enumerate([*shot_times, args.seconds]):
         remaining = when - (time.time() - started)
         if remaining > 0:
             time.sleep(remaining)
@@ -446,7 +452,7 @@ def main(argv=None):
     n_frames = collect_dumps(frames_dir) if args.dump_frames else 0
     log_summary = summarize_log(logpath)
     representative = select_representative_shot(shots)
-    capture_summary = None
+    capture_summary: dict[str, Any] | None = None
     if capture_path is not None:
         capture_summary = {
             "path": str(capture_path.relative_to(outdir)),

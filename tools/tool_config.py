@@ -4,10 +4,15 @@
 
 import os
 import tomllib
+from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any
 
-Config = dict[str, Any]
+# Everything tomllib can produce. TOML tables nest, so the alias is recursive;
+# callers get a value they must narrow instead of an Any that spreads.
+type ConfigValue = (
+    str | int | float | bool | datetime | date | time | list[ConfigValue] | dict[str, ConfigValue]
+)
+type Config = dict[str, ConfigValue]
 
 CONFIG_ENV = "CXBX_TOOLS_CONFIG"
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -39,8 +44,10 @@ def load_config(required: bool = True) -> Config:
         return tomllib.load(f)
 
 
-def config_value(cfg: Config, *keys: str, default: Any = None, required: bool = False) -> Any:
-    cur: Any = cfg
+def config_value(
+    cfg: Config, *keys: str, default: ConfigValue | Path | None = None, required: bool = False
+) -> ConfigValue | Path | None:
+    cur: ConfigValue = cfg
     for key in keys:
         if not isinstance(cur, dict) or key not in cur:
             if required:

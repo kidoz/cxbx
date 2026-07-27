@@ -12,7 +12,8 @@ from pathlib import Path
 SRC = Path(r"D:\projects\cxbx\other\source\NestopiaX_1.0_Source")
 XDK = Path(r"D:\projects\cxbx\other\sdk\XDKSetup5849.15_extracted\XDK")
 VC = XDK / "xbox" / "bin" / "vc71"
-OUT = Path(r"C:\Users\ALEKSA~1\AppData\Local\Temp\claude\D--projects-cxbx\475e1110-42b6-4414-877d-6984a4cb8dcb\scratchpad\nx_build")
+OUT = Path(r"C:\Users\ALEKSA~1\AppData\Local\Temp\claude\D--projects-cxbx"
+           r"\475e1110-42b6-4414-877d-6984a4cb8dcb\scratchpad\nx_build")
 CONFIG = "Release|Xbox"
 
 DEFINES = ["NDEBUG", "_XBOX", "EMU_A68K", "MMX", "_CONSOLE", "_SECURE_SCL=0", "CXBX_NO_SPLASH_MP3"]
@@ -33,12 +34,13 @@ LIBS = ("xapilib.lib d3d8.lib d3dx8.lib xgraphics.lib xboxkrnl.lib dsound.lib "
         "xacteng.lib xsndtrk.lib xvoice.lib xonlines.lib zlibstat.lib xmv.lib").split()
 
 
-def collect_sources():
+def collect_sources() -> tuple[list[str], list[Path]]:
     """(compile_list, prebuilt_obj_list) honoring Release|Xbox per-file
     ExcludedFromBuild. .asm entries use the prebuilt sibling .obj the source
     tree ships (no MASM in the XDK toolchain)."""
     tree = ET.parse(SRC / "NestopiaX.vcproj")
-    compile_list, prebuilt = [], []
+    compile_list: list[str] = []
+    prebuilt: list[Path] = []
     for f in tree.iter("File"):
         rel = f.get("RelativePath")
         if not rel:
@@ -63,7 +65,7 @@ def collect_sources():
     return compile_list, prebuilt
 
 
-def main():
+def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     objdir = OUT / "obj"
     objdir.mkdir(exist_ok=True)
@@ -71,12 +73,13 @@ def main():
     sources, prebuilt = collect_sources()
     print(f"{len(sources)} sources, {len(prebuilt)} prebuilt objs")
 
-    inc = [f'/I{XDK / "xbox" / "include"}'] + [f"/I{SRC / i}" for i in INCLUDES]
+    inc = [f'/I{XDK / "xbox" / "include"}', *(f"/I{SRC / i}" for i in INCLUDES)]
     defs = [f"/D{d}" for d in DEFINES]
     base = [str(VC / "CL.Exe"), "/nologo", "/c", "/O2", "/Oy", "/GB", "/W0",
-            "/MT", "/GF", "/Gy"] + defs + inc
+            "/MT", "/GF", "/Gy", *defs, *inc]
 
-    objs, failed = [], []
+    objs: list[Path] = []
+    failed: list[tuple[str, str]] = []
     for i, rel in enumerate(sources):
         src = (SRC / rel).resolve()
         # Unique object names: mirror the relative path with __ separators.
@@ -86,7 +89,7 @@ def main():
         objs.append(obj)
         if obj.exists() and obj.stat().st_mtime >= src.stat().st_mtime:
             continue
-        r = subprocess.run(base + [f"/Fo{obj}", str(src)],
+        r = subprocess.run([*base, f"/Fo{obj}", str(src)],
                            capture_output=True, text=True, cwd=SRC)
         if r.returncode != 0:
             failed.append((rel, (r.stdout + r.stderr).strip()))

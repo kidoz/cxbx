@@ -23,7 +23,9 @@ TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from tool_config import config_path_value, load_config, repo_root
+# tool_config lives in tools/, so this import only resolves after the sys.path
+# insert above; E402 is unavoidable without breaking that setup.
+from tool_config import config_path_value, load_config, repo_root  # noqa: E402
 
 
 def win_to_posix(p: Path) -> str:

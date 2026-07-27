@@ -15,7 +15,9 @@ raw XISO layout (partition base 0) and the redump/XGD offsets. Stdlib only.
 import argparse
 import struct
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import BinaryIO
 
 SECTOR = 2048
 MAGIC = b"MICROSOFT*XBOX*MEDIA"
@@ -23,7 +25,7 @@ MAGIC = b"MICROSOFT*XBOX*MEDIA"
 BASES = (0, 0x18300000, 0x1FB20000, 0x30600000, 0xFD90000)
 
 
-def find_base(f):
+def find_base(f: BinaryIO) -> int:
     for base in BASES:
         f.seek(base + 32 * SECTOR)
         if f.read(20) == MAGIC:
@@ -31,12 +33,15 @@ def find_base(f):
     sys.exit("xiso_extract: no XDVDFS volume descriptor found (not an Xbox ISO?)")
 
 
-def walk_dir(f, base, dir_sector, dir_size, prefix=""):
+def walk_dir(f: BinaryIO, base: int, dir_sector: int, dir_size: int,
+             prefix: str = "") -> list[tuple[str, int, int]]:
     """Left/right binary-tree of directory entries; returns [(path, sector, size)]
     for files (directories are recursed into)."""
     f.seek(base + dir_sector * SECTOR)
-    data = f.read(dir_size)
-    entries, stack, seen = [], [0], set()
+    data: bytes = f.read(dir_size)
+    entries: list[tuple[str, int, int]] = []
+    stack: list[int] = [0]
+    seen: set[int] = set()
     while stack:
         off = stack.pop()
         if off in seen or off * 4 + 14 > len(data):
@@ -60,14 +65,14 @@ def walk_dir(f, base, dir_sector, dir_size, prefix=""):
     return entries
 
 
-def read_toc(f):
+def read_toc(f: BinaryIO) -> tuple[int, list[tuple[str, int, int]]]:
     base = find_base(f)
     f.seek(base + 32 * SECTOR + 20)
     root_sector, root_size = struct.unpack("<II", f.read(8))
     return base, walk_dir(f, base, root_sector, root_size)
 
 
-def extract_one(f, base, sector, size, out):
+def extract_one(f: BinaryIO, base: int, sector: int, size: int, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     f.seek(base + sector * SECTOR)
     remaining = size
@@ -80,7 +85,7 @@ def extract_one(f, base, sector, size, out):
             remaining -= len(chunk)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="xiso_extract",
                                  description="List or extract files from an Xbox ISO.")
     ap.add_argument("iso", help="Xbox ISO (XDVDFS) image")

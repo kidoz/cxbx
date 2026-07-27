@@ -593,7 +593,8 @@ def resolve_dma_base(
     instance = objects.get(handle_or_instance, (handle_or_instance, 0))[0]
     if instance + 12 > len(ramin):
         return 0
-    flags, _limit, frame = struct.unpack_from("<III", ramin, instance)
+    header: tuple[int, int, int] = struct.unpack_from("<III", ramin, instance)
+    flags, _limit, frame = header
     object_class = flags & 0xFFF
     if object_class not in (2, 3, 0x3D):
         return 0
@@ -1860,7 +1861,7 @@ class PusherReplay:
 def analyze_capture(path: Path, allow_truncated: bool = False) -> dict[str, object]:
     actual_size = path.stat().st_size
     record_counts: dict[int, int] = {}
-    recorded_methods: list[tuple[int, int, int, int]] = []
+    recorded_methods: list[tuple[int, ...]] = []
     replay = PusherReplay()
     scanouts: list[dict[str, int]] = []
     memory_bytes = 0
@@ -2243,18 +2244,24 @@ def pixel_main(argv: list[str]) -> int:
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
+        status = result["status"]
+        scanouts = result["scanouts"]
+        unsupported = result["unsupported_checkpoints"]
+        assert isinstance(status, str)
+        assert isinstance(scanouts, list)
+        assert isinstance(unsupported, dict)
         print(
-            f"nv2a_capture pixels: {result['status'].upper()} "
+            f"nv2a_capture pixels: {status.upper()} "
             f"clears={result['clears_executed']} "
             f"draws={result['draws_executed']} "
             f"textured={result['textured_draws_executed']} "
             f"triangles={result['triangles_executed']} "
             f"presents={result['presents_executed']} "
-            f"scanouts={len(result['scanouts'])} "
-            f"unsupported={sum(result['unsupported_checkpoints'].values())} "
+            f"scanouts={len(scanouts)} "
+            f"unsupported={sum(unsupported.values())} "
             f"conflicts={result['observation_conflicts']}"
         )
-        for scanout in result["scanouts"]:
+        for scanout in scanouts:
             print(
                 f"  frame={scanout['frame']} complete={scanout['complete']} "
                 f"match={scanout['match']} actual=0x{scanout['actual_crc32']:08X} "
@@ -2360,6 +2367,7 @@ def pgraph_main(argv: list[str]) -> int:
         )
     elif result["equal"]:
         baseline = result["baseline"]
+        assert isinstance(baseline, dict)
         print(
             "nv2a_capture pgraph: MATCH "
             f"checkpoints={baseline['checkpoint_count']} "
@@ -2400,6 +2408,7 @@ def comparison_events(path: Path, strict_addresses: bool = False) -> list[Compar
     # as either side of a comparison.
     analyze_capture(path)
     events: list[ComparisonEvent] = []
+    details: dict[str, object]
     host_mode = False
     run_base = 0
     replay = PusherReplay()
@@ -2666,9 +2675,9 @@ def compare_main(argv: list[str]) -> int:
         print(f"nv2a_capture compare: DIFFER at event {divergence['index']}")
         print(f"  baseline : {format_event(divergence['baseline'])}")
         print(f"  candidate: {format_event(divergence['candidate'])}")
-        differing = [
-            name for name, category in result["categories"].items() if not category["equal"]
-        ]
+        categories = result["categories"]
+        assert isinstance(categories, dict)
+        differing = [name for name, category in categories.items() if not category["equal"]]
         print(f"  categories: {', '.join(differing)}")
     return 0 if result["equal"] else 1
 

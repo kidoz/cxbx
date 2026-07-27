@@ -63,7 +63,7 @@ def load_config() -> Config:
     except (FileNotFoundError, OSError) as e:
         sys.exit(str(e))
 
-    paths = cfg.setdefault("paths", {})
+    paths = cast(Config, cfg.setdefault("paths", {}))
     suite_dir = config_path_value(
         cfg, "paths", "suite_dir", default=repo_root() / "tests" / "suite"
     )
@@ -74,7 +74,8 @@ def load_config() -> Config:
         if value is not None:
             paths[key] = str(value)
 
-    cxbx = cfg.setdefault("emulator", {}).setdefault("cxbx", {})
+    emulator = cast(Config, cfg.setdefault("emulator", {}))
+    cxbx = cast(Config, emulator.setdefault("cxbx", {}))
     for key in ("exe", "build_dir"):
         value = config_path_value(cfg, "emulator", "cxbx", key)
         if value is not None:

@@ -10,11 +10,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
-import run_title
+import run_title  # noqa: E402
 
 
 class CaptureResultTests(unittest.TestCase):
-    def test_parse_saved_capture(self):
+    def test_parse_saved_capture(self) -> None:
         result = run_title.parse_capture_result(
             "SAVED width=656 height=519 source=desktop client=640x480 "
             "samples=19200 nonblack=0.125000 colors=47 bbox=0,68,636,408 "
@@ -27,7 +27,7 @@ class CaptureResultTests(unittest.TestCase):
         self.assertEqual(result["client_screen_origin"], [123, 456])
         self.assertTrue(run_title.capture_is_visible(result, 32))
 
-    def test_failure_and_representative_selection(self):
+    def test_failure_and_representative_selection(self) -> None:
         failure = run_title.parse_capture_result("NOWINDOW")
         self.assertFalse(failure["saved"])
         shots = [
@@ -37,11 +37,11 @@ class CaptureResultTests(unittest.TestCase):
             {"saved": True, "path": "scene.png", "sampled_colors": 80,
              "nonblack_fraction": 0.2},
         ]
-        self.assertEqual(
-            run_title.select_representative_shot(shots)["path"], "scene.png"
-        )
+        best = run_title.select_representative_shot(shots)
+        assert best is not None
+        self.assertEqual(best["path"], "scene.png")
 
-    def test_capture_completion_requires_finish_footer(self):
+    def test_capture_completion_requires_finish_footer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "frame.nv2acap"
             path.write_bytes(b"header" + struct.pack("<II5I", 6, 20, 0, 0, 0, 0, 0))
@@ -51,7 +51,7 @@ class CaptureResultTests(unittest.TestCase):
 
 
 class LogSummaryTests(unittest.TestCase):
-    def test_structured_graphics_summary(self):
+    def test_structured_graphics_summary(self) -> None:
         text = "\n".join([
             "NVDRAW| frame=3 draw=0 clear op=0x0 count=0",
             "NVDRAW| frame=3 draw=4 inline op=0x5 count=3",

@@ -10,13 +10,16 @@ TOOLS_DIR = Path(__file__).resolve().parents[1]
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from tool_config import config_path_value, load_config
+# Import has to follow the sys.path insert above -- tool_config is a sibling script.
+from tool_config import config_path_value, load_config  # noqa: E402
 
 
 def main() -> int:
     try:
         cfg = load_config(required=True)
         nxdk_dir = config_path_value(cfg, "paths", "nxdk_dir", required=True)
+        if nxdk_dir is None:                  # unreachable: required=True already raised
+            raise KeyError("paths.nxdk_dir")
         source_def = config_path_value(
             cfg,
             "kernelaudit",
@@ -38,7 +41,7 @@ def main() -> int:
         return 1
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = {}
+    rows: dict[int, tuple[str, str]] = {}
     for line in source_def.read_text(encoding="utf-8", errors="replace").splitlines():
         m = re.match(r"\s*@?([A-Za-z_]\w*)(@\d+)?\s+@\s+(\d+)\s+NONAME(\s+DATA)?", line)
         if not m:

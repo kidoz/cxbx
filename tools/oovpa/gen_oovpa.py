@@ -28,6 +28,7 @@ import argparse
 import glob
 import struct
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 IMAGE_SCN_CNT_CODE = 0x00000020
@@ -69,7 +70,8 @@ def _first_linker_member(lib: bytes) -> dict[str, int]:
     (count,) = struct.unpack(">I", payload[:4])
     offsets = struct.unpack(f">{count}I", payload[4 : 4 + 4 * count])
     names = payload[4 + 4 * count :].split(b"\0")[:count]
-    return {n.decode("ascii", "replace"): o for n, o in zip(names, offsets)}
+    # strict=False: a truncated name blob must keep pairing what it can, as before.
+    return {n.decode("ascii", "replace"): o for n, o in zip(names, offsets, strict=False)}
 
 
 def _symbol_name(entry: bytes, strtab: bytes) -> str:
@@ -80,7 +82,7 @@ def _symbol_name(entry: bytes, strtab: bytes) -> str:
     return entry[:8].rstrip(b"\0").decode("ascii", "replace")
 
 
-def _iter_object_members(lib: bytes):
+def _iter_object_members(lib: bytes) -> Iterator[bytes]:
     """Yield every COFF object member payload in the archive (skipping the
     linker members and the longnames member)."""
     off = 8
@@ -121,7 +123,7 @@ def extract_function(lib: bytes, symbols: dict[str, int], sym: str) -> Function:
 
 
 def _extract_from_member(member: bytes, sym: str) -> Function | None:
-    n_sections, = struct.unpack("<H", member[2:4])
+    _n_sections, = struct.unpack("<H", member[2:4])
     ptr_symtab, n_symbols = struct.unpack("<II", member[8:16])
     strtab = member[ptr_symtab + 18 * n_symbols :]
 
@@ -180,7 +182,7 @@ def pick_pairs(fn: Function, want: int, max_offset: int,
     `allow_fewer` permits tiny mostly-relocated functions (thin call stubs)
     to yield fewer pairs -- only safe for XRef signatures, where the rel32
     call-target pair carries the discrimination."""
-    banned = set()
+    banned: set[int] = set()
     for r in fn.reloc_offsets:
         banned.update(range(r, r + 4))
     limit = min(len(fn.data) - 1, max_offset)
@@ -344,17 +346,24 @@ def _function_bytes(image: bytes, base: int, va: int, max_len: int) -> bytes:
     return image[o:i]
 
 
-def _disasm_banned(data: bytes, base: int, image_size: int) -> set:
+def _disasm_banned(data: bytes, base: int, image_size: int) -> set[int]:
     """Byte offsets in `data` that encode a link/address-dependent operand (a
     branch rel32, or an address-like imm/disp) -- the equivalent of a .lib's
     relocations, which must not anchor a signature. Uses capstone when present;
     otherwise falls back to banning every dword that reads as an in-image or
     kernel pointer (conservative -- over-banning only costs usable offsets)."""
     try:
-        from capstone import (Cs, CS_ARCH_X86, CS_MODE_32, CS_OP_IMM, CS_OP_MEM,
-                              CS_GRP_JUMP, CS_GRP_CALL)
+        from capstone import (
+            CS_ARCH_X86,
+            CS_GRP_CALL,
+            CS_GRP_JUMP,
+            CS_MODE_32,
+            CS_OP_IMM,
+            CS_OP_MEM,
+            Cs,
+        )
     except ImportError:
-        banned = set()
+        banned: set[int] = set()
         for i in range(len(data) - 3):
             v = int.from_bytes(data[i:i + 4], "little")
             if base <= v < base + image_size or v >= 0x80000000:
@@ -382,7 +391,7 @@ def _disasm_banned(data: bytes, base: int, image_size: int) -> set:
     return banned
 
 
-def from_image_mode(args) -> int:
+def from_image_mode(args: argparse.Namespace) -> int:
     if not args.va or not args.name:
         sys.exit("--from-image requires --va <addr> and --name <SIGNAME>")
     src = Path(args.from_image)
@@ -422,6 +431,11 @@ def from_image_mode(args) -> int:
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
+
+
+# What an XRef chain level hands back: (snippets, internal address per
+# must-image, per may-image, the XREF enum names the chain needs declared).
+_Chain = tuple[list[str], dict[Path, int], dict[Path, int], list[str]]
 
 
 def main() -> int:
@@ -505,15 +519,18 @@ def main() -> int:
                 failed = True
         if ok:
             print(f"OK   {signame}: {sym} ({len(fn.data)} bytes, "
-                  f"{len(fn.reloc_offsets)} relocs, unique in {len(must_imgs) + len(may_imgs)} images)")
-            snippets.append(f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n" + render(signame, pairs))
+                  f"{len(fn.reloc_offsets)} relocs, unique in "
+                  f"{len(must_imgs) + len(may_imgs)} images)")
+            snippets.append(f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n"
+                            + render(signame, pairs))
 
     def sig_with_suffix(signame: str, suffix: str) -> str:
         return (signame.replace("_1_0_", f"{suffix}_1_0_")
                 if "_1_0_" in signame else signame + suffix)
 
     def resolve_chain(sym: str, signame: str, enum_name: str,
-                      target_match: str | None, depth: int, quiet: bool = False):
+                      target_match: str | None, depth: int,
+                      quiet: bool = False) -> _Chain | None:
         """Build the XRef chain for `sym` bottom-up. Returns
         (snippets, addr_by_must_image, addr_by_may_image, enum_names) or None
         on failure. A level that is byte-unique ends the chain; a colliding
@@ -540,7 +557,7 @@ def main() -> int:
         return None
 
     def _resolve_chain_copy(fn: Function, signame: str, enum_name: str,
-                            target_match: str | None, depth: int):
+                            target_match: str | None, depth: int) -> _Chain | None:
         sym = fn.name
         pairs = pick_pairs(fn, args.pairs, args.max_offset)
 
@@ -608,8 +625,8 @@ def main() -> int:
                     f"// XRef chain level: saved to {enum_name}, discriminated by callee.\n"
                     + render(signame, pairs, save_index=enum_name,
                              xref_pairs=[(xref_off, enum_name + "_T")]))
-            return (child_snips + [snip], must_addr, may_addr,
-                    child_enums + [enum_name])
+            return ([*child_snips, snip], must_addr, may_addr,
+                    [*child_enums, enum_name])
 
         return None
 
@@ -618,7 +635,8 @@ def main() -> int:
         sym, _, rest = spec.partition("=")
         parts = rest.split(":")
         if len(parts) not in (3, 4):
-            sys.exit(f"--xref-func needs SYMBOL=WRAPSIG:INTSIG:XREF_ENUM[:TARGETMATCH], got: {spec}")
+            sys.exit("--xref-func needs SYMBOL=WRAPSIG:INTSIG:XREF_ENUM[:TARGETMATCH], "
+                     f"got: {spec}")
         wrapsig, intsig, xref_enum = parts[:3]
         target_match = parts[3] if len(parts) == 4 else None
 

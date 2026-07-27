@@ -40,10 +40,11 @@ import struct
 import sys
 import tempfile
 import zlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_oovpa import (  # noqa: E402
+from gen_oovpa import (
     Function,
     _extract_from_member,
     _first_linker_member,
@@ -124,7 +125,7 @@ def discover(rescan: bool = False) -> dict[str, Path]:
     return found
 
 
-def _version_key(label: str) -> tuple:
+def _version_key(label: str) -> tuple[int, tuple[int, ...] | str]:
     nums = re.findall(r"\d+", label)
     return (0, tuple(int(n) for n in nums)) if nums else (1, label)
 
@@ -181,7 +182,7 @@ def masked_hash(fn: Function) -> str:
 
 def unmasked_runs(fn: Function) -> list[tuple[int, int]]:
     """Maximal (start, end) runs of bytes not covered by a relocation."""
-    banned = set()
+    banned: set[int] = set()
     for r in fn.reloc_offsets:
         banned.update(range(r, r + 4))
     runs, start = [], None
@@ -294,7 +295,7 @@ def load_image(path: Path) -> tuple[bytes, int]:
 # --------------------------------------------------------------------------- #
 
 
-def cmd_versions(args) -> int:
+def cmd_versions(args: argparse.Namespace) -> int:
     versions = discover(args.rescan)
     for v in sorted(versions, key=_version_key):
         libdir = versions[v]
@@ -303,7 +304,7 @@ def cmd_versions(args) -> int:
     return 0
 
 
-def cmd_libs(args) -> int:
+def cmd_libs(args: argparse.Namespace) -> int:
     _, libdir = pick_version(discover(args.rescan), args.version)
     for f in sorted(libdir.iterdir()):
         if f.suffix.lower() == ".lib":
@@ -312,7 +313,7 @@ def cmd_libs(args) -> int:
 
 
 def _iter_libs(versions: dict[str, Path], only_version: str | None,
-               only_lib: str | None):
+               only_lib: str | None) -> Iterator[tuple[str, Path]]:
     labels = sorted(versions, key=_version_key)
     if only_version:
         labels = [pick_version(versions, only_version)[0]]
@@ -326,8 +327,9 @@ def _iter_libs(versions: dict[str, Path], only_version: str | None,
             yield v, f
 
 
-def cmd_find(args) -> int:
+def cmd_find(args: argparse.Namespace) -> int:
     versions = discover(args.rescan)
+    match: Callable[[str], object]
     if args.pattern.startswith("re:"):
         rx = re.compile(args.pattern[3:])
         match = rx.search
@@ -362,7 +364,7 @@ def cmd_find(args) -> int:
     return 0
 
 
-def cmd_body(args) -> int:
+def cmd_body(args: argparse.Namespace) -> int:
     versions = discover(args.rescan)
     v, libdir = pick_version(versions, args.version)
     f = lib_path(libdir, args.lib)
@@ -371,7 +373,7 @@ def cmd_body(args) -> int:
     fn = safe_extract(lib, symbols, args.sym)
     if fn is None:
         sys.exit(f"{args.sym}: not a code symbol in {f.name} ({v})")
-    banned = set()
+    banned: set[int] = set()
     for r in fn.reloc_offsets:
         banned.update(range(r, r + 4))
     print(f"{args.sym}  [{v} {f.name}]  {len(fn.data)} bytes, "
@@ -395,7 +397,7 @@ def cmd_body(args) -> int:
     return 0
 
 
-def cmd_diff(args) -> int:
+def cmd_diff(args: argparse.Namespace) -> int:
     versions = discover(args.rescan)
     fns = []
     for want in args.versions:
@@ -410,7 +412,7 @@ def cmd_diff(args) -> int:
     print(f"{args.sym}: {va}={len(fa.data)}B/{len(fa.reloc_offsets)}r "
           f"h={masked_hash(fa)}  {vb}={len(fb.data)}B/{len(fb.reloc_offsets)}r "
           f"h={masked_hash(fb)}")
-    banned = set()
+    banned: set[int] = set()
     for fn in (fa, fb):
         for r in fn.reloc_offsets:
             banned.update(range(r, r + 4))
@@ -430,7 +432,7 @@ def cmd_diff(args) -> int:
     return 1
 
 
-def cmd_match(args) -> int:
+def cmd_match(args: argparse.Namespace) -> int:
     versions = discover(args.rescan)
     v, libdir = pick_version(versions, args.version)
     f = lib_path(libdir, args.lib)
@@ -464,7 +466,7 @@ _SKIP_PREFIXES = ("__imp_", "__IMPORT_DESCRIPTOR", "__NULL_", "??_C", "??_7",
                   "??_R", "__real@", "__xmm@")
 
 
-def cmd_map(args) -> int:
+def cmd_map(args: argparse.Namespace) -> int:
     versions = discover(args.rescan)
     v, libdir = pick_version(versions, args.version)
     f = lib_path(libdir, args.lib)

@@ -136,8 +136,8 @@ def audit_xdk(xdk_root: Path, repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     xbes = sorted(xdk_root.rglob("*.xbe"))
     for xbe in xbes:
         try:
-            for library in parse_xbe_libraries(xbe):
-                requirements[(library["library"], library["version"], library["debug"])] += 1
+            for entry in parse_xbe_libraries(xbe):
+                requirements[(entry["library"], entry["version"], entry["debug"])] += 1
         except AuditError:
             invalid_xbes += 1
 

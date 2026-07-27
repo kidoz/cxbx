@@ -14,7 +14,10 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py314"
-src = ["tools/xtest"]
+# Sibling-import roots: the tools are standalone scripts that import each other
+# by bare module name after a sys.path insert, so first-party detection needs
+# every directory that holds an imported module.
+src = ["tools", "tools/xtest", "tools/oovpa", "tools/nv2a"]
 extend-exclude = [
     "tools/xtest/out",
     "tools/xtest/__pycache__",
@@ -36,9 +39,19 @@ line-ending = "lf"
 
 [tool.mypy]
 python_version = "3.14"
-files = ["tools/xtest"]
+files = ["tools"]
 strict = true
+# Same reason as ruff's src: resolve the bare sibling imports (traceevt,
+# tracegrammar, tool_config, gen_oovpa, ...) the scripts do at runtime.
+mypy_path = "tools:tools/xtest:tools/oovpa:tools/nv2a"
 exclude = [
     "tools/xtest/out",
     "tools/xtest/__pycache__",
 ]
+
+# capstone ships neither stubs nor py.typed. The disassembler is optional at
+# runtime (every use site is guarded by try/ImportError), so declare it untyped
+# once here rather than repeating an inline ignore at each import.
+[[tool.mypy.overrides]]
+module = "capstone"
+ignore_missing_imports = true

@@ -97,7 +97,7 @@ def write_png(path: Path, width: int, height: int, argb: list[int]) -> None:
     path.write_bytes(png)
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="texdump", description="Decode cxbx_tex<N>.argb ground-truth texture sidecars.")
     ap.add_argument("sidecar", nargs="?", help="a cxbx_tex<N>.argb file")

@@ -33,7 +33,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+from capstone import CS_ARCH_X86, CS_MODE_32, Cs
 
 MD = Cs(CS_ARCH_X86, CS_MODE_32)
 INT3 = 0xCC
@@ -41,6 +41,9 @@ BRANCH = ("call", "jmp")
 
 
 class Xbe:
+    base: int            # struct.unpack_from yields Any; pin the header scalars
+    kernel_thunk: int
+
     def __init__(self, path: Path) -> None:
         d = path.read_bytes()
         if d[:4] != b"XBEH":
@@ -73,7 +76,8 @@ class Xbe:
         return va - self.base
 
 
-def scan_calls(xbe: Xbe, target: tuple[int, int], exclude: tuple[int, int]):
+def scan_calls(xbe: Xbe, target: tuple[int, int],
+               exclude: tuple[int, int]) -> list[tuple[int, int, str]]:
     """Every (caller_va, target_va) where code outside `exclude` branches into
     `target`. Linear disassembly of an entire image mis-decodes some data, so a hit
     is only trusted when the target lands on a plausible function start -- i.e. the
@@ -81,7 +85,7 @@ def scan_calls(xbe: Xbe, target: tuple[int, int], exclude: tuple[int, int]):
     every function entry). That filters the noise a raw rel32 scan would produce."""
     lo, hi = target
     ex_lo, ex_hi = exclude
-    hits = []
+    hits: list[tuple[int, int, str]] = []
 
     for name, (s_lo, s_hi) in xbe.sections.items():
         if s_lo >= ex_lo and s_hi <= ex_hi:

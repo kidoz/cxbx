@@ -38,6 +38,7 @@ import re
 import struct
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 # SOOVPA<8> Name =
 # {
@@ -57,9 +58,15 @@ def _strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
-def parse_signatures(paths: list[Path]) -> dict[str, dict]:
+class Signature(TypedDict):
+    xrefcount: int
+    pairs: list[tuple[int, int]]
+    xrefs: list[tuple[int, str]]
+
+
+def parse_signatures(paths: list[Path]) -> dict[str, Signature]:
     """name -> {'xrefcount': int, 'pairs': [(offset, byte)], 'xrefs': [(offset, enum)]}"""
-    sigs: dict[str, dict] = {}
+    sigs: dict[str, Signature] = {}
     for p in paths:
         text = _strip_comments(p.read_text(encoding="utf-8", errors="replace"))
         for m in _SIG_RE.finditer(text):
@@ -76,7 +83,8 @@ def parse_signatures(paths: list[Path]) -> dict[str, dict]:
             except ValueError:
                 continue
 
-            pairs, xrefs = [], []
+            pairs: list[tuple[int, int]] = []
+            xrefs: list[tuple[int, str]] = []
             for i, pm in enumerate(_PAIR_RE.finditer(inner)):
                 off = int(pm.group(1), 0)
                 val = pm.group(2)
@@ -111,7 +119,7 @@ def parse_table(paths: list[Path], table: str) -> list[tuple[str, str, bool]]:
         matches = list(re.finditer(
             r"\(\s*OOVPA\s*\*\s*\)\s*&\s*(\w+)\s*,\s*([\w:]+)", m.group(1)
         ))
-        out = []
+        out: list[tuple[str, str, bool]] = []
         for index, em in enumerate(matches):
             end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
             patch_all = "OOVPA_FLAG_PATCH_ALL" in body[em.start():end]
@@ -134,7 +142,7 @@ def xbe_image(path: Path) -> tuple[bytes, int]:
     off = psec - base
     for i in range(nsec):
         h = d[off + 0x38 * i: off + 0x38 * (i + 1)]
-        vaddr, vsize, raw, rawsize = struct.unpack_from("<IIII", h, 4)
+        vaddr, _vsize, raw, rawsize = struct.unpack_from("<IIII", h, 4)
         n = min(rawsize, len(d) - raw)
         start = vaddr - base
         if 0 <= start < len(img):
@@ -192,12 +200,12 @@ def main() -> int:
         p = Path(ipath)
         img, base = xbe_image(p)
         ok = miss = multi = unparsed = 0
-        rows = []
+        rows: list[tuple[str, str, str, list[str]]] = []
         for signame, emufn, patch_all in entries:
             sig = sigs.get(signame)
             if sig is None:
                 unparsed += 1
-                rows.append(("????", signame, emufn, ""))
+                rows.append(("????", signame, emufn, []))
                 continue
             hits = find_matches(img, sig["pairs"])
             if len(hits) == 1 or (patch_all and hits):
@@ -217,7 +225,7 @@ def main() -> int:
         print(f"=== {p.name}  ({total} entries)")
         print(f"    OK={ok}  MISS={miss}  MULTI={multi}  unparsed={unparsed}")
         if not args.quiet:
-            for status, signame, emufn, where in rows:
+            for status, signame, emufn, _where in rows:
                 if status not in ("OK", "ALL"):
                     print(f"    {status:5s} {emufn:52s} {signame}")
         print()

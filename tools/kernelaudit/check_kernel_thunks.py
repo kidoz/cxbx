@@ -11,7 +11,10 @@
 # This turns that into a precise, source-level failure naming the exact ordinal.
 #
 # Exit code 0 = table matches the ABI (modulo the curated ALLOWLIST); 1 = mismatch.
-import csv, re, os, sys
+import csv
+import os
+import re
+import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 THUNK = os.path.join(ROOT, "src", "cxbx", "src", "hle", "dispatch", "kernel_thunk.cpp")
@@ -19,42 +22,46 @@ REF   = os.path.join(os.path.dirname(__file__), "xboxkrnl_ordinals.csv")
 
 # Ordinals whose wired Emu symbol legitimately does not name-match the export
 # (intentional Cxbx aliases / shared implementations). Each needs a reason.
-ALLOWLIST = {
+ALLOWLIST: dict[int, str] = {
     # ordinal: "reason"
 }
 
-def derive_name(expr):
+def derive_name(expr: str) -> str | None:
     """Emu symbol expression -> export name, or None if unimplemented (PANIC/stub)."""
     if "PANIC" in expr or "UnimplementedStub" in expr:
         return None
     s = expr.strip().lstrip("&").split("::")[-1]
-    if s.startswith("g_"): s = s[2:]
-    if s.startswith("Emu"): s = s[3:]
-    if s.endswith("Export"): s = s[:-6]
+    if s.startswith("g_"):
+        s = s[2:]
+    if s.startswith("Emu"):
+        s = s[3:]
+    if s.endswith("Export"):
+        s = s[:-6]
     return s
 
-def load_thunks():
+def load_thunks() -> dict[int, str]:
     text = open(THUNK, encoding="utf-8", errors="replace").read()
     tbl = text[text.index("KernelThunkTable[367]"):]
-    out = {}
+    out: dict[int, str] = {}
     for m in re.finditer(r"\(uint32\)\s*(.+?),\s*//\s*0x[0-9A-Fa-f]+\s*\((\d+)\)", tbl):
         out[int(m.group(2))] = m.group(1).strip()
     return out
 
-def matches(wired, expected):
+def matches(wired: str, expected: str) -> bool:
     a, b = wired.lower(), expected.lower()
     return a == b or b in a or a in b
 
-def main():
+def main() -> int:
     thunks = load_thunks()
-    ref = {}
+    ref: dict[int, tuple[str, str]] = {}
     with open(REF, encoding="utf-8") as f:
-        for row in csv.DictReader(l for l in f if not l.startswith("#")):
+        for row in csv.DictReader(line for line in f if not line.startswith("#")):
             ref[int(row["ordinal"])] = (row["name"], row["kind"])
 
-    mismatches, unimplemented = [], 0
+    mismatches: list[tuple[int, str, str]] = []
+    unimplemented = 0
     for o in sorted(ref):
-        name, kind = ref[o]
+        name, _kind = ref[o]
         expr = thunks.get(o, "<MISSING>")
         wired = derive_name(expr)
         if wired is None:
