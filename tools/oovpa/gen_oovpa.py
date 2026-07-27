@@ -409,7 +409,8 @@ def from_image_mode(args) -> int:
     if n_src != 1:
         print(f"// !! {n_src} matches in the source -- raise --pairs / --max-offset for uniqueness")
     snippet = (f"// image-derived from {src.name} @ 0x{va:08X} "
-               f"({len(data)} bytes)\n" + render(args.name, pairs))
+               f"({len(data)} bytes)\n"
+               + render(args.name, pairs, save_index=args.save_index))
     if args.out:
         Path(args.out).write_text(snippet)
         print(f"wrote {args.out}")
@@ -433,6 +434,10 @@ def main() -> int:
                          "(for LTCG / differing-body functions no lib can match)")
     ap.add_argument("--va", help="with --from-image: the function's virtual address (0x-hex)")
     ap.add_argument("--name", help="with --from-image: the OOVPA variable name to emit")
+    ap.add_argument("--save-index", default="-1", metavar="XREF_ENUM",
+                    help="with --from-image: emit the OOVPA with this XRef save "
+                         "slot (e.g. XREF_D3D_MakeSpaceInt) so the signature "
+                         "records the matched address for XRef consumers")
     ap.add_argument(
         "--func", action="append", default=[], metavar="SYMBOL=SIGNAME",
         help="decorated symbol and the OOVPA variable name to emit (repeatable)",
