@@ -46,7 +46,7 @@ def load(path: Path) -> tuple[int, int, int, int, int, list[int]]:
     return width, height, color, kind, swizzled, texels
 
 
-def stats(path: Path, png_out: Path | None) -> None:
+def stats(path: Path, png_out: Path | None, scale: int = 1) -> None:
     width, height, color, kind, swizzled, texels = load(path)
     alpha = Counter((t >> 24) & 0xFF for t in texels)
     a0 = alpha.get(0, 0)
@@ -72,26 +72,29 @@ def stats(path: Path, png_out: Path | None) -> None:
         print(f"  raw source : {raw.stat().st_size} bytes, first dwords {words}")
 
     if png_out is not None:
-        write_png(png_out, width, height, texels)
+        write_png(png_out, width, height, texels, scale)
         print(f"  png        : {png_out} (real alpha preserved)")
 
 
-def write_png(path: Path, width: int, height: int, argb: list[int]) -> None:
+def write_png(path: Path, width: int, height: int, argb: list[int],
+              scale: int = 1) -> None:
+    # Nearest-neighbour upscale: font atlases are often 32 px tall, which is
+    # unreadable at 1:1 when the glyphs must be identified by eye.
     rows = bytearray()
-    i = 0
-    for _ in range(height):
-        rows.append(0)  # filter: none
-        for _ in range(width):
-            t = argb[i]
-            rows += bytes(((t >> 16) & 0xFF, (t >> 8) & 0xFF,
-                           t & 0xFF, (t >> 24) & 0xFF))
-            i += 1
+    for y in range(height):
+        for _ in range(scale):
+            rows.append(0)  # filter: none
+            for x in range(width):
+                t = argb[y * width + x]
+                px = bytes(((t >> 16) & 0xFF, (t >> 8) & 0xFF,
+                            t & 0xFF, (t >> 24) & 0xFF))
+                rows += px * scale
 
     def chunk(tag: bytes, payload: bytes) -> bytes:
         return (struct.pack(">I", len(payload)) + tag + payload +
                 struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
 
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", width * scale, height * scale, 8, 6, 0, 0, 0)
     png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) +
            chunk(b"IDAT", zlib.compress(bytes(rows), 9)) + chunk(b"IEND", b""))
     path.write_bytes(png)
@@ -103,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("sidecar", nargs="?", help="a cxbx_tex<N>.argb file")
     ap.add_argument("--all", action="store_true", help="every cxbx_tex*.argb in %%TEMP%%")
     ap.add_argument("--png", metavar="OUT", help="also write a real-alpha PNG")
+    ap.add_argument("--scale", type=int, default=1, metavar="N",
+                    help="nearest-neighbour upscale for --png (read small font atlases)")
     ap.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -137,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         if i:
             print()
         png = Path(args.png) if args.png and len(targets) == 1 else None
-        stats(t, png)
+        stats(t, png, max(1, args.scale))
     return 0
 
 
