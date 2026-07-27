@@ -6407,6 +6407,45 @@ static ULONG EmuNv2aStencilOp(ULONG Op, ULONG Value, ULONG Ref)
     }
 }
 
+// Per-draw pixel accounting (CXBX_NV2A_PIXEL_STATS=1). A black frame whose
+// geometry, texture and surface all check out leaves only the shading
+// pipeline, and the one-sample-per-draw raster line cannot say which stage
+// drops the pixels. These counters bracket every stage between "pixel is
+// inside the primitive" and "dword written to the surface", so the losing
+// stage names itself. Off by default; the counters are a predictable-branch
+// increment when on.
+struct EmuNv2aPixelStats
+{
+    ULONG Shaded;            // reached the shader, inside the clip rect
+    ULONG TexelOpaque;       // stage-0 texel had a nonzero alpha
+    ULONG ShadedNonBlack;    // post-combiner colour had a nonzero RGB
+    ULONG AlphaKilled;       // dropped by the alpha test
+    ULONG DepthKilled;       // dropped by the depth/stencil test
+    ULONG Written;           // reached the surface store
+    ULONG WrittenNonBlack;   // ... and the stored dword had a nonzero RGB
+    ULONG FirstOpaqueTexel;  // first stage-0 texel seen with alpha != 0
+    ULONG FirstWritten;      // first colour actually stored
+    // Primitives dropped before any pixel is walked. The homogeneous-W guard
+    // rejects a whole primitive silently, so a draw can report triangles while
+    // shading nothing at all -- record the offending W so the vertex stage can
+    // be blamed without guessing.
+    ULONG PrimsRejectedW;
+    float RejectedW[3];
+};
+
+static EmuNv2aPixelStats g_EmuNv2aPixelStats = {};
+
+static bool EmuNv2aPixelStatsEnabled()
+{
+    static int Enabled = -1;
+    if(Enabled < 0)
+    {
+        char Value[8];
+        Enabled = EmuNv2aGetEnv("CXBX_NV2A_PIXEL_STATS", Value, sizeof(Value)) ? 1 : 0;
+    }
+    return Enabled == 1;
+}
+
 static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
                               float Z, ULONG Diffuse, const float* U,
                               const float* V)
@@ -6417,6 +6456,12 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
         return;
     }
 
+    const bool Stats = EmuNv2aPixelStatsEnabled();
+    if(Stats)
+    {
+        g_EmuNv2aPixelStats.Shaded++;
+    }
+
     ULONG Textures[EmuNv2aTextureStageCount] = {};
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
@@ -6425,6 +6470,14 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
             Textures[Stage] = EmuNv2aSampleTexel(
                 Target->Sampler[Stage], U[Stage], V[Stage]);
         }
+    }
+    if(Stats && (Textures[0] >> 24) != 0)
+    {
+        if(g_EmuNv2aPixelStats.TexelOpaque == 0)
+        {
+            g_EmuNv2aPixelStats.FirstOpaqueTexel = Textures[0];
+        }
+        g_EmuNv2aPixelStats.TexelOpaque++;
     }
     ULONG Color = EmuNv2aRunStage0Combiner(Target, Diffuse, Textures);
     if(Target->FinalCombiner)
@@ -6442,10 +6495,19 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
             Target->FinalCombinerCw0, Target->FinalCombinerCw1, Registers);
     }
 
+    if(Stats && (Color & 0x00FFFFFFu) != 0)
+    {
+        g_EmuNv2aPixelStats.ShadedNonBlack++;
+    }
+
     if(Target->AlphaTest &&
        !EmuNv2aDepthPass(Target->AlphaFunc, (Color >> 24) & 0xFFu,
                          Target->AlphaRef))
     {
+        if(Stats)
+        {
+            g_EmuNv2aPixelStats.AlphaKilled++;
+        }
         return;
     }
 
@@ -6498,6 +6560,10 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
             *Slot = (NewDepth << 8) | (Stencil & 0xFFu);
             if(!StencilPass || !DepthPass)
             {
+                if(Stats)
+                {
+                    g_EmuNv2aPixelStats.DepthKilled++;
+                }
                 return;
             }
         }
@@ -6509,6 +6575,10 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
             if(Target->DepthTest &&
                !EmuNv2aDepthPass(Target->DepthFunc, SourceDepth, DestinationDepth))
             {
+                if(Stats)
+                {
+                    g_EmuNv2aPixelStats.DepthKilled++;
+                }
                 return;
             }
             if(Target->DepthTest && Target->DepthWrite)
@@ -6523,6 +6593,18 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
     {
         Color = EmuNv2aBlend(Color, *Destination, Target->BlendSFactor,
                              Target->BlendDFactor, Target->BlendEquation);
+    }
+    if(Stats)
+    {
+        if(g_EmuNv2aPixelStats.Written == 0)
+        {
+            g_EmuNv2aPixelStats.FirstWritten = Color;
+        }
+        g_EmuNv2aPixelStats.Written++;
+        if((Color & 0x00FFFFFFu) != 0)
+        {
+            g_EmuNv2aPixelStats.WrittenNonBlack++;
+        }
     }
     *Destination = Color;
 }
@@ -6595,6 +6677,16 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
     if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(
            VW[i0], VW[i1], VW[i2]))
     {
+        if(EmuNv2aPixelStatsEnabled())
+        {
+            if(g_EmuNv2aPixelStats.PrimsRejectedW == 0)
+            {
+                g_EmuNv2aPixelStats.RejectedW[0] = VW[i0];
+                g_EmuNv2aPixelStats.RejectedW[1] = VW[i1];
+                g_EmuNv2aPixelStats.RejectedW[2] = VW[i2];
+            }
+            g_EmuNv2aPixelStats.PrimsRejectedW++;
+        }
         return;
     }
 
@@ -6725,6 +6817,7 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
        !cxbx::nv2a::CanRasterizeHomogeneousTriangle(
            VW[Base], VW[Base + 2], VW[Base + 3]))
     {
+        // Fall back to the triangle path, which records the rejection.
         return false;
     }
 
@@ -7686,6 +7779,10 @@ static void EmuNv2aRasterizeDrawArrays(
     }
 
     ULONG Triangles = 0;
+    if(EmuNv2aPixelStatsEnabled())
+    {
+        ZeroMemory(&g_EmuNv2aPixelStats, sizeof(g_EmuNv2aPixelStats));
+    }
     __try
     {
         switch(BeginOp)
@@ -7749,6 +7846,23 @@ static void EmuNv2aRasterizeDrawArrays(
     {
         printf("Emu (0x%lX): NV2A raster: fault while filling (surf=0x%.08lX).\n",
                GetCurrentThreadId(), SurfaceHost);
+        fflush(stdout);
+    }
+
+    if(EmuNv2aPixelStatsEnabled())
+    {
+        const EmuNv2aPixelStats& P = g_EmuNv2aPixelStats;
+        const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
+                                    ? g_EmuNv2aDebugDrawIndex - 1
+                                    : 0;
+        printf("NVPIX| frame=%lu draw=%lu shaded=%lu texopaque=%lu shadednz=%lu "
+               "alphakill=%lu depthkill=%lu wrote=%lu wrotenz=%lu "
+               "firsttexel=0x%.08lX firstwrote=0x%.08lX "
+               "primrejw=%lu rejw=(%g,%g,%g)\n",
+               g_EmuNv2aDebugFrame, DrawIndex, P.Shaded, P.TexelOpaque,
+               P.ShadedNonBlack, P.AlphaKilled, P.DepthKilled, P.Written,
+               P.WrittenNonBlack, P.FirstOpaqueTexel, P.FirstWritten,
+               P.PrimsRejectedW, P.RejectedW[0], P.RejectedW[1], P.RejectedW[2]);
         fflush(stdout);
     }
 

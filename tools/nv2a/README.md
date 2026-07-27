@@ -12,6 +12,7 @@ rasterizer) debug output. The in-emulator switches they consume live in
 | `CXBX_NV2A_DUMP_DRAWS=i[:j]` | After each draw/clear in `[i,j)`, dump the color surface to `%TEMP%\cxbx_nv2a_draw\f<frame>_d<draw>.bmp` plus the full decoded pipeline state as a `.txt` sidecar (capped at 64 dumps). |
 | `CXBX_NV2A_DUMP_FRAMES=i[:j]` | Limit draw dumps to frames in `[i,j)` (frame = FLIP_STALL present). |
 | `CXBX_NV2A_CRC=1` | One `NVCRC\|` line per present: zlib-compatible CRC32 of the normalized scanout pixels — the frame-level regression signature. |
+| `CXBX_NV2A_PIXEL_STATS=1` | One `NVPIX\|` line per draw accounting for every pixel between "inside the primitive" and "dword stored": `shaded` (entered the shader), `texopaque` (stage-0 texel alpha != 0), `shadednz` (post-combiner RGB != 0), `alphakill`/`depthkill` (dropped by those tests), `wrote`/`wrotenz` (reached the surface), plus `primrejw` — primitives discarded by the homogeneous-w guard, with the offending `rejw=(w0,w1,w2)`. |
 
 ## Tools
 
