@@ -4224,10 +4224,19 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
 
     ULONG LogW = EmuNv2aLog2(Width);
     ULONG LogH = EmuNv2aLog2(Height);
-    ULONG *Pixels = new ULONG[Width * Height]; // BGRA, top-down
+    ULONG *Pixels = new ULONG[Width * Height]; // BGRA, top-down (BMP view)
+    ULONG *True = new ULONG[Width * Height];   // format-true ARGB (sidecar)
 
+    // The BMP forces alpha opaque so image viewers show the colors; the
+    // sidecar keeps the format's real alpha so "is the texture actually
+    // transparent" is answerable from the dump (the forced BMP alpha
+    // previously masqueraded as evidence). The sampler's own unpack keeps
+    // its documented opaque-alpha simplification -- this is ground truth
+    // for the dump only.
     ULONG DistinctSample = 0;
     ULONG FirstColor = 0;
+    ULONG FirstRaw = 0;
+    ULONG AlphaZero = 0, AlphaFull = 0, AlphaMid = 0;
     for(ULONG Y = 0; Y < Height; Y++)
     {
         for(ULONG X = 0; X < Width; X++)
@@ -4240,11 +4249,38 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
                 Raw |= (ULONG)Source[ByteOffset + b] << (b * 8);
 
             ULONG Argb = EmuNv2aUnpackTexel(Raw, Kind);
+
+            // Format-true alpha: A8R8G8B8 kinds carry it in Argb already;
+            // A4R4G4B4 too; A1R5G5B5 (colors 0x02/0x10) encodes it in bit 15,
+            // which the sampler's opaque simplification drops.
+            ULONG TrueAlpha = (Argb >> 24) & 0xFF;
+            if(Kind == 2 && (Color == 0x02 || Color == 0x10))
+            {
+                TrueAlpha = (Raw & 0x8000) != 0 ? 0xFF : 0x00;
+            }
+            ULONG TrueArgb = (TrueAlpha << 24) | (Argb & 0x00FFFFFF);
+            True[Y * Width + X] = TrueArgb;
+            if(TrueAlpha == 0)
+            {
+                AlphaZero++;
+            }
+            else if(TrueAlpha == 0xFF)
+            {
+                AlphaFull++;
+            }
+            else
+            {
+                AlphaMid++;
+            }
+
             ULONG Bgra = (Argb & 0x00FFFFFF) | 0xFF000000;
             Pixels[Y * Width + X] = Bgra;
 
             if(X == 0 && Y == 0)
+            {
                 FirstColor = Bgra;
+                FirstRaw = Raw;
+            }
             else if(Bgra != FirstColor && DistinctSample < 2)
                 DistinctSample = 2;
         }
@@ -4277,16 +4313,41 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
         fwrite(Pixels, 1, DataSize, f);
         fclose(f);
 
-        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s format=0x%.08lX dma=0x%.08lX base=0x%.08lX offset=0x%.08lX address=0x%.08lX palette=0x%.08lX first=0x%.08lX distinct>=2:%s -> %s\n",
+        // Ground-truth sidecars, decodable by tools/nv2a/texdump.py:
+        // .argb = format-true ARGB dwords (alpha NOT forced) behind a
+        // 24-byte header, .raw = the source bytes exactly as read from
+        // guest memory (pre-deswizzle, pre-unpack).
+        char sidecar[MAX_PATH];
+        sprintf(sidecar, "%scxbx_tex%lu.argb", dir, g_EmuNv2aTextureDumpIndex);
+        FILE *sf = fopen(sidecar, "wb");
+        if(sf != NULL)
+        {
+            ULONG header[6] = { 0x58455458 /* 'XTEX' */, Width, Height,
+                                Color, Kind, Swizzled ? 1ul : 0ul };
+            fwrite(header, 1, sizeof(header), sf);
+            fwrite(True, 1, Width * Height * 4, sf);
+            fclose(sf);
+        }
+        sprintf(sidecar, "%scxbx_tex%lu.raw", dir, g_EmuNv2aTextureDumpIndex);
+        sf = fopen(sidecar, "wb");
+        if(sf != NULL)
+        {
+            fwrite(Source, 1, SourceSize, sf);
+            fclose(sf);
+        }
+
+        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s format=0x%.08lX dma=0x%.08lX base=0x%.08lX offset=0x%.08lX address=0x%.08lX palette=0x%.08lX first=0x%.08lX firstraw=0x%.08lX alpha0=%lu alphaFF=%lu alphaMid=%lu distinct>=2:%s -> %s\n",
                GetCurrentThreadId(), Stage, Width, Height, Color,
                Swizzled ? "swizzled" : "linear", SourceKind, Format,
                TextureDmaHandle, Base, static_cast<ULONG>(Texture.offset),
                TextureAddress, static_cast<ULONG>(Texture.palette), FirstColor,
+               FirstRaw, AlphaZero, AlphaFull, AlphaMid,
                DistinctSample >= 2 ? "yes" : "no", path);
         fflush(stdout);
         g_EmuNv2aTextureDumpIndex++;
     }
 
+    delete[] True;
     delete[] Pixels;
     delete[] Source;
 }
