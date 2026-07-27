@@ -29,6 +29,34 @@ int main()
         return 1;
     }
 
+    // A screen-space pass-through vertex program may leave oPos.w at zero;
+    // that must become a neutral w so the primitive still rasterizes, while a
+    // genuine behind-the-viewer w keeps failing the guard.
+    if(cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(0.0f) != 1.0f ||
+       cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(-0.0f) != 1.0f ||
+       cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(2.0f) != 2.0f ||
+       cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(-0.5f) != -0.5f)
+    {
+        std::fputs(
+            "only a degenerate screen-space w may be neutralized\n", stderr);
+        return 1;
+    }
+
+    if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+           cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(0.0f),
+           cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(0.0f),
+           cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(0.0f)) ||
+       cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+           cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(-1.0f),
+           cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(1.0f),
+           cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(1.0f)))
+    {
+        std::fputs(
+            "a w=0 screen-space primitive must rasterize, a negative one must not\n",
+            stderr);
+        return 1;
+    }
+
     constexpr auto projected =
         cxbx::nv2a::ProjectTexture2D(0.5f, 0.25f, 2.0f, 0.5f);
     if(!Near(projected.u, 0.25f) || !Near(projected.v, 0.125f) ||

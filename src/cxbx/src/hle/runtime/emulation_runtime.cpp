@@ -5973,6 +5973,13 @@ EmuNv2aBuildVertexProgramRasterVertex(
     const float W = VertexProgram.Position[3];
     Result.InverseW =
         W > 1e-6f || W < -1e-6f ? 1.0f / W : 1.0f;
+    // A pass-through program that never writes oPos.w leaves it at zero, which
+    // the rasterizer's homogeneous-w guard rejects -- dropping the primitive
+    // and rendering nothing (Samurai Shodown V's screen-space text layer
+    // submits position as 4 floats with w = 0). InverseW above already treats
+    // that as "no perspective correction"; keep the position consistent.
+    Result.Position[3] =
+        cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(W);
     Result.DiffuseColor = VertexProgram.DiffuseColor;
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {

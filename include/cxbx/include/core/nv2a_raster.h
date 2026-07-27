@@ -19,6 +19,17 @@ inline constexpr bool CanRasterizeHomogeneousTriangle(
            IsUsableHomogeneousW(w2);
 }
 
+// A vertex program emits oPos already in screen space, so w only drives
+// perspective-correct attribute interpolation -- it is not a divisor. A 2D
+// pass-through program may therefore never write oPos.w, leaving it at zero,
+// which CanRasterizeHomogeneousTriangle would reject and so drop the whole
+// primitive. Map that degenerate case onto a neutral w. A negative w still
+// means behind the viewer and must keep failing the guard, so it is preserved.
+inline constexpr float NeutralizeDegenerateScreenSpaceW(float w) noexcept
+{
+    return (w > -1.0e-5f && w < 1.0e-5f) ? 1.0f : w;
+}
+
 struct ProjectedTextureCoordinates
 {
     float u;
