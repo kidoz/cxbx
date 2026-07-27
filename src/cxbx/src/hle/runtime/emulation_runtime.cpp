@@ -12442,16 +12442,31 @@ static ULONG EmuCallTracePrologueLength(const uint08 *Code)
     for(ULONG Guard = 0; Guard < 8 && Length < 5; Guard++)
     {
         const uint08 *Op = Code + Length;
-        if(Op[0] == 0x55) { Length += 1; continue; }                     // push ebp
-        if(Op[0] == 0x53 || Op[0] == 0x56 || Op[0] == 0x57) { Length += 1; continue; } // push ebx/esi/edi
-        if(Op[0] == 0x8B && Op[1] == 0xEC) { Length += 2; continue; }    // mov ebp,esp
+        if(Op[0] >= 0x50 && Op[0] <= 0x57) { Length += 1; continue; }    // push r32 (any)
         if(Op[0] == 0x83 && Op[1] == 0xEC) { Length += 3; continue; }    // sub esp,imm8
         if(Op[0] == 0x81 && Op[1] == 0xEC) { Length += 6; continue; }    // sub esp,imm32
-        if(Op[0] == 0xB8) { Length += 5; continue; }                     // mov eax,imm32
+        if(Op[0] >= 0xB8 && Op[0] <= 0xBF) { Length += 5; continue; }    // mov r32,imm32
         if(Op[0] == 0x6A) { Length += 2; continue; }                     // push imm8
         if(Op[0] == 0x68) { Length += 5; continue; }                     // push imm32
         if(Op[0] == 0xA1) { Length += 5; continue; }                     // mov eax,[imm32]
-        if(Op[0] == 0x8B && (Op[1] & 0xC7) == 0x44) { Length += 4; continue; } // mov r32,[esp+disp8]
+
+        // mov r32,r/m32 (0x8B) and lea r32,m (0x8D) share the ModRM encoding,
+        // so one length rule covers both -- these dominate real prologues and
+        // the old per-form entries could not keep up (a plain `push ecx` or
+        // `lea eax,[ebp-16]` was enough to refuse a function outright).
+        if(Op[0] == 0x8B || Op[0] == 0x8D)
+        {
+            const uint08 Mod = (uint08)(Op[1] >> 6);
+            const uint08 Rm = (uint08)(Op[1] & 7);
+            if(Mod == 3) { Length += 2; continue; }                      // reg,reg
+            if(Mod == 0 && Rm == 5) { Length += 6; continue; }           // [imm32]
+            if(Mod == 0 && Rm == 4) { Length += 3; continue; }           // [SIB]
+            if(Mod == 0) { Length += 2; continue; }                      // [reg]
+            if(Mod == 1 && Rm == 4) { Length += 4; continue; }           // [SIB+disp8]
+            if(Mod == 1) { Length += 3; continue; }                      // [reg+disp8]
+            if(Mod == 2 && Rm == 4) { Length += 7; continue; }           // [SIB+disp32]
+            Length += 6; continue;                                       // [reg+disp32]
+        }
         return 0;
     }
 
