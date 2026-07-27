@@ -4166,14 +4166,34 @@ static bool EmuD3DDrawGate(const char* what, DWORD pcPrimitiveType,
         DWORD vertexShader = 0;
         if(g_pD3DDevice8 != 0)
             g_pD3DDevice8->GetVertexShader(&vertexShader);
+        // Which texture is actually bound when the draw issues, plus the
+        // stage-0 colour op. A textured quad that renders flat white has
+        // either lost its binding between SetTexture and the draw, or has a
+        // stage op that ignores the texture -- the trace could not tell those
+        // apart while it reported only the shader handles.
+        XTL::IDirect3DBaseTexture8 *boundTexture = NULL;
+        DWORD stage0ColorOp = 0;
+        DWORD stage0ColorArg1 = 0;
+        if(g_pD3DDevice8 != 0)
+        {
+            g_pD3DDevice8->GetTexture(0, &boundTexture);
+            if(boundTexture != NULL)
+                boundTexture->Release();   // GetTexture adds a reference
+            g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLOROP, &stage0ColorOp);
+            g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLORARG1, &stage0ColorArg1);
+        }
         printf("DRAW| frame=%lu draw=%lu %s prim=%lu count=%lu vsh=0x%08lX "
-               "psh=0x%08lX%s\n",
+               "psh=0x%08lX tex0=0x%08lX yuv=%u op=%lu arg1=0x%lX%s\n",
                static_cast<unsigned long>(g_D3DDebugFrame),
                static_cast<unsigned long>(index), what,
                static_cast<unsigned long>(pcPrimitiveType),
                static_cast<unsigned long>(primitiveCount),
                static_cast<unsigned long>(vertexShader),
                static_cast<unsigned long>(g_EmuCurrentPixelShaderHandle),
+               reinterpret_cast<unsigned long>(boundTexture),
+               g_bStage0ConvertedYuv ? 1u : 0u,
+               static_cast<unsigned long>(stage0ColorOp),
+               static_cast<unsigned long>(stage0ColorArg1),
                skipped ? " SKIPPED" : "");
     }
 
@@ -9241,6 +9261,40 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect
                 pSurface8->UnlockRect();
 
                 hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
+
+                // A title that decodes video straight into a locked surface
+                // copies Pitch*Height bytes as the GUEST understands them. If
+                // the host surface is narrower or shorter, that memcpy runs
+                // off the end of the host allocation and faults -- the frame
+                // never lands and the surface stays blank. Report both
+                // geometries so the mismatch is visible instead of appearing
+                // as an unexplained access violation inside VCRUNTIME memcpy.
+                if(SUCCEEDED(hRet) && EmuD3DTexTraceEnabled())
+                {
+                    D3DSURFACE_DESC HostDesc = {};
+                    const bool GotHost = SUCCEEDED(pSurface8->GetDesc(&HostDesc));
+                    const DWORD GuestWidth =
+                        (pPixelContainer->Size & X_D3DSIZE_WIDTH_MASK) + 1;
+                    const DWORD GuestHeight =
+                        ((pPixelContainer->Size & X_D3DSIZE_HEIGHT_MASK) >>
+                         X_D3DSIZE_HEIGHT_SHIFT) + 1;
+                    const DWORD GuestPitch =
+                        (((pPixelContainer->Size & X_D3DSIZE_PITCH_MASK) >>
+                          X_D3DSIZE_PITCH_SHIFT) + 1) * 64;
+                    printf("TEX| surface-lock resource=0x%.08lX format=0x%.08lX "
+                           "size=0x%.08lX guest=%lux%lu pitch=%lu host=%lux%lu "
+                           "hostfmt=%d lockpitch=%ld bits=0x%.08lX\n",
+                           reinterpret_cast<unsigned long>(pThis),
+                           static_cast<unsigned long>(pPixelContainer->Format),
+                           static_cast<unsigned long>(pPixelContainer->Size),
+                           GuestWidth, GuestHeight, GuestPitch,
+                           GotHost ? (unsigned long)HostDesc.Width : 0ul,
+                           GotHost ? (unsigned long)HostDesc.Height : 0ul,
+                           GotHost ? (int)HostDesc.Format : -1,
+                           (long)pLockedRect->Pitch,
+                           reinterpret_cast<unsigned long>(pLockedRect->pBits));
+                    fflush(stdout);
+                }
 
                 // A writable full lock of a swizzled texture level receives the
                 // title's Morton-order texels; mark it for unswizzling exactly
