@@ -6254,7 +6254,8 @@ static void EmuStartAudioInterruptThread()
 static const ULONG EmuUsbInterruptLevel = 1;
 static volatile LONG g_EmuUsbThreadStarted = 0;
 
-extern "C" void EmuUsb0SignalInterrupt(); // emulation_runtime.cpp: raise HcInterruptStatus SOF
+extern "C" void EmuUsb0SignalInterrupt();  // emulation_runtime.cpp: raise HcInterruptStatus SOF
+extern "C" bool EmuUsb0InterruptPending(); // emulation_runtime.cpp: (status & enable & MIE) != 0
 
 static DWORD WINAPI EmuUsbInterruptThread(LPVOID)
 {
@@ -6271,7 +6272,14 @@ static DWORD WINAPI EmuUsbInterruptThread(LPVOID)
         if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
             continue;
 
-        EmuUsb0SignalInterrupt(); // start-of-frame source pending
+        EmuUsb0SignalInterrupt(); // advance the frame counter; SOF only if unmasked
+
+        // Only enter the ISR when the controller would actually assert its
+        // line. Calling it for a masked source makes the driver take its
+        // "not my interrupt" exit without acknowledging, and the next tick
+        // repeats it -- a livelock that starves the title's own threads.
+        if(!EmuUsb0InterruptPending())
+            continue;
 
         EmuSwapFS(); // Xbox FS
         __try

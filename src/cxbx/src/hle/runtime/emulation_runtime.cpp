@@ -672,17 +672,41 @@ static ULONG g_EmuUsb0PortStatus[EmuUsbPortCount] = { 0, 0, 0, 0 };
 // HcInterruptStatus (write-1-to-clear) + the frame counter, so a synthesized SOF
 // interrupt can be raised for the guest USB ISR and acknowledged by it.
 static const ULONG EmuUsbHcInterruptStatus = 0x0000000C;
+static const ULONG EmuUsbHcInterruptEnable = 0x00000010;
+static const ULONG EmuUsbHcInterruptDisable = 0x00000014;
 static const ULONG EmuUsbHcFmNumber = 0x0000003C;
-static const ULONG EmuUsbIntStatusSF = 1u << 2; // StartOfFrame
+static const ULONG EmuUsbIntStatusSF = 1u << 2;   // StartOfFrame
+static const ULONG EmuUsbIntStatusRHSC = 1u << 6; // RootHubStatusChange
+static const ULONG EmuUsbIntMIE = 1u << 31;       // MasterInterruptEnable
 static ULONG g_EmuUsb0IntStatus = 0;
+static ULONG g_EmuUsb0IntEnable = 0;
 static ULONG g_EmuUsb0FmNumber = 0;
 
+// An OHCI interrupt is asserted only for sources the driver has UNMASKED (and
+// only while the master enable is set). Raising a masked source livelocks the
+// guest: its ISR reads HcInterruptStatus & HcInterruptEnable, finds nothing it
+// owns, returns "not mine" WITHOUT acknowledging -- so the source stays
+// pending and the next delivery repeats it forever. EvolutionX enables RHSC
+// only (0x40, it is waiting for a controller to be plugged in) and spun ~2600
+// times per run against an unconditional start-of-frame.
+extern "C" bool EmuUsb0InterruptPending()
+{
+    if((g_EmuUsb0IntEnable & EmuUsbIntMIE) == 0)
+        return false;
+
+    return (g_EmuUsb0IntStatus & g_EmuUsb0IntEnable & ~EmuUsbIntMIE) != 0;
+}
+
 // Raise a USB start-of-frame interrupt source (called from the USB delivery
-// thread just before it invokes the connected level-1 ISR).
+// thread just before it invokes the connected level-1 ISR). The frame counter
+// advances regardless -- it is a free-running counter on hardware, readable
+// whether or not SOF interrupts are enabled.
 extern "C" void EmuUsb0SignalInterrupt()
 {
-    g_EmuUsb0IntStatus |= EmuUsbIntStatusSF;
     g_EmuUsb0FmNumber = (g_EmuUsb0FmNumber + 1) & 0xFFFF;
+
+    if((g_EmuUsb0IntEnable & EmuUsbIntStatusSF) != 0)
+        g_EmuUsb0IntStatus |= EmuUsbIntStatusSF;
 }
 static const ULONG EmuApuMmioBase = 0xFE800000;
 static const ULONG EmuApuMmioEnd = EmuApuMmioBase + 0x0007FFFF;
@@ -914,6 +938,10 @@ static ULONG EmuUsb0ReadRegister32(ULONG Address)
     {
         Value = g_EmuUsb0IntStatus;
     }
+    else if(Offset == EmuUsbHcInterruptEnable)
+    {
+        Value = g_EmuUsb0IntEnable;
+    }
     else if(Offset == EmuUsbHcFmNumber)
     {
         Value = g_EmuUsb0FmNumber;
@@ -962,6 +990,10 @@ static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
         EmuUsb0WritePortStatus(PortIndex, Value);
     else if(Offset == EmuUsbHcInterruptStatus)
         g_EmuUsb0IntStatus &= ~Value; // write-1-to-clear
+    else if(Offset == EmuUsbHcInterruptEnable)
+        g_EmuUsb0IntEnable |= Value; // set-bits register
+    else if(Offset == EmuUsbHcInterruptDisable)
+        g_EmuUsb0IntEnable &= ~Value; // paired clear-bits register
     else
         EmuStoreMmioRegister(Address, Value);
 
