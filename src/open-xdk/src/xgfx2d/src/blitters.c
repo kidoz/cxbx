@@ -36,7 +36,8 @@ DECLARE_BLITTER(colorize_sprite_blit, color)
 #ifndef __GNUC__
     if(len == 0)
         return;
-    __asm {
+    // clang-format off
+	__asm {
 		pushad
 		mov esi,s
 		mov edi,d
@@ -45,7 +46,7 @@ DECLARE_BLITTER(colorize_sprite_blit, color)
 sprite_loop:
 		mov eax,[esi]
 		and eax,0xffffff
-		jz skip_pixel // change to conditional move?
+		jz skip_pixel          //change to conditional move?
 		mov [edi],ebx
 skip_pixel:
 		add edi,4
@@ -53,7 +54,8 @@ skip_pixel:
 		dec ecx
 		jnz sprite_loop
 		popad
-    }
+	}
+    // clang-format on
 #endif
 }
 
@@ -62,7 +64,8 @@ skip_pixel:
 DECLARE_BLITTER(alphavalue_blit, alpha)
 {
 #ifndef __GNUC__
-    __asm {
+    // clang-format off
+	__asm {
 		mov esi,s
 		mov edi,d
 		mov ecx,len
@@ -72,9 +75,9 @@ DECLARE_BLITTER(alphavalue_blit, alpha)
 		punpcklwd mm7, mm7
 		punpcklwd mm7, mm7
 		psrlw mm7, 4
-
-        // esi -> source
-        // edi -> dest
+		
+		//esi -> source
+		//edi -> dest
 alphaloop:
 		
 		movd mm0, [esi]
@@ -85,14 +88,14 @@ alphaloop:
 		movd mm3, [edi+4]
 		punpcklbw mm1, mm1
 		punpcklbw mm3, mm3
-
-                                                                                                                                 // �ka upp datan till wordstorlek
+		
+		// �ka upp datan till wordstorlek
 		psrlw mm0, 4
 		psrlw mm1, 4
 		psrlw mm2, 4
 		psrlw mm3, 4
-
-        // vikta
+		
+		//vikta
 		psubw mm1, mm0
 		pmulhw mm1, mm7
 		psrlw mm0, 4
@@ -113,14 +116,16 @@ alphaloop:
 		dec ecx
 		jnz alphaloop
 		emms
-    }
+	}
+    // clang-format on
 #endif
 }
 
 DECLARE_BLITTER(alphavalue_sprite_blit, alpha)
 {
 #ifndef __GNUC__
-    __asm {
+    // clang-format off
+	__asm {
 		mov esi,s
 		mov edi,d
 		mov ecx,len
@@ -129,23 +134,23 @@ DECLARE_BLITTER(alphavalue_sprite_blit, alpha)
 		punpcklwd mm7, mm7
 		punpcklwd mm7, mm7
 		psrlw mm7, 4
-
-        // esi -> source
-        // edi -> dest
+			
+		//esi -> source
+		//edi -> dest
 alphaloop:
 		mov eax,[esi]
 		movd mm0, [esi]
 		and eax,0xffffff
 		jz skipthispixel
 
-                                                      // unpack to words and apply shift bias
+		//unpack to words and apply shift bias
 		punpcklbw mm0, mm0
 		movd mm1, [edi]
 		punpcklbw mm1, mm1
 		psrlw mm0, 4
 		psrlw mm1, 4
-
-                  // weighting
+		
+		//weighting
 		psubw mm1, mm0
 		pmulhw mm1, mm7
 		psrlw mm0, 4
@@ -160,14 +165,16 @@ skipthispixel:
 		dec ecx
 		jnz alphaloop
 		emms
-    }
+	}
+    // clang-format on
 #endif
 }
 
 DECLARE_BLITTER(alphavalue50_blit, none)
 {
 #ifndef __GNUC__
-    __asm {
+    // clang-format off
+	__asm {
 		mov esi,s
 		mov edi,d
 		mov ecx,len
@@ -184,19 +191,21 @@ alpha50_loop:
 		add esi,4
 		dec ecx
 		jnz alpha50_loop
-    }
+	}
+    // clang-format on
 #endif
 }
 
 DECLARE_BLITTER(alpha_blit, none)
 {
 #ifndef __GNUC__
-    __asm {
+    // clang-format off
+	__asm {
 		mov esi,s
 		mov edi,d
 		mov ecx,len
-                                   // esi -> source
-                                   // edi -> dest
+		//esi -> source
+		//edi -> dest
 	alphaloop:
 		mov eax, [esi]
 		movd mm1, eax
@@ -204,7 +213,7 @@ DECLARE_BLITTER(alpha_blit, none)
 		movd mm0, [edi]
 		punpcklbw mm0, mm0
 
-                                                                                                                  // get pixel alpha
+		//get pixel alpha
 		shr eax,24
 		movd mm7, eax
 		punpcklbw mm7, mm7
@@ -228,7 +237,8 @@ DECLARE_BLITTER(alpha_blit, none)
 		dec ecx
 		jnz alphaloop
 		emms
-    }
+	}
+    // clang-format on
 #endif
 }
 
@@ -238,7 +248,8 @@ DECLARE_BLITTER(additive_blit, none)
     // process 2 pixels at a time
     if(len > 3)
     {
-        __asm {
+        // clang-format off
+		__asm {
 			mov esi,s
 			mov edi,d
 			mov ebx,len
@@ -266,7 +277,8 @@ addblitloop:
 			movd [edi],mm0
 skipfinishadd:
 			emms
-        }
+		}
+        // clang-format on
     }
 
 #else
@@ -285,29 +297,25 @@ skipfinishadd:
 
 DECLARE_BLITTER(subtractive_blit, none){
 #ifndef __GNUC__
-    __asm {
-        mov esi,
-        s
-            mov edi,
-        d
-            mov ecx,
-        len
-            shr ecx,
-        1
-        sub_loop :
-            movq mm1,
-        [esi] movq mm0,
-        [edi] psubusb mm0,
-        mm1
-            movq[edi],
-        mm0
-
-            add esi,
-        8 add edi,
-        8 dec ecx
-            jnz sub_loop
-                emms
-    }
+    // clang-format off
+	__asm {
+		mov esi,s
+		mov edi,d
+		mov ecx,len
+		shr ecx,1
+sub_loop:
+		movq mm1,[esi]
+		movq mm0,[edi]
+		psubusb mm0,mm1
+		movq [edi],mm0
+		
+		add esi,8
+		add edi,8
+		dec ecx
+		jnz sub_loop
+		emms
+	}
+// clang-format on
 #endif
 };
 
@@ -316,10 +324,11 @@ DECLARE_BLITTER(additive_alpha_blit, alpha)
 {
     // alpha=255-alpha;
 #ifndef __GNUC__
-    __asm {
+    // clang-format off
+	__asm {
 		mov esi,s
 		mov edi,d
-                           // mov edx,alpha
+			//mov edx,alpha
 alphaloop2:
 		mov eax, [esi]
 		
@@ -347,7 +356,8 @@ alphaloop2:
 		dec len
 		jnz alphaloop2
 		emms
-    }
+	}
+    // clang-format on
 
 #else
 
@@ -370,7 +380,8 @@ DECLARE_BLITTER(multiply_blit, none)
 {
 
 #ifndef __GNUC__
-    __asm {
+    // clang-format off
+	__asm {
 		mov esi,s
 		mov edi,d
 		mov ecx,len
@@ -392,7 +403,8 @@ mulblitloop:
 		dec ecx
 		jnz mulblitloop
 		emms
-    }
+	}
+    // clang-format on
 #else
     for(; len; len--)
     {

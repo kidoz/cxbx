@@ -5147,7 +5147,10 @@ extern "C" VOID NTAPI EmuKeBugCheck(ULONG BugCheckCode)
         {
             EmuSwapFS(); // legacy mode: plain toggle
         }
-        __asm mov byte ptr fs : [0x24], 0 return;
+        // clang-format off
+        __asm mov byte ptr fs:[0x24], 0
+        return;
+        // clang-format on
     }
 
     EmuCleanup("Guest called KeBugCheck(0x%.08lX)", BugCheckCode);
