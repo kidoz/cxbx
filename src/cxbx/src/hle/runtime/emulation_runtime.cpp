@@ -703,6 +703,61 @@ extern "C" bool EmuUsb0InterruptPending()
     return (g_EmuUsb0IntStatus & g_EmuUsb0IntEnable & ~EmuUsbIntMIE) != 0;
 }
 
+// Synthetic root-hub connect (opt-in via CXBX_USB_CONNECT=<n>): report the
+// first <n> ports as carrying a connected, powered device -- CCS with its CSC
+// change bit, plus PPS since HcRhDescriptorA advertises always-on power. A
+// title parked on the controller-hotplug interrupt (EvolutionX unmasks RHSC
+// only) then runs its connect -> port-reset -> enumerate path against the
+// existing HcRhPortStatus write semantics. There is no transfer-descriptor
+// engine behind the port yet, so enumeration's control transfers are the next
+// wall; this stage only completes the hotplug wait.
+static void EmuUsb0MaybeSyntheticConnect(void)
+{
+    static LONG s_ConfiguredPorts = -1;
+    if(s_ConfiguredPorts < 0)
+    {
+        char Value[8] = { 0 };
+        ULONG Ports = 0;
+        if(GetEnvironmentVariableA("CXBX_USB_CONNECT", Value, sizeof(Value)) != 0)
+        {
+            Ports = strtoul(Value, NULL, 0);
+            if(Ports > EmuUsbPortCount)
+            {
+                Ports = EmuUsbPortCount;
+            }
+        }
+        s_ConfiguredPorts = (LONG)Ports;
+    }
+
+    for(LONG Port = 0; Port < s_ConfiguredPorts; ++Port)
+    {
+        if((g_EmuUsb0PortStatus[Port] & EmuUsbPortCCS) == 0)
+        {
+            g_EmuUsb0PortStatus[Port] |= EmuUsbPortCCS | EmuUsbPortCSC | EmuUsbPortPPS;
+            printf("Emu (0x%lX): USB0 synthetic connect on port %ld (CCS+CSC set).\n",
+                   GetCurrentThreadId(), Port);
+            fflush(stdout);
+        }
+    }
+}
+
+// RHSC is a level source: the root hub keeps requesting attention while any
+// port change bit is uncleared, so re-assert it until the guest's write-1-to-
+// clear handshake empties the change bits. This is what walks the driver's
+// state machine forward (connect CSC -> its port reset completes with PRSC ->
+// second interrupt -> reset handling) without any timer of its own.
+static void EmuUsb0UpdateRhscSource(void)
+{
+    for(ULONG Port = 0; Port < EmuUsbPortCount; ++Port)
+    {
+        if((g_EmuUsb0PortStatus[Port] & EmuUsbPortChangeMask) != 0)
+        {
+            g_EmuUsb0IntStatus |= EmuUsbIntStatusRHSC;
+            break;
+        }
+    }
+}
+
 // Raise a USB start-of-frame interrupt source (called from the USB delivery
 // thread just before it invokes the connected level-1 ISR). The frame counter
 // advances regardless -- it is a free-running counter on hardware, readable
@@ -713,6 +768,9 @@ extern "C" void EmuUsb0SignalInterrupt()
 
     if((g_EmuUsb0IntEnable & EmuUsbIntStatusSF) != 0)
         g_EmuUsb0IntStatus |= EmuUsbIntStatusSF;
+
+    EmuUsb0MaybeSyntheticConnect();
+    EmuUsb0UpdateRhscSource();
 }
 static const ULONG EmuApuMmioBase = 0xFE800000;
 static const ULONG EmuApuMmioEnd = EmuApuMmioBase + 0x0007FFFF;
@@ -918,6 +976,11 @@ static ULONG EmuUsb0ReadRegister32(ULONG Address)
     ULONG Offset = EmuUsb0Offset(Address);
     ULONG PortIndex = 0;
     ULONG Value;
+
+    // A polling driver must see the synthetic connect too, not only one that
+    // enables the interrupt delivery thread.
+    EmuUsb0MaybeSyntheticConnect();
+    EmuUsb0UpdateRhscSource();
 
     if(Offset == 0)
     {
