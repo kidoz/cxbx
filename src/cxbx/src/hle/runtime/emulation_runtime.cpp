@@ -13161,100 +13161,133 @@ extern "C" void EmuCallTraceReport(ULONG SlotIndex, ULONG CallerAddress)
     }
 }
 
-// Length of the instruction(s) covering at least 5 bytes at Address, using a
-// small table of prologue forms actually seen in title code. 0 = unsupported.
+// ModRM-tail length (ModRM byte + SIB + displacement) for a one-byte opcode
+// with no immediate. Returns the byte count INCLUDING the ModRM byte itself.
+static ULONG EmuCallTraceModRmLength(const uint08* ModRm)
+{
+    const uint08 Mod = (uint08)(ModRm[0] >> 6);
+    const uint08 Rm = (uint08)(ModRm[0] & 7);
+    if(Mod == 3)
+    {
+        return 1; // reg,reg
+    }
+    if(Mod == 0 && Rm == 5)
+    {
+        return 5; // [imm32]
+    }
+    if(Mod == 0 && Rm == 4)
+    {
+        return 2; // [SIB]
+    }
+    if(Mod == 0)
+    {
+        return 1; // [reg]
+    }
+    if(Mod == 1 && Rm == 4)
+    {
+        return 3; // [SIB+disp8]
+    }
+    if(Mod == 1)
+    {
+        return 2; // [reg+disp8]
+    }
+    if(Mod == 2 && Rm == 4)
+    {
+        return 6; // [SIB+disp32]
+    }
+    return 5; // [reg+disp32]
+}
+
+// Length of ONE instruction at Op for the prologue forms the tracer can
+// safely displace. 0 = unsupported. LTCG prologues mix plain pushes with
+// ALU/mov ModRM forms, absolute-moffs loads and even relative calls, so the
+// decoder covers those; the stub builder re-bases any displaced E8/E9.
+static ULONG EmuCallTraceInstructionLength(const uint08* Op)
+{
+    if(Op[0] >= 0x50 && Op[0] <= 0x5F)
+    {
+        return 1; // push/pop r32
+    }
+    if(Op[0] == 0x83 || Op[0] == 0x80)
+    {
+        return 1 + EmuCallTraceModRmLength(Op + 1) + 1; // ALU r/m,imm8
+    }
+    if(Op[0] == 0x81)
+    {
+        return 1 + EmuCallTraceModRmLength(Op + 1) + 4; // ALU r/m,imm32
+    }
+    if(Op[0] >= 0xB8 && Op[0] <= 0xBF)
+    {
+        return 5; // mov r32,imm32
+    }
+    if(Op[0] >= 0xB0 && Op[0] <= 0xB7)
+    {
+        return 2; // mov r8,imm8
+    }
+    if(Op[0] == 0x6A)
+    {
+        return 2; // push imm8
+    }
+    if(Op[0] == 0x68)
+    {
+        return 5; // push imm32
+    }
+    if(Op[0] >= 0xA0 && Op[0] <= 0xA3)
+    {
+        return 5; // mov al/eax,[moffs32] / mov [moffs32],al/eax
+    }
+    if(Op[0] == 0xE8 || Op[0] == 0xE9)
+    {
+        return 5; // call/jmp rel32 (stub re-bases the displacement)
+    }
+    // One-byte-opcode + ModRM forms with no immediate: mov/lea/xor/test/cmp/
+    // add/sub in both directions and both widths.
+    if(Op[0] == 0x8B || Op[0] == 0x8D || Op[0] == 0x8A || Op[0] == 0x88 || Op[0] == 0x89 ||
+       Op[0] == 0x32 || Op[0] == 0x33 || Op[0] == 0x84 || Op[0] == 0x85 ||
+       Op[0] == 0x3A || Op[0] == 0x3B || Op[0] == 0x2B || Op[0] == 0x03)
+    {
+        return 1 + EmuCallTraceModRmLength(Op + 1);
+    }
+    return 0;
+}
+
+// Instruction boundaries of the displaced prologue window (>= 5 bytes).
+struct EmuCallTracePrologue
+{
+    ULONG Length;
+    ULONG InstructionOffsets[8];
+    ULONG InstructionCount;
+};
+
+// Decode instruction starts covering at least 5 bytes at Code. Returns false
+// if an unsupported opcode appears before 5 bytes are covered.
+static bool EmuCallTraceDecodePrologue(const uint08* Code, EmuCallTracePrologue* Prologue)
+{
+    Prologue->Length = 0;
+    Prologue->InstructionCount = 0;
+    while(Prologue->Length < 5 && Prologue->InstructionCount < 8)
+    {
+        const ULONG InstructionLength = EmuCallTraceInstructionLength(Code + Prologue->Length);
+        if(InstructionLength == 0)
+        {
+            return false;
+        }
+        Prologue->InstructionOffsets[Prologue->InstructionCount] = Prologue->Length;
+        Prologue->InstructionCount += 1;
+        Prologue->Length += InstructionLength;
+    }
+    return Prologue->Length >= 5;
+}
+
+// Back-compat length wrapper (kept for existing callers).
 static ULONG EmuCallTracePrologueLength(const uint08* Code)
 {
-    ULONG Length = 0;
-    for(ULONG Guard = 0; Guard < 8 && Length < 5; Guard++)
+    EmuCallTracePrologue Prologue;
+    if(!EmuCallTraceDecodePrologue(Code, &Prologue))
     {
-        const uint08* Op = Code + Length;
-        if(Op[0] >= 0x50 && Op[0] <= 0x57)
-        {
-            Length += 1;
-            continue;
-        } // push r32 (any)
-        if(Op[0] == 0x83 && Op[1] == 0xEC)
-        {
-            Length += 3;
-            continue;
-        } // sub esp,imm8
-        if(Op[0] == 0x81 && Op[1] == 0xEC)
-        {
-            Length += 6;
-            continue;
-        } // sub esp,imm32
-        if(Op[0] >= 0xB8 && Op[0] <= 0xBF)
-        {
-            Length += 5;
-            continue;
-        } // mov r32,imm32
-        if(Op[0] == 0x6A)
-        {
-            Length += 2;
-            continue;
-        } // push imm8
-        if(Op[0] == 0x68)
-        {
-            Length += 5;
-            continue;
-        } // push imm32
-        if(Op[0] == 0xA1)
-        {
-            Length += 5;
-            continue;
-        } // mov eax,[imm32]
-
-        // mov r32,r/m32 (0x8B) and lea r32,m (0x8D) share the ModRM encoding,
-        // so one length rule covers both -- these dominate real prologues and
-        // the old per-form entries could not keep up (a plain `push ecx` or
-        // `lea eax,[ebp-16]` was enough to refuse a function outright).
-        if(Op[0] == 0x8B || Op[0] == 0x8D)
-        {
-            const uint08 Mod = (uint08)(Op[1] >> 6);
-            const uint08 Rm = (uint08)(Op[1] & 7);
-            if(Mod == 3)
-            {
-                Length += 2;
-                continue;
-            } // reg,reg
-            if(Mod == 0 && Rm == 5)
-            {
-                Length += 6;
-                continue;
-            } // [imm32]
-            if(Mod == 0 && Rm == 4)
-            {
-                Length += 3;
-                continue;
-            } // [SIB]
-            if(Mod == 0)
-            {
-                Length += 2;
-                continue;
-            } // [reg]
-            if(Mod == 1 && Rm == 4)
-            {
-                Length += 4;
-                continue;
-            } // [SIB+disp8]
-            if(Mod == 1)
-            {
-                Length += 3;
-                continue;
-            } // [reg+disp8]
-            if(Mod == 2 && Rm == 4)
-            {
-                Length += 7;
-                continue;
-            } // [SIB+disp32]
-            Length += 6;
-            continue; // [reg+disp32]
-        }
         return 0;
     }
-
-    return Length >= 5 ? Length : 0;
+    return Prologue.Length;
 }
 
 static void EmuInstallCallTrace(Xbe::Header* pXbeHeader)
@@ -13280,14 +13313,15 @@ static void EmuInstallCallTrace(Xbe::Header* pXbeHeader)
             continue;
         }
 
-        const ULONG Length = EmuCallTracePrologueLength((const uint08*)Address);
-        if(Length == 0)
+        EmuCallTracePrologue Prologue;
+        if(!EmuCallTraceDecodePrologue((const uint08*)Address, &Prologue))
         {
             printf("CALL| skip 0x%.08lX (unsupported prologue %.02X %.02X %.02X)\n",
                    Address, ((const uint08*)Address)[0], ((const uint08*)Address)[1],
                    ((const uint08*)Address)[2]);
             continue;
         }
+        const ULONG Length = Prologue.Length;
 
         EmuCallTraceSlot& Slot = g_EmuCallTraceSlots[SlotIndex];
         Slot.GuestAddress = Address;
@@ -13315,6 +13349,20 @@ static void EmuInstallCallTrace(Xbe::Header* pXbeHeader)
         Stub[At++] = 0x08; // add esp,8
         Stub[At++] = 0x61; // popad
         memcpy(Stub + At, Slot.Displaced, Length);
+        // A displaced call/jmp rel32 is position-dependent: re-base its
+        // displacement so it still reaches the original target from the stub.
+        for(ULONG i = 0; i < Prologue.InstructionCount; i++)
+        {
+            const ULONG Off = Prologue.InstructionOffsets[i];
+            const uint08 Opcode = Slot.Displaced[Off];
+            if(Opcode == 0xE8 || Opcode == 0xE9)
+            {
+                const LONG OriginalDisp = *(LONG*)&Slot.Displaced[Off + 1];
+                const ULONG Target = Address + Off + 5 + OriginalDisp;
+                const ULONG StubInsn = (ULONG)(uintptr_t)(Stub + At + Off);
+                *(LONG*)&Stub[At + Off + 1] = (LONG)(Target - (StubInsn + 5));
+            }
+        }
         At += Length;
         Stub[At++] = 0xE9;
         *(LONG*)&Stub[At] = (LONG)(Slot.ReturnAddress - (ULONG)(uintptr_t)(Stub + At + 4));
