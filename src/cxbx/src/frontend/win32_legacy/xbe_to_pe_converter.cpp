@@ -343,6 +343,39 @@ EmuExe::EmuExe(Xbe* x_Xbe, DebugMode x_debug_mode, char* x_debug_filename) : Exe
                 uint32 virt_size = RoundUp(m_OptionalHeader.m_image_base + 0x100 + x_Xbe->m_Header.dwSizeofHeaders + 260 + sizeof(Xbe::LibraryVersion) * x_Xbe->m_Header.dwLibraryVersions + sizeof(Xbe::TLS) + tls_data_size, 0x1000);
                 uint32 virt_addr = RoundUp(m_SectionHeader[i - 1].m_virtual_addr + m_SectionHeader[i - 1].m_virtual_size, PE_SEGM_ALIGN);
 
+                // Pad the final section until the module spans the low 16 MiB
+                // guest window (the flat 0x20-aligned image the loader maps
+                // requires raw size == virtual size, so the generated exe
+                // grows by the pad; it is a throwaway under %TEMP%). The NT process
+                // bootstrap parks host artifacts in the lowest free region --
+                // C_1252.NLS was observed at 0x000E0000 and the initial thread
+                // stack at 0x00400000, both mapped before any emulator code
+                // runs -- inside address space that on hardware belongs to the
+                // title (the EvolutionX dashboard re-allocates and rewrites
+                // base..0x597000 for its unpacked image). A module that spans
+                // the window makes the kernel place all of those above it, and
+                // the XBE-image alias path in NtAllocateVirtualMemory hands
+                // the module-backed pages to the guest on request.
+                {
+                    // Opt-in via CXBX_GUEST_LOW_WINDOW=1: known to unblock the
+                    // EvolutionX dashboard, but the raw-pushbuffer (pbkit)
+                    // titles fail pb_init with the window spanned -- keep the
+                    // suite's layout byte-identical until that interaction is
+                    // understood.
+                    char guest_window[8] = { 0 };
+                    const uint32 guest_window_end =
+                        GetEnvironmentVariableA("CXBX_GUEST_LOW_WINDOW", guest_window,
+                                                sizeof(guest_window)) != 0 &&
+                                guest_window[0] != '0'
+                            ? 0x01000000
+                            : 0;
+                    uint32 image_end = m_OptionalHeader.m_image_base + virt_addr + virt_size;
+                    if(image_end < guest_window_end)
+                        virt_size += guest_window_end - image_end;
+                    else
+                        virt_size += RoundUp(image_end, 0x10000) - image_end;
+                }
+
                 m_SectionHeader[i].m_virtual_size = virt_size;
                 m_SectionHeader[i].m_virtual_addr = virt_addr;
 

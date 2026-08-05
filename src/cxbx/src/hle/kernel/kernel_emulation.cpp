@@ -64,6 +64,7 @@ namespace NtDll
 };
 
 #include "emulation_runtime.h"
+#include <psapi.h>
 #include "fs_emulation.h"
 #include "file_emulation.h"
 #include "core/trace.h"
@@ -9429,6 +9430,197 @@ extern "C" VOID NTAPI EmuMmUnmapIoSpace(
 }
 
 // ******************************************************************
+// ******************************************************************
+// * XBE-image virtual-memory aliasing.
+// *
+// * On real hardware the running XBE occupies plain committed RAM, so a title
+// * may NtFreeVirtualMemory its own image and re-NtAllocateVirtualMemory the
+// * same range. The EvolutionX dashboard does exactly that: it inflates its
+// * packed image into a MEM_TOP_DOWN buffer, relocates a 0x12F-byte stub high,
+// * frees the image at 0x10000, re-reserves base..SizeOfImage (of the LARGER
+// * unpacked image), copies itself back and jumps to the unpacked entry --
+// * any allocation failure is answered with HalReturnToFirmware(4).
+// *
+// * Under this HLE the image is the loaded PE module itself (the XBE is
+// * converted to default.exe with ImageBase == dwBaseAddr), so the host
+// * refuses to release or re-reserve those pages and such titles fatal out
+// * before running. Emulate logical success piecewise across the request:
+// *   - MEM_FREE pieces are genuinely allocated at their fixed address;
+// *   - module/image-backed pieces already exist -- make them writable (the
+// *     title is about to overwrite them with its own copy) and report them
+// *     as allocated. Contents are preserved, matching the in-place
+// *     self-reload these loaders perform;
+// *   - already-committed private pieces are aliased the same way, loudly,
+// *     since on hardware that address space would have belonged to the
+// *     title anyway.
+// ******************************************************************
+static bool EmuTouchesXbeImage(ULONG Base, ULONG Size)
+{
+    if(g_pXbeHeader == NULL || g_pXbeHeader->dwSizeofImage == 0)
+        return false;
+
+    ULONG ImageBase = g_pXbeHeader->dwBaseAddr;
+    ULONG ImageEnd = ImageBase + g_pXbeHeader->dwSizeofImage;
+
+    // The generated module deliberately spans past the XBE image (its final
+    // section is padded across the low guest window so host artifacts cannot
+    // squat there); requests over that padding are the guest exercising
+    // address space it owns on hardware, so alias them too. Snapshot the
+    // extent from VirtualQuery, not the PE header -- a self-relocating title
+    // overwrites the header at the image base with its own.
+    // (The XBE converts to a PE whose ImageBase == dwBaseAddr, so the module
+    // extent is walked from the XBE base itself -- GetModuleHandle(NULL) is
+    // unusable here because PEB.ImageBaseAddress is redirected to a header
+    // copy once the guest may overwrite the real one.)
+    {
+        static ULONG s_ModuleEnd = 0;
+        if(s_ModuleEnd == 0)
+        {
+            MEMORY_BASIC_INFORMATION Info;
+            ULONG Cursor = ImageBase;
+            while(VirtualQuery((PVOID)Cursor, &Info, sizeof(Info)) != 0 &&
+                  Info.State != MEM_FREE && Info.Type == MEM_IMAGE &&
+                  (ULONG)Info.AllocationBase == ImageBase)
+                Cursor = (ULONG)Info.BaseAddress + Info.RegionSize;
+            s_ModuleEnd = Cursor;
+        }
+        if(s_ModuleEnd > ImageEnd)
+            ImageEnd = s_ModuleEnd;
+    }
+
+    if(Base >= ImageEnd || Base + Size < Base)
+        return false;
+
+    // Size 0 means "the whole allocation" for NtFreeVirtualMemory; otherwise
+    // require genuine overlap with the image.
+    return Size == 0 ? Base >= ImageBase : Base + Size > ImageBase;
+}
+
+// ******************************************************************
+// * Host PE-header repair.
+// *
+// * Host thread creation parses the running exe's PE header (MZ stub,
+// * e_lfanew, IMAGE_NT_HEADERS -- all below file offset 0x104) for the
+// * default stack sizes; a self-relocating title overwrites that page with
+// * its XBE header, whose own live fields start at +0x104 (dwBaseAddr
+// * onward; below that is only the magic and the boot-time RSA signature no
+// * code reads back). The two therefore coexist: EmuInit stashes the first
+// * 0x104 pristine bytes, and thread creation restores them when the guest
+// * has clobbered the 'MZ' magic. Without this every CreateThread in the
+// * process -- including the title's own PsCreateSystemThreadEx -- fails
+// * with ERROR_BAD_EXE_FORMAT (EvolutionX died spawning its dashboard
+// * thread this way).
+// ******************************************************************
+extern "C" BYTE g_EmuHostPeHeaderStash[0x104] = { 0 };
+extern "C" ULONG g_EmuHostPeHeaderBase = 0;
+
+static void EmuRepairHostPeHeader(void)
+{
+    if(g_EmuHostPeHeaderBase == 0)
+        return;
+
+    BYTE* Header = (BYTE*)g_EmuHostPeHeaderBase;
+    if(Header[0] == 'M' && Header[1] == 'Z')
+        return;
+
+    DWORD OldProtect;
+    if(!VirtualProtect(Header, sizeof(g_EmuHostPeHeaderStash),
+                       PAGE_EXECUTE_READWRITE, &OldProtect))
+        return;
+    memcpy(Header, g_EmuHostPeHeaderStash, sizeof(g_EmuHostPeHeaderStash));
+
+    printf("EmuKrnl (0x%lX): restored host PE header bytes 0x%.08lX+0x104 "
+           "(guest had overwritten the image header page).\n",
+           GetCurrentThreadId(), g_EmuHostPeHeaderBase);
+    fflush(stdout);
+}
+
+static NTSTATUS EmuAliasXbeImageAllocation(ULONG Base, ULONG Size,
+                                           DWORD AllocationType, DWORD Protect)
+{
+    ULONG End = Base + Size;
+
+    for(ULONG Cursor = Base; Cursor < End;)
+    {
+        MEMORY_BASIC_INFORMATION Info;
+        if(VirtualQuery((PVOID)Cursor, &Info, sizeof(Info)) == 0)
+            return (NTSTATUS)0xC0000018L; // STATUS_CONFLICTING_ADDRESSES
+
+        ULONG RegionEnd = (ULONG)Info.BaseAddress + Info.RegionSize;
+        ULONG PieceEnd = RegionEnd < End ? RegionEnd : End;
+
+        if(Info.State == MEM_FREE)
+        {
+            PVOID PieceBase = (PVOID)Cursor;
+            ULONG PieceSize = PieceEnd - Cursor;
+            // MEM_TOP_DOWN is meaningless with a fixed base; a fresh piece
+            // must be reserved even when the guest only asked to commit.
+            NTSTATUS PieceStatus = NtDll::NtAllocateVirtualMemory(
+                GetCurrentProcess(), &PieceBase, 0, &PieceSize,
+                (AllocationType & ~MEM_TOP_DOWN) | MEM_RESERVE, Protect);
+            if(PieceStatus < 0)
+            {
+                printf("EmuKrnl (0x%X): XBE-image alias: free piece 0x%.08X+0x%X "
+                       "failed with 0x%.08X.\n",
+                       GetCurrentThreadId(), Cursor, PieceEnd - Cursor, PieceStatus);
+                fflush(stdout);
+                return PieceStatus;
+            }
+        }
+        else if(Info.State == MEM_RESERVE)
+        {
+            // Reserved-but-uncommitted pages (e.g. the unused reserve of a
+            // thread stack inside the requested range) accept a fixed-base
+            // commit with no granularity constraint.
+            PVOID PieceBase = (PVOID)Cursor;
+            ULONG PieceSize = PieceEnd - Cursor;
+            NTSTATUS PieceStatus = NtDll::NtAllocateVirtualMemory(
+                GetCurrentProcess(), &PieceBase, 0, &PieceSize,
+                MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if(PieceStatus < 0)
+            {
+                printf("EmuKrnl (0x%X): XBE-image alias: reserved piece 0x%.08X+0x%X "
+                       "failed to commit with 0x%.08X.\n",
+                       GetCurrentThreadId(), Cursor, PieceEnd - Cursor, PieceStatus);
+                fflush(stdout);
+                return PieceStatus;
+            }
+        }
+        else
+        {
+            DWORD OldProtect;
+            if(!VirtualProtect((PVOID)Cursor, PieceEnd - Cursor,
+                               PAGE_EXECUTE_READWRITE, &OldProtect))
+            {
+                char MappedName[MAX_PATH] = "";
+                if(Info.Type == MEM_MAPPED)
+                    GetMappedFileNameA(GetCurrentProcess(), (PVOID)Cursor,
+                                       MappedName, sizeof(MappedName));
+                printf("EmuKrnl (0x%X): XBE-image alias: could not unprotect "
+                       "piece 0x%.08X+0x%X (type=0x%X state=0x%X protect=0x%X \"%s\").\n",
+                       GetCurrentThreadId(), Cursor, PieceEnd - Cursor,
+                       (unsigned)Info.Type, (unsigned)Info.State,
+                       (unsigned)Info.Protect, MappedName);
+                fflush(stdout);
+                return (NTSTATUS)0xC0000018L; // STATUS_CONFLICTING_ADDRESSES
+            }
+            if(Info.Type != MEM_IMAGE)
+            {
+                printf("EmuKrnl (0x%X): XBE-image alias: WARNING handing "
+                       "non-image piece 0x%.08X+0x%X (type=0x%X) to the guest.\n",
+                       GetCurrentThreadId(), Cursor, PieceEnd - Cursor,
+                       (unsigned)Info.Type);
+                fflush(stdout);
+            }
+        }
+
+        Cursor = PieceEnd;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+// ******************************************************************
 // * 0x00B8 - NtAllocateVirtualMemory
 // ******************************************************************
 XBSYSAPI EXPORTNUM(184) NTSTATUS NTAPI xboxkrnl::NtAllocateVirtualMemory(
@@ -9458,6 +9650,31 @@ XBSYSAPI EXPORTNUM(184) NTSTATUS NTAPI xboxkrnl::NtAllocateVirtualMemory(
 #endif
 
     NTSTATUS ret = NtDll::NtAllocateVirtualMemory(GetCurrentProcess(), BaseAddress, ZeroBits, AllocationSize, AllocationType, Protect);
+
+    // Module-backed XBE image pages cannot be re-reserved or re-committed on
+    // the host; satisfy overlapping requests piecewise instead (see the
+    // XBE-image aliasing note above EmuTouchesXbeImage).
+    if(ret < 0 && BaseAddress != NULL && AllocationSize != NULL &&
+       *AllocationSize != 0 &&
+       EmuTouchesXbeImage((ULONG)*BaseAddress, *AllocationSize))
+    {
+        ULONG Base = (ULONG)*BaseAddress & ~0xFFF;
+        ULONG Size = (((ULONG)*BaseAddress + *AllocationSize + 0xFFF) & ~0xFFF) - Base;
+
+        NTSTATUS alias = EmuAliasXbeImageAllocation(Base, Size, AllocationType, Protect);
+
+        printf("EmuKrnl (0x%X): NtAllocateVirtualMemory aliased XBE image range "
+               "0x%.08X+0x%X (type=0x%X, host status 0x%.08X) -> 0x%.08X.\n",
+               GetCurrentThreadId(), Base, Size, AllocationType, ret, alias);
+        fflush(stdout);
+
+        if(alias >= 0)
+        {
+            *BaseAddress = (PVOID)Base;
+            *AllocationSize = Size;
+            ret = alias;
+        }
+    }
 
     EmuSwapFS(); // Xbox FS
 
@@ -10501,6 +10718,21 @@ XBSYSAPI EXPORTNUM(199) NTSTATUS NTAPI xboxkrnl::NtFreeVirtualMemory(
 #endif
 
     NTSTATUS ret = NtDll::NtFreeVirtualMemory(GetCurrentProcess(), BaseAddress, FreeSize, FreeType);
+
+    // Module-backed XBE image pages cannot be released on the host; report a
+    // logical free so self-relocating loaders proceed (see the XBE-image
+    // aliasing note above EmuIsXbeImageRange). The pages stay mapped, which
+    // the paired NtAllocateVirtualMemory alias then hands back.
+    if(ret < 0 && BaseAddress != NULL && FreeSize != NULL &&
+       EmuTouchesXbeImage((ULONG)*BaseAddress, *FreeSize))
+    {
+        printf("EmuKrnl (0x%X): NtFreeVirtualMemory aliased XBE image range "
+               "0x%.08X+0x%X (type=0x%X, host status 0x%.08X) -> success.\n",
+               GetCurrentThreadId(), (ULONG)*BaseAddress, *FreeSize, FreeType, ret);
+        fflush(stdout);
+
+        ret = STATUS_SUCCESS;
+    }
 
     EmuSwapFS(); // Xbox FS
 
@@ -11878,12 +12110,22 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx(
         // and faulted at the committed floor during a host-side VirtualQuery.
         // Reserve a full host-sized stack instead; EmuGenerateFS pre-commits
         // the whole reservation on first entry to guest code.
+        EmuRepairHostPeHeader();
+
         const SIZE_T GuestThreadStackReserve = 2 * 1024 * 1024;
         *ThreadHandle = CreateThread(NULL, GuestThreadStackReserve, &PCSTProxy,
                                      iPCSTProxyParam,
                                      (CreateSuspended ? CREATE_SUSPENDED : 0) |
                                          STACK_SIZE_PARAM_IS_A_RESERVATION,
                                      &dwThreadId);
+
+        printf("EmuKrnl (0x%lX): PsCreateSystemThreadEx start=0x%.08lX ctx1=0x%.08lX "
+               "-> handle=0x%lX tid=0x%lX%s\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)StartRoutine,
+               (ULONG)(uintptr_t)StartContext1, (ULONG)(uintptr_t)*ThreadHandle,
+               *ThreadHandle != NULL ? dwThreadId : GetLastError(),
+               *ThreadHandle != NULL ? "" : " (CreateThread FAILED; last-error above)");
+        fflush(stdout);
 
         if(*ThreadHandle != NULL)
         {

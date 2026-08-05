@@ -96,13 +96,30 @@ CXBXKRNL_API void EmuShared::Init()
     // * Memory map this file
     // ******************************************************************
     {
-        g_EmuShared = (EmuShared*)MapViewOfFile(
-            hMapObject,     // object to map view of
-            FILE_MAP_WRITE, // read/write access
-            0,              // high offset:  map from
-            0,              // low offset:   beginning
-            0               // default: map entire file
-        );
+        // Prefer a high base: the default view lands in the lowest free 64 KiB
+        // region (observed at 0x000E0000), squarely inside guest address space
+        // that a self-relocating title (EvolutionX) legitimately re-allocates
+        // over -- and a mapped view can be neither released nor made writable
+        // for the guest by the XBE-image alias path. Each candidate is only a
+        // preference; fall back to letting the OS choose.
+        const void* PreferredBases[] = {
+            (void*)0x7F000000,
+            (void*)0x7E000000,
+            (void*)0x7D000000,
+            NULL,
+        };
+        for(unsigned i = 0; i < sizeof(PreferredBases) / sizeof(PreferredBases[0]); i++)
+        {
+            g_EmuShared = (EmuShared*)MapViewOfFileEx(
+                hMapObject,     // object to map view of
+                FILE_MAP_WRITE, // read/write access
+                0,              // high offset:  map from
+                0,              // low offset:   beginning
+                0,              // default: map entire file
+                (LPVOID)PreferredBases[i]);
+            if(g_EmuShared != NULL)
+                break;
+        }
 
         if(g_EmuShared == NULL)
             EmuCleanup("Could not map view of shared memory!");

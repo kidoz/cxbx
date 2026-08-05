@@ -103,6 +103,10 @@ bool Initialize();
 Xbe::TLS* g_pTLS = NULL;
 void* g_pTLSData = NULL;
 Xbe::Header* g_pXbeHeader = NULL;
+
+// defined in kernel_emulation.cpp (host PE-header repair for self-relocating titles)
+extern "C" BYTE g_EmuHostPeHeaderStash[0x104];
+extern "C" ULONG g_EmuHostPeHeaderBase;
 HANDLE g_hCurDir = NULL;
 HANDLE g_hTDrive = NULL;
 HANDLE g_hUDrive = NULL;
@@ -11740,7 +11744,67 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit(
 {
     g_pTLS = pTLS;
     g_pTLSData = pTLSData;
+
+    // pXbeHeader points into the .cxbxplg section of the generated module,
+    // i.e. into guest-visible address space that a self-relocating title (the
+    // EvolutionX dashboard reloads its unpacked image over base..SizeOfImage)
+    // may legally overwrite. Everything host-side reads the header through
+    // g_pXbeHeader long after boot, so keep it on host storage the guest can
+    // never reach.
+    {
+        Xbe::Header* HeaderCopy = (Xbe::Header*)malloc(dwXbeHeaderSize);
+        if(HeaderCopy != NULL)
+        {
+            memcpy(HeaderCopy, pXbeHeader, dwXbeHeaderSize);
+            pXbeHeader = HeaderCopy;
+        }
+    }
     g_pXbeHeader = pXbeHeader;
+
+    // Fence off low guest address space before anything host-side (the CRT's
+    // locale tables, heap segments, mapped views) squats in it. On hardware
+    // everything from the image base up belongs to the title; here the OS
+    // hands the lowest free 64 KiB region to whoever asks first (C_1252.NLS
+    // was observed at 0x000E0000, inside the span the EvolutionX dashboard
+    // re-allocates for its unpacked image). Reserve every free hole between
+    // the module end and +16 MiB; the XBE-image alias path in
+    // NtAllocateVirtualMemory commits guest requests out of this reservation.
+    {
+        ULONG FenceBase = pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage;
+        FenceBase = (FenceBase + 0xFFFF) & ~0xFFFFul;
+        const ULONG FenceEnd = pXbeHeader->dwBaseAddr + 0x01000000;
+
+        for(ULONG Cursor = FenceBase; Cursor < FenceEnd;)
+        {
+            MEMORY_BASIC_INFORMATION Info;
+            if(VirtualQuery((PVOID)Cursor, &Info, sizeof(Info)) == 0)
+                break;
+
+            ULONG RegionEnd = (ULONG)Info.BaseAddress + Info.RegionSize;
+            ULONG PieceEnd = RegionEnd < FenceEnd ? RegionEnd : FenceEnd;
+
+            if(Info.State == MEM_FREE)
+            {
+                ULONG PieceBase = (Cursor + 0xFFFF) & ~0xFFFFul;
+                if(PieceBase < PieceEnd &&
+                   VirtualAlloc((PVOID)PieceBase, PieceEnd - PieceBase,
+                                MEM_RESERVE, PAGE_NOACCESS) == NULL)
+                    printf("Emu (0x%X): guest-low fence: failed to reserve "
+                           "0x%.08lX+0x%lX (0x%lX).\n",
+                           GetCurrentThreadId(), PieceBase, PieceEnd - PieceBase,
+                           GetLastError());
+            }
+            else if(Info.State != MEM_FREE && Info.Type != 0 && Cursor < FenceEnd)
+            {
+                printf("Emu (0x%X): guest-low fence: 0x%.08lX+0x%lX already "
+                       "occupied (type=0x%lX state=0x%lX).\n",
+                       GetCurrentThreadId(), Cursor, PieceEnd - Cursor,
+                       (ULONG)Info.Type, (ULONG)Info.State);
+            }
+
+            Cursor = PieceEnd;
+        }
+    }
 
     // This process runs title code from here on: never persist configuration
     // from it at exit (see EmuShared::Cleanup).
@@ -12379,6 +12443,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit(
         memcpy((void*)pXbeHeader->dwCertificateAddr,
                (uint08*)pXbeHeader + CertificateOffset, sizeof(Xbe::Certificate));
     }
+
+    // Stash the pristine PE header bytes of the running exe so host thread
+    // creation keeps working after a self-relocating title overwrites the
+    // header page with its XBE header (see EmuRepairHostPeHeader).
+    memcpy(g_EmuHostPeHeaderStash, (void*)pXbeHeader->dwBaseAddr, 0x104);
+    g_EmuHostPeHeaderBase = pXbeHeader->dwBaseAddr;
 
     // ******************************************************************
     // * Entry Point
