@@ -5217,8 +5217,22 @@ extern "C" VOID NTAPI EmuKeInitializeDeviceQueue(PVOID DeviceQueue)
 
 extern "C" VOID NTAPI EmuKeInitializeEvent(PVOID Event, ULONG Type, BOOLEAN State)
 {
+    void* CallerRet = __builtin_return_address(0);
     EmuSwapFS(); // Win2k/XP FS
     EmuInitializeDispatcherHeader((xboxkrnl::DISPATCHER_HEADER*)Event, (UCHAR)Type, State ? 1 : 0);
+
+    // The Ke* dispatcher objects are addressed by POINTER, not by handle, so the
+    // handle-based SYNC lines above cannot name them. A title that parks on a
+    // KeWaitForMultipleObjects object nobody signals (the EvolutionX dashboard
+    // does) is only diagnosable by matching the waited-on address back to the
+    // guest code that initialized it -- hence the caller here.
+    if(EmuSyncTraceEnabled())
+    {
+        printf("SYNC| ke-init-event tid=0x%lX object=%p type=%lu initial=%lu caller=0x%08lX\n",
+               GetCurrentThreadId(), Event, Type, (ULONG)State, (ULONG)(uintptr_t)CallerRet);
+        fflush(stdout);
+    }
+
     EmuSwapFS(); // Xbox FS
 }
 
@@ -6654,6 +6668,7 @@ extern "C" ULONG NTAPI EmuKeSuspendThread(xboxkrnl::PKTHREAD Thread)
 // (the waiter polls it), which is enough to release the loop.
 extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait)
 {
+    void* CallerRet = __builtin_return_address(0);
     EmuSwapFS(); // Win2k/XP FS
 
     LONG PreviousState = 0;
@@ -6672,6 +6687,13 @@ extern "C" LONG NTAPI EmuKeSetEvent(PVOID Event, LONG Increment, UCHAR Wait)
                GetCurrentThreadId(), Event, Increment, (ULONG)Wait, PreviousState);
         fflush(stdout);
         s_LogCount++;
+    }
+
+    if(EmuSyncTraceEnabled())
+    {
+        printf("SYNC| ke-set-event tid=0x%lX object=%p previous=%ld caller=0x%08lX\n",
+               GetCurrentThreadId(), Event, PreviousState, (ULONG)(uintptr_t)CallerRet);
+        fflush(stdout);
     }
 
     EmuSwapFS(); // Xbox FS
@@ -7895,6 +7917,21 @@ XBSYSAPI EXPORTNUM(99) NTSTATUS NTAPI xboxkrnl::KeDelayExecutionThread(
     IN BOOLEAN Alertable,
     IN PLARGE_INTEGER Interval)
 {
+    if(EmuSyncTraceEnabled())
+    {
+        static volatile LONG DelayCount = 0;
+        const LONG Call = InterlockedIncrement(&DelayCount);
+        if(Call <= 20 || (Call & 0x3FF) == 0)
+        {
+            printf("SYNC| ke-delay tid=0x%lX interval=%lld alertable=%lu caller=0x%08lX (call %ld)\n",
+                   GetCurrentThreadId(),
+                   Interval != NULL ? (long long)Interval->QuadPart : 0LL,
+                   (ULONG)Alertable,
+                   (ULONG)(uintptr_t)__builtin_return_address(0), Call);
+            fflush(stdout);
+        }
+    }
+
     EmuSwapFS(); // Win2k/XP FS
 
 // ******************************************************************
@@ -8192,6 +8229,7 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects(
     IN xboxkrnl::PLARGE_INTEGER Timeout,
     IN PVOID WaitBlockArray)
 {
+    void* CallerRet = __builtin_return_address(0);
     EmuSwapFS(); // Win2k/XP FS
 
     // Rate-limit the entry trace: a title that polls (NFS Underground pumps a
@@ -8216,6 +8254,16 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForMultipleObjects(
                 else
                     printf("EmuKrnl (0x%lX):   object[%lu]=%p (unreadable)\n",
                            GetCurrentThreadId(), Index, Object[Index]);
+            }
+            if(EmuSyncTraceEnabled())
+            {
+                printf("SYNC| ke-wait tid=0x%lX count=%lu waitType=0x%lX timeout=%s "
+                       "caller=0x%08lX obj0=%p obj1=%p\n",
+                       GetCurrentThreadId(), Count, WaitType,
+                       Timeout != NULL ? "finite" : "infinite",
+                       (ULONG)(uintptr_t)CallerRet,
+                       (Count > 0 && Object != NULL) ? Object[0] : NULL,
+                       (Count > 1 && Object != NULL) ? Object[1] : NULL);
             }
             fflush(stdout);
         }
@@ -8436,6 +8484,29 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject(
     IN BOOLEAN Alertable,
     IN xboxkrnl::PLARGE_INTEGER Timeout)
 {
+    if(EmuSyncTraceEnabled())
+    {
+        static volatile LONG SingleCount = 0;
+        const LONG Call = InterlockedIncrement(&SingleCount);
+        if(Call <= 20 || (Call & 0xFFF) == 0)
+        {
+            const xboxkrnl::DISPATCHER_HEADER* Hdr =
+                (const xboxkrnl::DISPATCHER_HEADER*)Object;
+            printf("SYNC| ke-wait1 tid=0x%lX object=%p type=%d signal=%ld timeout=%s "
+                   "caller=0x%08lX (call %ld)\n",
+                   GetCurrentThreadId(), Object,
+                   (Hdr != NULL && EmuIsWritableMemoryRange((PVOID)Hdr, sizeof(*Hdr)))
+                       ? (int)Hdr->Type
+                       : -1,
+                   (Hdr != NULL && EmuIsWritableMemoryRange((PVOID)Hdr, sizeof(*Hdr)))
+                       ? (LONG)Hdr->SignalState
+                       : -1,
+                   Timeout != NULL ? "finite" : "infinite",
+                   (ULONG)(uintptr_t)__builtin_return_address(0), Call);
+            fflush(stdout);
+        }
+    }
+
     EmuSwapFS(); // Win2k/XP FS
 
     xboxkrnl::DISPATCHER_HEADER* Header = (xboxkrnl::DISPATCHER_HEADER*)Object;
