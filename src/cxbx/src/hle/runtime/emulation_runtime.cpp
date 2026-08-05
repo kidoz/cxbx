@@ -6973,23 +6973,28 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget* T,
     // in (px,py), so it is evaluated once per row seed and advanced with a single
     // add per pixel (3 adds) instead of recomputing the 9-mul closed form. The
     // X-gradients step every pixel; the Y-gradients step every row.
-    const float laStepX = (by - cy) * InvArea;
-    const float lbStepX = (cy - ay) * InvArea;
-    const float lcStepX = (ay - by) * InvArea;
-    const float laStepY = (cx - bx) * InvArea;
-    const float lbStepY = (ax - cx) * InvArea;
-    const float lcStepY = (bx - ax) * InvArea;
+    // Accumulate in double: float accumulators drift enough across a row to
+    // flip depth compares at the far edge (nv2a_depth right_blue_wins).
+    const double laStepX = (double)(by - cy) * InvArea;
+    const double lbStepX = (double)(cy - ay) * InvArea;
+    const double lcStepX = (double)(ay - by) * InvArea;
+    const double laStepY = (double)(cx - bx) * InvArea;
+    const double lbStepY = (double)(ax - cx) * InvArea;
+    const double lcStepY = (double)(bx - ax) * InvArea;
     const float px0 = (float)MinX + 0.5f;
     const float py0 = (float)MinY + 0.5f;
-    float laRow = ((cx - bx) * (py0 - by) - (cy - by) * (px0 - bx)) * InvArea;
-    float lbRow = ((ax - cx) * (py0 - cy) - (ay - cy) * (px0 - cx)) * InvArea;
-    float lcRow = ((bx - ax) * (py0 - ay) - (by - ay) * (px0 - ax)) * InvArea;
+    double laRow = ((double)(cx - bx) * (py0 - by) - (double)(cy - by) * (px0 - bx)) * InvArea;
+    double lbRow = ((double)(ax - cx) * (py0 - cy) - (double)(ay - cy) * (px0 - cx)) * InvArea;
+    double lcRow = ((double)(bx - ax) * (py0 - ay) - (double)(by - ay) * (px0 - ax)) * InvArea;
 
     for(int Y = MinY; Y < MaxY; Y++)
     {
-        float la = laRow;
-        float lb = lbRow;
-        float lc = lcRow;
+        float la = (float)laRow;
+        float lb = (float)lbRow;
+        float lc = (float)lcRow;
+        double laAcc = laRow;
+        double lbAcc = lbRow;
+        double lcAcc = lcRow;
         for(int X = MinX; X < MaxX; X++)
         {
             // Barycentric weights of a, b, c (sum to 1 inside the triangle).
@@ -7039,9 +7044,12 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget* T,
                 const float z = la * az + lb * bz + lc * cz;
                 EmuNv2aShadePixel(T, X, Y, z, Color, U, V);
             }
-            la += laStepX;
-            lb += lbStepX;
-            lc += lcStepX;
+            laAcc += laStepX;
+            lbAcc += lbStepX;
+            lcAcc += lcStepX;
+            la = (float)laAcc;
+            lb = (float)lbAcc;
+            lc = (float)lcAcc;
         }
         laRow += laStepY;
         lbRow += lbStepY;
