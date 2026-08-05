@@ -31,70 +31,70 @@ host_nv2a_pfifo_test = executable(
 host_nv2a_pgraph_surface_test = executable(
   'host_nv2a_pgraph_surface_test',
   'nv2a_pgraph_surface.cpp',
-  dependencies : cxbx_nv2a_pgraph_surface_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_render_state_test = executable(
   'host_nv2a_pgraph_render_state_test',
   'nv2a_pgraph_render_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_render_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_combiner_state_test = executable(
   'host_nv2a_pgraph_combiner_state_test',
   'nv2a_pgraph_combiner_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_combiner_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_draw_state_test = executable(
   'host_nv2a_pgraph_draw_state_test',
   'nv2a_pgraph_draw_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_draw_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_vertex_submission_state_test = executable(
   'host_nv2a_pgraph_vertex_submission_state_test',
   'nv2a_pgraph_vertex_submission_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_vertex_submission_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_texture_state_test = executable(
   'host_nv2a_pgraph_texture_state_test',
   'nv2a_pgraph_texture_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_texture_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_vertex_state_test = executable(
   'host_nv2a_pgraph_vertex_state_test',
   'nv2a_pgraph_vertex_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_vertex_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_transform_state_test = executable(
   'host_nv2a_pgraph_transform_state_test',
   'nv2a_pgraph_transform_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_transform_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_semaphore_state_test = executable(
   'host_nv2a_pgraph_semaphore_state_test',
   'nv2a_pgraph_semaphore_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_semaphore_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
 host_nv2a_pgraph_flip_state_test = executable(
   'host_nv2a_pgraph_flip_state_test',
   'nv2a_pgraph_flip_state.cpp',
-  dependencies : cxbx_nv2a_pgraph_flip_state_dep,
+  dependencies : cxbx_nv2a_pgraph_state_dep,
   install : false,
 )
 
