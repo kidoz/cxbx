@@ -127,6 +127,35 @@ void EmuAdjustCurrentThreadKernelApcDisable(long Delta)
 }
 
 // ******************************************************************
+// * func: EmuSetGuestTlsBlock
+// ******************************************************************
+// * PsCreateSystemThreadEx TLS: on hardware the kernel carves TlsDataSize
+// * bytes off the top of the new thread's stack, points Tcb.TlsData at the
+// * block and leaves KPCR NtTib.StackBase (guest fs:[4]) at the block END.
+// * Titles then reach TLS variables through NEGATIVE indices off fs:[4]
+// * (EvolutionX computes index = -TlsDataSize/4 and reads
+// * [fs:4 + index*4]). Mirror that layout for a host-allocated block.
+// ******************************************************************
+void EmuSetGuestTlsBlock(void* Block, unsigned long Size)
+{
+    if(g_pEmuCurrentThread != NULL)
+        g_pEmuCurrentThread->Tcb.TlsData = Block;
+    g_pEmuCurrentTLS = (uint08*)Block;
+
+    if(g_EmuFsSwap.Active)
+    {
+        // Xbox role's fs:[4]; the swap loads it on the next host->guest swap.
+        g_EmuFsSwap.Xbox[4] = (unsigned long)Block + Size;
+    }
+    else
+    {
+        printf("EmuFS (0x%X): EmuSetGuestTlsBlock without content-swap; "
+               "guest fs:[4] not updated (legacy mode).\n",
+               (uint32)GetCurrentThreadId());
+    }
+}
+
+// ******************************************************************
 // * func: EmuInitFS
 // ******************************************************************
 void EmuInitFS()

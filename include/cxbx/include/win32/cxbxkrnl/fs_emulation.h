@@ -48,6 +48,15 @@
 extern void EmuGenerateFS(Xbe::TLS* pTLS, void* pTLSData);
 
 // ******************************************************************
+// * func: EmuSetGuestTlsBlock
+// ******************************************************************
+// * Install a PsCreateSystemThreadEx-style TLS block for the current guest
+// * thread (hardware layout: Tcb.TlsData -> block start, fs:[4] -> block
+// * end, so the title's negative TLS indices resolve). Call after
+// * EmuGenerateFS and before the first guest code on the thread.
+extern void EmuSetGuestTlsBlock(void* Block, unsigned long Size);
+
+// ******************************************************************
 // * func: EmuCleanupFS
 // ******************************************************************
 extern void EmuCleanupFS();

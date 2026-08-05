@@ -7312,6 +7312,7 @@ typedef struct _PCSTProxyParam
     IN PVOID StartContext1;
     IN PVOID StartContext2;
     IN PVOID StartRoutine;
+    IN ULONG TlsDataSize;
 } PCSTProxyParam;
 
 // ******************************************************************
@@ -7327,6 +7328,7 @@ static DWORD WINAPI PCSTProxy(
     uint32 StartContext1 = (uint32)iPCSTProxyParam->StartContext1;
     uint32 StartContext2 = (uint32)iPCSTProxyParam->StartContext2;
     uint32 StartRoutine = (uint32)iPCSTProxyParam->StartRoutine;
+    ULONG TlsDataSize = iPCSTProxyParam->TlsDataSize;
 
     delete iPCSTProxyParam;
 
@@ -7365,6 +7367,22 @@ static DWORD WINAPI PCSTProxy(
     }
 
     EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    // Honor the title's PsCreateSystemThreadEx TlsDataSize: on hardware the
+    // kernel carves that many bytes off the top of the new thread's stack,
+    // points Tcb.TlsData at them and leaves fs:[4] at the block end; the
+    // title's own thread prologue then initializes the block itself
+    // (EvolutionX writes a self-pointer, copies its TLS template through
+    // fs:[0x28]->TlsData, and reads variables back via negative indices off
+    // fs:[4] -- both faulted on the NULL this HLE used to leave there). An
+    // XBE TLS directory, when present, already produced a block -- keep it.
+    if(TlsDataSize != 0 &&
+       ((xboxkrnl::KTHREAD*)EmuGetCurrentThread())->TlsData == NULL)
+    {
+        uint08* TlsData = new uint08[TlsDataSize];
+        memset(TlsData, 0, TlsDataSize);
+        EmuSetGuestTlsBlock(TlsData, TlsDataSize);
+    }
 
     printf("EmuKrnl (0x%X): PCSTProxy FS generated.\n", (uint32)GetCurrentThreadId());
     fflush(stdout);
@@ -11723,6 +11741,7 @@ XBSYSAPI EXPORTNUM(255) NTSTATUS NTAPI xboxkrnl::PsCreateSystemThreadEx(
         iPCSTProxyParam->StartContext1 = StartContext1;
         iPCSTProxyParam->StartContext2 = StartContext2;
         iPCSTProxyParam->StartRoutine = StartRoutine;
+        iPCSTProxyParam->TlsDataSize = TlsDataSize;
 
         // The title sizes KernelStackSize for Xbox-side frames only, but under
         // emulation the same stack also carries host wrapper frames (Emu*
