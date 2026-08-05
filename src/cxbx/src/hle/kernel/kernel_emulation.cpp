@@ -9649,39 +9649,70 @@ static bool EmuFileIoTraceEnabled()
     return EmuFileIoTraceLevel() >= 1;
 }
 
+// One shared backing file, many independent handles.
+//
+// A title that scans the raw disk reopens the partition root constantly without
+// closing (the EvolutionX dashboard did it 15288 times in a 25 s run). Creating
+// a fresh 64 MiB temp file per call leaked both the file and the handle: %TEMP%
+// filled with `cxb*` files, and after ~11 calls creation started failing --
+// whereupon the caller fell through to opening the XBE DIRECTORY as if it were
+// the partition, silently substituting a directory handle for a disk. Create
+// the backing once and hand out a separate handle per request instead, so each
+// caller still gets its own file position. The owner handle carries
+// DELETE_ON_CLOSE so the file disappears when the process exits.
+static HANDLE g_EmuBlankPartitionOwner = NULL;
+static char g_EmuBlankPartitionPath[MAX_PATH] = { 0 };
+static std::mutex g_EmuBlankPartitionMutex;
+
 static HANDLE EmuCreateBlankPartitionHandle()
 {
-    char TempDirectory[MAX_PATH];
-    char TempPath[MAX_PATH];
-    const ::DWORD TempDirectoryLength = GetTempPathA(MAX_PATH, TempDirectory);
-    if(TempDirectoryLength == 0 || TempDirectoryLength >= MAX_PATH ||
-       GetTempFileNameA(TempDirectory, "cxb", 0, TempPath) == 0)
+    const std::lock_guard<std::mutex> Lock(g_EmuBlankPartitionMutex);
+
+    if(g_EmuBlankPartitionOwner == NULL)
     {
-        return NULL;
+        char TempDirectory[MAX_PATH];
+        const ::DWORD TempDirectoryLength = GetTempPathA(MAX_PATH, TempDirectory);
+        if(TempDirectoryLength == 0 || TempDirectoryLength >= MAX_PATH ||
+           GetTempFileNameA(TempDirectory, "cxb", 0, g_EmuBlankPartitionPath) == 0)
+        {
+            return NULL;
+        }
+
+        HANDLE File = CreateFileA(g_EmuBlankPartitionPath, GENERIC_READ | GENERIC_WRITE,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  NULL, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE |
+                                      FILE_FLAG_RANDOM_ACCESS,
+                                  NULL);
+        if(File == reinterpret_cast<HANDLE>(static_cast<::LONG_PTR>(-1)))
+        {
+            DeleteFileA(g_EmuBlankPartitionPath);
+            g_EmuBlankPartitionPath[0] = '\0';
+            return NULL;
+        }
+
+        ::LARGE_INTEGER Size;
+        Size.QuadPart = 64ll * 1024 * 1024;
+        if(!SetFilePointerEx(File, Size, NULL, FILE_BEGIN) || !SetEndOfFile(File))
+        {
+            CloseHandle(File);
+            g_EmuBlankPartitionPath[0] = '\0';
+            return NULL;
+        }
+
+        g_EmuBlankPartitionOwner = File;
     }
 
-    HANDLE File = CreateFileA(TempPath, GENERIC_READ | GENERIC_WRITE,
+    // A fresh handle per request: the guest expects independent file positions,
+    // and it closes these handles on its own schedule.
+    HANDLE File = CreateFileA(g_EmuBlankPartitionPath, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                              NULL, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE |
-                                  FILE_FLAG_RANDOM_ACCESS,
+                              NULL, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_RANDOM_ACCESS,
                               NULL);
     if(File == reinterpret_cast<HANDLE>(static_cast<::LONG_PTR>(-1)))
-    {
-        DeleteFileA(TempPath);
         return NULL;
-    }
 
-    ::LARGE_INTEGER Size;
-    Size.QuadPart = 64ll * 1024 * 1024;
-    if(!SetFilePointerEx(File, Size, NULL, FILE_BEGIN) || !SetEndOfFile(File))
-    {
-        CloseHandle(File);
-        return NULL;
-    }
-
-    Size.QuadPart = 0;
-    SetFilePointerEx(File, Size, NULL, FILE_BEGIN);
     return File;
 }
 
