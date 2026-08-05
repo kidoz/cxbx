@@ -9447,6 +9447,51 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
     {
         BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
 
+        // F3 A5 / F3 A4 = rep movsd/movsb with either side in MMIO space: a
+        // block transfer to or from a device aperture (EvolutionX's network
+        // stack seeds the NIC at 0xFEF00000 with a 0x100-dword rep movsd).
+        // Route each element through the MMIO dispatchers.
+        if(Instruction[0] == 0xF3 && (Instruction[1] == 0xA5 || Instruction[1] == 0xA4) &&
+           (FaultAddress == e->ContextRecord->Edi || FaultAddress == e->ContextRecord->Esi))
+        {
+            ULONG Size = Instruction[1] == 0xA5 ? 4 : 1;
+            LONG Step = (e->ContextRecord->EFlags & 0x400) != 0 ? -(LONG)Size : (LONG)Size;
+            ULONG Count = e->ContextRecord->Ecx;
+
+            for(ULONG i = 0; i < Count; i++)
+            {
+                ULONG Value;
+                if(EmuIsMmioAddress(e->ContextRecord->Esi) ||
+                   EmuIsStubMmioAddress(e->ContextRecord->Esi))
+                    Value = EmuReadMmio(e->ContextRecord->Esi, Size);
+                else
+                    Value = Size == 4 ? *(ULONG*)e->ContextRecord->Esi
+                                      : *(BYTE*)e->ContextRecord->Esi;
+
+                if(EmuIsMmioAddress(e->ContextRecord->Edi) ||
+                   EmuIsStubMmioAddress(e->ContextRecord->Edi))
+                    EmuWriteMmio(e->ContextRecord->Edi, Size, Value);
+                else if(Size == 4)
+                    *(ULONG*)e->ContextRecord->Edi = Value;
+                else
+                    *(BYTE*)e->ContextRecord->Edi = (BYTE)Value;
+
+                e->ContextRecord->Esi += Step;
+                e->ContextRecord->Edi += Step;
+            }
+
+            e->ContextRecord->Ecx = 0;
+            e->ContextRecord->Eip += 2;
+
+            printf("Emu (0x%lX): Emulated MMIO rep movs%c dst=0x%.08lX src=0x%.08lX count 0x%lX.\n",
+                   GetCurrentThreadId(), Size == 4 ? 'd' : 'b',
+                   e->ContextRecord->Edi - Count * Step,
+                   e->ContextRecord->Esi - Count * Step, Count);
+            fflush(stdout);
+
+            return true;
+        }
+
         if(AccessType == 0 && Instruction[0] == 0xA1 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
             e->ContextRecord->Eax = EmuReadMmio(FaultAddress, 4);
@@ -10091,6 +10136,24 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
             fflush(stdout);
 
             return true;
+        }
+
+        // Nothing above decoded this access. An unemulated MMIO instruction is
+        // fatal -- the fault propagates and, with no guest handler, kills the
+        // process -- so name it instead of leaving a bare 0xC0000005 to triage.
+        // (EvolutionX died ~23 s in on exactly one such instruction.)
+        {
+            static volatile LONG UnhandledCount = 0;
+            if(InterlockedIncrement(&UnhandledCount) <= 16)
+            {
+                printf("Emu (0x%lX): *UNEMULATED MMIO* eip=0x%.08lX addr=0x%.08lX %s "
+                       "bytes=%.02X %.02X %.02X %.02X %.02X %.02X %.02X %.02X\n",
+                       GetCurrentThreadId(), (ULONG)e->ContextRecord->Eip, FaultAddress,
+                       AccessType == 1 ? "write" : "read",
+                       Instruction[0], Instruction[1], Instruction[2], Instruction[3],
+                       Instruction[4], Instruction[5], Instruction[6], Instruction[7]);
+                fflush(stdout);
+            }
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
