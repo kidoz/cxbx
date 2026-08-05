@@ -9808,6 +9808,58 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile(
 #endif
     }
     // ******************************************************************
+    // * X: and Y: are per-title cache partitions like Z:. Each maps to its
+    // * own initially-empty host directory -- NOT the XBE directory, whose
+    // * entries would otherwise leak into a title's cache/save-container
+    // * scan (Samurai Shodown V retries its save-device enumeration forever
+    // * when x:\ shows the XBE dir's "data" folder without a SaveMeta.xbx).
+    // ******************************************************************
+    else if((szBuffer[0] == 'X' || szBuffer[0] == 'x') && szBuffer[1] == ':' && szBuffer[2] == '\\')
+    {
+        szBuffer += 3;
+
+        ObjectAttributes->RootDirectory = g_hXDrive;
+
+#ifdef _DEBUG_TRACE
+        printf("EmuKrnl (0x%X): NtCreateFile Corrected path...\n", GetCurrentThreadId());
+        printf("  Org:\"%s\"\n", szOriginalBuffer);
+        printf("  New:\"$CxbxPath\\CxbxCacheX\\%s\"\n", szBuffer);
+#endif
+    }
+    else if((szBuffer[0] == 'Y' || szBuffer[0] == 'y') && szBuffer[1] == ':' && szBuffer[2] == '\\')
+    {
+        szBuffer += 3;
+
+        ObjectAttributes->RootDirectory = g_hYDrive;
+
+#ifdef _DEBUG_TRACE
+        printf("EmuKrnl (0x%X): NtCreateFile Corrected path...\n", GetCurrentThreadId());
+        printf("  Org:\"%s\"\n", szOriginalBuffer);
+        printf("  New:\"$CxbxPath\\CxbxCacheY\\%s\"\n", szBuffer);
+#endif
+    }
+    // ******************************************************************
+    // * Any other DOS drive letter (Q:, C:, F:, G:, ...) maps to the XBE
+    // * directory as well. Drive letters are title-created \?? symlinks on
+    // * hardware -- dashboards lean on them heavily (EvolutionX symlinks its
+    // * home partition to Q: and reads q:\evox.ini before anything else; its
+    // * menu entries use C:/F:/G:). No preset host directory models those
+    // * partitions, and passing the raw name to the host fails with
+    // * STATUS_INVALID_HANDLE, so treat them all like E: above.
+    // ******************************************************************
+    else if(((szBuffer[0] >= 'A' && szBuffer[0] <= 'Z') ||
+             (szBuffer[0] >= 'a' && szBuffer[0] <= 'z')) &&
+            szBuffer[1] == ':' && szBuffer[2] == '\\')
+    {
+        const char DriveLetter = szBuffer[0];
+        szBuffer += 3;
+
+        ObjectAttributes->RootDirectory = g_hCurDir;
+
+        printf("EmuKrnl (0x%X): NtCreateFile mapped drive %c: to the XBE dir: \"%s\"\n",
+               GetCurrentThreadId(), DriveLetter, szBuffer);
+    }
+    // ******************************************************************
     // * \Device\Harddisk0\PartitionN should map to the XBE directory too,
     // * so titles that open the raw hard-disk partition (e.g. NestopiaX's ROM
     // * browser enumerating the disk) find their content instead of failing

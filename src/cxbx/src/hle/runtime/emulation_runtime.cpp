@@ -106,6 +106,8 @@ Xbe::Header* g_pXbeHeader = NULL;
 HANDLE g_hCurDir = NULL;
 HANDLE g_hTDrive = NULL;
 HANDLE g_hUDrive = NULL;
+HANDLE g_hXDrive = NULL;
+HANDLE g_hYDrive = NULL;
 HANDLE g_hZDrive = NULL;
 
 // ******************************************************************
@@ -11943,6 +11945,42 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit(
 
             strcat(szBuffer, "\\CACHE");
             CreateDirectory(szBuffer, NULL);
+        }
+
+        // Create the X: and Y: cache directories. On hardware X:, Y: and Z:
+        // are separate per-title cache partitions that start out empty, so
+        // each gets its own host directory: a title scanning x:\ for save or
+        // cache containers must not see the XBE directory's content there
+        // (Samurai Shodown V's save-device scan loops forever on the phantom
+        // "data" entry otherwise).
+        {
+            strcpy(&szBuffer[spot], "\\CxbxCacheX");
+
+            CreateDirectory(szBuffer, NULL);
+
+            sprintf(&szBuffer[spot + 11], "\\%08x", pCertificate->dwTitleId);
+
+            CreateDirectory(szBuffer, NULL);
+
+            g_hXDrive = CreateFile(szBuffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+
+            if(g_hXDrive == INVALID_HANDLE_VALUE)
+                EmuCleanup("Could not map X:\\\n");
+        }
+
+        {
+            strcpy(&szBuffer[spot], "\\CxbxCacheY");
+
+            CreateDirectory(szBuffer, NULL);
+
+            sprintf(&szBuffer[spot + 11], "\\%08x", pCertificate->dwTitleId);
+
+            CreateDirectory(szBuffer, NULL);
+
+            g_hYDrive = CreateFile(szBuffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+
+            if(g_hYDrive == INVALID_HANDLE_VALUE)
+                EmuCleanup("Could not map Y:\\\n");
         }
     }
 

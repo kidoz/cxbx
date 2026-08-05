@@ -109,6 +109,8 @@ extern Xbe::Header* g_pXbeHeader;
 extern HANDLE g_hCurDir;
 extern HANDLE g_hTDrive;
 extern HANDLE g_hUDrive;
+extern HANDLE g_hXDrive;
+extern HANDLE g_hYDrive;
 extern HANDLE g_hZDrive;
 
 #endif
