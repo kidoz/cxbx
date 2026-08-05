@@ -9903,23 +9903,39 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile(
     }
 
     // ******************************************************************
-    // * TODO: Wildcards are not allowed??
+    // * Wildcards: a search pattern names the DIRECTORY to open, so cut the
+    // * path at the separator before the FIRST wildcard component.
+    // *
+    // * The previous scan tracked the LAST '*' instead, which mangled any
+    // * two-wildcard pattern: "bios\*.*" became "bios\*" (not a valid object
+    // * name -- STATUS_OBJECT_NAME_INVALID) rather than "bios". EvolutionX
+    // * enumerates "bios\*.*" and "skin\*.*" to build its menus and got
+    // * nothing back. A single-wildcard pattern ("trainers\*.etm") happened
+    // * to land on the separator and worked, which is why this survived.
     // ******************************************************************
     {
+        int FirstWildcard = -1;
         for(int v = 0; szBuffer[v] != '\0'; v++)
         {
-            if(szBuffer[v] == '*')
+            if(szBuffer[v] == '*' || szBuffer[v] == '?')
             {
-                if(v > 0)
-                    ReplaceIndex = v - 1;
-                else
-                    ReplaceIndex = v;
+                FirstWildcard = v;
+                break;
             }
         }
 
-        // Note: Hack: Not thread safe (if problems occur, create a temp buffer)
-        if(ReplaceIndex != -1)
+        if(FirstWildcard >= 0)
         {
+            // Back up to the separator that ends the directory part; a pattern
+            // with no separator ("*.*") refers to the root itself, which the
+            // RootDirectory handle already denotes.
+            ReplaceIndex = FirstWildcard;
+            while(ReplaceIndex > 0 && szBuffer[ReplaceIndex - 1] != '\\')
+                ReplaceIndex--;
+            if(ReplaceIndex > 0)
+                ReplaceIndex--; // land ON the separator
+
+            // Note: Hack: Not thread safe (if problems occur, create a temp buffer)
             ReplaceChar = szBuffer[ReplaceIndex];
             szBuffer[ReplaceIndex] = '\0';
         }
