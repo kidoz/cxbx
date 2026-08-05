@@ -76,7 +76,18 @@ int WINAPI XTL::EmuWSAStartup(
     }
 #endif
 
-    int ret = WSAStartup(wVersionRequested, lpWSAData);
+    // Xbox winsock performs no desktop-style version negotiation: titles pass
+    // request words like 0x0200 (Samurai Shodown V's XOnlineStartup) whose
+    // LOBYTE-major of 0 host WSAStartup rejects with WSAVERNOTSUPPORTED,
+    // failing the title's whole online/audio platform init. Negotiate 2.2
+    // with the host and report the caller's requested word back as accepted.
+    WSADATA HostData = {};
+    int ret = WSAStartup(MAKEWORD(2, 2), &HostData);
+    if(ret == 0 && lpWSAData != NULL)
+    {
+        *lpWSAData = HostData;
+        lpWSAData->wVersion = wVersionRequested;
+    }
 
     EmuSwapFS(); // XBox FS
 
