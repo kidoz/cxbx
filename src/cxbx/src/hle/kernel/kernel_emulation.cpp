@@ -335,6 +335,36 @@ static bool EmuIsWritableMemoryRange(PVOID Address, SIZE_T Size)
     return true;
 }
 
+static bool EmuIsReadableMemoryRange(const void* Address, SIZE_T Size)
+{
+    if(Address == NULL || Size == 0)
+        return false;
+
+    ULONG_PTR Current = (ULONG_PTR)Address;
+    ULONG_PTR End = Current + Size;
+    if(End < Current)
+        return false;
+
+    while(Current < End)
+    {
+        MEMORY_BASIC_INFORMATION MemoryInfo;
+        if(VirtualQuery((PVOID)Current, &MemoryInfo, sizeof(MemoryInfo)) != sizeof(MemoryInfo))
+            return false;
+
+        if(MemoryInfo.State != MEM_COMMIT ||
+           (MemoryInfo.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+            return false;
+
+        ULONG_PTR RegionEnd = (ULONG_PTR)MemoryInfo.BaseAddress + MemoryInfo.RegionSize;
+        if(RegionEnd <= Current)
+            return false;
+
+        Current = RegionEnd;
+    }
+
+    return true;
+}
+
 typedef int(__cdecl* EmuGuestExceptionHandler)(PEXCEPTION_RECORD ExceptionRecord, void* EstablisherFrame, PCONTEXT ContextRecord, void* DispatcherContext);
 
 static bool EmuRaiseGuestExceptionRecord(PEXCEPTION_RECORD ExceptionRecord, ULONG GuestEip, ULONG GuestEsp, ULONG GuestEbp)
@@ -2199,6 +2229,31 @@ extern "C" VOID NTAPI EmuXcSHAInit(UCHAR* SHAContext)
 
 extern "C" VOID NTAPI EmuXcSHAUpdate(UCHAR* SHAContext, UCHAR* Input, ULONG InputLength)
 {
+    // The Xc* crypto exports hash whatever the title points them at. On
+    // hardware that is always mapped RAM; under this HLE a title can derive
+    // the pointer from state the emulator does not populate (EEPROM/HDD-key
+    // material) and pass a wild address -- and a fault inside a kernel export
+    // kills the host process rather than the title. EvolutionX does exactly
+    // this while hashing HDD-lock data. Validate and skip, loudly: the digest
+    // is then wrong, but a wrong digest is a title-level failure the title can
+    // handle, whereas an emulator crash ends the run.
+    if(!EmuIsWritableMemoryRange(SHAContext, sizeof(EmuSha1Context)))
+    {
+        printf("EmuKrnl (0x%lX): XcSHAUpdate REFUSED unreadable context 0x%.08lX.\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)SHAContext);
+        fflush(stdout);
+        return;
+    }
+
+    if(InputLength != 0 && !EmuIsReadableMemoryRange(Input, InputLength))
+    {
+        printf("EmuKrnl (0x%lX): XcSHAUpdate REFUSED unreadable input 0x%.08lX+0x%lX "
+               "(digest will be wrong).\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)Input, InputLength);
+        fflush(stdout);
+        return;
+    }
+
     EmuSha1Context* Context = (EmuSha1Context*)SHAContext;
     ULONG BufferIndex = (ULONG)(Context->Count & 63);
 
@@ -2302,8 +2357,42 @@ extern "C" VOID NTAPI EmuXcHMAC(
     ULONG Data2Length,
     PUCHAR Digest)
 {
-    if(Digest == NULL)
+    // Guest-supplied pointers; see the note in EmuXcSHAUpdate. Drop any input
+    // that is not actually mapped instead of faulting the host inside the
+    // hash loop (EvolutionX passes a wild Data pointer hashing HDD-lock
+    // material this HLE never populates).
+    if(!EmuIsWritableMemoryRange(Digest, 20))
+    {
+        printf("EmuKrnl (0x%lX): XcHMAC REFUSED unwritable digest 0x%.08lX.\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)Digest);
+        fflush(stdout);
         return;
+    }
+
+    if(KeyMaterialLength != 0 && !EmuIsReadableMemoryRange(KeyMaterial, KeyMaterialLength))
+    {
+        printf("EmuKrnl (0x%lX): XcHMAC dropped unreadable key 0x%.08lX+0x%lX.\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)KeyMaterial, KeyMaterialLength);
+        fflush(stdout);
+        KeyMaterial = NULL;
+        KeyMaterialLength = 0;
+    }
+    if(DataLength != 0 && !EmuIsReadableMemoryRange(Data, DataLength))
+    {
+        printf("EmuKrnl (0x%lX): XcHMAC dropped unreadable data 0x%.08lX+0x%lX.\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)Data, DataLength);
+        fflush(stdout);
+        Data = NULL;
+        DataLength = 0;
+    }
+    if(Data2Length != 0 && !EmuIsReadableMemoryRange(Data2, Data2Length))
+    {
+        printf("EmuKrnl (0x%lX): XcHMAC dropped unreadable data2 0x%.08lX+0x%lX.\n",
+               GetCurrentThreadId(), (ULONG)(uintptr_t)Data2, Data2Length);
+        fflush(stdout);
+        Data2 = NULL;
+        Data2Length = 0;
+    }
 
     UCHAR KeyBlock[64] = {};
     UCHAR HashedKey[20] = {};
