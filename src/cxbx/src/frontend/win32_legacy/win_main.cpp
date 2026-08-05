@@ -273,6 +273,7 @@ static int RunXbeBatch(const char* szXbePath, const char* szLogFile)
             { 0xF0000000, 0x0D000000 }, // physical/AGP shadow aperture
             { 0xFD000000, 0x01000000 }, // NV2A MMIO
             { 0xFE000000, 0x01000000 }, // APU/ACI/USB/NVNET stub MMIO
+            { 0xFF000000, 0x00F00000 }, // flash/BIOS aperture (see EmuFlashInit)
         };
         for(unsigned f = 0; f < sizeof(kFences) / sizeof(kFences[0]); f++)
         {

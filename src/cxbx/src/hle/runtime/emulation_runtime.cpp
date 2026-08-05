@@ -10374,6 +10374,87 @@ static void EmuWatchRetryArm(void)
     }
 }
 
+// ******************************************************************
+// * Flash/BIOS aperture.
+// *
+// * The Xbox maps its flash ROM (256 KiB on retail) at the top of the address
+// * space, mirrored so every 256 KiB window through 0xFF000000-0xFFFFFFFF
+// * reads the same image. Dashboards and homebrew read it directly rather
+// * than through any kernel export -- EvolutionX SHA-1s it to identify and
+// * display the running BIOS -- so an unbacked aperture faults the host from
+// * a plain `rep movsd` with no kernel call to intercept.
+// *
+// * Back it with real committed pages. The contents are zero by default,
+// * which is honest (no BIOS is bundled or required): a title that hashes it
+// * simply finds no known BIOS and reports it as unknown, instead of the
+// * emulator dying. CXBX_FLASH_IMAGE=<path> loads a real dump for users who
+// * have one; the image is tiled across the aperture to model the mirroring.
+// *
+// * Only the low 15 MiB of the aperture is committed: the last 64 KiB of the
+// * address space cannot be allocated, and no title reads the final mirror.
+// ******************************************************************
+static const ULONG EmuFlashBase = 0xFF000000;
+static const ULONG EmuFlashSize = 0x00F00000;
+
+static void EmuFlashInit(void)
+{
+    // The launcher fenced this range with a PAGE_NOACCESS reservation; release
+    // it so the aperture can be committed as real memory.
+    VirtualFree((PVOID)EmuFlashBase, 0, MEM_RELEASE);
+
+    void* Flash = VirtualAlloc((PVOID)EmuFlashBase, EmuFlashSize,
+                               MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if(Flash == NULL)
+    {
+        printf("Emu (0x%lX): flash aperture 0x%.08lX+0x%lX could not be backed "
+               "(0x%lX); BIOS reads will still fault.\n",
+               GetCurrentThreadId(), EmuFlashBase, EmuFlashSize, GetLastError());
+        fflush(stdout);
+        return;
+    }
+
+    ZeroMemory(Flash, EmuFlashSize);
+
+    ULONG ImageSize = 0;
+    char Path[MAX_PATH] = { 0 };
+    if(GetEnvironmentVariableA("CXBX_FLASH_IMAGE", Path, sizeof(Path)) != 0)
+    {
+        FILE* File = fopen(Path, "rb");
+        if(File == NULL)
+        {
+            printf("Emu (0x%lX): flash image \"%s\" could not be opened; "
+                   "aperture left zero-filled.\n",
+                   GetCurrentThreadId(), Path);
+        }
+        else
+        {
+            static BYTE Image[0x100000]; // flash is at most 1 MiB
+            ImageSize = (ULONG)fread(Image, 1, sizeof(Image), File);
+            fclose(File);
+
+            // Mirror the image across the aperture, exactly as the hardware
+            // decode does (the flash chip ignores the high address bits).
+            for(ULONG Offset = 0; ImageSize != 0 && Offset < EmuFlashSize; Offset += ImageSize)
+            {
+                ULONG Chunk = EmuFlashSize - Offset;
+                if(Chunk > ImageSize)
+                    Chunk = ImageSize;
+                memcpy((BYTE*)Flash + Offset, Image, Chunk);
+            }
+        }
+    }
+
+    // Flash is read-only to the guest: a stray write must not silently corrupt
+    // the image other code may hash later.
+    DWORD OldProtect;
+    VirtualProtect(Flash, EmuFlashSize, PAGE_READONLY, &OldProtect);
+
+    printf("Emu (0x%lX): flash aperture backed at 0x%.08lX+0x%lX (%s).\n",
+           GetCurrentThreadId(), EmuFlashBase, EmuFlashSize,
+           ImageSize != 0 ? "image loaded, mirrored" : "zero-filled");
+    fflush(stdout);
+}
+
 static void EmuWatchInit(void)
 {
     char Value[256];
@@ -11882,6 +11963,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit(
     // services their faults is registered; not-yet-committed pages defer and
     // re-arm from the fault path.
     EmuWatchInit();
+
+    // Flash/BIOS aperture. The Xbox maps its 256 KiB flash at the top of the
+    // address space, mirrored through 0xFF000000-0xFFFFFFFF; dashboards read
+    // it directly (EvolutionX hashes it to name the running BIOS on screen).
+    // Nothing backed it here, so that read faulted the host.
+    EmuFlashInit();
 
     // Thread-EIP watchdog (opt-in via CXBX_FENCE_DUMP=<interval seconds>):
     // periodic snapshots of every thread's EIP so a stalled title's thread
