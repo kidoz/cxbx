@@ -3527,9 +3527,46 @@ static bool EmuTryReadHost(ULONG Address, void* Dst, ULONG Size)
     if(Address == 0 || Dst == NULL || Size == 0)
         return false;
 
+    // Clamp to what is actually mapped before copying. A vertex attribute (or
+    // any other payload) that sits at the very end of a guest block is a normal
+    // thing for a title to produce -- the last element's stride can reach past
+    // the allocation -- and the read then crosses into an unmapped page. Relying
+    // on the SEH guard alone made that case discard the ENTIRE read, so a
+    // perfectly good vertex was dropped because of trailing padding, and every
+    // occurrence raised a first-chance AV that the vectored handler dumped
+    // (EvolutionX produced one per run out of the NV2A vertex path). Copy the
+    // mapped prefix and zero the remainder instead.
+    ULONG Readable = 0;
+    {
+        ULONG Cursor = Address;
+        const ULONG End = Address + Size;
+        while(Cursor < End && End > Address)
+        {
+            MEMORY_BASIC_INFORMATION Info;
+            if(VirtualQuery((LPCVOID)Cursor, &Info, sizeof(Info)) != sizeof(Info) ||
+               Info.State != MEM_COMMIT ||
+               (Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+            {
+                break;
+            }
+
+            const ULONG RegionEnd = (ULONG)Info.BaseAddress + (ULONG)Info.RegionSize;
+            if(RegionEnd <= Cursor)
+                break;
+
+            Cursor = RegionEnd < End ? RegionEnd : End;
+        }
+        Readable = Cursor > Address ? Cursor - Address : 0;
+    }
+
+    if(Readable == 0)
+        return false;
+
     __try
     {
-        memcpy(Dst, (const void*)Address, Size);
+        memcpy(Dst, (const void*)Address, Readable);
+        if(Readable < Size)
+            memset((BYTE*)Dst + Readable, 0, Size - Readable);
         EmuNv2aCaptureMemory(Address, Dst, Size);
         return true;
     }
