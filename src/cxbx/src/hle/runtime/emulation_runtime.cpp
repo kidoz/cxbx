@@ -2153,7 +2153,23 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
             Data = Instance;
     }
 
-    if(g_EmuNv2aTextureMethodLogCount < 64 && Method != 0)
+    // Method-stream log budget. 64 entries only covers an object-binding
+    // prologue, which is not enough to tell whether a title's real drawing
+    // work is 3D or 2D (EvolutionX binds the 2D blit classes first and only
+    // then streams its blits). CXBX_NV2A_METHOD_LOG=<n> raises it.
+    static ULONG MethodLogBudget = 0;
+    if(MethodLogBudget == 0)
+    {
+        char Value[16] = { 0 };
+        MethodLogBudget =
+            GetEnvironmentVariableA("CXBX_NV2A_METHOD_LOG", Value, sizeof(Value)) != 0
+                ? (ULONG)strtoul(Value, NULL, 0)
+                : 64;
+        if(MethodLogBudget == 0)
+            MethodLogBudget = 64;
+    }
+
+    if(g_EmuNv2aTextureMethodLogCount < MethodLogBudget && Method != 0)
     {
         printf("Emu (0x%lX): PGRAPH method class=0x%.04lX m=0x%.04lX data=0x%.08lX\n",
                GetCurrentThreadId(), Class, Method, Data);
