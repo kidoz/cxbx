@@ -22,4 +22,4 @@ Cambridge, MA 02139, USA.  */
 
 #undef copysign
 function_alias(copysign, __copysign, __CONSTVALUE double, (x, y),
-	       DEFUN(copysign, (x, y), double x AND double y))
+               DEFUN(copysign, (x, y), double x AND double y))

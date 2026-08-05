@@ -19,12 +19,10 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	atoi
-
+#undef atoi
 
 /* Convert a string to an int.  */
-int
-DEFUN(atoi, (nptr), CONST char *nptr)
+int DEFUN(atoi, (nptr), CONST char* nptr)
 {
-  return((int) strtol(nptr, (char **) NULL, 10));
+    return ((int)strtol(nptr, (char**)NULL, 10));
 }

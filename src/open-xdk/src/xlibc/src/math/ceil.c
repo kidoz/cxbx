@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,36 +14,35 @@
 
 #ifdef WINVER
 #error
-extern int     _RoundUp;
+extern int _RoundUp;
 
 double ceil(double f)
 {
-	int temp;
-	__asm
-	{
+    int temp;
+    __asm
+    {
 		fstcw temp
 		fldcw _RoundUp
 		fld f
 		frndint
 		fldcw temp
-	}
+    }
 }
 
 float ceilf(float f)
 {
-	int temp;
-	__asm
-	{
+    int temp;
+    __asm
+    {
 		fstcw temp
 		fldcw _RoundUp
 		fld f
 		frndint
 		fldcw temp
-	}
+    }
 }
 #else
 
 OPENXDK_UNIMPLEMENTEDC(ceil)
 
-
-#endif 
+#endif

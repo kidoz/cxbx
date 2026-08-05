@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,19 +14,20 @@
 
 #ifndef __GNUC__
 
-
-double sqrt(double f) {
-	__asm {
+double sqrt(double f)
+{
+    __asm {
 		fld f
 		fsqrt
-	}
+    }
 }
 
-float sqrtf(float f) {
-	__asm {
+float sqrtf(float f)
+{
+    __asm {
 		fld f
 		fsqrt
-	}
+    }
 }
 
 #else

@@ -19,10 +19,10 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-#undef	memccpy
+#undef memccpy
 
 #include <gnu-stabs.h>
 
 function_alias(memccpy, __memccpy, PTR, (dest, src, c, n),
-	       DEFUN(memccpy, (dest, src, c, n),
-		     PTR dest AND CONST PTR src AND int c AND size_t n))
+               DEFUN(memccpy, (dest, src, c, n),
+                     PTR dest AND CONST PTR src AND int c AND size_t n))

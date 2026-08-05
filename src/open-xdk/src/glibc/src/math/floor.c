@@ -37,38 +37,38 @@ static char sccsid[] = "@(#)floor.c	5.7 (Berkeley) 10/9/90";
 
 #include "mathimpl.h"
 
-vc(L, 4503599627370496.0E0 ,0000,5c00,0000,0000, 55, 1.0) /* 2**55 */
+vc(L, 4503599627370496.0E0, 0000, 5c00, 0000, 0000, 55, 1.0) /* 2**55 */
 
-ic(L, 4503599627370496.0E0, 52, 1.0)			  /* 2**52 */
+    ic(L, 4503599627370496.0E0, 52, 1.0) /* 2**52 */
 
 #ifdef vccast
-#define	L	vccast(L)
+#define L vccast(L)
 #endif
 
-/*
- * floor(x) := the largest integer no larger than x;
- * ceil(x) := -floor(-x), for all real x.
- *
- * Note: Inexact will be signaled if x is not an integer, as is
- *	customary for IEEE 754.  No other signal can be emitted.
- */
-double
-floor(x)
+    /*
+     * floor(x) := the largest integer no larger than x;
+     * ceil(x) := -floor(-x), for all real x.
+     *
+     * Note: Inexact will be signaled if x is not an integer, as is
+     *	customary for IEEE 754.  No other signal can be emitted.
+     */
+    double floor(x)
 double x;
 {
-	double y;
+    double y;
 
-	if (
-#if !defined(vax)&&!defined(tahoe)
-		x != x ||	/* NaN */
-#endif	/* !defined(vax)&&!defined(tahoe) */
-		x >= L)		/* already an even integer */
-		return x;
-	else if (x < (double)0)
-		return -ceil(-x);
-	else {			/* now 0 <= x < L */
-		y = L+x;		/* destructive store must be forced */
-		y -= L;			/* an integer, and |x-y| < 1 */
-		return x < y ? y-(double)1 : y;
-	}
+    if(
+#if !defined(vax) && !defined(tahoe)
+        x != x || /* NaN */
+#endif            /* !defined(vax)&&!defined(tahoe) */
+        x >= L)   /* already an even integer */
+        return x;
+    else if(x < (double)0)
+        return -ceil(-x);
+    else
+    {              /* now 0 <= x < L */
+        y = L + x; /* destructive store must be forced */
+        y -= L;    /* an integer, and |x-y| < 1 */
+        return x < y ? y - (double)1 : y;
+    }
 }

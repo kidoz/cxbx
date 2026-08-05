@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	isnan
+#undef isnan
 function_alias(isnan, __isnan, __CONSTVALUE int, (value),
-	       DEFUN(isnan, (value), double value))
+               DEFUN(isnan, (value), double value))

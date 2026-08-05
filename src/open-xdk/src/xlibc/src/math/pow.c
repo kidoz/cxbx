@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,14 +14,13 @@
 
 #include <xlibc/math.h>
 
-
-//really bad approximation due to expf, log being approximations already :D
+// really bad approximation due to expf, log being approximations already :D
 double pow(double a, double b)
 {
-	return expf(b * logf(a));
+    return expf(b * logf(a));
 }
 
-
-float powf(float a, float b) {
-	return expf(b*logf(a));
+float powf(float a, float b)
+{
+    return expf(b * logf(a));
 }

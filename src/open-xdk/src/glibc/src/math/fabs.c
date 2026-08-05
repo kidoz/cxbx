@@ -23,5 +23,5 @@ Cambridge, MA 02139, USA.  */
 double
 DEFUN(_fabs, (x), register double x)
 {
-  return x < 0.0 ? -x : x;
+    return x < 0.0 ? -x : x;
 }

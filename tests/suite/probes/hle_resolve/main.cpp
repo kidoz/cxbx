@@ -20,7 +20,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-extern "C" ULONG __cdecl DbgPrint(const char *Format, ...);
+extern "C" ULONG __cdecl DbgPrint(const char* Format, ...);
 extern "C" VOID __stdcall HalReturnToFirmware(ULONG Routine);
 
 // --------------------------------------------------------------------------
@@ -30,9 +30,10 @@ static HANDLE g_trace = INVALID_HANDLE_VALUE;
 static int g_checks = 0;
 static int g_fails = 0;
 
-static void emit(const char *line)
+static void emit(const char* line)
 {
-    if (g_trace != INVALID_HANDLE_VALUE) {
+    if(g_trace != INVALID_HANDLE_VALUE)
+    {
         DWORD cb;
         WriteFile(g_trace, line, (DWORD)strlen(line), &cb, NULL);
         WriteFile(g_trace, "\n", 1, &cb, NULL);
@@ -40,7 +41,7 @@ static void emit(const char *line)
     DbgPrint("XT| %s\n", line);
 }
 
-static void emitf(const char *fmt, ...)
+static void emitf(const char* fmt, ...)
 {
     char line[480];
     va_list ap;
@@ -51,10 +52,10 @@ static void emitf(const char *fmt, ...)
     emit(line);
 }
 
-static void chk(const char *name, int expect, int got)
+static void chk(const char* name, int expect, int got)
 {
     g_checks++;
-    if (expect != got)
+    if(expect != got)
         g_fails++;
     emitf("CHK  %s expect=%d got=%d %s", name, expect, got,
           (expect == got) ? "PASS" : "FAIL");
@@ -67,34 +68,35 @@ static void chk(const char *name, int expect, int got)
 // live far below it.
 #define GUEST_TOP 0x04000000UL
 
-static DWORD jump_target(const unsigned char *p)
+static DWORD jump_target(const unsigned char* p)
 {
-    return (DWORD)(p + 5) + *(const DWORD *)(p + 1);
+    return (DWORD)(p + 5) + *(const DWORD*)(p + 1);
 }
 
-static int is_hle_patched(const void *fn)
+static int is_hle_patched(const void* fn)
 {
-    const unsigned char *p = (const unsigned char *)fn;
-    if (p[0] != 0xE9)
+    const unsigned char* p = (const unsigned char*)fn;
+    if(p[0] != 0xE9)
         return 0;
     DWORD tgt = jump_target(p);
-    if (tgt >= GUEST_TOP)
+    if(tgt >= GUEST_TOP)
         return 1;
     // Follow one guest-local jump (linker thunk) and re-test.
-    p = (const unsigned char *)tgt;
+    p = (const unsigned char*)tgt;
     return p[0] == 0xE9 && jump_target(p) >= GUEST_TOP;
 }
 
 // --------------------------------------------------------------------------
 // function tables
 // --------------------------------------------------------------------------
-typedef struct {
-    const char *name;
-    const void *fn;
+typedef struct
+{
+    const char* name;
+    const void* fn;
     int expect; // 1 = must be HLE-patched, 0 = documented gap
 } XFUNC;
 
-#define XF(f, e) { #f, (const void *)(f), (e) }
+#define XF(f, e) { #f, (const void*)(f), (e) }
 
 // Every entry below has an OOVPA registered in D3D8.1.0.5849.inl. An
 // expect=0 entry is SIGNATURE DEBT: its table entry's signature does not
@@ -242,11 +244,12 @@ static const XFUNC k_xapi[] = {
     XF(XInputSetState, 1),
 };
 
-static int run_table(const char *prefix, const XFUNC *t, int n)
+static int run_table(const char* prefix, const XFUNC* t, int n)
 {
     int resolved = 0;
     char name[128];
-    for (int i = 0; i < n; i++) {
+    for(int i = 0; i < n; i++)
+    {
         int got = is_hle_patched(t[i].fn);
         resolved += got;
         _snprintf(name, sizeof(name) - 1, "%s.%s.hle", prefix, t[i].name);
@@ -274,7 +277,7 @@ void __cdecl main()
           g_fails ? "FAIL" : "PASS", g_checks, g_fails);
     emit("#end");
 
-    if (g_trace != INVALID_HANDLE_VALUE)
+    if(g_trace != INVALID_HANDLE_VALUE)
         CloseHandle(g_trace);
 
     HalReturnToFirmware(2);

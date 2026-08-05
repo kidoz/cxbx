@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : OpenXDK
 // *
 // * desc : Open Source XBox Development Kit
@@ -27,13 +27,13 @@ void xohci_pci_init()
 
         RtlZeroMemory(&slot_number, sizeof(slot_number));
 
-        slot_number.u.bits.DeviceNumber   = PCI_USB0_DEVICE_ID;
+        slot_number.u.bits.DeviceNumber = PCI_USB0_DEVICE_ID;
         slot_number.u.bits.FunctionNumber = PCI_USB0_FUNCTION_ID;
 
         HalReadWritePCISpace(0, slot_number.u.AsULONG, 0, &config_info, PCI_COMMON_HDR_LENGTH, FALSE);
 
         if(config_info.VendorID != PCI_VENDOR_NVIDIA_CORPORATION || config_info.DeviceID != PCI_USB0_OHCI_CONTROLLER)
-            HalReturnToFirmware(ReturnFirmwareReboot);  // TODO: Fatal Error
+            HalReturnToFirmware(ReturnFirmwareReboot); // TODO: Fatal Error
 
         // ******************************************************************
         // * obtain io_addr pointer

@@ -22,20 +22,17 @@ Cambridge, MA 02139, USA.  */
 #include <memcopy.h>
 
 /* Copy SRC to DEST.  */
-char *
-DEFUN(_strcpy, (dest, src), char *dest AND CONST char *src)
+char* DEFUN(_strcpy, (dest, src), char* dest AND CONST char* src)
 {
-  reg_char c;
-  char *s = (char *) src;
-  CONST ptrdiff_t off = dest - src - 1;
+    reg_char c;
+    char* s = (char*)src;
+    CONST ptrdiff_t off = dest - src - 1;
 
-  do
+    do
     {
-      c = *s++;
-      s[off] = c;
-    }
-  while (c != '\0');
+        c = *s++;
+        s[off] = c;
+    } while(c != '\0');
 
-  return dest;
+    return dest;
 }
-

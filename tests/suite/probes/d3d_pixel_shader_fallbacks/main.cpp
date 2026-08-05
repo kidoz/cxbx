@@ -18,7 +18,8 @@ static const DWORD EXPECT_BUMP = 0x00FF00;
 static const DWORD EXPECT_SUM = 0x404000;
 static const DWORD EXPECT_BUDGET = 0x00DFBF7F;
 
-struct VERTEX {
+struct VERTEX
+{
     float x, y, z, rhw;
     D3DCOLOR color;
     float u0, v0;
@@ -28,14 +29,15 @@ struct VERTEX {
 
 #define FVF_VERTEX (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX3)
 
-static DWORD read_pixel(void *pBits, INT pitch, int x, int y)
+static DWORD read_pixel(void* pBits, INT pitch, int x, int y)
 {
-    return (*(DWORD *)((BYTE *)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
+    return (*(DWORD*)((BYTE*)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
 }
 
 static DWORD float_bits(float value)
 {
-    union {
+    union
+    {
         float f;
         DWORD d;
     } bits;
@@ -43,22 +45,26 @@ static DWORD float_bits(float value)
     return bits.d;
 }
 
-static D3DTexture *create_solid_texture(D3DCOLOR color)
+static D3DTexture* create_solid_texture(D3DCOLOR color)
 {
-    D3DTexture *texture = D3DDevice_CreateTexture2(4, 4, 1, 1, 0,
-                                                    D3DFMT_LIN_A8R8G8B8,
-                                                    D3DRTYPE_TEXTURE);
-    if(texture == NULL) {
+    D3DTexture* texture = D3DDevice_CreateTexture2(4, 4, 1, 1, 0,
+                                                   D3DFMT_LIN_A8R8G8B8,
+                                                   D3DRTYPE_TEXTURE);
+    if(texture == NULL)
+    {
         return NULL;
     }
 
     D3DLOCKED_RECT lock;
     lock.pBits = NULL;
     D3DTexture_LockRect(texture, 0, &lock, NULL, 0);
-    if(lock.pBits != NULL) {
-        for(int y = 0; y < 4; ++y) {
-            DWORD *row = (DWORD *)((BYTE *)lock.pBits + y * lock.Pitch);
-            for(int x = 0; x < 4; ++x) {
+    if(lock.pBits != NULL)
+    {
+        for(int y = 0; y < 4; ++y)
+        {
+            DWORD* row = (DWORD*)((BYTE*)lock.pBits + y * lock.Pitch);
+            for(int x = 0; x < 4; ++x)
+            {
                 row[x] = color;
             }
         }
@@ -66,22 +72,26 @@ static D3DTexture *create_solid_texture(D3DCOLOR color)
     return texture;
 }
 
-static D3DTexture *create_environment_texture(void)
+static D3DTexture* create_environment_texture(void)
 {
-    D3DTexture *texture = D3DDevice_CreateTexture2(4, 4, 1, 1, 0,
-                                                    D3DFMT_LIN_A8R8G8B8,
-                                                    D3DRTYPE_TEXTURE);
-    if(texture == NULL) {
+    D3DTexture* texture = D3DDevice_CreateTexture2(4, 4, 1, 1, 0,
+                                                   D3DFMT_LIN_A8R8G8B8,
+                                                   D3DRTYPE_TEXTURE);
+    if(texture == NULL)
+    {
         return NULL;
     }
 
     D3DLOCKED_RECT lock;
     lock.pBits = NULL;
     D3DTexture_LockRect(texture, 0, &lock, NULL, 0);
-    if(lock.pBits != NULL) {
-        for(int y = 0; y < 4; ++y) {
-            DWORD *row = (DWORD *)((BYTE *)lock.pBits + y * lock.Pitch);
-            for(int x = 0; x < 4; ++x) {
+    if(lock.pBits != NULL)
+    {
+        for(int y = 0; y < 4; ++y)
+        {
+            DWORD* row = (DWORD*)((BYTE*)lock.pBits + y * lock.Pitch);
+            for(int x = 0; x < 4; ++x)
+            {
                 row[x] = x < 2 ? COL_ENV_LEFT : COL_ENV_RIGHT;
             }
         }
@@ -92,29 +102,29 @@ static D3DTexture *create_environment_texture(void)
 static void draw_quad(float x0, float y0)
 {
     const VERTEX tris[6] = {
-        { x0,          y0,          0.0f, 1.0f, 0xFFFFFFFF,
+        { x0, y0, 0.0f, 1.0f, 0xFFFFFFFF,
           0.25f, 0.50f, 0.25f, 0.50f, 0.25f, 0.50f },
-        { x0 + 128.0f, y0,          0.0f, 1.0f, 0xFFFFFFFF,
+        { x0 + 128.0f, y0, 0.0f, 1.0f, 0xFFFFFFFF,
           0.25f, 0.50f, 0.25f, 0.50f, 0.25f, 0.50f },
-        { x0,          y0 + 128.0f, 0.0f, 1.0f, 0xFFFFFFFF,
+        { x0, y0 + 128.0f, 0.0f, 1.0f, 0xFFFFFFFF,
           0.25f, 0.50f, 0.25f, 0.50f, 0.25f, 0.50f },
-        { x0 + 128.0f, y0,          0.0f, 1.0f, 0xFFFFFFFF,
+        { x0 + 128.0f, y0, 0.0f, 1.0f, 0xFFFFFFFF,
           0.25f, 0.50f, 0.25f, 0.50f, 0.25f, 0.50f },
         { x0 + 128.0f, y0 + 128.0f, 0.0f, 1.0f, 0xFFFFFFFF,
           0.25f, 0.50f, 0.25f, 0.50f, 0.25f, 0.50f },
-        { x0,          y0 + 128.0f, 0.0f, 1.0f, 0xFFFFFFFF,
+        { x0, y0 + 128.0f, 0.0f, 1.0f, 0xFFFFFFFF,
           0.25f, 0.50f, 0.25f, 0.50f, 0.25f, 0.50f },
     };
     D3DDevice_DrawVerticesUP(D3DPT_TRIANGLELIST, 6, tris, sizeof(VERTEX));
 }
 
-static void build_bump_shader(D3DPIXELSHADERDEF *shader)
+static void build_bump_shader(D3DPIXELSHADERDEF* shader)
 {
     ZeroMemory(shader, sizeof(*shader));
     shader->PSCombinerCount = PS_COMBINERCOUNT(1, 0);
     shader->PSTextureModes = PS_TEXTUREMODES(PS_TEXTUREMODES_PROJECT2D,
-        PS_TEXTUREMODES_PROJECT2D, PS_TEXTUREMODES_BUMPENVMAP,
-        PS_TEXTUREMODES_NONE);
+                                             PS_TEXTUREMODES_PROJECT2D, PS_TEXTUREMODES_BUMPENVMAP,
+                                             PS_TEXTUREMODES_NONE);
     shader->PSInputTexture = PS_INPUTTEXTURE(0, 0, 1, 0);
     shader->PSRGBInputs[0] = PS_COMBINERINPUTS(
         PS_REGISTER_T2, PS_REGISTER_ONE, PS_REGISTER_ZERO, PS_REGISTER_ZERO);
@@ -127,12 +137,12 @@ static void build_bump_shader(D3DPIXELSHADERDEF *shader)
         PS_REGISTER_DISCARD, PS_REGISTER_DISCARD, PS_REGISTER_R0, 0);
 }
 
-static void build_sum_shader(D3DPIXELSHADERDEF *shader)
+static void build_sum_shader(D3DPIXELSHADERDEF* shader)
 {
     ZeroMemory(shader, sizeof(*shader));
     shader->PSCombinerCount = PS_COMBINERCOUNT(2, 0);
     shader->PSTextureModes = PS_TEXTUREMODES(PS_TEXTUREMODES_PROJECT2D,
-        PS_TEXTUREMODES_PROJECT2D, PS_TEXTUREMODES_NONE, PS_TEXTUREMODES_NONE);
+                                             PS_TEXTUREMODES_PROJECT2D, PS_TEXTUREMODES_NONE, PS_TEXTUREMODES_NONE);
     shader->PSRGBInputs[0] = PS_COMBINERINPUTS(
         PS_REGISTER_T0, PS_REGISTER_ONE, PS_REGISTER_ZERO, PS_REGISTER_ZERO);
     shader->PSRGBOutputs[0] = PS_COMBINEROUTPUTS(
@@ -158,13 +168,14 @@ static void build_sum_shader(D3DPIXELSHADERDEF *shader)
         PS_REGISTER_ZERO);
 }
 
-static void build_instruction_budget_shader(D3DPIXELSHADERDEF *shader)
+static void build_instruction_budget_shader(D3DPIXELSHADERDEF* shader)
 {
     ZeroMemory(shader, sizeof(*shader));
     shader->PSCombinerCount = PS_COMBINERCOUNT(8, 0);
     shader->PSTextureModes = PS_TEXTUREMODES(PS_TEXTUREMODES_PROJECT2D,
-        PS_TEXTUREMODES_NONE, PS_TEXTUREMODES_NONE, PS_TEXTUREMODES_NONE);
-    for(int stage = 0; stage < 8; ++stage) {
+                                             PS_TEXTUREMODES_NONE, PS_TEXTUREMODES_NONE, PS_TEXTUREMODES_NONE);
+    for(int stage = 0; stage < 8; ++stage)
+    {
         shader->PSRGBInputs[stage] = PS_COMBINERINPUTS(
             PS_REGISTER_ZERO, PS_REGISTER_ZERO, PS_REGISTER_ONE,
             PS_REGISTER_T0 | PS_INPUTMAPPING_UNSIGNED_INVERT);
@@ -183,14 +194,15 @@ void __cdecl main()
     xt_begin("d3d_pixel_shader_fallbacks");
 
     xt_chk("d3d.create_pixel_shader_hle", 1,
-           xt_is_hle_patched((const void *)D3DDevice_CreatePixelShader));
+           xt_is_hle_patched((const void*)D3DDevice_CreatePixelShader));
     xt_chk("d3d.set_pixel_shader_hle", 1,
-           xt_is_hle_patched((const void *)D3DDevice_SetPixelShader));
+           xt_is_hle_patched((const void*)D3DDevice_SetPixelShader));
     xt_chk("d3d.bump_env_hle", 1,
-           xt_is_hle_patched((const void *)D3DDevice_SetTextureState_BumpEnv));
-    if(!xt_is_hle_patched((const void *)D3DDevice_CreatePixelShader) ||
-       !xt_is_hle_patched((const void *)D3DDevice_SetPixelShader) ||
-       !xt_is_hle_patched((const void *)D3DDevice_SetTextureState_BumpEnv)) {
+           xt_is_hle_patched((const void*)D3DDevice_SetTextureState_BumpEnv));
+    if(!xt_is_hle_patched((const void*)D3DDevice_CreatePixelShader) ||
+       !xt_is_hle_patched((const void*)D3DDevice_SetPixelShader) ||
+       !xt_is_hle_patched((const void*)D3DDevice_SetTextureState_BumpEnv))
+    {
         xt_end_and_exit();
     }
 
@@ -205,24 +217,25 @@ void __cdecl main()
     present.BackBufferCount = 1;
     present.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *device = NULL;
+    D3DDevice* device = NULL;
     HRESULT hr = d3d->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                    D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                    &present, &device);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && device != NULL);
-    if(FAILED(hr) || device == NULL) {
+    if(FAILED(hr) || device == NULL)
+    {
         xt_end_and_exit();
     }
 
-    D3DTexture *bumpSource = create_solid_texture(COL_BUMP_SOURCE);
-    D3DTexture *environment = create_environment_texture();
-    D3DTexture *sumBase = create_solid_texture(COL_SUM_BASE);
-    D3DTexture *sumAdd = create_solid_texture(COL_SUM_ADD);
-    D3DTexture *budget = create_solid_texture(COL_BUDGET);
-    xt_chk("d3d.textures_ok", 1, bumpSource != NULL && environment != NULL &&
-           sumBase != NULL && sumAdd != NULL && budget != NULL);
+    D3DTexture* bumpSource = create_solid_texture(COL_BUMP_SOURCE);
+    D3DTexture* environment = create_environment_texture();
+    D3DTexture* sumBase = create_solid_texture(COL_SUM_BASE);
+    D3DTexture* sumAdd = create_solid_texture(COL_SUM_ADD);
+    D3DTexture* budget = create_solid_texture(COL_BUDGET);
+    xt_chk("d3d.textures_ok", 1, bumpSource != NULL && environment != NULL && sumBase != NULL && sumAdd != NULL && budget != NULL);
     if(bumpSource == NULL || environment == NULL || sumBase == NULL ||
-       sumAdd == NULL || budget == NULL) {
+       sumAdd == NULL || budget == NULL)
+    {
         xt_end_and_exit();
     }
 
@@ -235,8 +248,7 @@ void __cdecl main()
     D3DDevice_CreatePixelShader(&bumpShader, &bumpHandle);
     D3DDevice_CreatePixelShader(&sumShader, &sumHandle);
     D3DDevice_CreatePixelShader(&budgetShader, &budgetHandle);
-    xt_chk("ps.handles_ok", 1, bumpHandle != 0 && sumHandle != 0 &&
-           budgetHandle != 0);
+    xt_chk("ps.handles_ok", 1, bumpHandle != 0 && sumHandle != 0 && budgetHandle != 0);
 
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);
     D3DDevice_SetRenderState_CullMode(D3DCULL_NONE);
@@ -261,14 +273,16 @@ void __cdecl main()
     draw_quad(448.0f, 64.0f);
     D3DDevice_SetPixelShader(0);
 
-    D3DSurface *backBuffer = D3DDevice_GetBackBuffer2(0);
+    D3DSurface* backBuffer = D3DDevice_GetBackBuffer2(0);
     xt_chk("d3d.backbuffer_ok", 1, backBuffer != NULL);
-    if(backBuffer != NULL) {
+    if(backBuffer != NULL)
+    {
         D3DLOCKED_RECT lock;
         lock.pBits = NULL;
         D3DSurface_LockRect(backBuffer, &lock, NULL, D3DLOCK_READONLY);
         xt_chk("d3d.lock_ok", 1, lock.pBits != NULL);
-        if(lock.pBits != NULL) {
+        if(lock.pBits != NULL)
+        {
             xt_chk_u32("ps.bump_stage2", EXPECT_BUMP,
                        read_pixel(lock.pBits, lock.Pitch, 128, 128));
             xt_chk_u32("ps.sum_shape", EXPECT_SUM,

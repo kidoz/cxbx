@@ -24,7 +24,7 @@ Cambridge, MA 02139, USA.  */
 __CONSTVALUE double
 DEFUN(_log10, (x), double x)
 {
-  CONST double inverse_ln10 = 4.3429448190325181667e-1;	/* 1 / log(10) */
+    CONST double inverse_ln10 = 4.3429448190325181667e-1; /* 1 / log(10) */
 
-  return inverse_ln10 * log(x);
+    return inverse_ln10 * log(x);
 }

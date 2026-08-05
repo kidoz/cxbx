@@ -19,12 +19,11 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	atof
-
+#undef atof
 
 /* Convert a string to a double.  */
 double
-DEFUN(atof, (nptr), CONST char *nptr)
+DEFUN(atof, (nptr), CONST char* nptr)
 {
-  return(strtod(nptr, (char **) NULL));
+    return (strtod(nptr, (char**)NULL));
 }

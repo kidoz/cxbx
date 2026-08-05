@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -10,22 +10,24 @@
 // *
 // ******************************************************************
 
-#include	<xlibc/ansidecl.h>
+#include <xlibc/ansidecl.h>
 //
 // Return the length of a string
 //
 
-char* strcpy( char *dest, const char *src )
+char* strcpy(char* dest, const char* src)
 {
-	char*	pString = (char*) src;
-	char	*pDest = (char*) dest;
-	char	a;
+    char* pString = (char*)src;
+    char* pDest = (char*)dest;
+    char a;
 
-	while(true){
-		a = *pString++;
-		*pDest++=a;
-		if( a == 0x00 ){
-			return dest;
-		}
-	}
+    while(true)
+    {
+        a = *pString++;
+        *pDest++ = a;
+        if(a == 0x00)
+        {
+            return dest;
+        }
+    }
 }

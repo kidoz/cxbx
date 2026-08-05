@@ -19,28 +19,27 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 #include <cstdlib>
-//#include <ctime>
+// #include <ctime>
 
-char *
-DEFUN(strfry, (string), char *string)
+char* DEFUN(strfry, (string), char* string)
 {
-/*  static int init = 0;
-  size_t len, i;
+    /*  static int init = 0;
+      size_t len, i;
 
-  if (!init)
-    {
-      srand (time ((time_t *) NULL));
-      init = 1;
-    }
+      if (!init)
+        {
+          srand (time ((time_t *) NULL));
+          init = 1;
+        }
 
-  len = strlen (string);
-  for (i = 0; i < len; ++i)
-    {
-      size_t j = rand () % len;
-      char c = string[i];
-      string[i] = string[j];
-      string[j] = c;
-    }
-*/
-  return string;
+      len = strlen (string);
+      for (i = 0; i < len; ++i)
+        {
+          size_t j = rand () % len;
+          char c = string[i];
+          string[i] = string[j];
+          string[j] = c;
+        }
+    */
+    return string;
 }

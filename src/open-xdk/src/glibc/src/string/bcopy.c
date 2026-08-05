@@ -19,13 +19,12 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-
-#define	memmove		bcopy
-#define	rettype		void
-#define	RETURN(s)	return
-#define	a1		src
-#define	a1const		CONST
-#define	a2		dest
-#define	a2const
+#define memmove   bcopy
+#define rettype   void
+#define RETURN(s) return
+#define a1        src
+#define a1const   CONST
+#define a2        dest
+#define a2const
 
 #include "memmove.c"

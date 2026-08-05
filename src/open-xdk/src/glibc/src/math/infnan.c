@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	infnan
+#undef infnan
 function_alias(infnan, __infnan, __CONSTVALUE double, (error),
-	       DEFUN(infnan, (error), int error))
+               DEFUN(infnan, (error), int error))

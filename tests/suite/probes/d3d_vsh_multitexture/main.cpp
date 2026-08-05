@@ -129,23 +129,17 @@ void __cdecl main()
     // q=3 projects stage 0 to (0.25,0.25), selecting cyan, and stage 3 to
     // (0.75,0.25), selecting yellow. cyan * yellow is exactly green.
     const VERTEX quad[6] = {
-        {{-0.75f,  0.75f, 0.5f, 1.0f}, 0xFFFFFFFF,
-         {0.75f, 0.75f, 0.0f, 3.0f}, {2.25f, 0.75f, 0.0f, 3.0f}},
-        {{-0.25f,  0.75f, 0.5f, 1.0f}, 0xFFFFFFFF,
-         {0.75f, 0.75f, 0.0f, 3.0f}, {2.25f, 0.75f, 0.0f, 3.0f}},
-        {{-0.75f,  0.25f, 0.5f, 1.0f}, 0xFFFFFFFF,
-         {0.75f, 0.75f, 0.0f, 3.0f}, {2.25f, 0.75f, 0.0f, 3.0f}},
-        {{-0.25f,  0.75f, 0.5f, 1.0f}, 0xFFFFFFFF,
-         {0.75f, 0.75f, 0.0f, 3.0f}, {2.25f, 0.75f, 0.0f, 3.0f}},
-        {{-0.25f,  0.25f, 0.5f, 1.0f}, 0xFFFFFFFF,
-         {0.75f, 0.75f, 0.0f, 3.0f}, {2.25f, 0.75f, 0.0f, 3.0f}},
-        {{-0.75f,  0.25f, 0.5f, 1.0f}, 0xFFFFFFFF,
-         {0.75f, 0.75f, 0.0f, 3.0f}, {2.25f, 0.75f, 0.0f, 3.0f}}
+        { { -0.75f, 0.75f, 0.5f, 1.0f }, 0xFFFFFFFF, { 0.75f, 0.75f, 0.0f, 3.0f }, { 2.25f, 0.75f, 0.0f, 3.0f } },
+        { { -0.25f, 0.75f, 0.5f, 1.0f }, 0xFFFFFFFF, { 0.75f, 0.75f, 0.0f, 3.0f }, { 2.25f, 0.75f, 0.0f, 3.0f } },
+        { { -0.75f, 0.25f, 0.5f, 1.0f }, 0xFFFFFFFF, { 0.75f, 0.75f, 0.0f, 3.0f }, { 2.25f, 0.75f, 0.0f, 3.0f } },
+        { { -0.25f, 0.75f, 0.5f, 1.0f }, 0xFFFFFFFF, { 0.75f, 0.75f, 0.0f, 3.0f }, { 2.25f, 0.75f, 0.0f, 3.0f } },
+        { { -0.25f, 0.25f, 0.5f, 1.0f }, 0xFFFFFFFF, { 0.75f, 0.75f, 0.0f, 3.0f }, { 2.25f, 0.75f, 0.0f, 3.0f } },
+        { { -0.75f, 0.25f, 0.5f, 1.0f }, 0xFFFFFFFF, { 0.75f, 0.75f, 0.0f, 3.0f }, { 2.25f, 0.75f, 0.0f, 3.0f } }
     };
 
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);
     D3DDevice_SetRenderState_CullMode(D3DCULL_NONE);
-    const DWORD stages[2] = {0, 3};
+    const DWORD stages[2] = { 0, 3 };
     for(int index = 0; index < 2; ++index)
     {
         const DWORD stage = stages[index];

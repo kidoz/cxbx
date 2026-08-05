@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -10,34 +10,36 @@
 // *
 // ******************************************************************
 
-#include	<xlibc/ansidecl.h>
-#include	<xlibc/ctype.h>
+#include <xlibc/ansidecl.h>
+#include <xlibc/ctype.h>
 
 //
 // Compare 2 blocks of memory
 //
-int strncmp( const void *buff1, const void *buff2 )
+int strncmp(const void* buff1, const void* buff2)
 {
-	char	*pBuff1 = (char*) buff1;
-	char	*pBuff2 = (char*) buff2;
+    char* pBuff1 = (char*)buff1;
+    char* pBuff2 = (char*)buff2;
 
-	while( true ){
-		char	a,b;
-		// tolower() is a macro; keep the post-increment out of it so the
-		// pointer is only advanced once per character.
-		a = *pBuff1++;
-		b = *pBuff2++;
-		a = tolower(a);
-		b = tolower(b);
+    while(true)
+    {
+        char a, b;
+        // tolower() is a macro; keep the post-increment out of it so the
+        // pointer is only advanced once per character.
+        a = *pBuff1++;
+        b = *pBuff2++;
+        a = tolower(a);
+        b = tolower(b);
 
-		if( (a|b) == 0 ) return 0;			// both end at the same time, so equal
+        if((a | b) == 0) return 0; // both end at the same time, so equal
 
-		if( a<b ){
-			return -1;
-		}if( a>b ){
-			return 1;
-		}
-	}
+        if(a < b)
+        {
+            return -1;
+        }
+        if(a > b)
+        {
+            return 1;
+        }
+    }
 }
-
-

@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbx->xbox_video.h
@@ -43,58 +43,58 @@
 // ******************************************************************
 class XBVideo : public Error
 {
-    public:
-        // ******************************************************************
-        // * Initialization
-        // ******************************************************************
-        XBVideo();
-       ~XBVideo();
+  public:
+    // ******************************************************************
+    // * Initialization
+    // ******************************************************************
+    XBVideo();
+    ~XBVideo();
 
-        // ******************************************************************
-        // * Registry Load/Save
-        // ******************************************************************
-        void Load(const char *szRegistryKey);
-        void Save(const char *szRegistryKey);
+    // ******************************************************************
+    // * Registry Load/Save
+    // ******************************************************************
+    void Load(const char* szRegistryKey);
+    void Save(const char* szRegistryKey);
 
-        // ******************************************************************
-        // * SetDirect3DDevice
-        // ******************************************************************
-        void  SetDirect3DDevice(DWORD dwDirect3DDevice) { m_dwDirect3DDevice = dwDirect3DDevice; }
-        DWORD GetDirect3DDevice() { return m_dwDirect3DDevice; }
+    // ******************************************************************
+    // * SetDirect3DDevice
+    // ******************************************************************
+    void SetDirect3DDevice(DWORD dwDirect3DDevice) { m_dwDirect3DDevice = dwDirect3DDevice; }
+    DWORD GetDirect3DDevice() { return m_dwDirect3DDevice; }
 
-        // ******************************************************************
-        // * SetDisplayAdapter
-        // ******************************************************************
-        void  SetDisplayAdapter(DWORD dwDisplayAdapter) { m_dwDisplayAdapter = dwDisplayAdapter; }
-        DWORD GetDisplayAdapter() { return m_dwDisplayAdapter; }
+    // ******************************************************************
+    // * SetDisplayAdapter
+    // ******************************************************************
+    void SetDisplayAdapter(DWORD dwDisplayAdapter) { m_dwDisplayAdapter = dwDisplayAdapter; }
+    DWORD GetDisplayAdapter() { return m_dwDisplayAdapter; }
 
-        // ******************************************************************
-        // * SetVideoResolution
-        // ******************************************************************
-        void SetVideoResolution(const char *szBuffer) { strcpy(m_szVideoResolution, szBuffer); }
-        const char *GetVideoResolution(){ return m_szVideoResolution; }
+    // ******************************************************************
+    // * SetVideoResolution
+    // ******************************************************************
+    void SetVideoResolution(const char* szBuffer) { strcpy(m_szVideoResolution, szBuffer); }
+    const char* GetVideoResolution() { return m_szVideoResolution; }
 
-        // ******************************************************************
-        // * Fullscreen Toggling
-        // ******************************************************************
-        void SetFullscreen(BOOL bFullscreen) { m_bFullscreen = bFullscreen; }
-        BOOL GetFullscreen() { return m_bFullscreen; }
+    // ******************************************************************
+    // * Fullscreen Toggling
+    // ******************************************************************
+    void SetFullscreen(BOOL bFullscreen) { m_bFullscreen = bFullscreen; }
+    BOOL GetFullscreen() { return m_bFullscreen; }
 
-        // ******************************************************************
-        // * VSync Toggling
-        // ******************************************************************
-        void SetVSync(BOOL bVSync) { m_bVSync = bVSync; }
-        BOOL GetVSync() { return m_bVSync; }
+    // ******************************************************************
+    // * VSync Toggling
+    // ******************************************************************
+    void SetVSync(BOOL bVSync) { m_bVSync = bVSync; }
+    BOOL GetVSync() { return m_bVSync; }
 
-    private:
-        // ******************************************************************
-        // * Configuration
-        // ******************************************************************
-        char  m_szVideoResolution[100];
-        DWORD m_dwDisplayAdapter;
-        DWORD m_dwDirect3DDevice;
-        BOOL  m_bFullscreen;
-        BOOL  m_bVSync;
+  private:
+    // ******************************************************************
+    // * Configuration
+    // ******************************************************************
+    char m_szVideoResolution[100];
+    DWORD m_dwDisplayAdapter;
+    DWORD m_dwDirect3DDevice;
+    BOOL m_bFullscreen;
+    BOOL m_bVSync;
 };
 
 #endif

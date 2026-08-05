@@ -8,13 +8,13 @@
 #include "xtest.h"
 #include <stdint.h>
 
-#define USB0_BASE    0xFED00000u
-#define REG32(off)   (*(volatile uint32_t *)(USB0_BASE + (uint32_t)(off)))
+#define USB0_BASE  0xFED00000u
+#define REG32(off) (*(volatile uint32_t*)(USB0_BASE + (uint32_t)(off)))
 
-#define HC_REVISION     0x00u   // BCD OHCI spec revision (1.0 -> 0x10)
-#define HC_FM_INTERVAL  0x34u   // frame interval (a plain operational register)
+#define HC_REVISION    0x00u // BCD OHCI spec revision (1.0 -> 0x10)
+#define HC_FM_INTERVAL 0x34u // frame interval (a plain operational register)
 
-#define OHCI_REV_1_0    0x00000010u
+#define OHCI_REV_1_0 0x00000010u
 
 int main(void)
 {

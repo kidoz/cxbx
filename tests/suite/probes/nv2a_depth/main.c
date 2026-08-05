@@ -29,13 +29,22 @@
 #define VTX_FMT(type, size, stride) \
     (((uint32_t)(stride) << 8) | ((uint32_t)(size) << 4) | (uint32_t)(type))
 
-#define FBW 640
-#define FBH 480
+#define FBW  640
+#define FBH  480
 #define ZMAX 65535.0f
 
-typedef struct { float x, y, z; uint32_t color; } Vertex;
+typedef struct
+{
+    float x, y, z;
+    uint32_t color;
+} Vertex;
 
-static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static uint32_t f2u(float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    return u;
+}
 
 int main(void)
 {
@@ -47,58 +56,72 @@ int main(void)
 
     int status = pb_init();
     xt_check_bool("nv2a_depth.pb_init", 1, status == 0);
-    if (status != 0)
+    if(status != 0)
         return xt_end();
 
-    uint32_t *bb = (uint32_t *)pb_back_buffer();
-    uint32_t  pitch_px = pb_back_buffer_pitch() / 4;
-    uint32_t  bbh = pb_back_buffer_height();
+    uint32_t* bb = (uint32_t*)pb_back_buffer();
+    uint32_t pitch_px = pb_back_buffer_pitch() / 4;
+    uint32_t bbh = pb_back_buffer_height();
     xt_check_bool("nv2a_depth.back_buffer", 1, bb != NULL && pitch_px != 0);
-    if (bb == NULL || pitch_px == 0) { pb_kill(); return xt_end(); }
-    for (uint32_t i = 0; i < pitch_px * bbh; i++)
+    if(bb == NULL || pitch_px == 0)
+    {
+        pb_kill();
+        return xt_end();
+    }
+    for(uint32_t i = 0; i < pitch_px * bbh; i++)
         bb[i] = 0xFF000000u;
 
     // Z16 depth buffer, cleared to the far value so the first triangle passes.
-    uint16_t *zbuf = (uint16_t *)MmAllocateContiguousMemoryEx(
+    uint16_t* zbuf = (uint16_t*)MmAllocateContiguousMemoryEx(
         FBW * FBH * 2, 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_depth.zbuf_alloc", 1, zbuf != NULL);
-    if (zbuf == NULL) { pb_kill(); return xt_end(); }
-    for (int i = 0; i < FBW * FBH; i++)
+    if(zbuf == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
+    for(int i = 0; i < FBW * FBH; i++)
         zbuf[i] = 0xFFFF;
 
     const uint32_t RED = 0xFFFF0000u, GREEN = 0xFF00FF00u, BLUE = 0xFF0000FFu;
     // 12 vertices = 4 flat triangles (3 each). z in ndc [0,1]; the viewport
     // z-scale maps it to the Z16 range.
-    Vertex *vb = (Vertex *)MmAllocateContiguousMemoryEx(
+    Vertex* vb = (Vertex*)MmAllocateContiguousMemoryEx(
         12 * sizeof(Vertex), 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_depth.vbuf_alloc", 1, vb != NULL);
-    if (vb == NULL) { pb_kill(); return xt_end(); }
+    if(vb == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
 
-    // Left region triangle (centroid ~190,287), right region (~450,287).
-    #define LTRI(zz, c) \
-        (Vertex){190.0f,100.0f,(zz),(c)}, (Vertex){300.0f,380.0f,(zz),(c)}, (Vertex){80.0f,380.0f,(zz),(c)}
-    #define RTRI(zz, c) \
-        (Vertex){450.0f,100.0f,(zz),(c)}, (Vertex){560.0f,380.0f,(zz),(c)}, (Vertex){340.0f,380.0f,(zz),(c)}
+// Left region triangle (centroid ~190,287), right region (~450,287).
+#define LTRI(zz, c) \
+    (Vertex){ 190.0f, 100.0f, (zz), (c) }, (Vertex){ 300.0f, 380.0f, (zz), (c) }, (Vertex){ 80.0f, 380.0f, (zz), (c) }
+#define RTRI(zz, c) \
+    (Vertex){ 450.0f, 100.0f, (zz), (c) }, (Vertex){ 560.0f, 380.0f, (zz), (c) }, (Vertex){ 340.0f, 380.0f, (zz), (c) }
     Vertex verts[12] = {
-        LTRI(0.5f, RED),    // 0-2 : left red, mid depth (drawn first)
-        LTRI(0.9f, GREEN),  // 3-5 : left green, far (drawn after -> rejected)
-        RTRI(0.5f, RED),    // 6-8 : right red, mid depth (drawn first)
-        RTRI(0.2f, BLUE),   // 9-11: right blue, near (drawn after -> accepted)
+        LTRI(0.5f, RED),   // 0-2 : left red, mid depth (drawn first)
+        LTRI(0.9f, GREEN), // 3-5 : left green, far (drawn after -> rejected)
+        RTRI(0.5f, RED),   // 6-8 : right red, mid depth (drawn first)
+        RTRI(0.2f, BLUE),  // 9-11: right blue, near (drawn after -> accepted)
     };
-    for (int i = 0; i < 12; i++) vb[i] = verts[i];
+    for(int i = 0; i < 12; i++)
+        vb[i] = verts[i];
     uint32_t vbAddr = (uint32_t)(uintptr_t)vb;
 
-    for (int rep = 0; rep < 4; rep++) {
-        uint32_t *p = pb_begin();
+    for(int rep = 0; rep < 4; rep++)
+    {
+        uint32_t* p = pb_begin();
 
         // Color + zeta surfaces (both raw base-0 pointers).
         p = pb_push1(p, NV097_SET_SURFACE_CLIP_HORIZONTAL, ((uint32_t)FBW << 16));
-        p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL,   ((uint32_t)FBH << 16));
+        p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL, ((uint32_t)FBH << 16));
         p = pb_push1(p, NV097_SET_SURFACE_FORMAT, (uint32_t)NV097_SET_SURFACE_FORMAT_ZETA_Z16 << 4);
         p = pb_push1(p, NV097_SET_SURFACE_PITCH,
                      ((uint32_t)(FBW * 2) << 16) | (pb_back_buffer_pitch() & 0xFFFF));
         p = pb_push1(p, NV097_SET_SURFACE_COLOR_OFFSET, (uint32_t)(uintptr_t)bb);
-        p = pb_push1(p, NV097_SET_SURFACE_ZETA_OFFSET,  (uint32_t)(uintptr_t)zbuf);
+        p = pb_push1(p, NV097_SET_SURFACE_ZETA_OFFSET, (uint32_t)(uintptr_t)zbuf);
 
         // Depth test: LESS, writes enabled.
         p = pb_push1(p, NV097_SET_DEPTH_TEST_ENABLE, 1);
@@ -106,14 +129,14 @@ int main(void)
         p = pb_push1(p, NV097_SET_DEPTH_MASK, 1);
 
         // Viewport: xy identity (positions are screen space); z -> [0,ZMAX].
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0,  f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4,  f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8,  f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8, f2u(0.0f));
         p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 12, f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8,   f2u(ZMAX));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12,  f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8, f2u(ZMAX));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12, f2u(1.0f));
 
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + ATTR_POSITION * 4, vbAddr);
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_FORMAT + ATTR_POSITION * 4,
@@ -124,18 +147,19 @@ int main(void)
                      VTX_FMT(NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_D3D, 4, sizeof(Vertex)));
 
         // Four draws in order: L-red, L-green, R-red, R-blue.
-        for (uint32_t t = 0; t < 4; t++) {
+        for(uint32_t t = 0; t < 4; t++)
+        {
             p = pb_push1(p, NV097_SET_BEGIN_END, NV097_SET_BEGIN_END_OP_TRIANGLES);
             p = pb_push1(p, NV097_DRAW_ARRAYS, ((3u - 1u) << 24) | (t * 3u));
             p = pb_push1(p, NV097_SET_BEGIN_END, NV097_SET_BEGIN_END_OP_END);
         }
         pb_end(p);
-        while (pb_busy())
+        while(pb_busy())
             ;
     }
 
 #define PX(x, y) (bb[(uint32_t)(y) * pitch_px + (uint32_t)(x)] | 0xFF000000u)
-    uint32_t left  = PX(190, 287);
+    uint32_t left = PX(190, 287);
     uint32_t right = PX(450, 287);
     xt_ev("nv2a_depth.left=0x%08lX right=0x%08lX",
           (unsigned long)left, (unsigned long)right);

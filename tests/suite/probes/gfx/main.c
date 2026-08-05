@@ -19,10 +19,7 @@
 
 static uint32_t pattern_px(int x, int y)
 {
-    return 0xFF000000u
-         | ((uint32_t)((x * 4) & 0xFF) << 16)
-         | ((uint32_t)((y * 4) & 0xFF) << 8)
-         | (uint32_t)((x ^ y) & 0xFF);
+    return 0xFF000000u | ((uint32_t)((x * 4) & 0xFF) << 16) | ((uint32_t)((y * 4) & 0xFF) << 8) | (uint32_t)((x ^ y) & 0xFF);
 }
 
 int main(void)
@@ -32,28 +29,32 @@ int main(void)
     xt_note("NV2A rendering conformance needs a GPU-emulating target - see README");
 
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    const int stride = 640;   // pixels per row at 640x480x32
+    const int stride = 640; // pixels per row at 640x480x32
 
-    unsigned char *fb = XVideoGetFB();
+    unsigned char* fb = XVideoGetFB();
     xt_ev("XVideoGetFB -> 0x%08lX", (unsigned long)(uintptr_t)fb);
     xt_check_bool("gfx.fb_nonnull", 1, fb != NULL);
 
-    if (fb != NULL) {
-        volatile uint32_t *px = (volatile uint32_t *)fb;
+    if(fb != NULL)
+    {
+        volatile uint32_t* px = (volatile uint32_t*)fb;
 
         // Write the pattern.
-        for (int y = 0; y < BH; y++)
-            for (int x = 0; x < BW; x++)
+        for(int y = 0; y < BH; y++)
+            for(int x = 0; x < BW; x++)
                 px[y * stride + x] = pattern_px(x, y);
 
         // Read back and verify + hash (FNV-1a over the block, row-packed).
         int ok = 1;
         uint32_t h = 2166136261u;
-        for (int y = 0; y < BH; y++) {
-            for (int x = 0; x < BW; x++) {
+        for(int y = 0; y < BH; y++)
+        {
+            for(int x = 0; x < BW; x++)
+            {
                 uint32_t v = px[y * stride + x];
-                if (v != pattern_px(x, y)) ok = 0;
-                for (int b = 0; b < 4; b++) {
+                if(v != pattern_px(x, y)) ok = 0;
+                for(int b = 0; b < 4; b++)
+                {
                     h ^= (v >> (b * 8)) & 0xFF;
                     h *= 16777619u;
                 }

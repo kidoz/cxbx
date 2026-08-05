@@ -7,8 +7,8 @@
    the bits/endian.h file for that machine must exist.  */
 
 #ifndef _ENDIAN_H
-# error "Never use <bits/endian.h> directly; include <endian.h> instead."
+#error "Never use <bits/endian.h> directly; include <endian.h> instead."
 #endif
 
-#define	__BYTE_ORDER		__LITTLE_ENDIAN
-//#error Machine byte order unknown.
+#define __BYTE_ORDER __LITTLE_ENDIAN
+// #error Machine byte order unknown.

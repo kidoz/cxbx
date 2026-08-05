@@ -30,41 +30,42 @@
 #include <stdarg.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-// Begin a probe: opens D:\<probe_name>.trace, resets counters, emits the
-// "#suite"/"#probe" header lines. suite_version is a short tag, e.g. "v1".
-void xt_begin(const char *suite_version, const char *probe_name);
+    // Begin a probe: opens D:\<probe_name>.trace, resets counters, emits the
+    // "#suite"/"#probe" header lines. suite_version is a short tag, e.g. "v1".
+    void xt_begin(const char* suite_version, const char* probe_name);
 
-// Emit an observed-data event line (not a pass/fail check):
-//   EV <formatted text>
-void xt_ev(const char *fmt, ...);
+    // Emit an observed-data event line (not a pass/fail check):
+    //   EV <formatted text>
+    void xt_ev(const char* fmt, ...);
 
-// Emit a check line and record the verdict:
-//   CHK <name> <detail> PASS|FAIL
-// Returns 1 on pass, 0 on fail.
-int xt_check(const char *name, int passed, const char *detail_fmt, ...);
-int xt_check_u32(const char *name, uint32_t expect, uint32_t got);
-int xt_check_u64(const char *name, uint64_t expect, uint64_t got);
-int xt_check_bool(const char *name, int expect, int got);
-int xt_check_str(const char *name, const char *expect, const char *got);
+    // Emit a check line and record the verdict:
+    //   CHK <name> <detail> PASS|FAIL
+    // Returns 1 on pass, 0 on fail.
+    int xt_check(const char* name, int passed, const char* detail_fmt, ...);
+    int xt_check_u32(const char* name, uint32_t expect, uint32_t got);
+    int xt_check_u64(const char* name, uint64_t expect, uint64_t got);
+    int xt_check_bool(const char* name, int expect, int got);
+    int xt_check_str(const char* name, const char* expect, const char* got);
 
-// Emit a note line (informational, ignored by golden diff):
-//   NOTE <formatted text>
-void xt_note(const char *fmt, ...);
+    // Emit a note line (informational, ignored by golden diff):
+    //   NOTE <formatted text>
+    void xt_note(const char* fmt, ...);
 
-// Finish the probe: emits "#result"/"#end", flushes and closes the trace.
-// Returns the number of failed checks (use as main()'s return value).
-int xt_end(void);
+    // Finish the probe: emits "#result"/"#end", flushes and closes the trace.
+    // Returns the number of failed checks (use as main()'s return value).
+    int xt_end(void);
 
-int xt_fail_count(void);
-int xt_check_count(void);
+    int xt_fail_count(void);
+    int xt_check_count(void);
 
-// Opt in to mirroring every trace line to the screen via nxdk debugPrint.
-// Sets a video mode as a side effect. Off by default; use only when you want
-// visible output on real hardware or a GPU-emulating target.
-void xt_enable_screen(void);
+    // Opt in to mirroring every trace line to the screen via nxdk debugPrint.
+    // Sets a video mode as a side effect. Off by default; use only when you want
+    // visible output on real hardware or a GPU-emulating target.
+    void xt_enable_screen(void);
 
 #ifdef __cplusplus
 }

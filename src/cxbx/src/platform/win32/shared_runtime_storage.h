@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->platform->win32->shared_runtime_storage.h
@@ -45,61 +45,91 @@
 // ******************************************************************
 class EmuShared : public Mutex
 {
-    public:
-        // ******************************************************************
-        // * Constructor / Deconstructor
-        // ******************************************************************
-        CXBXKRNL_API  EmuShared();
-        CXBXKRNL_API ~EmuShared();
+  public:
+    // ******************************************************************
+    // * Constructor / Deconstructor
+    // ******************************************************************
+    CXBXKRNL_API EmuShared();
+    CXBXKRNL_API ~EmuShared();
 
-        // ******************************************************************
-        // * Each process needs to call this to initialize shared memory
-        // ******************************************************************
-        CXBXKRNL_API static void Init();
+    // ******************************************************************
+    // * Each process needs to call this to initialize shared memory
+    // ******************************************************************
+    CXBXKRNL_API static void Init();
 
-        // ******************************************************************
-        // * Each process needs to call this to cleanup shared memory
-        // ******************************************************************
-        CXBXKRNL_API static void Cleanup();
+    // ******************************************************************
+    // * Each process needs to call this to cleanup shared memory
+    // ******************************************************************
+    CXBXKRNL_API static void Cleanup();
 
-        // ******************************************************************
-        // * The guest process calls this so Cleanup does not persist
-        // * configuration (registry writes are the launcher's job, and the
-        // * guest's Cxbx.dll data may have been stomped by title code)
-        // ******************************************************************
-        CXBXKRNL_API static void DisablePersist();
+    // ******************************************************************
+    // * The guest process calls this so Cleanup does not persist
+    // * configuration (registry writes are the launcher's job, and the
+    // * guest's Cxbx.dll data may have been stomped by title code)
+    // ******************************************************************
+    CXBXKRNL_API static void DisablePersist();
 
-        // ******************************************************************
-        // * Xbox Video Accessors
-        // ******************************************************************
-        CXBXKRNL_API void GetXBVideo(      XBVideo *video) { Lock(); memcpy(video, &m_XBVideo, sizeof(XBVideo)); Unlock(); }
-        CXBXKRNL_API void SetXBVideo(const XBVideo *video) { Lock(); memcpy(&m_XBVideo, video, sizeof(XBVideo)); Unlock(); }
+    // ******************************************************************
+    // * Xbox Video Accessors
+    // ******************************************************************
+    CXBXKRNL_API void GetXBVideo(XBVideo* video)
+    {
+        Lock();
+        memcpy(video, &m_XBVideo, sizeof(XBVideo));
+        Unlock();
+    }
+    CXBXKRNL_API void SetXBVideo(const XBVideo* video)
+    {
+        Lock();
+        memcpy(&m_XBVideo, video, sizeof(XBVideo));
+        Unlock();
+    }
 
-        // ******************************************************************
-        // * Xbox Controller Accessors
-        // ******************************************************************
-        CXBXKRNL_API void GetXBController(      XBController *ctrl) { Lock(); memcpy(ctrl, &m_XBController, sizeof(XBController)); Unlock();}
-        CXBXKRNL_API void SetXBController(const XBController *ctrl) { Lock(); memcpy(&m_XBController, ctrl, sizeof(XBController)); Unlock();}
+    // ******************************************************************
+    // * Xbox Controller Accessors
+    // ******************************************************************
+    CXBXKRNL_API void GetXBController(XBController* ctrl)
+    {
+        Lock();
+        memcpy(ctrl, &m_XBController, sizeof(XBController));
+        Unlock();
+    }
+    CXBXKRNL_API void SetXBController(const XBController* ctrl)
+    {
+        Lock();
+        memcpy(&m_XBController, ctrl, sizeof(XBController));
+        Unlock();
+    }
 
-        // ******************************************************************
-        // * Xbe Path Accessors
-        // ******************************************************************
-        CXBXKRNL_API void GetXbePath(      char *path) { Lock(); strcpy(path, m_XbePath); Unlock(); }
-        CXBXKRNL_API void SetXbePath(const char *path) { Lock(); strcpy(m_XbePath, path); Unlock(); }
+    // ******************************************************************
+    // * Xbe Path Accessors
+    // ******************************************************************
+    CXBXKRNL_API void GetXbePath(char* path)
+    {
+        Lock();
+        strcpy(path, m_XbePath);
+        Unlock();
+    }
+    CXBXKRNL_API void SetXbePath(const char* path)
+    {
+        Lock();
+        strcpy(m_XbePath, path);
+        Unlock();
+    }
 
-    private:
-        // ******************************************************************
-        // * Shared configuration
-        // ******************************************************************
-        XBController m_XBController;
-        XBVideo      m_XBVideo;
-        char         m_XbePath[260];
+  private:
+    // ******************************************************************
+    // * Shared configuration
+    // ******************************************************************
+    XBController m_XBController;
+    XBVideo m_XBVideo;
+    char m_XbePath[260];
 };
 
 // ******************************************************************
 // * Exported Global Shared Memory Pointer
 // ******************************************************************
-extern CXBXKRNL_API EmuShared *g_EmuShared;
-extern CXBXKRNL_API int        g_EmuSharedRefCount;
+extern CXBXKRNL_API EmuShared* g_EmuShared;
+extern CXBXKRNL_API int g_EmuSharedRefCount;
 
 #endif

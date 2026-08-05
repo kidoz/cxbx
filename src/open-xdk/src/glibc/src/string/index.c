@@ -19,9 +19,9 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-#undef	index
+#undef index
 
 #include <gnu-stabs.h>
 
-function_alias(index, strchr, char *, (s, c),
-	       DEFUN(index, (s, c), CONST char *s AND int c))
+function_alias(index, strchr, char*, (s, c),
+               DEFUN(index, (s, c), CONST char* s AND int c))

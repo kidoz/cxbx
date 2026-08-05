@@ -2029,7 +2029,8 @@ void RunExecuteMemoBenchmark()
     const std::vector<DWORD> programA(std::begin(kXboxProgram), std::end(kXboxProgram));
     const std::vector<DWORD> programB(std::begin(kXboxProgram), std::end(kXboxProgram));
 
-    auto runOne = [&](const std::vector<DWORD>& program, ShaderOutputs& out) {
+    auto runOne = [&](const std::vector<DWORD>& program, ShaderOutputs& out)
+    {
         XTL::VshDiagnostics::RasterOutputs raster{};
         return XTL::VshDiagnostics::ExecuteXboxVertexShader(
             program, constants.data(), inputs.data(), out.position.data(),

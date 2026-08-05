@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -12,14 +12,11 @@
 
 #include <xlibc/math.h>
 
-
 float hypotf(float f, float g)
 {
-	return sqrt(f*f+g*g);
+    return sqrt(f * f + g * g);
 }
 double hypot(double f, double g)
 {
-	return sqrt(f*f+g*g);
+    return sqrt(f * f + g * g);
 }
-
-

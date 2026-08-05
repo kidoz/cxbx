@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -10,15 +10,13 @@
 // *
 // ******************************************************************
 
-#include	<xlibc/ansidecl.h>
+#include <xlibc/ansidecl.h>
 
-
-// Return the absolute value of I. 
-int	abs( int i )
+// Return the absolute value of I.
+int abs(int i)
 {
-	if( i>=0 ) 
-		return i; 
-	else 
-		return -i;
+    if(i >= 0)
+        return i;
+    else
+        return -i;
 }
-

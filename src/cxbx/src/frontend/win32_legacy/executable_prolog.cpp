@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbx->executable_prolog.cpp
@@ -42,8 +42,7 @@
 // ******************************************************************
 // * Func : Prolog
 // ******************************************************************
-__declspec(allocate(".cxbxplg")) uint08 Prolog[] =
-{
+__declspec(allocate(".cxbxplg")) uint08 Prolog[] = {
     // ******************************************************************
     // *
     // * WARNING:
@@ -54,17 +53,17 @@ __declspec(allocate(".cxbxplg")) uint08 Prolog[] =
     // * directly, so this precise structure is necessary.
     // *
     // ******************************************************************
-    0xBE, 0xC3, 0xC3, 0xC3, 0xC3,   // mov esi, 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0x68, 0xC3, 0xC3, 0xC3, 0xC3,   // push 0xC3C3C3C3
-    0xFF, 0xD6,                     // call esi
-    0xC3                            // ret
+    0xBE, 0xC3, 0xC3, 0xC3, 0xC3, // mov esi, 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0x68, 0xC3, 0xC3, 0xC3, 0xC3, // push 0xC3C3C3C3
+    0xFF, 0xD6,                   // call esi
+    0xC3                          // ret
 };
 
 uint32 PrologSize = sizeof(Prolog);

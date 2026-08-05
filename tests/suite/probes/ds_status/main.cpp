@@ -29,19 +29,19 @@ void __cdecl main()
     // 22050 Hz 16-bit mono PCM, a 440 Hz-ish square wave (same as ds_buffer).
     WAVEFORMATEX wfx;
     ZeroMemory(&wfx, sizeof(wfx));
-    wfx.wFormatTag      = WAVE_FORMAT_PCM;
-    wfx.nChannels       = 1;
-    wfx.nSamplesPerSec  = 22050;
-    wfx.wBitsPerSample  = 16;
-    wfx.nBlockAlign     = 2;
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1;
+    wfx.nSamplesPerSec = 22050;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = 2;
     wfx.nAvgBytesPerSec = 22050 * 2;
 
     DSBUFFERDESC dsbd;
     ZeroMemory(&dsbd, sizeof(dsbd));
-    dsbd.dwSize        = sizeof(dsbd);
-    dsbd.dwFlags       = 0;
+    dsbd.dwSize = sizeof(dsbd);
+    dsbd.dwFlags = 0;
     dsbd.dwBufferBytes = BUF_BYTES;
-    dsbd.lpwfxFormat   = &wfx;
+    dsbd.lpwfxFormat = &wfx;
 
     LPDIRECTSOUNDBUFFER pBuf = NULL;
     hr = IDirectSound_CreateSoundBuffer(pDS, &dsbd, &pBuf, NULL);
@@ -121,7 +121,7 @@ void __cdecl main()
     if(SUCCEEDED(hr) && p1b != NULL)
     {
         int mismatches = 0;
-        unsigned char *pb = (unsigned char *)p1b;
+        unsigned char* pb = (unsigned char*)p1b;
         DWORD check = cb1b > 256 ? 256 : cb1b;
         for(DWORD k = 0; k < check; k++)
             if(pb[k] != 0xAA)

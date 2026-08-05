@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->core->exe.cpp
@@ -39,13 +39,13 @@
 // ******************************************************************
 // * constructor
 // ******************************************************************
-Exe::Exe(const char *x_szFilename)
+Exe::Exe(const char* x_szFilename)
 {
     ConstructorInit();
 
     printf("Exe::Exe: Opening Exe file...");
 
-    FILE *ExeFile = fopen(x_szFilename, "rb");
+    FILE* ExeFile = fopen(x_szFilename, "rb");
 
     // ******************************************************************
     // * verify exe file was opened
@@ -74,7 +74,7 @@ Exe::Exe(const char *x_szFilename)
         {
             printf("Found, Ignoring...");
 
-            if(fread(&m_DOSHeader.m_cblp, sizeof(m_DOSHeader)-2, 1, ExeFile) != 1)
+            if(fread(&m_DOSHeader.m_cblp, sizeof(m_DOSHeader) - 2, 1, ExeFile) != 1)
             {
                 SetError("Unexpected read error while reading DOS stub", true);
                 goto cleanup;
@@ -129,7 +129,7 @@ Exe::Exe(const char *x_szFilename)
             goto cleanup;
         }
 
-         printf("OK\n");
+        printf("OK\n");
     }
 
     // ******************************************************************
@@ -140,7 +140,7 @@ Exe::Exe(const char *x_szFilename)
 
         printf("Exe::Exe: Reading Section Headers...\n");
 
-        for(uint32 v=0;v<m_Header.m_sections;v++)
+        for(uint32 v = 0; v < m_Header.m_sections; v++)
         {
             printf("Exe::Exe: Reading Section Header 0x%.04X...", v);
 
@@ -164,7 +164,7 @@ Exe::Exe(const char *x_szFilename)
 
         m_bzSection = new uint08*[m_Header.m_sections];
 
-        for(uint32 v=0;v<m_Header.m_sections;v++)
+        for(uint32 v = 0; v < m_Header.m_sections; v++)
         {
             printf("Exe::Exe: Reading Section 0x%.04X...", v);
 
@@ -219,7 +219,7 @@ cleanup:
 void Exe::ConstructorInit()
 {
     m_SectionHeader = 0;
-    m_bzSection     = 0;
+    m_bzSection = 0;
 }
 
 // ******************************************************************
@@ -229,7 +229,7 @@ Exe::~Exe()
 {
     if(m_bzSection != 0)
     {
-        for(uint32 v=0;v<m_Header.m_sections;v++)
+        for(uint32 v = 0; v < m_Header.m_sections; v++)
             delete[] m_bzSection[v];
 
         delete[] m_bzSection;
@@ -241,14 +241,14 @@ Exe::~Exe()
 // ******************************************************************
 // * Export
 // ******************************************************************
-void Exe::Export(const char *x_szExeFilename)
+void Exe::Export(const char* x_szExeFilename)
 {
     if(GetError() != 0)
         return;
 
     printf("Exe::Export: Opening Exe file...");
 
-    FILE *ExeFile = fopen(x_szExeFilename, "wb");
+    FILE* ExeFile = fopen(x_szExeFilename, "wb");
 
     // ******************************************************************
     // * verify that file was opened
@@ -312,7 +312,7 @@ void Exe::Export(const char *x_szExeFilename)
     {
         printf("Exe::Export: Writing Section Headers...\n");
 
-        for(uint32 v=0;v<m_Header.m_sections;v++)
+        for(uint32 v = 0; v < m_Header.m_sections; v++)
         {
             printf("Exe::Export: Writing Section Header 0x%.04X...", v);
 
@@ -334,7 +334,7 @@ void Exe::Export(const char *x_szExeFilename)
     {
         printf("Exe::Export: Writing Sections...\n");
 
-        for(uint32 v=0;v<m_Header.m_sections;v++)
+        for(uint32 v = 0; v < m_Header.m_sections; v++)
         {
             printf("Exe::Export: Writing Section 0x%.04X...", v);
 
@@ -378,7 +378,7 @@ void Exe::Export(const char *x_szExeFilename)
         long dwFileSize = ftell(ExeFile);
         if(dwFileSize >= 0 && (uint32)dwFileSize < m_OptionalHeader.m_sizeof_image)
         {
-            static const uint08 zbuf[4096] = {0};
+            static const uint08 zbuf[4096] = { 0 };
             uint32 dwPad = m_OptionalHeader.m_sizeof_image - (uint32)dwFileSize;
             while(dwPad > 0)
             {
@@ -405,14 +405,14 @@ cleanup:
 // ******************************************************************
 // * GetAddr
 // ******************************************************************
-uint08 *Exe::GetAddr(uint32 x_dwVirtualAddress)
+uint08* Exe::GetAddr(uint32 x_dwVirtualAddress)
 {
-    for(uint32 v=0;v<m_Header.m_sections;v++)
+    for(uint32 v = 0; v < m_Header.m_sections; v++)
     {
         uint32 virt_addr = m_SectionHeader[v].m_virtual_addr;
         uint32 virt_size = m_SectionHeader[v].m_virtual_size;
 
-        if( (x_dwVirtualAddress >= virt_addr) && (x_dwVirtualAddress < (virt_addr + virt_size)) )
+        if((x_dwVirtualAddress >= virt_addr) && (x_dwVirtualAddress < (virt_addr + virt_size)))
             return &m_bzSection[v][x_dwVirtualAddress - virt_addr];
     }
 

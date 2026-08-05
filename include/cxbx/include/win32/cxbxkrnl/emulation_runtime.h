@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->emulation_runtime.h
@@ -36,7 +36,7 @@
 
 #include "core/xbe.h"
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #include <windows.h>
 
 // ******************************************************************
@@ -47,12 +47,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuNoFunc();
 // ******************************************************************
 // * func: EmuVerifyVersion
 // ******************************************************************
-extern "C" CXBXKRNL_API bool NTAPI EmuVerifyVersion(const char *szVersion);
+extern "C" CXBXKRNL_API bool NTAPI EmuVerifyVersion(const char* szVersion);
 
 // ******************************************************************
 // * func: EmuInit
 // ******************************************************************
-extern "C" CXBXKRNL_API void NTAPI EmuInit(void *pTLSData, Xbe::TLS *pTLS, Xbe::LibraryVersion *LibraryVersion, DebugMode DbgMode, char *szDebugFilename, Xbe::Header *XbeHeader, uint32 XbeHeaderSize, void (*Entry)());
+extern "C" CXBXKRNL_API void NTAPI EmuInit(void* pTLSData, Xbe::TLS* pTLS, Xbe::LibraryVersion* LibraryVersion, DebugMode DbgMode, char* szDebugFilename, Xbe::Header* XbeHeader, uint32 XbeHeaderSize, void (*Entry)());
 
 // ******************************************************************
 // * func: EmuCleanThread
@@ -71,7 +71,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuWarning(const char* szWarningMessage, ...)
 // ******************************************************************
 // * func: EmuCleanup
 // ******************************************************************
-extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char *szErrorMessage, ...);
+extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char* szErrorMessage, ...);
 
 // ******************************************************************
 // * func: EmuPanic
@@ -91,17 +91,17 @@ extern "C" CXBXKRNL_API uint32 KernelThunkTable[367];
 // ******************************************************************
 // * data: g_pTLS
 // ******************************************************************
-extern Xbe::TLS *g_pTLS;
+extern Xbe::TLS* g_pTLS;
 
 // ******************************************************************
 // * data: g_pTLSData
 // ******************************************************************
-extern void *g_pTLSData;
+extern void* g_pTLSData;
 
 // ******************************************************************
 // * data: g_pXbeHeader
 // ******************************************************************
-extern Xbe::Header *g_pXbeHeader;
+extern Xbe::Header* g_pXbeHeader;
 
 // ******************************************************************
 // * data: Hard Disk Directory Handles

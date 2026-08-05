@@ -24,16 +24,20 @@ int main(void)
     LARGE_INTEGER t1, t2;
     volatile int spin;
     KeQuerySystemTime(&t1);
-    for (spin = 0; spin < 200000; spin++) { }
+    for(spin = 0; spin < 200000; spin++)
+    {
+    }
     KeQuerySystemTime(&t2);
     xt_ev("systime t1=0x%016llX t2=0x%016llX",
           (unsigned long long)t1.QuadPart, (unsigned long long)t2.QuadPart);
-    xt_check_bool("ke.systime_nonzero",   1, t1.QuadPart != 0);
+    xt_check_bool("ke.systime_nonzero", 1, t1.QuadPart != 0);
     xt_check_bool("ke.systime_monotonic", 1, t2.QuadPart >= t1.QuadPart);
 
     // --- KeTickCount: readable variable, non-decreasing ----------------------
     DWORD k1 = KeTickCount;
-    for (spin = 0; spin < 200000; spin++) { }
+    for(spin = 0; spin < 200000; spin++)
+    {
+    }
     DWORD k2 = KeTickCount;
     xt_ev("tickcount k1=%lu k2=%lu", (unsigned long)k1, (unsigned long)k2);
     xt_check_bool("ke.tickcount_monotonic", 1, k2 >= k1);
@@ -41,9 +45,15 @@ int main(void)
     // --- RtlEqualString ------------------------------------------------------
     // Build ANSI_STRINGs by hand to avoid depending on RtlInitAnsiString.
     ANSI_STRING a, b, c;
-    a.Length = 5; a.MaximumLength = 6; a.Buffer = (PCHAR)"hello";
-    b.Length = 5; b.MaximumLength = 6; b.Buffer = (PCHAR)"hello";
-    c.Length = 5; c.MaximumLength = 6; c.Buffer = (PCHAR)"world";
+    a.Length = 5;
+    a.MaximumLength = 6;
+    a.Buffer = (PCHAR) "hello";
+    b.Length = 5;
+    b.MaximumLength = 6;
+    b.Buffer = (PCHAR) "hello";
+    c.Length = 5;
+    c.MaximumLength = 6;
+    c.Buffer = (PCHAR) "world";
     xt_check_bool("rtl.equalstring_eq", 1, RtlEqualString(&a, &b, FALSE));
     xt_check_bool("rtl.equalstring_ne", 0, RtlEqualString(&a, &c, FALSE));
 

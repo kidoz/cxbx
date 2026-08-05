@@ -12,20 +12,20 @@
 #include "xtest.h"
 #include <stdint.h>
 
-#define ACI_BASE     0xFEC00000u
-#define REG8(off)    (*(volatile uint8_t  *)(ACI_BASE + (uint32_t)(off)))
-#define REG16(off)   (*(volatile uint16_t *)(ACI_BASE + (uint32_t)(off)))
+#define ACI_BASE   0xFEC00000u
+#define REG8(off)  (*(volatile uint8_t*)(ACI_BASE + (uint32_t)(off)))
+#define REG16(off) (*(volatile uint16_t*)(ACI_BASE + (uint32_t)(off)))
 
 // NABM block at +0x100; PCM-Out channel at +0x10 within it. Per-channel layout:
 // Status (SR) at channel+0x06 (16-bit), Control (CR) at channel+0x0B (8-bit).
 // SR is read at its natural 16-bit width, which also exercises the target's
 // 16-bit MMIO-read decoding.
-#define PO_SR        (0x110u + 0x06u)   // 0x116
-#define PO_CR        (0x110u + 0x0Bu)   // 0x11B
+#define PO_SR (0x110u + 0x06u) // 0x116
+#define PO_CR (0x110u + 0x0Bu) // 0x11B
 
-#define CR_RUN       0x01u
-#define CR_RESET     0x02u
-#define SR_DMA_HALT  0x01u
+#define CR_RUN      0x01u
+#define CR_RESET    0x02u
+#define SR_DMA_HALT 0x01u
 
 int main(void)
 {

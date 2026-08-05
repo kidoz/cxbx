@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->fs_emulation.cpp
@@ -39,7 +39,7 @@
 // ******************************************************************
 namespace xboxkrnl
 {
-    #include <xboxkrnl/xboxkrnl.h>
+#include <xboxkrnl/xboxkrnl.h>
 };
 
 #include "emulation_runtime.h"
@@ -47,7 +47,7 @@ namespace xboxkrnl
 #include "fs_emulation.h"
 #include "ldt_emulation.h"
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #include <windows.h>
 #include "emu_stack_precommit.h"
 #include <cstdio>
@@ -63,9 +63,9 @@ bool g_bEmuFSUnavailable = false;
 bool g_bEmuFSContentSwap = true;
 thread_local EmuFsSwapState g_EmuFsSwap = {};
 
-static thread_local xboxkrnl::ETHREAD *g_pEmuCurrentThread = NULL;
-static thread_local uint08 *g_pEmuCurrentTLS = NULL;
-static thread_local uint08 *g_pEmuCurrentTLSAllocation = NULL;
+static thread_local xboxkrnl::ETHREAD* g_pEmuCurrentThread = NULL;
+static thread_local uint08* g_pEmuCurrentTLS = NULL;
+static thread_local uint08* g_pEmuCurrentTLSAllocation = NULL;
 static thread_local PVOID g_pEmuHostStackBase = NULL;
 
 // Cross-thread ETHREAD lookup. The suspend path must read a TARGET thread's
@@ -97,7 +97,7 @@ long EmuGetThreadKernelApcDisable(DWORD ThreadId)
     return *(long*)((uint08*)&Entry->second->Tcb + 0x68);
 }
 
-static void EmuSetCurrentThread(uint08 *pTLSData, uint08 *pTLSAllocation)
+static void EmuSetCurrentThread(uint08* pTLSData, uint08* pTLSAllocation)
 {
     if(g_pEmuCurrentThread != NULL)
         delete g_pEmuCurrentThread;
@@ -112,7 +112,7 @@ static void EmuSetCurrentThread(uint08 *pTLSData, uint08 *pTLSAllocation)
     EmuRegisterCurrentThread();
 }
 
-void *EmuGetCurrentThread()
+void* EmuGetCurrentThread()
 {
     if(g_pEmuCurrentThread == NULL)
         EmuSetCurrentThread(NULL, NULL);
@@ -122,7 +122,7 @@ void *EmuGetCurrentThread()
 
 void EmuAdjustCurrentThreadKernelApcDisable(long Delta)
 {
-    long *KernelApcDisable = (long*)((uint08*)EmuGetCurrentThread() + 0x68);
+    long* KernelApcDisable = (long*)((uint08*)EmuGetCurrentThread() + 0x68);
     *KernelApcDisable += Delta;
 }
 
@@ -157,10 +157,10 @@ void EmuInitFS()
 // ******************************************************************
 // * func: EmuGenerateFS
 // ******************************************************************
-void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
+void EmuGenerateFS(Xbe::TLS* pTLS, void* pTLSData)
 {
-    NT_TIB         *OrgNtTib;
-    xboxkrnl::KPCR *NewPcr;
+    NT_TIB* OrgNtTib;
+    xboxkrnl::KPCR* NewPcr;
 
     // While this thread runs guest code its TEB stack fields hold KPCR/TLS
     // content, so the kernel cannot grow the stack on a guard-page fault (the
@@ -176,7 +176,7 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
             // is too small for guest frames PLUS host wrapper frames shows up
             // here as a small span (NFS Underground exhausted a ~124 KiB
             // guest-thread stack inside a host-side VirtualQuery).
-            NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+            NT_TIB* Tib = (NT_TIB*)NtCurrentTeb();
             printf("EmuFS (0x%X): pre-committed 0x%X stack bytes for guest code "
                    "(base=%p limit=%p reserve=0x%X)\n",
                    (uint32)GetCurrentThreadId(), (uint32)Precommitted,
@@ -186,8 +186,8 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
         }
     }
 
-    uint08 *pNewTLS = NULL;
-    uint08 *pNewTLSAllocation = NULL;
+    uint08* pNewTLS = NULL;
+    uint08* pNewTLSAllocation = NULL;
 
     uint16 NewFS = -1, OrgFS = -1;
 
@@ -235,30 +235,30 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
     // * Dump Raw TLS data
     // ******************************************************************
     {
-        #ifdef _DEBUG_TRACE
-		if(pNewTLS == 0)
-		{
-			printf("EmuFS (0x%X): TLS Non-Existant (OK)\n", GetCurrentThreadId());
-		}
-		else
-		{
-			printf("EmuFS (0x%X): TLS Data Dump... \n  0x%.08X: ", GetCurrentThreadId(), pNewTLS);
+#ifdef _DEBUG_TRACE
+        if(pNewTLS == 0)
+        {
+            printf("EmuFS (0x%X): TLS Non-Existant (OK)\n", GetCurrentThreadId());
+        }
+        else
+        {
+            printf("EmuFS (0x%X): TLS Data Dump... \n  0x%.08X: ", GetCurrentThreadId(), pNewTLS);
 
-			uint32 stop = pTLS->dwDataEndAddr - pTLS->dwDataStartAddr + pTLS->dwSizeofZeroFill;
+            uint32 stop = pTLS->dwDataEndAddr - pTLS->dwDataStartAddr + pTLS->dwSizeofZeroFill;
 
-			for(uint32 v=0;v<stop;v++)
-			{
-				uint08 *bByte = (uint08*)pNewTLS + v;
+            for(uint32 v = 0; v < stop; v++)
+            {
+                uint08* bByte = (uint08*)pNewTLS + v;
 
-				printf("%.01X", (uint32)*bByte);
+                printf("%.01X", (uint32)*bByte);
 
-				if((v+1) % 0x10 == 0)
-					printf("\n  0x%.08X: ", ((uint32)pNewTLS + v));
-			}
+                if((v + 1) % 0x10 == 0)
+                    printf("\n  0x%.08X: ", ((uint32)pNewTLS + v));
+            }
 
-			printf("\n");
-		}
-        #endif
+            printf("\n");
+        }
+#endif
     }
 
     // ******************************************************************
@@ -270,7 +270,7 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
         mov ax, fs
         mov OrgFS, ax
 
-        // Obtain "OrgNtTib"
+                             // Obtain "OrgNtTib"
         mov eax, fs:[0x18]
         mov OrgNtTib, eax
     }
@@ -319,15 +319,15 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
             // unused by the titles this HLE runs.
             memset(NewPcr, 0, sizeof(*NewPcr));
             memcpy(&NewPcr->NtTib, OrgNtTib, sizeof(NT_TIB));
-            NewPcr->NtTib.Self             = &NewPcr->NtTib;
-            NewPcr->SelfPcr                = NewPcr;
+            NewPcr->NtTib.Self = &NewPcr->NtTib;
+            NewPcr->SelfPcr = NewPcr;
             NewPcr->PrcbData.CurrentThread = (xboxkrnl::KTHREAD*)g_pEmuCurrentThread;
-            NewPcr->Prcb                   = &NewPcr->PrcbData;
+            NewPcr->Prcb = &NewPcr->PrcbData;
 
             {
-                void *SelfPcr   = NewPcr;
-                void *Prcb      = &NewPcr->PrcbData;
-                void *CurThread = g_pEmuCurrentThread;
+                void* SelfPcr = NewPcr;
+                void* Prcb = &NewPcr->PrcbData;
+                void* CurThread = g_pEmuCurrentThread;
 
                 if(g_bEmuFSContentSwap)
                 {
@@ -340,7 +340,7 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
                     // leave the host values in the slots and start IsXbox=false.
                     unsigned long h0, h1, h2, h3, h4;
                     __asm
-                    {
+                        {
                         mov eax, fs:[0x1C]
                         mov h0, eax
                         mov eax, fs:[0x20]
@@ -351,37 +351,37 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
                         mov h3, eax
                         mov eax, fs:[0x04]
                         mov h4, eax
-                    }
+                        }
                     g_EmuFsSwap.Host[0] = h0;
                     g_EmuFsSwap.Host[1] = h1;
                     g_EmuFsSwap.Host[2] = h2;
                     g_EmuFsSwap.Host[3] = h3;
-                    g_EmuFsSwap.Host[4] = h4;                 // the real StackBase
+                    g_EmuFsSwap.Host[4] = h4; // the real StackBase
                     g_EmuFsSwap.Xbox[0] = (unsigned long)SelfPcr;
                     g_EmuFsSwap.Xbox[1] = (unsigned long)Prcb;
-                    g_EmuFsSwap.Xbox[2] = h2 & 0xFFFFFF00;   // KPCR.Irql byte = PASSIVE (0)
+                    g_EmuFsSwap.Xbox[2] = h2 & 0xFFFFFF00; // KPCR.Irql byte = PASSIVE (0)
                     g_EmuFsSwap.Xbox[3] = (unsigned long)CurThread;
-                    g_EmuFsSwap.Xbox[4] = (unsigned long)pNewTLS;   // guest TLS pointer
-                    g_EmuFsSwap.IsXbox  = false;
-                    g_EmuFsSwap.Active  = true;
+                    g_EmuFsSwap.Xbox[4] = (unsigned long)pNewTLS; // guest TLS pointer
+                    g_EmuFsSwap.IsXbox = false;
+                    g_EmuFsSwap.Active = true;
                 }
                 else
                 {
                     __asm
-                    {
+                        {
                         mov eax, SelfPcr
                         mov fs:[0x1C], eax
                         mov eax, Prcb
                         mov fs:[0x20], eax
                         mov eax, CurThread
                         mov fs:[0x28], eax
-                        // KPCR.Irql (byte at 0x24). XDK/XAPI code reads it as the
-                        // current IRQL and bug-checks when it looks >= DISPATCH_LEVEL;
-                        // the raw TEB has the thread-id low byte there. Force PASSIVE
-                        // (0) -- only the low byte, to leave the rest of ClientId
-                        // intact.
+                                                                                                                   // KPCR.Irql (byte at 0x24). XDK/XAPI code reads it as the
+                                                                                                                   // current IRQL and bug-checks when it looks >= DISPATCH_LEVEL;
+                                                                                                                   // the raw TEB has the thread-id low byte there. Force PASSIVE
+                                                                                                                   // (0) -- only the low byte, to leave the rest of ClientId
+                                                                                                                   // intact.
                         mov byte ptr fs:[0x24], 0
-                    }
+                        }
                 }
             }
             return;
@@ -406,9 +406,9 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
     // * Generate TIB
     // ******************************************************************
     {
-        xboxkrnl::ETHREAD *EThread = new xboxkrnl::ETHREAD();
+        xboxkrnl::ETHREAD* EThread = new xboxkrnl::ETHREAD();
 
-        EThread->Tcb.TlsData  = (void*)pNewTLS;
+        EThread->Tcb.TlsData = (void*)pNewTLS;
         EThread->UniqueThread = GetCurrentThreadId();
         g_pEmuCurrentThread = EThread;
         g_pEmuCurrentTLS = pNewTLS;
@@ -459,12 +459,12 @@ void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData)
     // ******************************************************************
     EmuSwapFS();
 
-    // ******************************************************************
-    // * Debug output
-    // ******************************************************************
-	#ifdef _DEBUG_TRACE
+// ******************************************************************
+// * Debug output
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     printf("EmuFS (0x%X): OrgFS=%d NewFS=%d pTLS=0x%.08X\n", GetCurrentThreadId(), OrgFS, NewFS, pTLS);
-	#endif
+#endif
 }
 
 // ******************************************************************
@@ -474,7 +474,7 @@ void EmuCleanupFS()
 {
     if(g_bEmuFSUnavailable)
     {
-        NT_TIB *OrgNtTib;
+        NT_TIB* OrgNtTib;
 
         // Leave the dying thread's TEB holding its real host values and stop
         // swapping on it.
@@ -507,23 +507,22 @@ void EmuCleanupFS()
 
     __asm
     {
-        mov ax, fs:[0x14]   // FS.ArbitraryUserPointer
+        mov ax, fs:[0x14] // FS.ArbitraryUserPointer
         mov wSwapFS, ax
     }
 
-    if(wSwapFS == 0)
-        return;
+    if(wSwapFS == 0) return;
 
     if(!EmuIsXboxFS())
-        EmuSwapFS();    // Xbox FS
+        EmuSwapFS(); // Xbox FS
 
-    uint08 *pTLSData = NULL;
+    uint08* pTLSData = NULL;
 
     __asm
-    {
+        {
         mov eax, fs:[0x04]
         mov pTLSData, eax
-    }
+        }
 
     EmuSwapFS(); // Win2k/XP FS
 

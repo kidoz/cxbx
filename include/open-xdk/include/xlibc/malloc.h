@@ -1,17 +1,18 @@
 
-#ifndef		__OPENXDK_MALLOC__
-#define		__OPENXDK_MALLOC__
+#ifndef __OPENXDK_MALLOC__
+#define __OPENXDK_MALLOC__
 
-#ifdef	__cplusplus
-extern "C" {
+#ifdef __cplusplus
+extern "C"
+{
 #endif
 
-//dummy malloc to make bitmap lib compile :P
+    // dummy malloc to make bitmap lib compile :P
 
-void *malloc(size_t);
-void free(void *);
+    void* malloc(size_t);
+    void free(void*);
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 };
 #endif
 

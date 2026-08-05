@@ -19,12 +19,10 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	rand
-
+#undef rand
 
 /* Return a random integer between 0 and RAND_MAX.  */
-int
-DEFUN_VOID(rand)
+int DEFUN_VOID(rand)
 {
-  return (int) __random();
+    return (int)__random();
 }

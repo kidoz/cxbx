@@ -114,7 +114,7 @@ void __cdecl main()
     xt_chk_u32("xact.cue_second_play_result", S_OK, second_result);
     xt_chk("xact.cue_distinct_instances", 1,
            SUCCEEDED(first_result) && SUCCEEDED(second_result) &&
-           first != NULL && second != NULL && first != second);
+               first != NULL && second != NULL && first != second);
     result = IXACTSoundBank_Stop(sound_bank, cue_index, 0, NULL);
     xt_chk("xact.cue_stop_index", 1, SUCCEEDED(result));
 

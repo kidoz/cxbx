@@ -5,10 +5,10 @@
 // render-state handler turning into a hard abort shows up as a named check.
 #include "xdk_xtrace.h"
 
-static void fill_matrix(D3DMATRIX *m, float seed)
+static void fill_matrix(D3DMATRIX* m, float seed)
 {
-    float *f = (float *)m;
-    for (int i = 0; i < 16; i++)
+    float* f = (float*)m;
+    for(int i = 0; i < 16; i++)
         f[i] = seed + (float)i * 0.25f;
 }
 
@@ -21,18 +21,18 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS d3dpp;
     ZeroMemory(&d3dpp, sizeof(d3dpp));
-    d3dpp.BackBufferWidth  = 640;
+    d3dpp.BackBufferWidth = 640;
     d3dpp.BackBufferHeight = 480;
     d3dpp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    d3dpp.BackBufferCount  = 1;
-    d3dpp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    d3dpp.BackBufferCount = 1;
+    d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                     &d3dpp, &pDevice);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
-    if (FAILED(hr) || pDevice == NULL)
+    if(FAILED(hr) || pDevice == NULL)
         xt_end_and_exit();
 
     // Transform round-trips: what the title sets must read back bit-exact.
@@ -82,7 +82,7 @@ void __cdecl main()
     D3DDevice_GetDisplayMode(&mode);
     xt_chk("d3d.dispmode_plausible", 1,
            mode.Width >= 320 && mode.Width <= 16384 &&
-           mode.Height >= 240 && mode.Height <= 16384);
+               mode.Height >= 240 && mode.Height <= 16384);
 
     xt_end_and_exit();
 }

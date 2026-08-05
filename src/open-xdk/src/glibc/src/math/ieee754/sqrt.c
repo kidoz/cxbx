@@ -23,103 +23,103 @@
 
 /* Return the square root of X.  */
 double
-DEFUN (_sqrt, (x), double x)
+DEFUN(_sqrt, (x), double x)
 {
-  double q, s, b, r, t;
-  CONST double zero = 0.0;
-  int m, n, i;
+    double q, s, b, r, t;
+    CONST double zero = 0.0;
+    int m, n, i;
 
-  /* sqrt (NaN) is NaN; sqrt (+-0) is +-0.  */
-  if (__isnan (x) || x == zero)
-    return x;
+    /* sqrt (NaN) is NaN; sqrt (+-0) is +-0.  */
+    if(__isnan(x) || x == zero)
+        return x;
 
-  // Throw an FPU error!!!
-  // we dont want to do this just yet.... so just return 0.0
-  if (x < zero){
-    return 0.0;
-    //return zero / zero;			
-  }
-
-
-  /* sqrt (Inf) is Inf.  */
-  if (__isinf (x))
-    return x;
-
-  /* Scale X to [1,4).  */
-  n = (int) __logb (x);
-  x = __scalb (x, -n);
-  m = (int) __logb (x);
-  if (m != 0)
-    /* Subnormal number.  */
-    x = __scalb (x, -m);
-
-  m += n;
-  n = m / 2;
-
-  if ((n + n) != m)
+    // Throw an FPU error!!!
+    // we dont want to do this just yet.... so just return 0.0
+    if(x < zero)
     {
-      x *= 2;
-      --m;
-      n = m / 2;
+        return 0.0;
+        // return zero / zero;
     }
 
-  /* Generate sqrt (X) bit by bit (accumulating in Q).  */
-  q = 1.0;
-  s = 4.0;
-  x -= 1.0;
-  r = 1;
-  for (i = 1; i <= 51; i++)
+    /* sqrt (Inf) is Inf.  */
+    if(__isinf(x))
+        return x;
+
+    /* Scale X to [1,4).  */
+    n = (int)__logb(x);
+    x = __scalb(x, -n);
+    m = (int)__logb(x);
+    if(m != 0)
+        /* Subnormal number.  */
+        x = __scalb(x, -m);
+
+    m += n;
+    n = m / 2;
+
+    if((n + n) != m)
     {
-      t = s + 1;
-      x *= 4;
-      r /= 2;
-      if (t <= x)
-	{
-	  s = t + t + 2, x -= t;
-	  q += r;
-	}
-      else
-	s *= 2;
+        x *= 2;
+        --m;
+        n = m / 2;
     }
 
-  /* Generate the last bit and determine the final rounding.  */
-  r /= 2;
-  x *= 4;
-  if (x == zero)
-    goto end;
-  (void) (100 + r);		/* Trigger inexact flag.  */
-  if (s < x)
+    /* Generate sqrt (X) bit by bit (accumulating in Q).  */
+    q = 1.0;
+    s = 4.0;
+    x -= 1.0;
+    r = 1;
+    for(i = 1; i <= 51; i++)
     {
-      q += r;
-      x -= s;
-      s += 2;
-      s *= 2;
-      x *= 4;
-      t = (x - s) - 5;
-      b = 1.0 + 3 * r / 4;
-      if (b == 1.0)
-	goto end;		/* B == 1: Round to zero.  */
-      b = 1.0 + r / 4;
-      if (b > 1.0)
-	t = 1;			/* B > 1: Round to +Inf.  */
-      if (t >= 0)
-	q += r;
-    }				/* Else round to nearest.  */
-  else
+        t = s + 1;
+        x *= 4;
+        r /= 2;
+        if(t <= x)
+        {
+            s = t + t + 2, x -= t;
+            q += r;
+        }
+        else
+            s *= 2;
+    }
+
+    /* Generate the last bit and determine the final rounding.  */
+    r /= 2;
+    x *= 4;
+    if(x == zero)
+        goto end;
+    (void)(100 + r); /* Trigger inexact flag.  */
+    if(s < x)
     {
-      s *= 2;
-      x *= 4;
-      t = (x - s) - 1;
-      b = 1.0 + 3 * r / 4;
-      if (b == 1.0)
-	goto end;
-      b = 1.0 + r / 4;
-      if (b > 1.0)
-	t = 1;
-      if (t >= 0)
-	q += r;
+        q += r;
+        x -= s;
+        s += 2;
+        s *= 2;
+        x *= 4;
+        t = (x - s) - 5;
+        b = 1.0 + 3 * r / 4;
+        if(b == 1.0)
+            goto end; /* B == 1: Round to zero.  */
+        b = 1.0 + r / 4;
+        if(b > 1.0)
+            t = 1; /* B > 1: Round to +Inf.  */
+        if(t >= 0)
+            q += r;
+    } /* Else round to nearest.  */
+    else
+    {
+        s *= 2;
+        x *= 4;
+        t = (x - s) - 1;
+        b = 1.0 + 3 * r / 4;
+        if(b == 1.0)
+            goto end;
+        b = 1.0 + r / 4;
+        if(b > 1.0)
+            t = 1;
+        if(t >= 0)
+            q += r;
     }
 
 end:
-  return __scalb (q, n);
+    return __scalb(q, n);
 }

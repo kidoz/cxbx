@@ -533,9 +533,7 @@ def compare_bmp_images(
     )
 
 
-def golden_images_compare(
-    suite_dir: Path, emulator: str, res: ProbeResult, update: bool
-) -> None:
+def golden_images_compare(suite_dir: Path, emulator: str, res: ProbeResult, update: bool) -> None:
     entries = probe_golden_images(suite_dir, res.name)
     if not entries:
         return

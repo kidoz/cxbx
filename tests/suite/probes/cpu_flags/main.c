@@ -14,52 +14,68 @@
 
 // --- ALU helpers: run one instruction, capture result + EFLAGS ---------------
 
-static uint8_t alu_add8(uint8_t a, uint8_t b, uint32_t *flags)
+static uint8_t alu_add8(uint8_t a, uint8_t b, uint32_t* flags)
 {
-    uint8_t r = a; uint32_t f;
+    uint8_t r = a;
+    uint32_t f;
     __asm__ volatile("addb %2, %0\n\t pushfl\n\t popl %1"
                      : "+q"(r), "=r"(f) : "q"(b) : "cc");
-    *flags = f; return r;
+    *flags = f;
+    return r;
 }
 
-static uint8_t alu_sub8(uint8_t a, uint8_t b, uint32_t *flags)
+static uint8_t alu_sub8(uint8_t a, uint8_t b, uint32_t* flags)
 {
-    uint8_t r = a; uint32_t f;
+    uint8_t r = a;
+    uint32_t f;
     __asm__ volatile("subb %2, %0\n\t pushfl\n\t popl %1"
                      : "+q"(r), "=r"(f) : "q"(b) : "cc");
-    *flags = f; return r;
+    *flags = f;
+    return r;
 }
 
-static uint32_t alu_and32(uint32_t a, uint32_t b, uint32_t *flags)
+static uint32_t alu_and32(uint32_t a, uint32_t b, uint32_t* flags)
 {
     uint32_t r = a, f;
     __asm__ volatile("andl %2, %0\n\t pushfl\n\t popl %1"
                      : "+r"(r), "=r"(f) : "r"(b) : "cc");
-    *flags = f; return r;
+    *flags = f;
+    return r;
 }
 
-static uint32_t alu_or32(uint32_t a, uint32_t b, uint32_t *flags)
+static uint32_t alu_or32(uint32_t a, uint32_t b, uint32_t* flags)
 {
     uint32_t r = a, f;
     __asm__ volatile("orl %2, %0\n\t pushfl\n\t popl %1"
                      : "+r"(r), "=r"(f) : "r"(b) : "cc");
-    *flags = f; return r;
+    *flags = f;
+    return r;
 }
 
-static uint32_t alu_xor32(uint32_t a, uint32_t b, uint32_t *flags)
+static uint32_t alu_xor32(uint32_t a, uint32_t b, uint32_t* flags)
 {
     uint32_t r = a, f;
     __asm__ volatile("xorl %2, %0\n\t pushfl\n\t popl %1"
                      : "+r"(r), "=r"(f) : "r"(b) : "cc");
-    *flags = f; return r;
+    *flags = f;
+    return r;
 }
 
 // --- Test vectors ------------------------------------------------------------
 // exp_flags is the OR of the flags expected SET; flag_mask selects the flags
 // that are architecturally defined for the op (AF is excluded for logic ops).
 
-typedef struct { const char *name; uint8_t a, b, res; uint32_t exp_flags; } vec8;
-typedef struct { const char *name; uint32_t a, b, res, mask, exp_flags; } vec32;
+typedef struct
+{
+    const char* name;
+    uint8_t a, b, res;
+    uint32_t exp_flags;
+} vec8;
+typedef struct
+{
+    const char* name;
+    uint32_t a, b, res, mask, exp_flags;
+} vec32;
 
 static const vec8 add8_vecs[] = {
     // 0x7F+0x01=0x80: signed overflow, sign set, aux carry; not zero/carry; odd parity
@@ -81,7 +97,7 @@ static const vec8 sub8_vecs[] = {
     { "sub8.05-05", 0x05, 0x05, 0x00, XT_ZF | XT_PF },
 };
 
-#define LOGIC_MASK (XT_CF | XT_OF | XT_ZF | XT_SF | XT_PF)  // AF undefined for logic
+#define LOGIC_MASK (XT_CF | XT_OF | XT_ZF | XT_SF | XT_PF) // AF undefined for logic
 
 static const vec32 and_vecs[] = {
     // clears CF/OF; result 0 => ZF, even parity
@@ -111,38 +127,43 @@ int main(void)
 
     xt_begin("v1", "cpu_flags");
 
-    for (i = 0; i < sizeof(add8_vecs) / sizeof(add8_vecs[0]); i++) {
-        const vec8 *v = &add8_vecs[i];
+    for(i = 0; i < sizeof(add8_vecs) / sizeof(add8_vecs[0]); i++)
+    {
+        const vec8* v = &add8_vecs[i];
         uint8_t r = alu_add8(v->a, v->b, &f);
         xt_ev("%s res=0x%02X eflags=0x%08lX", v->name, r, (unsigned long)f);
         xt_check_u32(v->name, v->res, r);
         xt_check_flags(v->name, XT_ARITH_FLAGS, v->exp_flags, f);
     }
 
-    for (i = 0; i < sizeof(sub8_vecs) / sizeof(sub8_vecs[0]); i++) {
-        const vec8 *v = &sub8_vecs[i];
+    for(i = 0; i < sizeof(sub8_vecs) / sizeof(sub8_vecs[0]); i++)
+    {
+        const vec8* v = &sub8_vecs[i];
         uint8_t r = alu_sub8(v->a, v->b, &f);
         xt_ev("%s res=0x%02X eflags=0x%08lX", v->name, r, (unsigned long)f);
         xt_check_u32(v->name, v->res, r);
         xt_check_flags(v->name, XT_ARITH_FLAGS, v->exp_flags, f);
     }
 
-    for (i = 0; i < sizeof(and_vecs) / sizeof(and_vecs[0]); i++) {
-        const vec32 *v = &and_vecs[i];
+    for(i = 0; i < sizeof(and_vecs) / sizeof(and_vecs[0]); i++)
+    {
+        const vec32* v = &and_vecs[i];
         uint32_t r = alu_and32(v->a, v->b, &f);
         xt_ev("%s res=0x%08lX eflags=0x%08lX", v->name, (unsigned long)r, (unsigned long)f);
         xt_check_u32(v->name, v->res, r);
         xt_check_flags(v->name, v->mask, v->exp_flags, f);
     }
-    for (i = 0; i < sizeof(or_vecs) / sizeof(or_vecs[0]); i++) {
-        const vec32 *v = &or_vecs[i];
+    for(i = 0; i < sizeof(or_vecs) / sizeof(or_vecs[0]); i++)
+    {
+        const vec32* v = &or_vecs[i];
         uint32_t r = alu_or32(v->a, v->b, &f);
         xt_ev("%s res=0x%08lX eflags=0x%08lX", v->name, (unsigned long)r, (unsigned long)f);
         xt_check_u32(v->name, v->res, r);
         xt_check_flags(v->name, v->mask, v->exp_flags, f);
     }
-    for (i = 0; i < sizeof(xor_vecs) / sizeof(xor_vecs[0]); i++) {
-        const vec32 *v = &xor_vecs[i];
+    for(i = 0; i < sizeof(xor_vecs) / sizeof(xor_vecs[0]); i++)
+    {
+        const vec32* v = &xor_vecs[i];
         uint32_t r = alu_xor32(v->a, v->b, &f);
         xt_ev("%s res=0x%08lX eflags=0x%08lX", v->name, (unsigned long)r, (unsigned long)f);
         xt_check_u32(v->name, v->res, r);

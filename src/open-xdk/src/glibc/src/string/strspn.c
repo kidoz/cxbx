@@ -19,26 +19,25 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-
 /* Return the length of the maximum initial segment
    of S which contains only characters in ACCEPT.  */
 size_t
-DEFUN(strspn, (s, accept), CONST char *s AND CONST char *accept)
+DEFUN(strspn, (s, accept), CONST char* s AND CONST char* accept)
 {
-  register CONST char *p;
-  register CONST char *a;
-  register size_t count = 0;
+    register CONST char* p;
+    register CONST char* a;
+    register size_t count = 0;
 
-  for (p = s; *p != '\0'; ++p)
+    for(p = s; *p != '\0'; ++p)
     {
-      for (a = accept; *a != '\0'; ++a)
-	if (*p == *a)
-	  break;
-      if (*a == '\0')
-	return count;
-      else
-	++count;
+        for(a = accept; *a != '\0'; ++a)
+            if(*p == *a)
+                break;
+        if(*a == '\0')
+            return count;
+        else
+            ++count;
     }
 
-  return count;
+    return count;
 }

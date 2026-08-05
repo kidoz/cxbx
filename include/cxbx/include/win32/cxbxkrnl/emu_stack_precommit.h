@@ -34,10 +34,10 @@
 // resolved.
 static inline SIZE_T EmuPrecommitThreadStack(void)
 {
-    NT_TIB *Tib = (NT_TIB *)NtCurrentTeb();
-    BYTE *StackLimit = (BYTE *)Tib->StackLimit;
+    NT_TIB* Tib = (NT_TIB*)NtCurrentTeb();
+    BYTE* StackLimit = (BYTE*)Tib->StackLimit;
     // TEB.DeallocationStack (32-bit TEB offset 0xE0C): the reservation base.
-    BYTE *DeallocationBase = *(BYTE **)((BYTE *)Tib + 0xE0C);
+    BYTE* DeallocationBase = *(BYTE**)((BYTE*)Tib + 0xE0C);
 
     if(DeallocationBase == NULL || StackLimit == NULL ||
        StackLimit <= DeallocationBase)
@@ -49,10 +49,10 @@ static inline SIZE_T EmuPrecommitThreadStack(void)
     GetSystemInfo(&SystemInfo);
     const SIZE_T PageSize = SystemInfo.dwPageSize;
 
-    BYTE *Fence = DeallocationBase + PageSize;
+    BYTE* Fence = DeallocationBase + PageSize;
     SIZE_T Changed = 0;
 
-    BYTE *Cursor = Fence;
+    BYTE* Cursor = Fence;
     while(Cursor < StackLimit)
     {
         MEMORY_BASIC_INFORMATION Info;
@@ -61,7 +61,7 @@ static inline SIZE_T EmuPrecommitThreadStack(void)
             return Changed;
         }
 
-        BYTE *RegionEnd = (BYTE *)Info.BaseAddress + Info.RegionSize;
+        BYTE* RegionEnd = (BYTE*)Info.BaseAddress + Info.RegionSize;
         if(RegionEnd > StackLimit)
         {
             RegionEnd = StackLimit;

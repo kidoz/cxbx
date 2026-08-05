@@ -16,15 +16,22 @@
 #include <cstdio>
 
 #ifdef _DEBUG_TRACE
-#define KTRACE(name, fmt, ...) \
-    do { printf("KTRACE| %s " fmt "\n", (name), ##__VA_ARGS__); fflush(stdout); } while (0)
+#define KTRACE(name, fmt, ...)                                 \
+    do                                                         \
+    {                                                          \
+        printf("KTRACE| %s " fmt "\n", (name), ##__VA_ARGS__); \
+        fflush(stdout);                                        \
+    } while(0)
 #else
-#define KTRACE(name, fmt, ...) do { } while (0)
+#define KTRACE(name, fmt, ...) \
+    do                         \
+    {                          \
+    } while(0)
 #endif
 
 // Logs a call into an unimplemented kernel export. Defined in kernel_thunk.cpp
 // (where the per-ordinal trap stubs live). Always emits, so a developer sees
 // exactly which export a title needs even in a non-_DEBUG build.
-extern "C" void EmuUnimplementedKernelLog(int Ordinal, void *Caller);
+extern "C" void EmuUnimplementedKernelLog(int Ordinal, void* Caller);
 
 #endif // KERNEL_LOGGING_H

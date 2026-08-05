@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	logb
+#undef logb
 function_alias(logb, __logb, __CONSTVALUE double, (x),
-	       DEFUN(logb, (x), double x))
+               DEFUN(logb, (x), double x))

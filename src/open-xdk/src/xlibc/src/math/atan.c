@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,38 +14,42 @@
 
 #ifdef _MSC_VER
 
-double atan(double x) {
-	__asm {
+double atan(double x)
+{
+    __asm {
 		fld x 
 		fld1
-		fpatan 
-	}
+		fpatan
+    }
 }
-double atan2(double y, double x) {
-	__asm {
+double atan2(double y, double x)
+{
+    __asm {
 		fld y 
 		fld x 
 		fpatan
-	}
+    }
 }
 
-float atanf(float x) {
-	__asm {
+float atanf(float x)
+{
+    __asm {
 		fld x 
 		fld1
-		fpatan 
-	}
+		fpatan
+    }
 }
-float atan2f(float y, float x) {
-	__asm {
+float atan2f(float y, float x)
+{
+    __asm {
 		fld y 
 		fld x 
 		fpatan
-	}
+    }
 }
 
 #else
 
-OPENXDK_UNIMPLEMENTEDC(atan/atan2)
+OPENXDK_UNIMPLEMENTEDC(atan / atan2)
 
-#endif 
+#endif

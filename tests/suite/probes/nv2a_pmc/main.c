@@ -13,17 +13,17 @@
 #include "xtest.h"
 #include <stdint.h>
 
-#define NV2A_BASE   0xFD000000u
-#define REG32(off)  (*(volatile uint32_t *)(NV2A_BASE + (uint32_t)(off)))
+#define NV2A_BASE  0xFD000000u
+#define REG32(off) (*(volatile uint32_t*)(NV2A_BASE + (uint32_t)(off)))
 
 // Engine/register offsets (subset; see nv2a_logging.h).
-#define PMC_BOOT_0  0x000000u
-#define PMC_ENABLE  0x000200u
-#define PRAMIN      0x700000u
+#define PMC_BOOT_0 0x000000u
+#define PMC_ENABLE 0x000200u
+#define PRAMIN     0x700000u
 
 // PMC_ENABLE default bits for the FIFO/graphics engines.
-#define PMC_ENABLE_PFIFO   0x00000100u
-#define PMC_ENABLE_PGRAPH  0x00001000u
+#define PMC_ENABLE_PFIFO  0x00000100u
+#define PMC_ENABLE_PGRAPH 0x00001000u
 
 int main(void)
 {
@@ -38,7 +38,7 @@ int main(void)
     // --- PMC_ENABLE: FIFO + graphics engines enabled by default --------------
     uint32_t enable = REG32(PMC_ENABLE);
     xt_ev("PMC_ENABLE = 0x%08lX", (unsigned long)enable);
-    xt_check_bool("nv2a.pmc_enable_pfifo",  1, (enable & PMC_ENABLE_PFIFO) != 0);
+    xt_check_bool("nv2a.pmc_enable_pfifo", 1, (enable & PMC_ENABLE_PFIFO) != 0);
     xt_check_bool("nv2a.pmc_enable_pgraph", 1, (enable & PMC_ENABLE_PGRAPH) != 0);
 
     // --- RAMIN: 1 MiB dword-addressable instance memory, write/readback ------
@@ -46,7 +46,7 @@ int main(void)
     // [mem],reg) rather than immediate stores, keeping the faulting instruction
     // in the set the MMIO decoder handles.
     volatile uint32_t pattern[3] = { 0xDEADBEEFu, 0xCAFEBABEu, 0x12345678u };
-    volatile uint32_t *ramin = (volatile uint32_t *)(NV2A_BASE + PRAMIN);
+    volatile uint32_t* ramin = (volatile uint32_t*)(NV2A_BASE + PRAMIN);
 
     ramin[0] = pattern[0];
     ramin[1] = pattern[1];

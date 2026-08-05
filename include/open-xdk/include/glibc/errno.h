@@ -20,9 +20,9 @@ Cambridge, MA 02139, USA.  */
  *	ANSI Standard: 4.1.3 Errors	<errno.h>
  */
 
-#ifndef	_ERRNO_H
+#ifndef _ERRNO_H
 
-#define	_ERRNO_H	1
+#define _ERRNO_H 1
 
 /* Get the error number constants.  */
 #include "errnos.h"
@@ -40,4 +40,4 @@ extern char *program_invocation_name, *program_invocation_short_name;
 #endif
 
 #endif /* errno.h	*/
-#define EINVAL	-1
+#define EINVAL -1

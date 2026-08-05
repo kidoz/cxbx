@@ -23,21 +23,19 @@ Cambridge, MA 02139, USA.  */
 /* Compare S1 and S2, returning less than, equal to or
    greater than zero if S1 is lexiographically less than,
    equal to or greater than S2.  */
-int
-DEFUN(_strcmp, (p1, p2), CONST char *p1 AND CONST char *p2)
+int DEFUN(_strcmp, (p1, p2), CONST char* p1 AND CONST char* p2)
 {
-  register CONST unsigned char *s1 = (CONST unsigned char *) p1;
-  register CONST unsigned char *s2 = (CONST unsigned char *) p2;
-  unsigned reg_char c1, c2;
+    register CONST unsigned char* s1 = (CONST unsigned char*)p1;
+    register CONST unsigned char* s2 = (CONST unsigned char*)p2;
+    unsigned reg_char c1, c2;
 
-  do
+    do
     {
-      c1 = (unsigned char) *s1++;
-      c2 = (unsigned char) *s2++;
-      if (c1 == '\0')
-	return c1 - c2;
-    }
-  while (c1 == c2);
+        c1 = (unsigned char)*s1++;
+        c2 = (unsigned char)*s2++;
+        if(c1 == '\0')
+            return c1 - c2;
+    } while(c1 == c2);
 
-  return c1 - c2;
+    return c1 - c2;
 }

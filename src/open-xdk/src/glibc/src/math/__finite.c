@@ -19,11 +19,11 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <math.h>
 
-#undef	__finite
+#undef __finite
 
 /* Return nonzero if VALUE is finite and not NaN.  */
 __CONSTVALUE int
 DEFUN(__finite, (value), double value)
 {
-  return !__isinf (value) && !__isnan (value);
+    return !__isinf(value) && !__isnan(value);
 }

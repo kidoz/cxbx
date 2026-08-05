@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbx->main_window.h
@@ -49,8 +49,8 @@
 // ******************************************************************
 enum EnumAutoConvert
 {
-    AUTO_CONVERT_MANUAL       = 0,
-    AUTO_CONVERT_XBE_PATH     = 1,
+    AUTO_CONVERT_MANUAL = 0,
+    AUTO_CONVERT_XBE_PATH = 1,
     AUTO_CONVERT_WINDOWS_TEMP = 2
 };
 
@@ -59,131 +59,131 @@ enum EnumAutoConvert
 // ******************************************************************
 class WndMain : public Wnd
 {
-    public:
-        WndMain(HINSTANCE x_hInstance);
-       ~WndMain();
+  public:
+    WndMain(HINSTANCE x_hInstance);
+    ~WndMain();
 
-        // ******************************************************************
-        // * window message procedure
-        // ******************************************************************
-        LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    // ******************************************************************
+    // * window message procedure
+    // ******************************************************************
+    LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-        // ******************************************************************
-        // * Xbe operations
-        // ******************************************************************
-        void OpenXbe(const char *x_filename);
-        void CloseXbe();
-        void SaveXbe(const char *x_filename);
-        void SaveXbeAs();
+    // ******************************************************************
+    // * Xbe operations
+    // ******************************************************************
+    void OpenXbe(const char* x_filename);
+    void CloseXbe();
+    void SaveXbe(const char* x_filename);
+    void SaveXbeAs();
 
-        // ******************************************************************
-        // * Exe operations
-        // ******************************************************************
-        void ImportExe(const char *x_filename);
-        bool ConvertToExe(const char *x_filename, bool x_bVerifyIfExists);
+    // ******************************************************************
+    // * Exe operations
+    // ******************************************************************
+    void ImportExe(const char* x_filename);
+    bool ConvertToExe(const char* x_filename, bool x_bVerifyIfExists);
 
-        // ******************************************************************
-        // * start emulation (converting to .exe if not done already)
-        // ******************************************************************
-        void StartEmulation(EnumAutoConvert x_bAutoConvert, bool x_bWaitForExit = false);
+    // ******************************************************************
+    // * start emulation (converting to .exe if not done already)
+    // ******************************************************************
+    void StartEmulation(EnumAutoConvert x_bAutoConvert, bool x_bWaitForExit = false);
 
-        // ******************************************************************
-        // * accessor
-        // ******************************************************************
-        bool isCreated() { return m_bCreated; }
+    // ******************************************************************
+    // * accessor
+    // ******************************************************************
+    bool isCreated() { return m_bCreated; }
 
-        // ******************************************************************
-        // * suggest appropriate filename based on input
-        // ******************************************************************
-        static void SuggestFilename(const char *x_orig_filename, char *x_filename, char x_extension[4]);
+    // ******************************************************************
+    // * suggest appropriate filename based on input
+    // ******************************************************************
+    static void SuggestFilename(const char* x_orig_filename, char* x_filename, char x_extension[4]);
 
-    private:
-        // ******************************************************************
-        // * after an xbe is loaded, some things must be updated
-        // ******************************************************************
-        void XbeLoaded();
+  private:
+    // ******************************************************************
+    // * after an xbe is loaded, some things must be updated
+    // ******************************************************************
+    void XbeLoaded();
 
-        // ******************************************************************
-        // * refresh the logo in the main window
-        // ******************************************************************
-        void LoadLogo();
+    // ******************************************************************
+    // * refresh the logo in the main window
+    // ******************************************************************
+    void LoadLogo();
 
-        // ******************************************************************
-        // * refresh all menus (checks, enabled, disabled, etc)
-        // ******************************************************************
-        void RefreshMenus();
+    // ******************************************************************
+    // * refresh all menus (checks, enabled, disabled, etc)
+    // ******************************************************************
+    void RefreshMenus();
 
-        // ******************************************************************
-        // * allocate / deallocate debug consoles
-        // ******************************************************************
-        void UpdateDebugConsoles();
+    // ******************************************************************
+    // * allocate / deallocate debug consoles
+    // ******************************************************************
+    void UpdateDebugConsoles();
 
-        // ******************************************************************
-        // * update menu containing list of recent files
-        // ******************************************************************
-        void UpdateRecentFiles();
+    // ******************************************************************
+    // * update menu containing list of recent files
+    // ******************************************************************
+    void UpdateRecentFiles();
 
-        // ******************************************************************
-        // * drawing information
-        // ******************************************************************
-        HDC         m_BackDC;
-        HDC         m_LogoDC;
-        HBITMAP     m_OrigBmp;
-        HBITMAP     m_OrigLogo;
-        HBITMAP     m_BackBmp;
-        HBITMAP     m_LogoBmp;
+    // ******************************************************************
+    // * drawing information
+    // ******************************************************************
+    HDC m_BackDC;
+    HDC m_LogoDC;
+    HBITMAP m_OrigBmp;
+    HBITMAP m_OrigLogo;
+    HBITMAP m_BackBmp;
+    HBITMAP m_LogoBmp;
 
-        // ******************************************************************
-        // * Xbe/Exe objects
-        // ******************************************************************
-        Xbe        *m_Xbe;
-        Exe        *m_Exe;
+    // ******************************************************************
+    // * Xbe/Exe objects
+    // ******************************************************************
+    Xbe* m_Xbe;
+    Exe* m_Exe;
 
-        // ******************************************************************
-        // * changes remembered for internal purposes
-        // ******************************************************************
-        bool        m_bXbeChanged;
-        bool        m_bExeChanged;
+    // ******************************************************************
+    // * changes remembered for internal purposes
+    // ******************************************************************
+    bool m_bXbeChanged;
+    bool m_bExeChanged;
 
-        // ******************************************************************
-        // * cached filenames
-        // ******************************************************************
-        char       *m_XbeFilename;
-        char       *m_ExeFilename;
+    // ******************************************************************
+    // * cached filenames
+    // ******************************************************************
+    char* m_XbeFilename;
+    char* m_ExeFilename;
 
-        // ******************************************************************
-        // * should emulation always auto-create the .exe?
-        // ******************************************************************
-        EnumAutoConvert m_AutoConvertToExe;
+    // ******************************************************************
+    // * should emulation always auto-create the .exe?
+    // ******************************************************************
+    EnumAutoConvert m_AutoConvertToExe;
 
-        // ******************************************************************
-        // * Recent Xbe files
-        // ******************************************************************
-        int         m_dwRecentXbe;
-        char       *m_szRecentXbe[RECENT_XBE_SIZE];
+    // ******************************************************************
+    // * Recent Xbe files
+    // ******************************************************************
+    int m_dwRecentXbe;
+    char* m_szRecentXbe[RECENT_XBE_SIZE];
 
-        // ******************************************************************
-        // * Recent Exe files
-        // ******************************************************************
-        int         m_dwRecentExe;
-        char       *m_szRecentExe[RECENT_EXE_SIZE];
+    // ******************************************************************
+    // * Recent Exe files
+    // ******************************************************************
+    int m_dwRecentExe;
+    char* m_szRecentExe[RECENT_EXE_SIZE];
 
-        // ******************************************************************
-        // * is this window fully initialized?
-        // ******************************************************************
-        bool        m_bCreated;
+    // ******************************************************************
+    // * is this window fully initialized?
+    // ******************************************************************
+    bool m_bCreated;
 
-        // ******************************************************************
-        // * current debug mode type
-        // ******************************************************************
-        DebugMode   m_CxbxDebug;
-        DebugMode   m_KrnlDebug;
+    // ******************************************************************
+    // * current debug mode type
+    // ******************************************************************
+    DebugMode m_CxbxDebug;
+    DebugMode m_KrnlDebug;
 
-        // ******************************************************************
-        // * debug output filenames
-        // ******************************************************************
-        char       *m_CxbxDebugFilename;
-        char       *m_KrnlDebugFilename;
+    // ******************************************************************
+    // * debug output filenames
+    // ******************************************************************
+    char* m_CxbxDebugFilename;
+    char* m_KrnlDebugFilename;
 };
 
 #endif

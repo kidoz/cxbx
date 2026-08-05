@@ -19,14 +19,13 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <stddef.h>
 
-void
-DEFUN(swab, (from, to, n),
-      CONST char *from AND char *to AND size_t n)
+void DEFUN(swab, (from, to, n),
+           CONST char* from AND char* to AND size_t n)
 {
-  while (n > 1)
+    while(n > 1)
     {
-      CONST char b0 = from[--n], b1 = from[--n];
-      to[n] = b0;
-      to[n + 1] = b1;
+        CONST char b0 = from[--n], b1 = from[--n];
+        to[n] = b0;
+        to[n + 1] = b1;
     }
 }

@@ -13,7 +13,8 @@
 #define XUSB_H
 
 #ifdef __cplusplus
-extern "C" { 
+extern "C"
+{
 #endif
 
 // ******************************************************************
@@ -27,7 +28,3 @@ extern "C" {
 #endif
 
 #endif
-
-
-
-

@@ -19,20 +19,19 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	random
-#undef	srandom
-#undef	initstate
-#undef	setstate
+#undef random
+#undef srandom
+#undef initstate
+#undef setstate
 
 #include "gnu-stabs.h"
 
 function_alias(random, __random, long int, (),
-	       DEFUN_VOID(random))
-function_alias(srandom, __srandom, void, (seed),
-	       DEFUN(srandom, (seed), unsigned int seed))
-function_alias(initstate, __initstate, PTR, (seed, buf, size),
-	       DEFUN(initstate, (seed, buf, size),
-		     unsigned int seed AND PTR buf AND size_t size))
-function_alias(setstate, __setstate, PTR, (buf),
-	       DEFUN(setstate, (buf), PTR buf))
-
+               DEFUN_VOID(random))
+    function_alias(srandom, __srandom, void, (seed),
+                   DEFUN(srandom, (seed), unsigned int seed))
+        function_alias(initstate, __initstate, PTR, (seed, buf, size),
+                       DEFUN(initstate, (seed, buf, size),
+                             unsigned int seed AND PTR buf AND size_t size))
+            function_alias(setstate, __setstate, PTR, (buf),
+                           DEFUN(setstate, (buf), PTR buf))

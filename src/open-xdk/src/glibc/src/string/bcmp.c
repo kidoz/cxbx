@@ -19,10 +19,10 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-#undef	bcmp
+#undef bcmp
 
 #include <gnu-stabs.h>
 
 function_alias(bcmp, memcmp, int, (s1, s2, n),
-	       DEFUN(bcmp, (s1, s2, n),
-		     CONST PTR s1 AND CONST PTR s2 AND size_t n))
+               DEFUN(bcmp, (s1, s2, n),
+                     CONST PTR s1 AND CONST PTR s2 AND size_t n))

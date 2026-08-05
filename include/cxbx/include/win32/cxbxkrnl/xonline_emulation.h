@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->xonline_emulation.h
@@ -52,7 +52,7 @@
 // ******************************************************************
 class EmuThis
 {
-public:
+  public:
     // ******************************************************************
     // * func: Emusocket
     // ******************************************************************
@@ -61,7 +61,7 @@ public:
     // ******************************************************************
     // * func: Emubind
     // ******************************************************************
-    int Emubind(SOCKET s, const struct sockaddr FAR *name, int namelen);
+    int Emubind(SOCKET s, const struct sockaddr FAR* name, int namelen);
 
     // ******************************************************************
     // * func: Emulisten
@@ -71,25 +71,21 @@ public:
     // ******************************************************************
     // * func: Emuioctlsocket
     // ******************************************************************
-    int Emuioctlsocket(SOCKET s, long cmd, u_long FAR *argp);
+    int Emuioctlsocket(SOCKET s, long cmd, u_long FAR* argp);
 };
 
 // ******************************************************************
 // * func: EmuWSAStartup
 // ******************************************************************
-int WINAPI EmuWSAStartup
-(
-    WORD        wVersionRequested,
-    WSADATA    *lpWSAData
-);
+int WINAPI EmuWSAStartup(
+    WORD wVersionRequested,
+    WSADATA* lpWSAData);
 
 // ******************************************************************
 // * func: EmuXNetStartup
 // ******************************************************************
-INT WINAPI EmuXNetStartup
-(
-    const PVOID pDummy
-);
+INT WINAPI EmuXNetStartup(
+    const PVOID pDummy);
 
 // ******************************************************************
 // * func: EmuXNetGetEthernetLinkStatus

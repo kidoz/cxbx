@@ -21,28 +21,26 @@ Cambridge, MA 02139, USA.  */
 #include <memcopy.h>
 
 /* Append SRC on the end of DEST.  */
-char *
-DEFUN(_strcat, (dest, src), char *dest AND CONST char *src)
+char* DEFUN(_strcat, (dest, src), char* dest AND CONST char* src)
 {
-  register char *s1 = dest;
-  register CONST char *s2 = src;
-  reg_char c;
+    register char* s1 = dest;
+    register CONST char* s2 = src;
+    reg_char c;
 
-  /* Find the end of the string.  */
-  do
-    c = *s1++;
-  while (c != '\0');
+    /* Find the end of the string.  */
+    do
+        c = *s1++;
+    while(c != '\0');
 
-  /* Make S1 point before the next character, so we can increment
-     it while memory is read (wins on pipelined cpus).  */
-  s1 -= 2;
+    /* Make S1 point before the next character, so we can increment
+       it while memory is read (wins on pipelined cpus).  */
+    s1 -= 2;
 
-  do
+    do
     {
-      c = *s2++;
-      *++s1 = c;
-    }
-  while (c != '\0');
+        c = *s2++;
+        *++s1 = c;
+    } while(c != '\0');
 
-  return dest;
+    return dest;
 }

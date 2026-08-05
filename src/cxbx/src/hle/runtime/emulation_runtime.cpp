@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->emulation_runtime.cpp
@@ -39,7 +39,7 @@
 // ******************************************************************
 namespace xboxkrnl
 {
-    #include <xboxkrnl/xboxkrnl.h>
+#include <xboxkrnl/xboxkrnl.h>
 };
 
 #include "emulation_runtime.h"
@@ -71,7 +71,7 @@ namespace XTL
 {
 #include "xapi_emulation.h"
 #include "d3d8_emulation.h"
-};
+}; // namespace XTL
 
 #include <array>
 #include <clocale>
@@ -92,53 +92,56 @@ namespace XTL
 // Forward-declare HostInput::Initialize to avoid pulling STL headers into the
 // XTL namespace scope (host_input.h includes <array>/<cstdint> which conflict
 // with the Xbox declarations inside namespace XTL).
-namespace HostInput { bool Initialize(); }
+namespace HostInput
+{
+bool Initialize();
+}
 
 // ******************************************************************
 // * global / static
 // ******************************************************************
-Xbe::TLS    *g_pTLS       = NULL;
-void        *g_pTLSData   = NULL;
-Xbe::Header *g_pXbeHeader = NULL;
-HANDLE		 g_hCurDir    = NULL;
-HANDLE       g_hTDrive    = NULL;
-HANDLE       g_hUDrive    = NULL;
-HANDLE       g_hZDrive    = NULL;
+Xbe::TLS* g_pTLS = NULL;
+void* g_pTLSData = NULL;
+Xbe::Header* g_pXbeHeader = NULL;
+HANDLE g_hCurDir = NULL;
+HANDLE g_hTDrive = NULL;
+HANDLE g_hUDrive = NULL;
+HANDLE g_hZDrive = NULL;
 
 // ******************************************************************
 // * static
 // ******************************************************************
-static void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper);
-static void  EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader);
-static void  EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader);
-static bool  EmuIsNestopiaX13(Xbe::Header *pXbeHeader);
-static void  EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader);
-static void  EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader);
-static void  EmuInstallCallTrace(Xbe::Header *pXbeHeader);
-static void  EmuInstallDsoundDspMailboxPatch(Xbe::Header *pXbeHeader);
-static void  EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader);
-static void  EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader);
-static void  EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader);
-static void  EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader);
+static void* EmuLocateFunction(OOVPA* Oovpa, uint32 lower, uint32 upper);
+static void EmuInstallWrappers(OOVPATable* OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header* pXbeHeader);
+static void EmuInstallNestopiaX13Bootstrap(Xbe::Header* pXbeHeader);
+static bool EmuIsNestopiaX13(Xbe::Header* pXbeHeader);
+static void EmuInstallFceultraBootstrap(Xbe::Header* pXbeHeader);
+static void EmuInstallCdxLaunchBootstrap(Xbe::Header* pXbeHeader);
+static void EmuInstallCallTrace(Xbe::Header* pXbeHeader);
+static void EmuInstallDsoundDspMailboxPatch(Xbe::Header* pXbeHeader);
+static void EmuInstallDsoundApuAccountingPatch(Xbe::Header* pXbeHeader);
+static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header* pXbeHeader);
+static void EmuInstallDsoundApuDestructorPatch(Xbe::Header* pXbeHeader);
+static void EmuInstallXapiRdtscQpcPatch(Xbe::Header* pXbeHeader);
 extern "C" void EmuAciStartDmaThread();                       // kernel_emulation.cpp: AC97 DMA delivery thread
 extern "C" void EmuApuStartVoiceThread(bool EnableByDefault); // kernel_emulation.cpp: APU voice-event delivery thread
 extern "C" void EmuStartTimerDpcThread();                     // kernel_emulation.cpp: due-time KeSetTimer DPC dispatch
 extern "C" PVOID EmuAllocateContiguousMemoryHost(ULONG NumberOfBytes, ULONG Alignment);
 extern "C" ULONG g_EmuDsoundApuContextTable;
-static bool  EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader);
-static void  EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count);
-static bool  EmuLooksLikeReturnAddress(ULONG Address);
-static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, size_t BufferSize);
-static bool  EmuIsReadableRange(ULONG Address, ULONG Bytes);
+static bool EmuBytesMatch(uint32 Address, const uint08* Bytes, uint32 Count, Xbe::Header* pXbeHeader);
+static void EmuWriteBytes(uint32 Address, const uint08* Bytes, uint32 Count);
+static bool EmuLooksLikeReturnAddress(ULONG Address);
+static const char* EmuHostAddressToModuleOffset(ULONG Address, char* Buffer, size_t BufferSize);
+static bool EmuIsReadableRange(ULONG Address, ULONG Bytes);
 // Optional D3D wrapper entry trace (d3d8_emulation.cpp); NULL when the trace is off.
-extern "C" const char *EmuGetLastD3DCall(void);
-static void  EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader);
-static void  EmuInstallFakeKernelImage();
-static void  EmuXRefFailure();
-static int   ExitException(LPEXCEPTION_POINTERS e);
-static void  EmuConfigureLogFile();
+extern "C" const char* EmuGetLastD3DCall(void);
+static void EmuInstallAutoBootLaunchData(Xbe::Header* pXbeHeader);
+static void EmuInstallFakeKernelImage();
+static void EmuXRefFailure();
+static int ExitException(LPEXCEPTION_POINTERS e);
+static void EmuConfigureLogFile();
 
-static bool EmuGetLogFile(char *szLogFile, DWORD dwLogFileSize)
+static bool EmuGetLogFile(char* szLogFile, DWORD dwLogFileSize)
 {
     DWORD dwLogFile = GetEnvironmentVariable("CXBX_LOG_FILE", szLogFile, dwLogFileSize);
 
@@ -208,7 +211,7 @@ static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
 
     __try
     {
-        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
 
         if(Instruction[0] == 0x0F && Instruction[1] == 0x32 && e->ContextRecord->Ecx == 0x2A)
         {
@@ -239,9 +242,9 @@ static bool EmuTryEmulateRdmsr(LPEXCEPTION_POINTERS e)
     return false;
 }
 
-static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value);
+static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG* Value);
 
-static ULONG EmuContextRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
+static ULONG EmuContextRegister(const CONTEXT* ContextRecord, ULONG RegisterIndex)
 {
     switch(RegisterIndex & 0x07)
     {
@@ -258,7 +261,7 @@ static ULONG EmuContextRegister(const CONTEXT *ContextRecord, ULONG RegisterInde
     return 0;
 }
 
-static void EmuSetContextRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, ULONG Value)
+static void EmuSetContextRegister(CONTEXT* ContextRecord, ULONG RegisterIndex, ULONG Value)
 {
     switch(RegisterIndex & 0x07)
     {
@@ -273,18 +276,18 @@ static void EmuSetContextRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, U
     }
 }
 
-static WORD EmuContextWordRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
+static WORD EmuContextWordRegister(const CONTEXT* ContextRecord, ULONG RegisterIndex)
 {
     return (WORD)EmuContextRegister(ContextRecord, RegisterIndex);
 }
 
-static void EmuSetContextWordRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, WORD Value)
+static void EmuSetContextWordRegister(CONTEXT* ContextRecord, ULONG RegisterIndex, WORD Value)
 {
     ULONG OldValue = EmuContextRegister(ContextRecord, RegisterIndex);
     EmuSetContextRegister(ContextRecord, RegisterIndex, (OldValue & 0xFFFF0000) | Value);
 }
 
-static BYTE EmuContextByteRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex)
+static BYTE EmuContextByteRegister(const CONTEXT* ContextRecord, ULONG RegisterIndex)
 {
     switch(RegisterIndex & 0x07)
     {
@@ -301,7 +304,7 @@ static BYTE EmuContextByteRegister(const CONTEXT *ContextRecord, ULONG RegisterI
     return 0;
 }
 
-static void EmuSetContextByteRegister(CONTEXT *ContextRecord, ULONG RegisterIndex, BYTE Value)
+static void EmuSetContextByteRegister(CONTEXT* ContextRecord, ULONG RegisterIndex, BYTE Value)
 {
     switch(RegisterIndex & 0x07)
     {
@@ -316,7 +319,7 @@ static void EmuSetContextByteRegister(CONTEXT *ContextRecord, ULONG RegisterInde
     }
 }
 
-static bool EmuReadContextXmmRegister(const CONTEXT *ContextRecord, ULONG RegisterIndex, BYTE Value[16])
+static bool EmuReadContextXmmRegister(const CONTEXT* ContextRecord, ULONG RegisterIndex, BYTE Value[16])
 {
 #if defined(_X86_) || defined(_M_IX86) || defined(__i386__)
     static const ULONG EmuFxSaveXmmBase = 160;
@@ -340,7 +343,7 @@ static bool EmuReadContextXmmRegister(const CONTEXT *ContextRecord, ULONG Regist
 #endif
 }
 
-static void EmuFloat32ToExtended(ULONG Value, BYTE Extended[10], WORD *Tag)
+static void EmuFloat32ToExtended(ULONG Value, BYTE Extended[10], WORD* Tag)
 {
     const ULONGLONG Sign = (ULONGLONG)(Value >> 31) << 15;
     const ULONG Exponent = (Value >> 23) & 0xFF;
@@ -385,7 +388,7 @@ static void EmuFloat32ToExtended(ULONG Value, BYTE Extended[10], WORD *Tag)
     CopyMemory(Extended + sizeof(Significand), &SignAndExponent, sizeof(SignAndExponent));
 }
 
-static bool EmuPushContextFloat32(CONTEXT *ContextRecord, ULONG Value)
+static bool EmuPushContextFloat32(CONTEXT* ContextRecord, ULONG Value)
 {
     if(ContextRecord == NULL)
         return false;
@@ -409,7 +412,7 @@ static bool EmuPushContextFloat32(CONTEXT *ContextRecord, ULONG Value)
 #if defined(_X86_) || defined(_M_IX86) || defined(__i386__)
     if((ContextRecord->ContextFlags & CONTEXT_EXTENDED_REGISTERS) != 0)
     {
-        BYTE *FxSave = ContextRecord->ExtendedRegisters;
+        BYTE* FxSave = ContextRecord->ExtendedRegisters;
         CopyMemory(FxSave + 2, &StatusWord, sizeof(StatusWord));
         FxSave[4] |= (BYTE)(1 << Top);
         MoveMemory(FxSave + 48, FxSave + 32, 7 * 16);
@@ -434,7 +437,7 @@ static bool EmuHasEvenParity(BYTE Value)
     return Even;
 }
 
-static void EmuSetTestFlags(CONTEXT *ContextRecord, ULONG Result, ULONG SignFlagMask)
+static void EmuSetTestFlags(CONTEXT* ContextRecord, ULONG Result, ULONG SignFlagMask)
 {
     static const ULONG CarryFlag = 0x00000001;
     static const ULONG ParityFlag = 0x00000004;
@@ -458,7 +461,7 @@ static void EmuSetTestFlags(CONTEXT *ContextRecord, ULONG Result, ULONG SignFlag
     ContextRecord->EFlags = EFlags;
 }
 
-static void EmuSetSubtractFlags(CONTEXT *ContextRecord, ULONG Left, ULONG Right, ULONG Result, ULONG SignFlagMask)
+static void EmuSetSubtractFlags(CONTEXT* ContextRecord, ULONG Left, ULONG Right, ULONG Result, ULONG SignFlagMask)
 {
     static const ULONG CarryFlag = 0x00000001;
     static const ULONG ParityFlag = 0x00000004;
@@ -495,7 +498,7 @@ static void EmuSetSubtractFlags(CONTEXT *ContextRecord, ULONG Left, ULONG Right,
     ContextRecord->EFlags = EFlags;
 }
 
-static bool EmuDecodeModRmAddress(const CONTEXT *ContextRecord, const BYTE *Instruction, ULONG *Address, ULONG *Length)
+static bool EmuDecodeModRmAddress(const CONTEXT* ContextRecord, const BYTE* Instruction, ULONG* Address, ULONG* Length)
 {
     BYTE ModRm = Instruction[1];
     ULONG Mod = (ModRm >> 6) & 0x03;
@@ -560,7 +563,7 @@ struct EmuMmioRegister
 
 static EmuMmioRegister g_EmuMmioRegisters[EmuMmioRegisterSlotCount] = {};
 
-static bool EmuLookupMmioRegister(ULONG Address, ULONG *Value)
+static bool EmuLookupMmioRegister(ULONG Address, ULONG* Value)
 {
     ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
 
@@ -619,7 +622,7 @@ static const ULONG EmuNv2aPmcIntrPcrtc = 0x01000000;
 static const ULONG EmuNv2aPmcEnablePfifo = 0x00000100;
 static const ULONG EmuNv2aPmcEnablePgraph = 0x00001000;
 static const ULONG NV_PCRTC_INTR_EN_0 = 0x600140;
-static const ULONG EmuNv2aPcrtcStart = 0x600800;   // CRTC scanout base (display flip)
+static const ULONG EmuNv2aPcrtcStart = 0x600800; // CRTC scanout base (display flip)
 static const ULONG EmuNv2aPcrtcIntrVblank = 0x00000001;
 static const ULONG EmuNv2aPfifoIntrDmaPusher = 0x00001000;
 static const ULONG EmuNv2aPfifoDmaPushSuspended = 0x00001000;
@@ -651,18 +654,18 @@ static const ULONG EmuUsbPortCount = 4;
 // and no over-current reporting, and POTPGT stays 0 so the driver's
 // power-on-to-power-good delay is a no-op.
 static const ULONG EmuUsbRhDescriptorANdpMask = 0x000000FF;
-static const ULONG EmuUsbRhDescriptorANps = 1u << 9;    // NoPowerSwitching
-static const ULONG EmuUsbRhDescriptorANocp = 1u << 12;  // NoOverCurrentProtection
+static const ULONG EmuUsbRhDescriptorANps = 1u << 9;   // NoPowerSwitching
+static const ULONG EmuUsbRhDescriptorANocp = 1u << 12; // NoOverCurrentProtection
 // HcRhPortStatus bit fields.
-static const ULONG EmuUsbPortCCS  = 1u << 0;   // CurrentConnectStatus
-static const ULONG EmuUsbPortPES  = 1u << 1;   // PortEnableStatus
-static const ULONG EmuUsbPortPRS  = 1u << 4;   // PortResetStatus
-static const ULONG EmuUsbPortPPS  = 1u << 8;   // PortPowerStatus
-static const ULONG EmuUsbPortCSC  = 1u << 16;  // ConnectStatusChange
-static const ULONG EmuUsbPortPESC = 1u << 17;  // PortEnableStatusChange
-static const ULONG EmuUsbPortPSSC = 1u << 18;  // PortSuspendStatusChange
-static const ULONG EmuUsbPortOCIC = 1u << 19;  // OverCurrentIndicatorChange
-static const ULONG EmuUsbPortPRSC = 1u << 20;  // PortResetStatusChange
+static const ULONG EmuUsbPortCCS = 1u << 0;   // CurrentConnectStatus
+static const ULONG EmuUsbPortPES = 1u << 1;   // PortEnableStatus
+static const ULONG EmuUsbPortPRS = 1u << 4;   // PortResetStatus
+static const ULONG EmuUsbPortPPS = 1u << 8;   // PortPowerStatus
+static const ULONG EmuUsbPortCSC = 1u << 16;  // ConnectStatusChange
+static const ULONG EmuUsbPortPESC = 1u << 17; // PortEnableStatusChange
+static const ULONG EmuUsbPortPSSC = 1u << 18; // PortSuspendStatusChange
+static const ULONG EmuUsbPortOCIC = 1u << 19; // OverCurrentIndicatorChange
+static const ULONG EmuUsbPortPRSC = 1u << 20; // PortResetStatusChange
 static const ULONG EmuUsbPortChangeMask =
     EmuUsbPortCSC | EmuUsbPortPESC | EmuUsbPortPSSC | EmuUsbPortOCIC | EmuUsbPortPRSC;
 static ULONG g_EmuUsb0PortStatus[EmuUsbPortCount] = { 0, 0, 0, 0 };
@@ -670,7 +673,7 @@ static ULONG g_EmuUsb0PortStatus[EmuUsbPortCount] = { 0, 0, 0, 0 };
 // interrupt can be raised for the guest USB ISR and acknowledged by it.
 static const ULONG EmuUsbHcInterruptStatus = 0x0000000C;
 static const ULONG EmuUsbHcFmNumber = 0x0000003C;
-static const ULONG EmuUsbIntStatusSF = 1u << 2;   // StartOfFrame
+static const ULONG EmuUsbIntStatusSF = 1u << 2; // StartOfFrame
 static ULONG g_EmuUsb0IntStatus = 0;
 static ULONG g_EmuUsb0FmNumber = 0;
 
@@ -865,7 +868,7 @@ static void EmuAciSetBusMasterStatus(ULONG StreamBase, ULONG Status)
     EmuAciStorePartialRegister(EmuAciMmioBase + StreamBase + EmuAciBusMasterStatusOffset, 2, Status);
 }
 
-static bool EmuUsb0IsPortStatus(ULONG Offset, ULONG *PortIndex)
+static bool EmuUsb0IsPortStatus(ULONG Offset, ULONG* PortIndex)
 {
     if(Offset < EmuUsbHcRhPortStatus0 ||
        Offset >= EmuUsbHcRhPortStatus0 + EmuUsbPortCount * 4 || (Offset & 3) != 0)
@@ -935,18 +938,18 @@ static void EmuUsb0WritePortStatus(ULONG PortIndex, ULONG Value)
 {
     ULONG Status = g_EmuUsb0PortStatus[PortIndex];
 
-    if(Value & (1u << 0))                       // ClearPortEnable
+    if(Value & (1u << 0)) // ClearPortEnable
         Status &= ~EmuUsbPortPES;
     if((Value & (1u << 1)) && (Status & EmuUsbPortCCS)) // SetPortEnable
         Status |= EmuUsbPortPES;
     if((Value & (1u << 4)) && (Status & EmuUsbPortCCS)) // SetPortReset -> completes
         Status = (Status | EmuUsbPortPES | EmuUsbPortPRSC) & ~EmuUsbPortPRS;
-    if(Value & (1u << 8))                       // SetPortPower
+    if(Value & (1u << 8)) // SetPortPower
         Status |= EmuUsbPortPPS;
-    if(Value & (1u << 9))                       // ClearPortPower
+    if(Value & (1u << 9)) // ClearPortPower
         Status &= ~EmuUsbPortPPS;
 
-    Status &= ~(Value & EmuUsbPortChangeMask);  // write-1-to-clear change bits
+    Status &= ~(Value & EmuUsbPortChangeMask); // write-1-to-clear change bits
     g_EmuUsb0PortStatus[PortIndex] = Status;
 }
 
@@ -958,7 +961,7 @@ static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
     if(EmuUsb0IsPortStatus(Offset, &PortIndex))
         EmuUsb0WritePortStatus(PortIndex, Value);
     else if(Offset == EmuUsbHcInterruptStatus)
-        g_EmuUsb0IntStatus &= ~Value;   // write-1-to-clear
+        g_EmuUsb0IntStatus &= ~Value; // write-1-to-clear
     else
         EmuStoreMmioRegister(Address, Value);
 
@@ -971,9 +974,9 @@ static const ULONG EmuApuVpVoiceSelect = 0x000202F8;
 static const ULONG EmuApuVpVoiceOn = 0x00020124;
 static const ULONG EmuApuVpVoiceOff = 0x00020128;
 static ULONG g_EmuApuSelectedVoice = 0xFFFF;
-static volatile LONG g_EmuApuVoiceOffPending[8];   // 256-bit set
+static volatile LONG g_EmuApuVoiceOffPending[8]; // 256-bit set
 
-static BYTE *EmuApuGetVoiceState(ULONG Voice)
+static BYTE* EmuApuGetVoiceState(ULONG Voice)
 {
     if(Voice >= 256 || g_EmuDsoundApuContextTable == 0 ||
        IsBadReadPtr((void*)(g_EmuDsoundApuContextTable + 0x30), sizeof(PVOID)))
@@ -981,14 +984,14 @@ static BYTE *EmuApuGetVoiceState(ULONG Voice)
         return NULL;
     }
 
-    BYTE *VoiceArray = *(BYTE**)(g_EmuDsoundApuContextTable + 0x30);
-    BYTE *State = VoiceArray != NULL ? VoiceArray + Voice * 0x80 : NULL;
+    BYTE* VoiceArray = *(BYTE**)(g_EmuDsoundApuContextTable + 0x30);
+    BYTE* State = VoiceArray != NULL ? VoiceArray + Voice * 0x80 : NULL;
     return State != NULL && !IsBadWritePtr(State, 0x80) ? State : NULL;
 }
 
 static void EmuApuMirrorVoiceMethod(ULONG Method, ULONG Value)
 {
-    BYTE *State = EmuApuGetVoiceState(g_EmuApuSelectedVoice);
+    BYTE* State = EmuApuGetVoiceState(g_EmuApuSelectedVoice);
     if(State == NULL)
     {
         return;
@@ -1026,12 +1029,12 @@ static void EmuApuMirrorVoiceMethod(ULONG Method, ULONG Value)
     if(StateOffset == 0x20 || StateOffset == 0x24 ||
        StateOffset == 0x58 || StateOffset == 0x5C)
     {
-        ULONG &Field = *(ULONG*)(State + StateOffset);
+        ULONG& Field = *(ULONG*)(State + StateOffset);
         Field = (Field & 0xFF000000) | (Value & 0x00FFFFFF);
     }
     else if(StateOffset == 0x7C)
     {
-        ULONG &Field = *(ULONG*)(State + StateOffset);
+        ULONG& Field = *(ULONG*)(State + StateOffset);
         Field = (Field & 0x0000FFFF) | (Value & 0xFFFF0000);
     }
     else
@@ -1046,14 +1049,14 @@ static void EmuApuAdvanceSelectedVoice()
     static unsigned __int64 Remainder[256] = {};
 
     const ULONG Voice = g_EmuApuSelectedVoice;
-    BYTE *State = EmuApuGetVoiceState(Voice);
+    BYTE* State = EmuApuGetVoiceState(Voice);
     if(State == NULL)
     {
         return;
     }
 
     const DWORD Now = GetTickCount();
-    DWORD &Previous = LastTick[Voice];
+    DWORD& Previous = LastTick[Voice];
     if(Previous == 0)
     {
         Previous = Now;
@@ -1089,7 +1092,7 @@ static void EmuApuAdvanceSelectedVoice()
         return;
     }
 
-    ULONG &OffsetAndLevel = *(ULONG*)(State + 0x58);
+    ULONG& OffsetAndLevel = *(ULONG*)(State + 0x58);
     const ULONG Current = OffsetAndLevel & 0x00FFFFFF;
     const ULONG LoopStart = *(ULONG*)(State + 0x24) & 0x00FFFFFF;
     const ULONG End = *(ULONG*)(State + 0x5C) & 0x00FFFFFF;
@@ -1155,9 +1158,9 @@ static ULONG EmuApuReadRegister32(ULONG Address)
     return Value;
 }
 
-static const ULONG EmuApuInterruptStatus = 0x00001000;   // NV_PAPU ISTS: W1C
-static const ULONG EmuApuIstsClaimBit = 0x00000001;      // "our interrupt"
-static const ULONG EmuApuIstsVoiceBit = 0x00000040;      // voice event pending
+static const ULONG EmuApuInterruptStatus = 0x00001000; // NV_PAPU ISTS: W1C
+static const ULONG EmuApuIstsClaimBit = 0x00000001;    // "our interrupt"
+static const ULONG EmuApuIstsVoiceBit = 0x00000040;    // voice event pending
 
 // VP PIO command capture. Live traces settled the encoding by REGISTER, not
 // command-word bits: every submission is strobed via 0x202F8 (voice select)
@@ -1183,7 +1186,7 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
     }
     else if(Offset == EmuApuVpVoiceOn)
     {
-        BYTE *State = EmuApuGetVoiceState(Value & 0xFFFF);
+        BYTE* State = EmuApuGetVoiceState(Value & 0xFFFF);
         if(State != NULL)
         {
             *(ULONG*)(State + 0x54) |= 0x00200000;
@@ -1193,7 +1196,7 @@ static void EmuApuWriteRegister32(ULONG Address, ULONG Value)
     else if(Offset == EmuApuVpVoiceOff && (Value & 0xFFFF) < 256)
     {
         ULONG Voice = Value & 0xFFFF;
-        BYTE *State = EmuApuGetVoiceState(Voice);
+        BYTE* State = EmuApuGetVoiceState(Voice);
         if(State != NULL)
         {
             *(ULONG*)(State + 0x54) &= ~0x00200000;
@@ -1251,7 +1254,7 @@ extern "C" ULONG EmuApuReadInterruptStatus()
     return Status;
 }
 
-static void EmuAciDmaSync();   // time-based DMA state-machine catch-up (defined below)
+static void EmuAciDmaSync(); // time-based DMA state-machine catch-up (defined below)
 
 static ULONG EmuAciReadRegister32(ULONG Address)
 {
@@ -1359,12 +1362,12 @@ extern "C" void EmuAciSignalAudioInterrupt()
 // every completion is treated as interrupt-on-completion since the descriptor
 // entries hold guest-physical addresses this HLE cannot translate back.
 // ---------------------------------------------------------------------------
-static const ULONG EmuAciDmaChannels[3] = { 0x100, 0x110, 0x170 };   // PCM-in, PCM-out, SPDIF
-static const ULONG EmuAciDmaGlobStaBits[3] = { 0x10, 0x40, 0x01 };   // ISR mask GLOB_STA & 0x51
-static const ULONG EmuAciStatusCelv = 0x02;    // current equals last valid
-static const ULONG EmuAciStatusLvbci = 0x04;   // last valid buffer completed
-static const ULONG EmuAciStatusBcis = 0x08;    // buffer completion status
-static const ULONG EmuAciControlIoce = 0x10;   // interrupt-on-completion enable
+static const ULONG EmuAciDmaChannels[3] = { 0x100, 0x110, 0x170 }; // PCM-in, PCM-out, SPDIF
+static const ULONG EmuAciDmaGlobStaBits[3] = { 0x10, 0x40, 0x01 }; // ISR mask GLOB_STA & 0x51
+static const ULONG EmuAciStatusCelv = 0x02;                        // current equals last valid
+static const ULONG EmuAciStatusLvbci = 0x04;                       // last valid buffer completed
+static const ULONG EmuAciStatusBcis = 0x08;                        // buffer completion status
+static const ULONG EmuAciControlIoce = 0x10;                       // interrupt-on-completion enable
 
 // The DMA state machine advances at a fixed buffer cadence. It is stepped from
 // two places -- the background delivery thread and, lazily, a guest register
@@ -1372,13 +1375,13 @@ static const ULONG EmuAciControlIoce = 0x10;   // interrupt-on-completion enable
 // runs first consumes the elapsed buffer periods (the other then sees none).
 // This makes the observable register state (CIV/SR/GLOB_STA) a pure function of
 // elapsed wall time, independent of host thread scheduling.
-static const DWORD EmuAciDmaPeriodMs = 5;       // ~200 Hz buffer cadence
-static const DWORD EmuAciDmaMaxCatchup = 64;    // cap a backlog burst after a long stall
+static const DWORD EmuAciDmaPeriodMs = 5;    // ~200 Hz buffer cadence
+static const DWORD EmuAciDmaMaxCatchup = 64; // cap a backlog burst after a long stall
 
 static CRITICAL_SECTION g_EmuAciDmaLock;
 static DWORD g_EmuAciDmaLastMs = 0;
 static volatile LONG g_EmuAciDmaPendingIrq = 0;
-static volatile LONG g_EmuAciDmaInitState = 0;   // 0=uninit, 1=initializing, 2=ready
+static volatile LONG g_EmuAciDmaInitState = 0; // 0=uninit, 1=initializing, 2=ready
 
 // Race-safe one-time init of the lock + time base without depending on Vista's
 // InitOnce (this tree targets the XP-era SDK). The winner initializes; any
@@ -1411,14 +1414,14 @@ static int EmuAciDmaAdvanceOnce()
     {
         ULONG Channel = EmuAciMmioBase + EmuAciDmaChannels[i];
 
-        ULONG Control = (EmuAciCachedRegister(Channel + 0x08, 0) >> 24) & 0xFF;   // CR at +0x0B
+        ULONG Control = (EmuAciCachedRegister(Channel + 0x08, 0) >> 24) & 0xFF; // CR at +0x0B
         if((Control & EmuAciBusMasterControlRun) == 0)
             continue;
 
         ULONG IndexWord = EmuAciCachedRegister(Channel + 0x04, 0);
-        ULONG Civ = IndexWord & 0x1F;                                             // CIV at +0x04
-        ULONG Lvi = (IndexWord >> 8) & 0x1F;                                      // LVI at +0x05
-        ULONG Status = (IndexWord >> 16) & 0xFFFF;                                // SR at +0x06
+        ULONG Civ = IndexWord & 0x1F;              // CIV at +0x04
+        ULONG Lvi = (IndexWord >> 8) & 0x1F;       // LVI at +0x05
+        ULONG Status = (IndexWord >> 16) & 0xFFFF; // SR at +0x06
 
         if((Status & EmuAciStatusDmaHalted) != 0)
         {
@@ -1441,7 +1444,7 @@ static int EmuAciDmaAdvanceOnce()
         {
             Civ = (Civ + 1) & 0x1F;
             EmuAciStorePartialRegister(Channel + 0x04, 1, Civ);
-            EmuAciStorePartialRegister(Channel + 0x0A, 1, (Civ + 1) & 0x1F);   // prefetch index
+            EmuAciStorePartialRegister(Channel + 0x0A, 1, (Civ + 1) & 0x1F); // prefetch index
         }
 
         Status |= EmuAciStatusBcis;
@@ -1469,7 +1472,7 @@ static void EmuAciDmaSync()
     EnterCriticalSection(&g_EmuAciDmaLock);
 
     DWORD Now = GetTickCount();
-    DWORD Elapsed = Now - g_EmuAciDmaLastMs;   // unsigned: correct across a single wrap
+    DWORD Elapsed = Now - g_EmuAciDmaLastMs; // unsigned: correct across a single wrap
     DWORD Steps = Elapsed / EmuAciDmaPeriodMs;
 
     if(Steps > 0)
@@ -1477,11 +1480,11 @@ static void EmuAciDmaSync()
         if(Steps > EmuAciDmaMaxCatchup)
         {
             Steps = EmuAciDmaMaxCatchup;
-            g_EmuAciDmaLastMs = Now;                        // collapse a large backlog
+            g_EmuAciDmaLastMs = Now; // collapse a large backlog
         }
         else
         {
-            g_EmuAciDmaLastMs += Steps * EmuAciDmaPeriodMs;  // keep the sub-period remainder
+            g_EmuAciDmaLastMs += Steps * EmuAciDmaPeriodMs; // keep the sub-period remainder
         }
 
         for(DWORD k = 0; k < Steps; k++)
@@ -1614,7 +1617,7 @@ extern "C" void EmuNv2aEnableGpuInterrupts()
     EmuNv2aStoreRegister(NV_PMC_INTR_EN_0, En | 0x00000001);
 }
 
-static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
+static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG* Instance, ULONG* Class)
 {
     const ULONG Ramht = EmuNv2aCachedRegister(NV_PFIFO_RAMHT, 0);
     const ULONG ChannelId =
@@ -1663,7 +1666,7 @@ static bool EmuNv2aRamhtLookup(ULONG Handle, ULONG *Instance, ULONG *Class)
 // without a GPU. Triggered on SET_BEGIN_END (a primitive batch) when a stage-0
 // texture is bound.
 // ---------------------------------------------------------------------------
-#define NV097_NO_OPERATION             0x0100u
+#define NV097_NO_OPERATION 0x0100u
 static constexpr ULONG EmuNv2aTextureStageCount =
     static_cast<ULONG>(cxbx::nv2a::PgraphTextureStageCount);
 static ULONG g_EmuNv2aTextureDumpIndex = 0;
@@ -1783,15 +1786,15 @@ extern "C" ULONG g_EmuDisplayPitch = 0;
 // one vertex through the loaded NV2A microcode. Inputs are the 16 attribute
 // registers (16*4 floats), constants the 192-entry constant memory (192*4
 // floats), outputs clip-space oPos + oD0 diffuse.
-extern "C" bool EmuVshExecuteProgram(const DWORD *Program, int InstrCount, int Start,
-                                     const float *Const, const float *Input,
-                                     float *OutPos, float *OutCol0, float *OutTex0);
+extern "C" bool EmuVshExecuteProgram(const DWORD* Program, int InstrCount, int Start,
+                                     const float* Const, const float* Input,
+                                     float* OutPos, float* OutCol0, float* OutTex0);
 extern "C" bool EmuVshExecuteProgramRaster(
     const std::uint32_t* Program, int InstrCount, int Start,
     const float* Const, const float* Input, float* OutPos,
     float* OutColors, float* OutTexCoords);
 
-static bool  g_EmuNv2aRasterizingImmediate = false;
+static bool g_EmuNv2aRasterizingImmediate = false;
 struct EmuNv2aAaColorSurface
 {
     ULONG Address;
@@ -1806,15 +1809,15 @@ struct EmuNv2aAaColorSurface
 static EmuNv2aAaColorSurface g_EmuNv2aAaColorSurface = {};
 // The live overlay must read an owned snapshot from the last flip. Guest front
 // buffers are recycled and can become active render targets again immediately.
-static std::atomic<ULONG> g_EmuNv2aPresentedFrameAddress{0};
+static std::atomic<ULONG> g_EmuNv2aPresentedFrameAddress{ 0 };
 static SRWLOCK g_EmuNv2aPresentedFrameLock = SRWLOCK_INIT;
 static ULONG* g_EmuNv2aPresentedFramePixels = NULL;
 static size_t g_EmuNv2aPresentedFrameCapacity = 0;
 static ULONG g_EmuNv2aPresentedFrameWidth = 0;
 static ULONG g_EmuNv2aPresentedFrameHeight = 0;
-static bool  g_bEmuNv2aRaster = false;
-static bool  g_bEmuNv2aRasterChecked = false;
-static bool  g_bEmuNv2aHleRaster = false;
+static bool g_bEmuNv2aRaster = false;
+static bool g_bEmuNv2aRasterChecked = false;
+static bool g_bEmuNv2aHleRaster = false;
 extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Value)
 {
     if(Value == nullptr)
@@ -1869,7 +1872,7 @@ static void EmuNv2aWriteBackendSemaphore(
 static void EmuNv2aClearSurface(ULONG Flags);
 static void EmuNv2aPresentColorSurface();
 static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
-                                      ULONG Width, ULONG Height);
+                                       ULONG Width, ULONG Height);
 static void EmuNv2aResolveAaColorSurface(ULONG DestinationAddress);
 static void EmuNv2aInvalidateSampler(ULONG Stage);
 static void EmuNv2aInvalidateFrameSamplers();
@@ -1945,7 +1948,7 @@ static void EmuNv2aDispatchInsertedCallback(
     }
     ++g_EmuNv2aInsertedCallbackCount;
 
-    using InsertedCallback = void (__cdecl*)(DWORD);
+    using InsertedCallback = void(__cdecl*)(DWORD);
     const bool WasXboxFs = EmuIsXboxFS();
     if(!WasXboxFs)
     {
@@ -1953,7 +1956,7 @@ static void EmuNv2aDispatchInsertedCallback(
     }
     reinterpret_cast<InsertedCallback>(
         static_cast<uintptr_t>(Callback.address))(
-            static_cast<DWORD>(Callback.context));
+        static_cast<DWORD>(Callback.context));
     if(!WasXboxFs)
     {
         EmuSwapFS();
@@ -1993,7 +1996,7 @@ static EmuNv2aMethodStats g_EmuNv2aMethodStats[EmuNv2aStatsClassMax] = {};
 static ULONG g_EmuNv2aStatsClassCount = 0;
 static ULONG g_EmuNv2aStatsBeginOps[32] = {};
 static ULONG g_EmuNv2aStatsTotal = 0;
-static int   g_EmuNv2aStatsEnabled = -1;
+static int g_EmuNv2aStatsEnabled = -1;
 
 static bool EmuNv2aMethodStatsEnabled()
 {
@@ -2006,7 +2009,7 @@ static bool EmuNv2aMethodStatsEnabled()
     return g_EmuNv2aStatsEnabled == 1;
 }
 
-extern "C" void EmuNv2aDumpMethodStats(const char *Reason)
+extern "C" void EmuNv2aDumpMethodStats(const char* Reason)
 {
     if(g_EmuNv2aStatsEnabled != 1 || g_EmuNv2aStatsTotal == 0)
         return;
@@ -2015,7 +2018,7 @@ extern "C" void EmuNv2aDumpMethodStats(const char *Reason)
 
     for(ULONG i = 0; i < g_EmuNv2aStatsClassCount; i++)
     {
-        EmuNv2aMethodStats *Stats = &g_EmuNv2aMethodStats[i];
+        EmuNv2aMethodStats* Stats = &g_EmuNv2aMethodStats[i];
 
         if(Stats->Binds != 0)
             printf("NV2A| stats class=0x%.02lX bind count=%lu\n", Stats->Class, Stats->Binds);
@@ -2037,7 +2040,7 @@ extern "C" void EmuNv2aDumpMethodStats(const char *Reason)
     fflush(stdout);
 }
 
-static EmuNv2aMethodStats *EmuNv2aStatsForClass(ULONG Class)
+static EmuNv2aMethodStats* EmuNv2aStatsForClass(ULONG Class)
 {
     for(ULONG i = 0; i < g_EmuNv2aStatsClassCount; i++)
     {
@@ -2048,7 +2051,7 @@ static EmuNv2aMethodStats *EmuNv2aStatsForClass(ULONG Class)
     if(g_EmuNv2aStatsClassCount >= EmuNv2aStatsClassMax)
         return NULL;
 
-    EmuNv2aMethodStats *Stats = &g_EmuNv2aMethodStats[g_EmuNv2aStatsClassCount++];
+    EmuNv2aMethodStats* Stats = &g_EmuNv2aMethodStats[g_EmuNv2aStatsClassCount++];
     Stats->Class = Class;
     return Stats;
 }
@@ -2058,7 +2061,7 @@ static void EmuNv2aRecordMethodStat(ULONG Class, ULONG Method, ULONG Data)
     if(!EmuNv2aMethodStatsEnabled())
         return;
 
-    EmuNv2aMethodStats *Stats = EmuNv2aStatsForClass(Class);
+    EmuNv2aMethodStats* Stats = EmuNv2aStatsForClass(Class);
     if(Stats == NULL)
         return;
 
@@ -2457,13 +2460,13 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
         // (bits 0-7); a zero coefficient means M==0, so pbkit bails out of channel
         // setup, leaves its DMA-context pointer null, and later crashes. Report
         // realistic Xbox values: clock = N * 16.66MHz / (M << P).
-        case 0x680500:   // NVPLL_COEFF: GPU core ~233 MHz  (M=1, N=28, P=1)
+        case 0x680500: // NVPLL_COEFF: GPU core ~233 MHz  (M=1, N=28, P=1)
             Value = 0x00011C01;
             break;
-        case 0x680504:   // MPLL_COEFF:  memory  ~200 MHz  (M=1, N=12, P=0)
+        case 0x680504: // MPLL_COEFF:  memory  ~200 MHz  (M=1, N=12, P=0)
             Value = 0x00000C01;
             break;
-        case 0x680508:   // VPLL_COEFF:  video   ~33 MHz   (M=1, N=2,  P=0)
+        case 0x680508: // VPLL_COEFF:  video   ~33 MHz   (M=1, N=2,  P=0)
             Value = 0x00000201;
             break;
 
@@ -2492,7 +2495,7 @@ static ULONG EmuReadMmioRegister32(ULONG Address)
 // Xbox hardware device / flash MMIO region, above the NV2A aperture (0xFD...).
 // Kept high so genuine null/wild-pointer bugs (low addresses) still crash.
 static const ULONG EmuStubMmioBase = 0xFE000000;
-static const ULONG EmuStubMmioEnd  = 0xFEFFFFFF;
+static const ULONG EmuStubMmioEnd = 0xFEFFFFFF;
 
 static bool EmuIsStubMmioAddress(ULONG Address)
 {
@@ -2666,7 +2669,7 @@ static const ULONG EmuPhysicalPageSlotCount = 4096;
 struct EmuPhysicalPage
 {
     ULONG Address;
-    BYTE *Data;
+    BYTE* Data;
 };
 
 static EmuPhysicalPage g_EmuPhysicalPages[EmuPhysicalPageSlotCount] = {};
@@ -2686,7 +2689,7 @@ static ULONG EmuPhysicalMapPageAddress(ULONG Address)
     return EmuPhysicalMapBase + (Address & EmuPhysicalRamMirrorMask);
 }
 
-static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
+static BYTE* EmuGetPhysicalPage(ULONG Address, bool Create)
 {
     if(!EmuIsPhysicalMapAddress(Address))
         return NULL;
@@ -2706,7 +2709,7 @@ static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
     {
         if(g_EmuPhysicalPages[i].Data == NULL)
         {
-            BYTE *Page = new BYTE[EmuPhysicalPageSize];
+            BYTE* Page = new BYTE[EmuPhysicalPageSize];
             ZeroMemory(Page, EmuPhysicalPageSize);
             g_EmuPhysicalPages[i].Address = PageAddress;
             g_EmuPhysicalPages[i].Data = Page;
@@ -2729,7 +2732,7 @@ static BYTE *EmuGetPhysicalPage(ULONG Address, bool Create)
 // raw host pointers -- so resolve the alias to its host backing first; the
 // shadow pool stays the fallback for unbacked physical ranges (kernel-image
 // decode, the probe apertures at 0xF0000000+).
-extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize);
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG* BlockSize);
 extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
 
 static bool EmuIsWritableHostRange(ULONG Address, ULONG Size)
@@ -2742,7 +2745,7 @@ static bool EmuIsWritableHostRange(ULONG Address, ULONG Size)
     while(Current < End)
     {
         MEMORY_BASIC_INFORMATION Memory;
-        if(VirtualQuery((const void *)(uintptr_t)Current, &Memory, sizeof(Memory)) != sizeof(Memory) ||
+        if(VirtualQuery((const void*)(uintptr_t)Current, &Memory, sizeof(Memory)) != sizeof(Memory) ||
            Memory.State != MEM_COMMIT || (Memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
         {
             return false;
@@ -2764,19 +2767,19 @@ static bool EmuIsWritableHostRange(ULONG Address, ULONG Size)
     return true;
 }
 
-static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size);
+static BYTE* EmuPhysicalHostSpan(ULONG Address, ULONG Size);
 
 // D3D-visible resolver for physically-aliased guest pointers. A title library
 // can hand a hooked D3D entry a resource pointer in the 0x8xxxxxxx alias range
 // (Turok's XMV movie player does this for its video overlay surface); host
 // code cannot trap-and-emulate its own dereference the way guest code can, so
 // the wrapper must translate before touching any field.
-extern "C" BYTE *EmuResolvePhysicalHostSpan(ULONG Address, ULONG Size)
+extern "C" BYTE* EmuResolvePhysicalHostSpan(ULONG Address, ULONG Size)
 {
     return EmuPhysicalHostSpan(Address, Size);
 }
 
-static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
+static BYTE* EmuPhysicalHostSpan(ULONG Address, ULONG Size)
 {
     // Kill switch for A/B attribution: CXBX_PHYS_NO_HOST_SPAN=1 restores the
     // pure-shadow behavior so regressions can be bisected against this path.
@@ -2800,7 +2803,7 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
         const ULONG HostAlias = Address & 0x0FFFFFFF;
         ULONG Base = EmuContiguousBlockBase(HostAlias, &BlockSize);
         if(Base != 0 && HostAlias + Size >= HostAlias && HostAlias + Size <= Base + BlockSize)
-            return (BYTE *)(uintptr_t)HostAlias;
+            return (BYTE*)(uintptr_t)HostAlias;
 
         const ULONG GuestImageBase = g_pXbeHeader != NULL ? g_pXbeHeader->dwBaseAddr : 0;
         const ULONG GuestImageEnd = g_pXbeHeader != NULL &&
@@ -2811,7 +2814,7 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
         const bool InGuestImage = GuestImageEnd > GuestImageBase &&
                                   HostAlias >= GuestImageBase && HostAlias < GuestImageEnd;
         if(!InGuestImage && EmuIsWritableHostRange(HostAlias, Size))
-            return (BYTE *)(uintptr_t)HostAlias;
+            return (BYTE*)(uintptr_t)HostAlias;
     }
 
     if(Address < EmuPhysicalMapBase || Address > EmuPhysicalMapEnd)
@@ -2821,14 +2824,14 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
     ULONG Base = EmuContiguousBlockBase(Physical, &BlockSize);
 
     if(Base != 0 && Physical + Size <= Base + BlockSize)
-        return (BYTE *)(uintptr_t)Physical;
+        return (BYTE*)(uintptr_t)Physical;
 
     ULONG Host = EmuContiguousHostFromPhysical(Physical);
     if(Host != 0)
     {
         Base = EmuContiguousBlockBase(Host, &BlockSize);
         if(Base != 0 && Host + Size <= Base + BlockSize)
-            return (BYTE *)(uintptr_t)Host;
+            return (BYTE*)(uintptr_t)Host;
     }
 
     // Oversized images can force D3D resources into ordinary host heap blocks.
@@ -2847,18 +2850,18 @@ static BYTE *EmuPhysicalHostSpan(ULONG Address, ULONG Size)
     const bool InGuestImage = GuestImageEnd > GuestImageBase &&
                               HostAlias >= GuestImageBase && HostAlias < GuestImageEnd;
     if(!InGuestImage && EmuIsWritableHostRange(HostAlias, Size))
-        return (BYTE *)(uintptr_t)HostAlias;
+        return (BYTE*)(uintptr_t)HostAlias;
 
     return NULL;
 }
 
-static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
+static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG* Value)
 {
     ULONG End = Address + Size - 1;
     if(Size == 0 || Value == NULL || End < Address)
         return false;
 
-    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    BYTE* Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
     {
         ULONG Result = 0;
@@ -2874,7 +2877,7 @@ static bool EmuReadPhysicalMap(ULONG Address, ULONG Size, ULONG *Value)
     ULONG Result = 0;
     for(ULONG i = 0; i < Size; i++)
     {
-        BYTE *Page = EmuGetPhysicalPage(Address + i, false);
+        BYTE* Page = EmuGetPhysicalPage(Address + i, false);
         BYTE ByteValue = 0;
         if(Page != NULL)
             ByteValue = Page[(Address + i) & (EmuPhysicalPageSize - 1)];
@@ -3082,7 +3085,7 @@ static bool EmuNv2aNotifySatisfyEnabled()
 // If the guest is polling a physical notifier for the NV2A completion sentinel,
 // write it through and report the satisfied value back so the emulated compare
 // reflects equality on this very iteration. Returns true when it acted.
-static bool EmuMaybeSatisfyNv2aNotifier(ULONG Address, ULONG ComparedValue, ULONG *MemoryValue)
+static bool EmuMaybeSatisfyNv2aNotifier(ULONG Address, ULONG ComparedValue, ULONG* MemoryValue)
 {
     if(!EmuNv2aNotifySatisfyEnabled() || ComparedValue != EmuNv2aNotifierSentinel)
         return false;
@@ -3128,7 +3131,7 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
     // repeat so a stall that develops minutes in (e.g. after a title's asset
     // load) is still captured.
     ULONG IntervalMs = 14000;
-    const char *Value = getenv("CXBX_FENCE_DUMP");
+    const char* Value = getenv("CXBX_FENCE_DUMP");
     if(Value != NULL)
     {
         ULONG Seconds = strtoul(Value, NULL, 10);
@@ -3149,10 +3152,10 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
     ULONG WatchBytes = 0x20;
     LONG WatchDerefOffset = -1;
     ULONG WatchDerefDisp = 0;
-    const char *WatchValue = getenv("CXBX_WATCH_MEM");
+    const char* WatchValue = getenv("CXBX_WATCH_MEM");
     if(WatchValue != NULL)
     {
-        char *End = NULL;
+        char* End = NULL;
         WatchAddress = strtoul(WatchValue, &End, 16);
         if(End != NULL && *End == ',')
         {
@@ -3285,8 +3288,7 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
                         }
                     }
                 }
-            }
-            while(Thread32Next(Snap, &Te));
+            } while(Thread32Next(Snap, &Te));
         }
         CloseHandle(Snap);
         printf("WATCHDOG: --- end ---\n");
@@ -3294,13 +3296,13 @@ static DWORD WINAPI EmuThreadEipWatchdog(LPVOID)
     }
 }
 
-static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size)
+static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE* Data, ULONG Size)
 {
     ULONG End = Address + Size - 1;
     if(Size == 0 || Data == NULL || End < Address)
         return false;
 
-    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    BYTE* Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
     {
         memcpy(Host, Data, Size);
@@ -3312,7 +3314,7 @@ static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size
 
     for(ULONG i = 0; i < Size; i++)
     {
-        BYTE *Page = EmuGetPhysicalPage(Address + i, true);
+        BYTE* Page = EmuGetPhysicalPage(Address + i, true);
         if(Page == NULL)
             return false;
 
@@ -3322,7 +3324,7 @@ static bool EmuWritePhysicalMapBytes(ULONG Address, const BYTE *Data, ULONG Size
     return true;
 }
 
-extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE *Data, ULONG Size)
+extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE* Data, ULONG Size)
 {
     return EmuWritePhysicalMapBytes(Address, Data, Size);
 }
@@ -3374,7 +3376,7 @@ static bool EmuWritePhysicalMapRepeated(ULONG Address, ULONG Count, ULONG Size, 
     return true;
 }
 
-static bool EmuReadMemoryValue(ULONG Address, ULONG Size, ULONG *Value)
+static bool EmuReadMemoryValue(ULONG Address, ULONG Size, ULONG* Value)
 {
     if(Value == NULL)
         return false;
@@ -3459,21 +3461,21 @@ static bool EmuCopyToPhysicalMapRepeated(ULONG DestinationAddress, ULONG SourceA
 
 // Bridges into the kernel's contiguous-memory tracker (defined in kernel_emulation.cpp).
 // Used to reach guest data the NV2A references by raw host pointer.
-extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG *BlockSize);
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG* BlockSize);
 extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
 
 // SEH-guarded read of guest data straight from host memory. In this HLE model
 // the guest hands the NV2A real host pointers (pushbuffer PUT, texture offsets),
 // so the payload is directly addressable -- but a bad pointer must not crash the
 // emulator, hence the guard.
-static bool EmuTryReadHost(ULONG Address, void *Dst, ULONG Size)
+static bool EmuTryReadHost(ULONG Address, void* Dst, ULONG Size)
 {
     if(Address == 0 || Dst == NULL || Size == 0)
         return false;
 
     __try
     {
-        memcpy(Dst, (const void *)Address, Size);
+        memcpy(Dst, (const void*)Address, Size);
         EmuNv2aCaptureMemory(Address, Dst, Size);
         return true;
     }
@@ -3503,7 +3505,7 @@ static ULONG EmuNv2aHostPointer(ULONG GuestAddress)
 // Bulk-read a contiguous span from the physical-map shadow, walking one page at
 // a time (byte-at-a-time via EmuReadPhysicalMap would be ~1e9 ops for a 256 KiB
 // texture). Unbacked pages read as zero.
-static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
+static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE* Dst, ULONG Size)
 {
     ULONG End = Address + Size - 1;
     if(Size == 0 || Dst == NULL || End < Address ||
@@ -3512,7 +3514,7 @@ static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
         return false;
     }
 
-    BYTE *Host = EmuPhysicalHostSpan(Address, Size);
+    BYTE* Host = EmuPhysicalHostSpan(Address, Size);
     if(Host != NULL)
     {
         memcpy(Dst, Host, Size);
@@ -3529,7 +3531,7 @@ static bool EmuReadPhysicalMapBlock(ULONG Address, BYTE *Dst, ULONG Size)
         if(Chunk > Size - Copied)
             Chunk = Size - Copied;
 
-        BYTE *Page = EmuGetPhysicalPage(Cur, false);
+        BYTE* Page = EmuGetPhysicalPage(Cur, false);
         if(Page != NULL)
             memcpy(Dst + Copied, Page + PageOffset, Chunk);
         else
@@ -3647,7 +3649,7 @@ static void EmuNv2aWriteBackendSemaphore(
         return;
     }
 
-    *(volatile ULONG *)(uintptr_t)Host = Data;
+    *(volatile ULONG*)(uintptr_t)Host = Data;
 
     static ULONG s_ReleaseCount = 0;
     if(s_ReleaseCount < 8 || (s_ReleaseCount % 1000) == 0)
@@ -3668,8 +3670,18 @@ static ULONG EmuNv2aSwizzleTexelIndex(ULONG X, ULONG Y, ULONG LogW, ULONG LogH)
 
     while(Bx < LogW || By < LogH)
     {
-        if(Bx < LogW) { Result |= ((X >> Bx) & 1u) << Out; Out++; Bx++; }
-        if(By < LogH) { Result |= ((Y >> By) & 1u) << Out; Out++; By++; }
+        if(Bx < LogW)
+        {
+            Result |= ((X >> Bx) & 1u) << Out;
+            Out++;
+            Bx++;
+        }
+        if(By < LogH)
+        {
+            Result |= ((Y >> By) & 1u) << Out;
+            Out++;
+            By++;
+        }
     }
 
     return Result;
@@ -3687,27 +3699,91 @@ static ULONG EmuNv2aLog2(ULONG Value)
 // (0=A8R8G8B8/X8R8G8B8, 1=R5G6B5, 2=A1R5G5B5, 3=A4R4G4B4, 4=Y8,
 // 5=P8 palette index), and whether it
 // is swizzled (Morton) or linear. Returns false for unsupported codes.
-static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG *Bpp, ULONG *Kind, bool *Swizzled)
+static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG* Bpp, ULONG* Kind, bool* Swizzled)
 {
     switch(Color)
     {
-        case 0x00: *Bpp = 1; *Kind = 4; *Swizzled = true;  return true; // SZ_Y8
-        case 0x13: *Bpp = 1; *Kind = 4; *Swizzled = false; return true; // LU_Y8
-        case 0x02: *Bpp = 2; *Kind = 2; *Swizzled = true;  return true; // SZ_A1R5G5B5
-        case 0x03: *Bpp = 2; *Kind = 2; *Swizzled = true;  return true; // SZ_X1R5G5B5
-        case 0x10: *Bpp = 2; *Kind = 2; *Swizzled = false; return true; // LU_A1R5G5B5
-        case 0x04: *Bpp = 2; *Kind = 3; *Swizzled = true;  return true; // SZ_A4R4G4B4
-        case 0x19: *Bpp = 2; *Kind = 3; *Swizzled = false; return true; // LU_A4R4G4B4
-        case 0x05: *Bpp = 2; *Kind = 1; *Swizzled = true;  return true; // SZ_R5G6B5
-        case 0x11: *Bpp = 2; *Kind = 1; *Swizzled = false; return true; // LU_R5G6B5
-        case 0x06: *Bpp = 4; *Kind = 0; *Swizzled = true;  return true; // SZ_A8R8G8B8
-        case 0x07: *Bpp = 4; *Kind = 0; *Swizzled = true;  return true; // SZ_X8R8G8B8
-        case 0x0B: *Bpp = 1; *Kind = 5; *Swizzled = true;  return true; // SZ_I8_A8R8G8B8 (P8)
-        case 0x12: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8R8G8B8
-        case 0x1A: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8R8G8B8 (rect)
-        case 0x1C: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_X8R8G8B8
-        case 0x1E: *Bpp = 4; *Kind = 0; *Swizzled = false; return true; // LU_A8B8G8R8 approx
-        default:   return false;
+        case 0x00:
+            *Bpp = 1;
+            *Kind = 4;
+            *Swizzled = true;
+            return true; // SZ_Y8
+        case 0x13:
+            *Bpp = 1;
+            *Kind = 4;
+            *Swizzled = false;
+            return true; // LU_Y8
+        case 0x02:
+            *Bpp = 2;
+            *Kind = 2;
+            *Swizzled = true;
+            return true; // SZ_A1R5G5B5
+        case 0x03:
+            *Bpp = 2;
+            *Kind = 2;
+            *Swizzled = true;
+            return true; // SZ_X1R5G5B5
+        case 0x10:
+            *Bpp = 2;
+            *Kind = 2;
+            *Swizzled = false;
+            return true; // LU_A1R5G5B5
+        case 0x04:
+            *Bpp = 2;
+            *Kind = 3;
+            *Swizzled = true;
+            return true; // SZ_A4R4G4B4
+        case 0x19:
+            *Bpp = 2;
+            *Kind = 3;
+            *Swizzled = false;
+            return true; // LU_A4R4G4B4
+        case 0x05:
+            *Bpp = 2;
+            *Kind = 1;
+            *Swizzled = true;
+            return true; // SZ_R5G6B5
+        case 0x11:
+            *Bpp = 2;
+            *Kind = 1;
+            *Swizzled = false;
+            return true; // LU_R5G6B5
+        case 0x06:
+            *Bpp = 4;
+            *Kind = 0;
+            *Swizzled = true;
+            return true; // SZ_A8R8G8B8
+        case 0x07:
+            *Bpp = 4;
+            *Kind = 0;
+            *Swizzled = true;
+            return true; // SZ_X8R8G8B8
+        case 0x0B:
+            *Bpp = 1;
+            *Kind = 5;
+            *Swizzled = true;
+            return true; // SZ_I8_A8R8G8B8 (P8)
+        case 0x12:
+            *Bpp = 4;
+            *Kind = 0;
+            *Swizzled = false;
+            return true; // LU_A8R8G8B8
+        case 0x1A:
+            *Bpp = 4;
+            *Kind = 0;
+            *Swizzled = false;
+            return true; // LU_A8R8G8B8 (rect)
+        case 0x1C:
+            *Bpp = 4;
+            *Kind = 0;
+            *Swizzled = false;
+            return true; // LU_X8R8G8B8
+        case 0x1E:
+            *Bpp = 4;
+            *Kind = 0;
+            *Swizzled = false;
+            return true; // LU_A8B8G8R8 approx
+        default: return false;
     }
 }
 
@@ -3718,11 +3794,29 @@ static ULONG EmuNv2aUnpackTexel(ULONG Raw, ULONG Kind)
     ULONG R = 0, G = 0, B = 0, A = 0xFF;
     switch(Kind)
     {
-        case 0: B = Raw & 0xFF; G = (Raw >> 8) & 0xFF; R = (Raw >> 16) & 0xFF; A = (Raw >> 24) & 0xFF; break;
-        case 1: R = ((Raw >> 11) & 0x1F) << 3; G = ((Raw >> 5) & 0x3F) << 2; B = (Raw & 0x1F) << 3; break;
-        case 2: R = ((Raw >> 10) & 0x1F) << 3; G = ((Raw >> 5) & 0x1F) << 3; B = (Raw & 0x1F) << 3;
-                A = (Raw & 0x8000) ? 0xFF : 0xFF; break;
-        case 3: A = ((Raw >> 12) & 0xF) << 4; R = ((Raw >> 8) & 0xF) << 4; G = ((Raw >> 4) & 0xF) << 4; B = (Raw & 0xF) << 4; break;
+        case 0:
+            B = Raw & 0xFF;
+            G = (Raw >> 8) & 0xFF;
+            R = (Raw >> 16) & 0xFF;
+            A = (Raw >> 24) & 0xFF;
+            break;
+        case 1:
+            R = ((Raw >> 11) & 0x1F) << 3;
+            G = ((Raw >> 5) & 0x3F) << 2;
+            B = (Raw & 0x1F) << 3;
+            break;
+        case 2:
+            R = ((Raw >> 10) & 0x1F) << 3;
+            G = ((Raw >> 5) & 0x1F) << 3;
+            B = (Raw & 0x1F) << 3;
+            A = (Raw & 0x8000) ? 0xFF : 0xFF;
+            break;
+        case 3:
+            A = ((Raw >> 12) & 0xF) << 4;
+            R = ((Raw >> 8) & 0xF) << 4;
+            G = ((Raw >> 4) & 0xF) << 4;
+            B = (Raw & 0xF) << 4;
+            break;
         case 4: R = G = B = Raw & 0xFF; break;
     }
     return (A << 24) | (R << 16) | (G << 8) | B;
@@ -3732,13 +3826,13 @@ static ULONG EmuNv2aUnpackTexel(ULONG Raw, ULONG Kind)
 // texture memory descriptor changes or the guest finishes the frame.
 struct EmuNv2aSampler
 {
-    ULONG *Pixels;
+    ULONG* Pixels;
     BYTE* Source;
     ULONG Size, Width, Height, SourcePitch, Bpp, Kind, LogW, LogH;
-    ULONG  Palette[256];
+    ULONG Palette[256];
     ULONG Address;
-    bool   Swizzled;
-    bool   Bilinear;   // mag filter == LINEAR
+    bool Swizzled;
+    bool Bilinear; // mag filter == LINEAR
     bool OwnsSource;
 };
 
@@ -4104,7 +4198,7 @@ static float EmuNv2aAddressCoordinate(float Coordinate, ULONG Mode)
 
 // Sample at normalized (u,v): nearest, or bilinear (4-texel blend) when the mag
 // filter is LINEAR.
-static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
+static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler* S, float u, float v)
 {
     u = EmuNv2aAddressCoordinate(u, S->Address & 0x7u);
     v = EmuNv2aAddressCoordinate(v, (S->Address >> 8) & 0x7u);
@@ -4115,15 +4209,17 @@ static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler *S, float u, float v)
     }
 
     // Sample the 2x2 texel neighborhood around the point (texel centers at +0.5).
-    float fx = u * (float)S->Width  - 0.5f;
+    float fx = u * (float)S->Width - 0.5f;
     float fy = v * (float)S->Height - 0.5f;
-    int x0 = (int)fx; if((float)x0 > fx) x0--;   // floor without libm
-    int y0 = (int)fy; if((float)y0 > fy) y0--;
+    int x0 = (int)fx;
+    if((float)x0 > fx) x0--; // floor without libm
+    int y0 = (int)fy;
+    if((float)y0 > fy) y0--;
     float wx = fx - (float)x0, wy = fy - (float)y0;
 
-    ULONG c00 = EmuNv2aFetchTexel(S, x0,     y0);
+    ULONG c00 = EmuNv2aFetchTexel(S, x0, y0);
     ULONG c10 = EmuNv2aFetchTexel(S, x0 + 1, y0);
-    ULONG c01 = EmuNv2aFetchTexel(S, x0,     y0 + 1);
+    ULONG c01 = EmuNv2aFetchTexel(S, x0, y0 + 1);
     ULONG c11 = EmuNv2aFetchTexel(S, x0 + 1, y0 + 1);
 
     ULONG Out = 0;
@@ -4192,8 +4288,8 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
     ULONG Base = EmuNv2aResolveDmaBase(TextureDmaHandle);
     ULONG TextureAddress = Base + static_cast<ULONG>(Texture.offset);
     ULONG SourceSize = Width * Height * Bpp;
-    BYTE *Source = new BYTE[SourceSize];
-    const char *SourceKind = NULL;
+    BYTE* Source = new BYTE[SourceSize];
+    const char* SourceKind = NULL;
 
     // The texture is normally a raw host pointer into a contiguous block (or a
     // fake-physical that reverse-maps to one); read it straight from host memory.
@@ -4224,8 +4320,8 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
 
     ULONG LogW = EmuNv2aLog2(Width);
     ULONG LogH = EmuNv2aLog2(Height);
-    ULONG *Pixels = new ULONG[Width * Height]; // BGRA, top-down (BMP view)
-    ULONG *True = new ULONG[Width * Height];   // format-true ARGB (sidecar)
+    ULONG* Pixels = new ULONG[Width * Height]; // BGRA, top-down (BMP view)
+    ULONG* True = new ULONG[Width * Height];   // format-true ARGB (sidecar)
 
     // The BMP forces alpha opaque so image viewers show the colors; the
     // sidecar keeps the format's real alpha so "is the texture actually
@@ -4286,26 +4382,32 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
         }
     }
 
-    char dir[MAX_PATH] = {0};
+    char dir[MAX_PATH] = { 0 };
     GetTempPathA(sizeof(dir), dir);
     char path[MAX_PATH];
     sprintf(path, "%scxbx_tex%lu.bmp", dir, g_EmuNv2aTextureDumpIndex);
 
-    FILE *f = fopen(path, "wb");
+    FILE* f = fopen(path, "wb");
     if(f != NULL)
     {
         ULONG DataSize = Width * Height * 4;
-        unsigned char fh[14] = {0}, ih[40] = {0};
+        unsigned char fh[14] = { 0 }, ih[40] = { 0 };
         ULONG fileSize = 54 + DataSize;
-        fh[0] = 'B'; fh[1] = 'M';
-        fh[2] = (unsigned char)fileSize;         fh[3] = (unsigned char)(fileSize >> 8);
-        fh[4] = (unsigned char)(fileSize >> 16); fh[5] = (unsigned char)(fileSize >> 24);
+        fh[0] = 'B';
+        fh[1] = 'M';
+        fh[2] = (unsigned char)fileSize;
+        fh[3] = (unsigned char)(fileSize >> 8);
+        fh[4] = (unsigned char)(fileSize >> 16);
+        fh[5] = (unsigned char)(fileSize >> 24);
         fh[10] = 54;
         ih[0] = 40;
-        ih[4] = (unsigned char)Width; ih[5] = (unsigned char)(Width >> 8);
+        ih[4] = (unsigned char)Width;
+        ih[5] = (unsigned char)(Width >> 8);
         LONG nh = -(LONG)Height; // negative height => top-down
-        ih[8]  = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
-        ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+        ih[8] = (unsigned char)nh;
+        ih[9] = (unsigned char)(nh >> 8);
+        ih[10] = (unsigned char)(nh >> 16);
+        ih[11] = (unsigned char)(nh >> 24);
         ih[12] = 1;
         ih[14] = 32;
         fwrite(fh, 1, 14, f);
@@ -4319,7 +4421,7 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
         // guest memory (pre-deswizzle, pre-unpack).
         char sidecar[MAX_PATH];
         sprintf(sidecar, "%scxbx_tex%lu.argb", dir, g_EmuNv2aTextureDumpIndex);
-        FILE *sf = fopen(sidecar, "wb");
+        FILE* sf = fopen(sidecar, "wb");
         if(sf != NULL)
         {
             ULONG header[6] = { 0x58455458 /* 'XTEX' */, Width, Height,
@@ -4367,7 +4469,7 @@ static bool EmuNv2aWindowEnabled()
 {
     if(InterlockedCompareExchange(&g_EmuNv2aWindowChecked, 1, 0) == 0)
     {
-        char Buffer[8] = {0};
+        char Buffer[8] = { 0 };
         DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_WINDOW", Buffer, sizeof(Buffer));
         g_bEmuNv2aWindow = (Length > 0 && Buffer[0] == '1');
     }
@@ -4400,8 +4502,8 @@ static DWORD WINAPI EmuNv2aWindowThread(LPVOID Param)
     RECT R = { 0, 0, W, H };
     AdjustWindowRect(&R, WS_OVERLAPPEDWINDOW, FALSE);
     g_hEmuNv2aWindow = CreateWindowA("CxbxNv2aRender", "cxbx : NV2A software rasterizer",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, R.right - R.left, R.bottom - R.top,
-        NULL, NULL, GetModuleHandle(NULL), NULL);
+                                     WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, R.right - R.left, R.bottom - R.top,
+                                     NULL, NULL, GetModuleHandle(NULL), NULL);
     ShowWindow(g_hEmuNv2aWindow, SW_SHOW);
     UpdateWindow(g_hEmuNv2aWindow);
 
@@ -4624,14 +4726,14 @@ extern "C" void EmuNv2aBlitResolvedFrame()
 // CXBX_NV2A_CRC=1             one NVCRC| line per present: zlib-compatible
 //                             CRC32 of the normalized scanout pixels
 
-static bool EmuNv2aParseDrawRange(const char *Value, ULONG *Begin, ULONG *End)
+static bool EmuNv2aParseDrawRange(const char* Value, ULONG* Begin, ULONG* End)
 {
     if(Value == NULL || *Value == '\0')
     {
         return false;
     }
 
-    char *Cursor = NULL;
+    char* Cursor = NULL;
     *Begin = strtoul(Value, &Cursor, 0);
     if(Cursor != NULL && (*Cursor == ':' || *Cursor == '-'))
     {
@@ -4645,9 +4747,9 @@ static bool EmuNv2aParseDrawRange(const char *Value, ULONG *Begin, ULONG *End)
 }
 
 // Build "%TEMP%\cxbx_nv2a_draw\<fileName>" and make sure the directory exists.
-static void EmuNv2aDebugDumpPath(char *Buffer, size_t Size, const char *FileName)
+static void EmuNv2aDebugDumpPath(char* Buffer, size_t Size, const char* FileName)
 {
-    char TempPath[MAX_PATH] = {0};
+    char TempPath[MAX_PATH] = { 0 };
     DWORD Length = GetTempPathA(MAX_PATH, TempPath);
     if(Length == 0 || Length >= MAX_PATH)
     {
@@ -4664,7 +4766,7 @@ static void EmuNv2aDebugDumpPath(char *Buffer, size_t Size, const char *FileName
 
 // zlib-compatible CRC32 (poly 0xEDB88320, init/final 0xFFFFFFFF) so host tools
 // can recompute the same value with Python's zlib.crc32.
-static ULONG EmuNv2aCrc32(const void *Data, ULONG Size)
+static ULONG EmuNv2aCrc32(const void* Data, ULONG Size)
 {
     static ULONG Table[256];
     static bool Built = false;
@@ -4683,7 +4785,7 @@ static ULONG EmuNv2aCrc32(const void *Data, ULONG Size)
     }
 
     ULONG Crc = 0xFFFFFFFFu;
-    const unsigned char *Bytes = (const unsigned char *)Data;
+    const unsigned char* Bytes = (const unsigned char*)Data;
     for(ULONG i = 0; i < Size; i++)
     {
         Crc = (Crc >> 8) ^ Table[(Crc ^ Bytes[i]) & 0xFF];
@@ -4695,7 +4797,7 @@ static ULONG EmuNv2aCrc32(const void *Data, ULONG Size)
 // reliably see the process environment inside the generated guest executable,
 // so the NV2A gates all query the live environment (compare
 // EmuNv2aRasterEnabled / EmuNv2aTextureDumpEnabled).
-static bool EmuNv2aGetEnv(const char *Name, char *Buffer, DWORD Size)
+static bool EmuNv2aGetEnv(const char* Name, char* Buffer, DWORD Size)
 {
     DWORD Length = GetEnvironmentVariableA(Name, Buffer, Size);
     return Length > 0 && Length < Size;
@@ -4766,7 +4868,7 @@ static bool EmuNv2aDrawGate(
 static void EmuNv2aWriteDrawStateFile(
     const char* Path, const char* What, ULONG BeginOp, ULONG Count)
 {
-    FILE *f = fopen(Path, "w");
+    FILE* f = fopen(Path, "w");
     if(f == NULL)
     {
         return;
@@ -4985,7 +5087,7 @@ static void EmuNv2aDrawPost(
     char BmpPath[MAX_PATH * 2];
     EmuNv2aDebugDumpPath(BmpPath, sizeof(BmpPath), FileName);
 
-    FILE *f = fopen(BmpPath, "wb");
+    FILE* f = fopen(BmpPath, "wb");
     if(f == NULL)
     {
         printf("NVDRAW| dump open failed (%s)\n", BmpPath);
@@ -4994,18 +5096,25 @@ static void EmuNv2aDrawPost(
     }
 
     ULONG DataSize = (ULONG)Width * (ULONG)Height * 4;
-    unsigned char fh[14] = {0}, ih[40] = {0};
+    unsigned char fh[14] = { 0 }, ih[40] = { 0 };
     ULONG FileSize = 54 + DataSize;
-    fh[0] = 'B'; fh[1] = 'M';
-    fh[2] = (unsigned char)FileSize;         fh[3] = (unsigned char)(FileSize >> 8);
-    fh[4] = (unsigned char)(FileSize >> 16); fh[5] = (unsigned char)(FileSize >> 24);
+    fh[0] = 'B';
+    fh[1] = 'M';
+    fh[2] = (unsigned char)FileSize;
+    fh[3] = (unsigned char)(FileSize >> 8);
+    fh[4] = (unsigned char)(FileSize >> 16);
+    fh[5] = (unsigned char)(FileSize >> 24);
     fh[10] = 54;
     ih[0] = 40;
-    ih[4] = (unsigned char)Width; ih[5] = (unsigned char)(Width >> 8);
-    ih[6] = (unsigned char)(Width >> 16); ih[7] = (unsigned char)(Width >> 24);
+    ih[4] = (unsigned char)Width;
+    ih[5] = (unsigned char)(Width >> 8);
+    ih[6] = (unsigned char)(Width >> 16);
+    ih[7] = (unsigned char)(Width >> 24);
     LONG nh = -(LONG)Height; // negative height => top-down
-    ih[8]  = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
-    ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+    ih[8] = (unsigned char)nh;
+    ih[9] = (unsigned char)(nh >> 8);
+    ih[10] = (unsigned char)(nh >> 16);
+    ih[11] = (unsigned char)(nh >> 24);
     ih[12] = 1;
     ih[14] = 32;
     fwrite(fh, 1, 14, f);
@@ -5013,7 +5122,7 @@ static void EmuNv2aDrawPost(
 
     // Copy row by row through the guarded reader (the surface pointer came from
     // guest state) and force opaque alpha so the BMP renders solid.
-    ULONG *Row = new ULONG[Width];
+    ULONG* Row = new ULONG[Width];
     bool Ok = true;
     for(int Y = 0; Y < Height && Ok; Y++)
     {
@@ -5093,8 +5202,8 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
         Height = 2048u;
 
     ULONG SurfaceSize = Pitch * Height;
-    BYTE *Surface = new BYTE[SurfaceSize];
-    const char *SourceKind = NULL;
+    BYTE* Surface = new BYTE[SurfaceSize];
+    const char* SourceKind = NULL;
 
     if(Host != 0 && EmuTryReadHost(Host, Surface, SurfaceSize))
     {
@@ -5120,11 +5229,11 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 
     // Repack each X8R8G8B8 scanline to BGRA (drop any pitch padding beyond width)
     // and force opaque alpha so the BMP renders solid.
-    ULONG *Pixels = new ULONG[Width * Height];
+    ULONG* Pixels = new ULONG[Width * Height];
     ULONG DistinctSample = 0, FirstColor = 0;
     for(ULONG Y = 0; Y < Height; Y++)
     {
-        const ULONG *Row = (const ULONG *)(Surface + (size_t)Y * Pitch);
+        const ULONG* Row = (const ULONG*)(Surface + (size_t)Y * Pitch);
         for(ULONG X = 0; X < Width; X++)
         {
             ULONG Bgra = (Row[X] & 0x00FFFFFF) | 0xFF000000;
@@ -5181,27 +5290,34 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
     if(WantWindow)
         EmuNv2aBlitToWindow(Pixels, Width, Height);
 
-    char dir[MAX_PATH] = {0};
+    char dir[MAX_PATH] = { 0 };
     GetTempPathA(sizeof(dir), dir);
     char path[MAX_PATH];
     sprintf(path, "%scxbx_fb%lu.bmp", dir, g_EmuNv2aScanoutDumpIndex);
 
-    FILE *f = WantBmp ? fopen(path, "wb") : NULL;
+    FILE* f = WantBmp ? fopen(path, "wb") : NULL;
     if(f != NULL)
     {
         ULONG DataSize = Width * Height * 4;
-        unsigned char fh[14] = {0}, ih[40] = {0};
+        unsigned char fh[14] = { 0 }, ih[40] = { 0 };
         ULONG fileSize = 54 + DataSize;
-        fh[0] = 'B'; fh[1] = 'M';
-        fh[2] = (unsigned char)fileSize;         fh[3] = (unsigned char)(fileSize >> 8);
-        fh[4] = (unsigned char)(fileSize >> 16); fh[5] = (unsigned char)(fileSize >> 24);
+        fh[0] = 'B';
+        fh[1] = 'M';
+        fh[2] = (unsigned char)fileSize;
+        fh[3] = (unsigned char)(fileSize >> 8);
+        fh[4] = (unsigned char)(fileSize >> 16);
+        fh[5] = (unsigned char)(fileSize >> 24);
         fh[10] = 54;
         ih[0] = 40;
-        ih[4] = (unsigned char)Width; ih[5] = (unsigned char)(Width >> 8);
-        ih[6] = (unsigned char)(Width >> 16); ih[7] = (unsigned char)(Width >> 24);
+        ih[4] = (unsigned char)Width;
+        ih[5] = (unsigned char)(Width >> 8);
+        ih[6] = (unsigned char)(Width >> 16);
+        ih[7] = (unsigned char)(Width >> 24);
         LONG nh = -(LONG)Height; // negative height => top-down
-        ih[8]  = (unsigned char)nh;         ih[9]  = (unsigned char)(nh >> 8);
-        ih[10] = (unsigned char)(nh >> 16); ih[11] = (unsigned char)(nh >> 24);
+        ih[8] = (unsigned char)nh;
+        ih[9] = (unsigned char)(nh >> 8);
+        ih[10] = (unsigned char)(nh >> 16);
+        ih[11] = (unsigned char)(nh >> 24);
         ih[12] = 1;
         ih[14] = 32;
         fwrite(fh, 1, 14, f);
@@ -5258,7 +5374,7 @@ static void EmuNv2aPresentColorSurface()
 }
 
 static void EmuNv2aTrackAaColorSurface(ULONG Host, ULONG Pitch,
-                                      ULONG Width, ULONG Height)
+                                       ULONG Width, ULONG Height)
 {
     const ULONG AaMode = (g_EmuNv2aSurfaceState.format >> 12) & 0x0F;
     if(AaMode == 0 || Host == 0 || Pitch == 0 || Width == 0 || Height == 0)
@@ -5364,7 +5480,7 @@ static bool EmuNv2aRasterEnabled()
     }
     if(!g_bEmuNv2aRasterChecked)
     {
-        char Buffer[8] = {0};
+        char Buffer[8] = { 0 };
         DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_RASTER", Buffer, sizeof(Buffer));
         g_bEmuNv2aRaster = (Length > 0 && Buffer[0] == '1');
         g_bEmuNv2aRasterChecked = true;
@@ -5432,7 +5548,7 @@ static void EmuNv2aClearSurface(ULONG Flags)
     };
     const cxbx::nv2a::RasterBounds ClearBounds =
         cxbx::nv2a::IntersectRasterBounds(
-            {ClearMinX, ClearMinY, ClearMaxX + 1, ClearMaxY + 1}, SurfaceClip);
+            { ClearMinX, ClearMinY, ClearMaxX + 1, ClearMaxY + 1 }, SurfaceClip);
     if(ClearBounds.Empty())
     {
         return;
@@ -5486,13 +5602,13 @@ static void EmuNv2aClearSurface(ULONG Flags)
             {
                 Mask |= 0xFF000000;
             }
-            ULONG *Color = reinterpret_cast<ULONG *>(static_cast<uintptr_t>(ColorHost));
+            ULONG* Color = reinterpret_cast<ULONG*>(static_cast<uintptr_t>(ColorHost));
             int Pitch = ColorPitchB / 4;
             for(int Y = MinY; Y <= MaxY; ++Y)
             {
                 for(int X = MinX; X <= MaxX; ++X)
                 {
-                    ULONG &Pixel = Color[Y * Pitch + X];
+                    ULONG& Pixel = Color[Y * Pitch + X];
                     Pixel = (Pixel & ~Mask) | (g_EmuNv2aSurfaceState.colorClearValue & Mask);
                 }
             }
@@ -5507,7 +5623,7 @@ static void EmuNv2aClearSurface(ULONG Flags)
                 {
                     PitchB = Width * 4;
                 }
-                ULONG *Zeta = reinterpret_cast<ULONG *>(static_cast<uintptr_t>(ZetaHost));
+                ULONG* Zeta = reinterpret_cast<ULONG*>(static_cast<uintptr_t>(ZetaHost));
                 int Pitch = PitchB / 4;
                 ULONG Mask = ((Flags & 0x01) != 0 ? 0xFFFFFF00 : 0) |
                              ((Flags & 0x02) != 0 ? 0x000000FF : 0);
@@ -5515,7 +5631,7 @@ static void EmuNv2aClearSurface(ULONG Flags)
                 {
                     for(int X = MinX; X <= MaxX; ++X)
                     {
-                        ULONG &Pixel = Zeta[Y * Pitch + X];
+                        ULONG& Pixel = Zeta[Y * Pitch + X];
                         Pixel = (Pixel & ~Mask) | (g_EmuNv2aSurfaceState.zStencilClearValue & Mask);
                     }
                 }
@@ -5526,7 +5642,7 @@ static void EmuNv2aClearSurface(ULONG Flags)
                 {
                     PitchB = Width * 2;
                 }
-                unsigned short *Zeta = reinterpret_cast<unsigned short *>(static_cast<uintptr_t>(ZetaHost));
+                unsigned short* Zeta = reinterpret_cast<unsigned short*>(static_cast<uintptr_t>(ZetaHost));
                 int Pitch = PitchB / 2;
                 unsigned short Value = static_cast<unsigned short>(g_EmuNv2aSurfaceState.zStencilClearValue);
                 for(int Y = MinY; Y <= MaxY; ++Y)
@@ -6120,25 +6236,25 @@ static void EmuNv2aCommitRasterVertex(
 // (zeta) surface and the depth-test state. Populated once per DRAW_ARRAYS.
 struct EmuNv2aRasterTarget
 {
-    ULONG *Color;
-    int    PitchPx;
-    int    Width;
-    int    Height;
-    int    ClipMinX;
-    int    ClipMinY;
-    int    ClipMaxX;
-    int    ClipMaxY;
-    void  *Depth;        // NULL when neither depth nor stencil is active this draw
-    int    DepthPitchB;
-    ULONG  DepthFormat;  // 1=Z16, 2=Z24S8
-    ULONG  DepthFunc;    // NV097_SET_DEPTH_FUNC value (0x200..0x207)
-    bool   DepthTest;
-    bool   DepthWrite;
-    const EmuNv2aSampler *Sampler[EmuNv2aTextureStageCount];
-    bool   BlendEnable;
-    ULONG  BlendSFactor, BlendDFactor, BlendEquation;
-    bool   AlphaTest;
-    ULONG  AlphaFunc, AlphaRef;
+    ULONG* Color;
+    int PitchPx;
+    int Width;
+    int Height;
+    int ClipMinX;
+    int ClipMinY;
+    int ClipMaxX;
+    int ClipMaxY;
+    void* Depth; // NULL when neither depth nor stencil is active this draw
+    int DepthPitchB;
+    ULONG DepthFormat; // 1=Z16, 2=Z24S8
+    ULONG DepthFunc;   // NV097_SET_DEPTH_FUNC value (0x200..0x207)
+    bool DepthTest;
+    bool DepthWrite;
+    const EmuNv2aSampler* Sampler[EmuNv2aTextureStageCount];
+    bool BlendEnable;
+    ULONG BlendSFactor, BlendDFactor, BlendEquation;
+    bool AlphaTest;
+    ULONG AlphaFunc, AlphaRef;
     ULONG CombinerControl;
     ULONG CombinerColorIcw, CombinerAlphaIcw;
     ULONG CombinerColorOcw, CombinerAlphaOcw;
@@ -6146,9 +6262,9 @@ struct EmuNv2aRasterTarget
     ULONG CombinerMode;
     ULONG FinalCombinerCw0, FinalCombinerCw1;
     bool FinalCombiner;
-    bool   StencilTest;
-    ULONG  StencilFunc, StencilRef, StencilFuncMask, StencilMask;
-    ULONG  StencilOpFail, StencilOpZFail, StencilOpZPass;
+    bool StencilTest;
+    ULONG StencilFunc, StencilRef, StencilFuncMask, StencilMask;
+    ULONG StencilOpFail, StencilOpZFail, StencilOpZPass;
 };
 
 struct EmuNv2aTextureCoordinateArrays
@@ -6173,18 +6289,22 @@ static float EmuNv2aBlendFactor(ULONG Factor, float ChanSrc, float ChanDst, floa
 {
     switch(Factor)
     {
-        case 0x0000: return 0.0f;                 // ZERO
-        case 0x0001: return 1.0f;                 // ONE
-        case 0x0300: return ChanSrc;              // SRC_COLOR
-        case 0x0301: return 1.0f - ChanSrc;       // ONE_MINUS_SRC_COLOR
-        case 0x0302: return Sa;                   // SRC_ALPHA
-        case 0x0303: return 1.0f - Sa;            // ONE_MINUS_SRC_ALPHA
-        case 0x0304: return Da;                   // DST_ALPHA
-        case 0x0305: return 1.0f - Da;            // ONE_MINUS_DST_ALPHA
-        case 0x0306: return ChanDst;              // DST_COLOR
-        case 0x0307: return 1.0f - ChanDst;       // ONE_MINUS_DST_COLOR
-        case 0x0308: { float m = Sa < 1.0f - Da ? Sa : 1.0f - Da; return m; } // SRC_ALPHA_SATURATE
-        default:     return 1.0f;
+        case 0x0000: return 0.0f;           // ZERO
+        case 0x0001: return 1.0f;           // ONE
+        case 0x0300: return ChanSrc;        // SRC_COLOR
+        case 0x0301: return 1.0f - ChanSrc; // ONE_MINUS_SRC_COLOR
+        case 0x0302: return Sa;             // SRC_ALPHA
+        case 0x0303: return 1.0f - Sa;      // ONE_MINUS_SRC_ALPHA
+        case 0x0304: return Da;             // DST_ALPHA
+        case 0x0305: return 1.0f - Da;      // ONE_MINUS_DST_ALPHA
+        case 0x0306: return ChanDst;        // DST_COLOR
+        case 0x0307: return 1.0f - ChanDst; // ONE_MINUS_DST_COLOR
+        case 0x0308:
+        {
+            float m = Sa < 1.0f - Da ? Sa : 1.0f - Da;
+            return m;
+        } // SRC_ALPHA_SATURATE
+        default: return 1.0f;
     }
 }
 
@@ -6193,11 +6313,11 @@ static ULONG EmuNv2aBlendChannel(ULONG Eq, float S, float D)
     float R;
     switch(Eq)
     {
-        case 0x800A: R = S - D; break;   // FUNC_SUBTRACT
-        case 0x800B: R = D - S; break;   // FUNC_REVERSE_SUBTRACT
+        case 0x800A: R = S - D; break;         // FUNC_SUBTRACT
+        case 0x800B: R = D - S; break;         // FUNC_REVERSE_SUBTRACT
         case 0x8007: R = S < D ? S : D; break; // MIN (of the pre-factored terms)
         case 0x8008: R = S > D ? S : D; break; // MAX
-        default:     R = S + D; break;   // FUNC_ADD
+        default: R = S + D; break;             // FUNC_ADD
     }
     if(R <= 0.0f) return 0;
     if(R >= 1.0f) return 255;
@@ -6213,18 +6333,18 @@ static ULONG EmuNv2aBlend(ULONG Src, ULONG Dst, ULONG Sf, ULONG Df, ULONG Eq)
     }
 
     float sa = ((Src >> 24) & 0xFF) / 255.0f, sr = ((Src >> 16) & 0xFF) / 255.0f;
-    float sg = ((Src >> 8) & 0xFF) / 255.0f,  sb = (Src & 0xFF) / 255.0f;
+    float sg = ((Src >> 8) & 0xFF) / 255.0f, sb = (Src & 0xFF) / 255.0f;
     float da = ((Dst >> 24) & 0xFF) / 255.0f, dr = ((Dst >> 16) & 0xFF) / 255.0f;
-    float dg = ((Dst >> 8) & 0xFF) / 255.0f,  db = (Dst & 0xFF) / 255.0f;
+    float dg = ((Dst >> 8) & 0xFF) / 255.0f, db = (Dst & 0xFF) / 255.0f;
 
     ULONG A = EmuNv2aBlendChannel(Eq, sa * EmuNv2aBlendFactor(Sf, sa, da, sa, da),
-                                      da * EmuNv2aBlendFactor(Df, sa, da, sa, da));
+                                  da * EmuNv2aBlendFactor(Df, sa, da, sa, da));
     ULONG R = EmuNv2aBlendChannel(Eq, sr * EmuNv2aBlendFactor(Sf, sr, dr, sa, da),
-                                      dr * EmuNv2aBlendFactor(Df, sr, dr, sa, da));
+                                  dr * EmuNv2aBlendFactor(Df, sr, dr, sa, da));
     ULONG G = EmuNv2aBlendChannel(Eq, sg * EmuNv2aBlendFactor(Sf, sg, dg, sa, da),
-                                      dg * EmuNv2aBlendFactor(Df, sg, dg, sa, da));
+                                  dg * EmuNv2aBlendFactor(Df, sg, dg, sa, da));
     ULONG B = EmuNv2aBlendChannel(Eq, sb * EmuNv2aBlendFactor(Sf, sb, db, sa, da),
-                                      db * EmuNv2aBlendFactor(Df, sb, db, sa, da));
+                                  db * EmuNv2aBlendFactor(Df, sb, db, sa, da));
     return (A << 24) | (R << 16) | (G << 8) | B;
 }
 
@@ -6387,14 +6507,14 @@ static bool EmuNv2aDepthPass(ULONG Func, ULONG Src, ULONG Dst)
 {
     switch(Func)
     {
-        case 0x200: return false;        // NEVER
-        case 0x201: return Src < Dst;    // LESS
-        case 0x202: return Src == Dst;   // EQUAL
-        case 0x203: return Src <= Dst;   // LEQUAL
-        case 0x204: return Src > Dst;    // GREATER
-        case 0x205: return Src != Dst;   // NOTEQUAL
-        case 0x206: return Src >= Dst;   // GEQUAL
-        default:    return true;         // ALWAYS
+        case 0x200: return false;      // NEVER
+        case 0x201: return Src < Dst;  // LESS
+        case 0x202: return Src == Dst; // EQUAL
+        case 0x203: return Src <= Dst; // LEQUAL
+        case 0x204: return Src > Dst;  // GREATER
+        case 0x205: return Src != Dst; // NOTEQUAL
+        case 0x206: return Src >= Dst; // GEQUAL
+        default: return true;          // ALWAYS
     }
 }
 
@@ -6403,14 +6523,14 @@ static ULONG EmuNv2aStencilOp(ULONG Op, ULONG Value, ULONG Ref)
 {
     switch(Op)
     {
-        case 0x0000: return 0;                                   // ZERO
-        case 0x1E01: return Ref & 0xFF;                          // REPLACE
-        case 0x1E02: return Value < 0xFF ? Value + 1 : 0xFF;     // INCR (saturate)
-        case 0x1E03: return Value > 0 ? Value - 1 : 0;           // DECR (saturate)
-        case 0x150A: return (~Value) & 0xFF;                     // INVERT
-        case 0x8507: return (Value + 1) & 0xFF;                  // INCR_WRAP
-        case 0x8508: return (Value - 1) & 0xFF;                  // DECR_WRAP
-        default:     return Value;                               // KEEP
+        case 0x0000: return 0;                               // ZERO
+        case 0x1E01: return Ref & 0xFF;                      // REPLACE
+        case 0x1E02: return Value < 0xFF ? Value + 1 : 0xFF; // INCR (saturate)
+        case 0x1E03: return Value > 0 ? Value - 1 : 0;       // DECR (saturate)
+        case 0x150A: return (~Value) & 0xFF;                 // INVERT
+        case 0x8507: return (Value + 1) & 0xFF;              // INCR_WRAP
+        case 0x8508: return (Value - 1) & 0xFF;              // DECR_WRAP
+        default: return Value;                               // KEEP
     }
 }
 
@@ -6423,15 +6543,15 @@ static ULONG EmuNv2aStencilOp(ULONG Op, ULONG Value, ULONG Ref)
 // increment when on.
 struct EmuNv2aPixelStats
 {
-    ULONG Shaded;            // reached the shader, inside the clip rect
-    ULONG TexelOpaque;       // stage-0 texel had a nonzero alpha
-    ULONG ShadedNonBlack;    // post-combiner colour had a nonzero RGB
-    ULONG AlphaKilled;       // dropped by the alpha test
-    ULONG DepthKilled;       // dropped by the depth/stencil test
-    ULONG Written;           // reached the surface store
-    ULONG WrittenNonBlack;   // ... and the stored dword had a nonzero RGB
-    ULONG FirstOpaqueTexel;  // first stage-0 texel seen with alpha != 0
-    ULONG FirstWritten;      // first colour actually stored
+    ULONG Shaded;           // reached the shader, inside the clip rect
+    ULONG TexelOpaque;      // stage-0 texel had a nonzero alpha
+    ULONG ShadedNonBlack;   // post-combiner colour had a nonzero RGB
+    ULONG AlphaKilled;      // dropped by the alpha test
+    ULONG DepthKilled;      // dropped by the depth/stencil test
+    ULONG Written;          // reached the surface store
+    ULONG WrittenNonBlack;  // ... and the stored dword had a nonzero RGB
+    ULONG FirstOpaqueTexel; // first stage-0 texel seen with alpha != 0
+    ULONG FirstWritten;     // first colour actually stored
     // Primitives dropped before any pixel is walked. The homogeneous-W guard
     // rejects a whole primitive silently, so a draw can report triangles while
     // shading nothing at all -- record the offending W so the vertex stage can
@@ -6675,11 +6795,11 @@ static void EmuNv2aShadeP8TilePixel(
 // is bound the screen z is interpolated and tested/written; when a sampler is
 // bound the texcoords are perspective-correctly interpolated (via per-vertex
 // 1/w), point-sampled, and modulated with the diffuse. Clipped to the surface.
-static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
-                                const float *VX, const float *VY, const float *VZ,
-                                const float *VW,
+static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget* T,
+                                const float* VX, const float* VY, const float* VZ,
+                                const float* VW,
                                 const EmuNv2aTextureCoordinateArrays* TexCoords,
-                                const ULONG *VC, ULONG i0, ULONG i1, ULONG i2)
+                                const ULONG* VC, ULONG i0, ULONG i1, ULONG i2)
 {
     if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(
            VW[i0], VW[i1], VW[i2]))
@@ -6745,16 +6865,18 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
         HiYf = static_cast<float>(T->ClipMaxY - 1);
     }
 
-    int MinX = (int)LoXf;       int MinY = (int)LoYf;
-    int MaxX = (int)HiXf + 1;   int MaxY = (int)HiYf + 1;
+    int MinX = (int)LoXf;
+    int MinY = (int)LoYf;
+    int MaxX = (int)HiXf + 1;
+    int MaxY = (int)HiYf + 1;
 
     bool Uniform = (Ca == Cb && Cb == Cc);
     float Aa = (float)((Ca >> 24) & 0xFF), Ra = (float)((Ca >> 16) & 0xFF);
-    float Ga = (float)((Ca >>  8) & 0xFF), Bva = (float)(Ca & 0xFF);
+    float Ga = (float)((Ca >> 8) & 0xFF), Bva = (float)(Ca & 0xFF);
     float Ab = (float)((Cb >> 24) & 0xFF), Rb = (float)((Cb >> 16) & 0xFF);
-    float Gb = (float)((Cb >>  8) & 0xFF), Bvb = (float)(Cb & 0xFF);
+    float Gb = (float)((Cb >> 8) & 0xFF), Bvb = (float)(Cb & 0xFF);
     float Ac = (float)((Cc >> 24) & 0xFF), Rc = (float)((Cc >> 16) & 0xFF);
-    float Gc = (float)((Cc >>  8) & 0xFF), Bvc = (float)(Cc & 0xFF);
+    float Gc = (float)((Cc >> 8) & 0xFF), Bvc = (float)(Cc & 0xFF);
 
     for(int Y = MinY; Y < MaxY; Y++)
     {
@@ -6801,11 +6923,13 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget *T,
                 U[Stage] =
                     (la * TexCoords->U[Stage][i0] * aiw +
                      lb * TexCoords->U[Stage][i1] * biw +
-                     lc * TexCoords->U[Stage][i2] * ciw) * inv;
+                     lc * TexCoords->U[Stage][i2] * ciw) *
+                    inv;
                 V[Stage] =
                     (la * TexCoords->V[Stage][i0] * aiw +
                      lb * TexCoords->V[Stage][i1] * biw +
-                     lc * TexCoords->V[Stage][i2] * ciw) * inv;
+                     lc * TexCoords->V[Stage][i2] * ciw) *
+                    inv;
             }
             const float z = la * az + lb * bz + lc * cz;
             EmuNv2aShadePixel(T, X, Y, z, Color, U, V);
@@ -7208,9 +7332,9 @@ static void EmuNv2aRasterizeDrawArrays(
         return;
     }
 
-    const char *DrawKind = g_EmuNv2aRasterizingImmediate ? "immediate"
-                           : (InlineData != nullptr ? "inline"
-                           : (Indices != nullptr ? "elements" : "draw_arrays"));
+    const char* DrawKind = g_EmuNv2aRasterizingImmediate ? "immediate"
+                                                         : (InlineData != nullptr ? "inline"
+                                                                                  : (Indices != nullptr ? "elements" : "draw_arrays"));
     if(!EmuNv2aDrawGate(DrawKind, BeginOp, Count))
     {
         return;
@@ -7307,7 +7431,7 @@ static void EmuNv2aRasterizeDrawArrays(
     }
 
     EmuNv2aRasterTarget Target = {};
-    Target.Color = (ULONG *)(uintptr_t)SurfaceHost;
+    Target.Color = (ULONG*)(uintptr_t)SurfaceHost;
     Target.PitchPx = PitchPx;
     Target.Width = Width;
     Target.Height = Height;
@@ -7367,7 +7491,7 @@ static void EmuNv2aRasterizeDrawArrays(
             if(DepthBlockBase != 0 &&
                DepthEnd <= static_cast<ULONGLONG>(DepthBlockBase) + DepthBlockSize)
             {
-                Target.Depth = (void *)(uintptr_t)ZetaHost;
+                Target.Depth = (void*)(uintptr_t)ZetaHost;
                 Target.DepthFormat = g_EmuNv2aSurfaceState.zetaFormat;
                 Target.DepthFunc = g_EmuNv2aRenderState.depthFunc;
                 Target.DepthTest = g_EmuNv2aRenderState.depthTest;
@@ -7468,7 +7592,9 @@ static void EmuNv2aRasterizeDrawArrays(
     {
         char Value[8];
         VertexTraceEnabled = EmuNv2aGetEnv(
-            "CXBX_NV2A_VERTEX_TRACE", Value, sizeof(Value)) ? 1 : 0;
+                                 "CXBX_NV2A_VERTEX_TRACE", Value, sizeof(Value))
+                                 ? 1
+                                 : 0;
     }
 
     for(ULONG i = 0; i < Count; i++)
@@ -7496,7 +7622,9 @@ static void EmuNv2aRasterizeDrawArrays(
                 {
                     char Value[8];
                     TraceEnabled = EmuNv2aGetEnv(
-                        "CXBX_NV2A_IMMEDIATE_TRACE", Value, sizeof(Value)) ? 1 : 0;
+                                       "CXBX_NV2A_IMMEDIATE_TRACE", Value, sizeof(Value))
+                                       ? 1
+                                       : 0;
                 }
                 if(TraceEnabled == 1)
                 {
@@ -7798,7 +7926,7 @@ static void EmuNv2aRasterizeDrawArrays(
                 for(ULONG i = 0; i + 2 < Count; i += 3)
                 {
                     EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i+1, i+2);
+                                        &TextureCoordinates, VC, i, i + 1, i + 2);
                     Triangles++;
                 }
                 break;
@@ -7806,7 +7934,7 @@ static void EmuNv2aRasterizeDrawArrays(
                 for(ULONG i = 0; i + 2 < Count; i++)
                 {
                     EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i+1, i+2);
+                                        &TextureCoordinates, VC, i, i + 1, i + 2);
                     Triangles++;
                 }
                 break;
@@ -7815,7 +7943,7 @@ static void EmuNv2aRasterizeDrawArrays(
                 for(ULONG i = 1; i + 1 < Count; i++)
                 {
                     EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, 0, i, i+1);
+                                        &TextureCoordinates, VC, 0, i, i + 1);
                     Triangles++;
                 }
                 break;
@@ -7839,9 +7967,9 @@ static void EmuNv2aRasterizeDrawArrays(
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
                     EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i+1, i+3);
+                                        &TextureCoordinates, VC, i, i + 1, i + 3);
                     EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i+3, i+2);
+                                        &TextureCoordinates, VC, i, i + 3, i + 2);
                     Triangles += 2;
                 }
                 break;
@@ -7927,7 +8055,7 @@ static void EmuNv2aRasterizeDrawArrays(
         DrawKind, BeginOp, Count, SurfaceHost, PitchB, Width, Height);
 }
 
-static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)
+static bool EmuNv2aLoadDmaObject(ULONG* BaseAddress, ULONG* Limit)
 {
     const ULONG Instance =
         (EmuNv2aCachedRegister(NV_PFIFO_CACHE1_DMA_INSTANCE, 0) &
@@ -7954,7 +8082,7 @@ static bool EmuNv2aLoadDmaObject(ULONG *BaseAddress, ULONG *Limit)
     return true;
 }
 
-static bool EmuNv2aReadDmaWord(ULONG BaseAddress, ULONG Offset, ULONG *Value)
+static bool EmuNv2aReadDmaWord(ULONG BaseAddress, ULONG Offset, ULONG* Value)
 {
     ULONG PhysicalAddress = BaseAddress + Offset;
 
@@ -7976,7 +8104,7 @@ extern "C" int EmuNv2aRenderStarted()
 // Fetch a pushbuffer word. In host mode the pushbuffer lives in a host
 // contiguous block and Address is an absolute host pointer; otherwise it is an
 // offset into the DMA object read from the physical-map shadow (probe path).
-static bool EmuNv2aFetchPushWord(bool HostMode, ULONG BaseAddress, ULONG Address, ULONG *Value)
+static bool EmuNv2aFetchPushWord(bool HostMode, ULONG BaseAddress, ULONG Address, ULONG* Value)
 {
     if(HostMode)
         return EmuTryReadHost(Address, Value, 4);
@@ -8189,7 +8317,7 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
     bool IsBulkStore = false;
     __try
     {
-        const BYTE *FaultInstruction = (const BYTE *)e->ContextRecord->Eip;
+        const BYTE* FaultInstruction = (const BYTE*)e->ContextRecord->Eip;
         IsBulkStore = AccessType == 1 &&
                       ((FaultInstruction[0] == 0x0F &&
                         (FaultInstruction[1] == 0x2B || FaultInstruction[1] == 0x7F)) ||
@@ -8219,7 +8347,7 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
 
     __try
     {
-        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
 
         // Reboot-decision trace (opt-in via CXBX_REBOOT_TRACE): log the guest EIP
         // that performed each kernel/physical read so the read sequence can be
@@ -8365,7 +8493,7 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                  (EmuIsPhysicalMapAddress(Address) || EmuPhysicalHostSpan(Address, 8) != NULL))))
             {
                 ULONG RegisterIndex = (Instruction[2] >> 3) & 0x07;
-                const BYTE *Mm = (const BYTE *)&e->ContextRecord->FloatSave.RegisterArea[RegisterIndex * 10];
+                const BYTE* Mm = (const BYTE*)&e->ContextRecord->FloatSave.RegisterArea[RegisterIndex * 10];
 
                 if(!EmuWritePhysicalMapBytes(Address, Mm, 8))
                     return false;
@@ -8577,7 +8705,7 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 ULONG Value = 0;
                 ULONG Immediate = Instruction[OperandLength];
                 ULONG Operation = Instruction[1] & 0x38;
-                const char *OperationName = "or";
+                const char* OperationName = "or";
 
                 if(!EmuReadPhysicalMap(FaultAddress, 1, &Value))
                     return false;
@@ -8625,7 +8753,7 @@ static bool EmuTryEmulatePhysicalMapAccess(LPEXCEPTION_POINTERS e)
                 ULONG Immediate = 0;
                 ULONG ImmediateLength = 0;
                 ULONG Operation = Instruction[1] & 0x38;
-                const char *OperationName = "or";
+                const char* OperationName = "or";
 
                 if(!EmuReadPhysicalMap(FaultAddress, 4, &Value))
                     return false;
@@ -9129,7 +9257,7 @@ static bool EmuTryEmulatePortIo(LPEXCEPTION_POINTERS e)
 
     __try
     {
-        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
         ULONG Port = e->ContextRecord->Edx & 0xFFFF;
 
         switch(Instruction[0])
@@ -9228,9 +9356,9 @@ static bool EmuTryEmulateGdtPatch(LPEXCEPTION_POINTERS e)
 
     __try
     {
-        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
 
-        if(Instruction[0] == 0x87)   // xchg r/m32, r32
+        if(Instruction[0] == 0x87) // xchg r/m32, r32
         {
             ULONG Address = 0, Length = 0;
             if(EmuDecodeModRmAddress(e->ContextRecord, Instruction, &Address, &Length))
@@ -9247,7 +9375,7 @@ static bool EmuTryEmulateGdtPatch(LPEXCEPTION_POINTERS e)
             }
         }
 
-        if(Instruction[0] == 0xEA)   // ljmp ptr16:32
+        if(Instruction[0] == 0xEA) // ljmp ptr16:32
         {
             ULONG Target = *(ULONG*)&Instruction[1];
             e->ContextRecord->Eip = Target;
@@ -9279,7 +9407,7 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
 
     __try
     {
-        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
+        BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
 
         if(AccessType == 0 && Instruction[0] == 0xA1 && *(ULONG*)&Instruction[1] == FaultAddress)
         {
@@ -9948,11 +10076,11 @@ static bool EmuLooksLikeReturnAddress(ULONG Address)
 
     __try
     {
-        const BYTE *p = (const BYTE*)Address;
-        if(p[-5] == 0xE8)                                  return true; // call rel32
-        if(p[-6] == 0xFF && (p[-5] & 0x38) == 0x10)        return true; // call r/m32, disp32
-        if(p[-3] == 0xFF && (p[-2] & 0x38) == 0x10)        return true; // call r/m32, disp8
-        if(p[-2] == 0xFF && (p[-1] & 0x38) == 0x10)        return true; // call r/m32 / call reg
+        const BYTE* p = (const BYTE*)Address;
+        if(p[-5] == 0xE8) return true;                           // call rel32
+        if(p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) return true; // call r/m32, disp32
+        if(p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) return true; // call r/m32, disp8
+        if(p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) return true; // call r/m32 / call reg
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -9989,7 +10117,7 @@ static LONG EmuSsTraceLimit()
 {
     if(g_SsTraceLimit < 0)
     {
-        const char *Value = getenv("CXBX_SS_TRACE");
+        const char* Value = getenv("CXBX_SS_TRACE");
         g_SsTraceLimit = Value != NULL ? (LONG)strtoul(Value, NULL, 10) : 0;
     }
     return g_SsTraceLimit;
@@ -10001,7 +10129,7 @@ static LONG EmuSsTraceLimit()
 // periodically from the timer-DPC thread: when the hook has been "mid-step"
 // for a while, declare the chain dead and re-arm the int3 -- the blocked
 // thread is already past the hook address, so rewriting it is safe.
-static ULONGLONG g_Crc32ArmAtTick = 0;   // deferred arming (CXBX_CRC_DELAY)
+static ULONGLONG g_Crc32ArmAtTick = 0; // deferred arming (CXBX_CRC_DELAY)
 
 extern "C" void EmuCrc32TraceRearm()
 {
@@ -10068,15 +10196,15 @@ extern "C" void EmuCrc32TraceRearm()
 
 struct EmuWatchWordDef
 {
-    ULONG Addr;     // 4-byte aligned guest VA
+    ULONG Addr; // 4-byte aligned guest VA
     ULONG PageIdx;
 };
 
 struct EmuWatchPageDef
 {
     ULONG Base;
-    DWORD GuardProtect;   // protection while armed
-    DWORD OpenProtect;    // original protection, restored for the step
+    DWORD GuardProtect; // protection while armed
+    DWORD OpenProtect;  // original protection, restored for the step
     volatile LONG Armed;
 };
 
@@ -10089,7 +10217,7 @@ static volatile LONG g_WatchPendingPages = 0;
 
 struct EmuWatchStepState
 {
-    volatile LONG Tid;    // 0 = free slot
+    volatile LONG Tid; // 0 = free slot
     ULONG PageIdx;
     ULONG Eip;
     ULONG FaultAddr;
@@ -10098,13 +10226,18 @@ struct EmuWatchStepState
 };
 static EmuWatchStepState g_WatchSteps[16];
 
-static void EmuWatchLogHit(const char *Kind, ULONG Eip, ULONG Addr,
+static void EmuWatchLogHit(const char* Kind, ULONG Eip, ULONG Addr,
                            ULONG OldVal, ULONG NewVal, bool ShowNew)
 {
     // Dedup per (eip, addr): full lines for the first 8 hits, then every
     // 4096th with the running count -- a poll loop under CXBX_WATCH_READS
     // otherwise floods the log at MHz rates.
-    struct Stat { ULONG Eip; ULONG Addr; ULONG Count; };
+    struct Stat
+    {
+        ULONG Eip;
+        ULONG Addr;
+        ULONG Count;
+    };
     static Stat Stats[64];
     ULONG Count = 1;
 
@@ -10141,7 +10274,7 @@ static void EmuWatchLogHit(const char *Kind, ULONG Eip, ULONG Addr,
     fflush(stdout);
 }
 
-static BOOL EmuWatchArmPage(EmuWatchPageDef *Page)
+static BOOL EmuWatchArmPage(EmuWatchPageDef* Page)
 {
     MEMORY_BASIC_INFORMATION mbi;
     if(VirtualQuery((LPCVOID)Page->Base, &mbi, sizeof(mbi)) != sizeof(mbi) ||
@@ -10212,9 +10345,11 @@ static void EmuWatchInit(void)
     }
     char Reads[8];
     g_WatchReads = GetEnvironmentVariableA("CXBX_WATCH_READS", Reads, sizeof(Reads)) != 0 &&
-                   Reads[0] != '0' ? 1 : 0;
+                           Reads[0] != '0'
+                       ? 1
+                       : 0;
 
-    char *Cursor = Value;
+    char* Cursor = Value;
     while(*Cursor != '\0' && g_WatchWordCount < EMU_WATCH_MAX)
     {
         while(*Cursor == ',' || *Cursor == ';' || *Cursor == ' ')
@@ -10225,7 +10360,7 @@ static void EmuWatchInit(void)
         {
             break;
         }
-        char *End = Cursor;
+        char* End = Cursor;
         ULONG Addr = (ULONG)strtoul(Cursor, &End, 16) & ~3UL;
         if(End == Cursor || Addr == 0)
         {
@@ -10289,7 +10424,7 @@ static bool EmuWatchTryHandleAccessViolation(LPEXCEPTION_POINTERS e)
     }
 
     const ULONG PageBase = FaultAddress & ~0xFFFUL;
-    EmuWatchPageDef *Page = NULL;
+    EmuWatchPageDef* Page = NULL;
     ULONG PageIdx = 0;
     for(ULONG i = 0; i < g_WatchPageCount; i++)
     {
@@ -10314,7 +10449,7 @@ static bool EmuWatchTryHandleAccessViolation(LPEXCEPTION_POINTERS e)
     }
 
     LONG Tid = (LONG)GetCurrentThreadId();
-    EmuWatchStepState *Slot = NULL;
+    EmuWatchStepState* Slot = NULL;
     for(int i = 0; i < 16; i++)
     {
         if(InterlockedCompareExchange(&g_WatchSteps[i].Tid, Tid, 0) == 0)
@@ -10340,8 +10475,7 @@ static bool EmuWatchTryHandleAccessViolation(LPEXCEPTION_POINTERS e)
     Slot->AccessType = AccessType;
     for(ULONG w = 0; w < g_WatchWordCount; w++)
     {
-        Slot->PrevVals[w] = g_WatchWords[w].PageIdx == PageIdx ?
-                            *(volatile ULONG*)(uintptr_t)g_WatchWords[w].Addr : 0;
+        Slot->PrevVals[w] = g_WatchWords[w].PageIdx == PageIdx ? *(volatile ULONG*)(uintptr_t)g_WatchWords[w].Addr : 0;
     }
     e->ContextRecord->EFlags |= 0x100; // step the access, then re-protect
     return true;
@@ -10355,7 +10489,7 @@ static bool EmuWatchTryHandleSingleStep(LPEXCEPTION_POINTERS e)
         return false;
     }
     LONG Tid = (LONG)GetCurrentThreadId();
-    EmuWatchStepState *Slot = NULL;
+    EmuWatchStepState* Slot = NULL;
     for(int i = 0; i < 16; i++)
     {
         if(g_WatchSteps[i].Tid == Tid)
@@ -10369,7 +10503,7 @@ static bool EmuWatchTryHandleSingleStep(LPEXCEPTION_POINTERS e)
         return false;
     }
 
-    EmuWatchPageDef *Page = &g_WatchPages[Slot->PageIdx];
+    EmuWatchPageDef* Page = &g_WatchPages[Slot->PageIdx];
     for(ULONG w = 0; w < g_WatchWordCount; w++)
     {
         if(g_WatchWords[w].PageIdx != Slot->PageIdx)
@@ -10399,38 +10533,262 @@ static bool EmuWatchTryHandleSingleStep(LPEXCEPTION_POINTERS e)
     return true;
 }
 static const uint32_t crc32_table[256] = {
-    0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,0xE963A535,0x9E6495A3,
-    0x0EDB8832,0x79DCB8A4,0xE0D5E91E,0x97D2D988,0x09B64C2B,0x7EB17CBD,0xE7B82D07,0x90BF1D91,
-    0x1DB71064,0x6AB020F2,0xF3B97148,0x84BE41DE,0x1ADAD47D,0x6DDDE4EB,0xF4D4B551,0x83D385C7,
-    0x136C9856,0x646BA8C0,0xFD62F97A,0x8A65C9EC,0x14015C4F,0x63066CD9,0xFA0F3D63,0x8D080DF5,
-    0x3B6E20C8,0x4C69105E,0xD56041E4,0xA2677172,0x3C03E4D1,0x4B04D447,0xD20D85FD,0xA50AB56B,
-    0x35B5A8FA,0x42B2986C,0xDBBBC9D6,0xACBCF940,0x32D86CE3,0x45DF5C75,0xDCD60DCF,0xABD13D59,
-    0x26D930AC,0x51DE003A,0xC8D75180,0xBFD06116,0x21B4F4B5,0x56B3C423,0xCFBA9599,0xB8BDA50F,
-    0x2802B89E,0x5F058808,0xC60CD9B2,0xB10BE924,0x2F6F7C87,0x58684C11,0xC1611DAB,0xB6662D3D,
-    0x76DC4190,0x01DB7106,0x98D220BC,0xEFD5102A,0x71B18589,0x06B6B51F,0x9FBFE4A5,0xE8B8D433,
-    0x7807C9A2,0x0F00F934,0x9609A88E,0xE10E9818,0x7F6A0DBB,0x086D3D2D,0x91646C97,0xE6635C01,
-    0x6B6B51F4,0x1C6C6162,0x856530D8,0xF262004E,0x6C0695ED,0x1B01A57B,0x8208F4C1,0xF50FC457,
-    0x65B0D9C6,0x12B7E950,0x8BBEB8EA,0xFCB9887C,0x62DD1DDF,0x15DA2D49,0x8CD37CF3,0xFBD44C65,
-    0x4DB26158,0x3AB551CE,0xA3BC0074,0xD4BB30E2,0x4ADFA541,0x3DD895D7,0xA4D1C46D,0xD3D6F4FB,
-    0x4369E96A,0x346ED9FC,0xAD678846,0xDA60B8D0,0x44042D73,0x33031DE5,0xAA0A4C5F,0xDD0D7CC9,
-    0x5005713C,0x270241AA,0xBE0B1010,0xC90C2086,0x5768B525,0x206F85B3,0xB966D409,0xCE61E49F,
-    0x5EDEF90E,0x29D9C998,0xB0D09822,0xC7D7A8B4,0x59B33D17,0x2EB40D81,0xB7BD5C3B,0xC0BA6CAD,
-    0xEDB88320,0x9ABFB3B6,0x03B6E20C,0x74B1D29A,0xEAD54739,0x9DD277AF,0x04DB2615,0x73DC1683,
-    0xE3630B12,0x94643B84,0x0D6D6A3E,0x7A6A5AA8,0xE40ECF0B,0x9309FF9D,0x0A00AE27,0x7D079EB1,
-    0xF00F9344,0x8708A3D2,0x1E01F268,0x6906C2FE,0xF762575D,0x806567CB,0x196C3671,0x6E6B06E7,
-    0xFED41B76,0x89D32BE0,0x10DA7A5A,0x67DD4ACC,0xF9B9DF6F,0x8EBEEFF9,0x17B7BE43,0x60B08ED5,
-    0xD6D6A3E8,0xA1D1937E,0x38D8C2C4,0x4FDFF252,0xD1BB67F1,0xA6BC5767,0x3FB506DD,0x48B2364B,
-    0xD80D2BDA,0xAF0A1B4C,0x36034AF6,0x41047A60,0xDF60EFC3,0xA867DF55,0x316E8EEF,0x4669BE79,
-    0xCB61B38C,0xBC66831A,0x256FD2A0,0x5268E236,0xCC0C7795,0xBB0B4703,0x220216B9,0x5505262F,
-    0xC5BA3BBE,0xB2BD0B28,0x2BB45A92,0x5CB36A04,0xC2D7FFA7,0xB5D0CF31,0x2CD99E8B,0x5BDEAE1D,
-    0x9B64C2B0,0xEC63F226,0x756AA39C,0x026D930A,0x9C0906A9,0xEB0E363F,0x72076785,0x05005713,
-    0x95BF4A82,0xE2B87A14,0x7BB12BAE,0x0CB61B38,0x92D28E9B,0xE5D5BE0D,0x7CDCEFB7,0x0BDBDF21,
-    0x86D3D2D4,0xF1D4E242,0x68DDB3F8,0x1FDA836E,0x81BE16CD,0xF6B9265B,0x6FB077E1,0x18B74777,
-    0x88085AE6,0xFF0F6A70,0x66063BCA,0x11010B5C,0x8F659EFF,0xF862AE69,0x616BFFD3,0x166CCF45,
-    0xA00AE278,0xD70DD2EE,0x4E048354,0x3903B3C2,0xA7672661,0xD06016F7,0x4969474D,0x3E6E77DB,
-    0xAED16A4A,0xD9D65ADC,0x40DF0B66,0x37D83BF0,0xA9BCAE53,0xDEBB9EC5,0x47B2CF7F,0x30B5FFE9,
-    0xBDBDF21C,0xCABAC28A,0x53B39330,0x24B4A3A6,0xBAD03605,0xCDD70693,0x54DE5729,0x23D967BF,
-    0xB3667A2E,0xC4614AB8,0x5D681B02,0x2A6F2B94,0xB40BBE37,0xC30C8EA1,0x5A05DF1B,0x2D02EF8D,
+    0x00000000,
+    0x77073096,
+    0xEE0E612C,
+    0x990951BA,
+    0x076DC419,
+    0x706AF48F,
+    0xE963A535,
+    0x9E6495A3,
+    0x0EDB8832,
+    0x79DCB8A4,
+    0xE0D5E91E,
+    0x97D2D988,
+    0x09B64C2B,
+    0x7EB17CBD,
+    0xE7B82D07,
+    0x90BF1D91,
+    0x1DB71064,
+    0x6AB020F2,
+    0xF3B97148,
+    0x84BE41DE,
+    0x1ADAD47D,
+    0x6DDDE4EB,
+    0xF4D4B551,
+    0x83D385C7,
+    0x136C9856,
+    0x646BA8C0,
+    0xFD62F97A,
+    0x8A65C9EC,
+    0x14015C4F,
+    0x63066CD9,
+    0xFA0F3D63,
+    0x8D080DF5,
+    0x3B6E20C8,
+    0x4C69105E,
+    0xD56041E4,
+    0xA2677172,
+    0x3C03E4D1,
+    0x4B04D447,
+    0xD20D85FD,
+    0xA50AB56B,
+    0x35B5A8FA,
+    0x42B2986C,
+    0xDBBBC9D6,
+    0xACBCF940,
+    0x32D86CE3,
+    0x45DF5C75,
+    0xDCD60DCF,
+    0xABD13D59,
+    0x26D930AC,
+    0x51DE003A,
+    0xC8D75180,
+    0xBFD06116,
+    0x21B4F4B5,
+    0x56B3C423,
+    0xCFBA9599,
+    0xB8BDA50F,
+    0x2802B89E,
+    0x5F058808,
+    0xC60CD9B2,
+    0xB10BE924,
+    0x2F6F7C87,
+    0x58684C11,
+    0xC1611DAB,
+    0xB6662D3D,
+    0x76DC4190,
+    0x01DB7106,
+    0x98D220BC,
+    0xEFD5102A,
+    0x71B18589,
+    0x06B6B51F,
+    0x9FBFE4A5,
+    0xE8B8D433,
+    0x7807C9A2,
+    0x0F00F934,
+    0x9609A88E,
+    0xE10E9818,
+    0x7F6A0DBB,
+    0x086D3D2D,
+    0x91646C97,
+    0xE6635C01,
+    0x6B6B51F4,
+    0x1C6C6162,
+    0x856530D8,
+    0xF262004E,
+    0x6C0695ED,
+    0x1B01A57B,
+    0x8208F4C1,
+    0xF50FC457,
+    0x65B0D9C6,
+    0x12B7E950,
+    0x8BBEB8EA,
+    0xFCB9887C,
+    0x62DD1DDF,
+    0x15DA2D49,
+    0x8CD37CF3,
+    0xFBD44C65,
+    0x4DB26158,
+    0x3AB551CE,
+    0xA3BC0074,
+    0xD4BB30E2,
+    0x4ADFA541,
+    0x3DD895D7,
+    0xA4D1C46D,
+    0xD3D6F4FB,
+    0x4369E96A,
+    0x346ED9FC,
+    0xAD678846,
+    0xDA60B8D0,
+    0x44042D73,
+    0x33031DE5,
+    0xAA0A4C5F,
+    0xDD0D7CC9,
+    0x5005713C,
+    0x270241AA,
+    0xBE0B1010,
+    0xC90C2086,
+    0x5768B525,
+    0x206F85B3,
+    0xB966D409,
+    0xCE61E49F,
+    0x5EDEF90E,
+    0x29D9C998,
+    0xB0D09822,
+    0xC7D7A8B4,
+    0x59B33D17,
+    0x2EB40D81,
+    0xB7BD5C3B,
+    0xC0BA6CAD,
+    0xEDB88320,
+    0x9ABFB3B6,
+    0x03B6E20C,
+    0x74B1D29A,
+    0xEAD54739,
+    0x9DD277AF,
+    0x04DB2615,
+    0x73DC1683,
+    0xE3630B12,
+    0x94643B84,
+    0x0D6D6A3E,
+    0x7A6A5AA8,
+    0xE40ECF0B,
+    0x9309FF9D,
+    0x0A00AE27,
+    0x7D079EB1,
+    0xF00F9344,
+    0x8708A3D2,
+    0x1E01F268,
+    0x6906C2FE,
+    0xF762575D,
+    0x806567CB,
+    0x196C3671,
+    0x6E6B06E7,
+    0xFED41B76,
+    0x89D32BE0,
+    0x10DA7A5A,
+    0x67DD4ACC,
+    0xF9B9DF6F,
+    0x8EBEEFF9,
+    0x17B7BE43,
+    0x60B08ED5,
+    0xD6D6A3E8,
+    0xA1D1937E,
+    0x38D8C2C4,
+    0x4FDFF252,
+    0xD1BB67F1,
+    0xA6BC5767,
+    0x3FB506DD,
+    0x48B2364B,
+    0xD80D2BDA,
+    0xAF0A1B4C,
+    0x36034AF6,
+    0x41047A60,
+    0xDF60EFC3,
+    0xA867DF55,
+    0x316E8EEF,
+    0x4669BE79,
+    0xCB61B38C,
+    0xBC66831A,
+    0x256FD2A0,
+    0x5268E236,
+    0xCC0C7795,
+    0xBB0B4703,
+    0x220216B9,
+    0x5505262F,
+    0xC5BA3BBE,
+    0xB2BD0B28,
+    0x2BB45A92,
+    0x5CB36A04,
+    0xC2D7FFA7,
+    0xB5D0CF31,
+    0x2CD99E8B,
+    0x5BDEAE1D,
+    0x9B64C2B0,
+    0xEC63F226,
+    0x756AA39C,
+    0x026D930A,
+    0x9C0906A9,
+    0xEB0E363F,
+    0x72076785,
+    0x05005713,
+    0x95BF4A82,
+    0xE2B87A14,
+    0x7BB12BAE,
+    0x0CB61B38,
+    0x92D28E9B,
+    0xE5D5BE0D,
+    0x7CDCEFB7,
+    0x0BDBDF21,
+    0x86D3D2D4,
+    0xF1D4E242,
+    0x68DDB3F8,
+    0x1FDA836E,
+    0x81BE16CD,
+    0xF6B9265B,
+    0x6FB077E1,
+    0x18B74777,
+    0x88085AE6,
+    0xFF0F6A70,
+    0x66063BCA,
+    0x11010B5C,
+    0x8F659EFF,
+    0xF862AE69,
+    0x616BFFD3,
+    0x166CCF45,
+    0xA00AE278,
+    0xD70DD2EE,
+    0x4E048354,
+    0x3903B3C2,
+    0xA7672661,
+    0xD06016F7,
+    0x4969474D,
+    0x3E6E77DB,
+    0xAED16A4A,
+    0xD9D65ADC,
+    0x40DF0B66,
+    0x37D83BF0,
+    0xA9BCAE53,
+    0xDEBB9EC5,
+    0x47B2CF7F,
+    0x30B5FFE9,
+    0xBDBDF21C,
+    0xCABAC28A,
+    0x53B39330,
+    0x24B4A3A6,
+    0xBAD03605,
+    0xCDD70693,
+    0x54DE5729,
+    0x23D967BF,
+    0xB3667A2E,
+    0xC4614AB8,
+    0x5D681B02,
+    0x2A6F2B94,
+    0xB40BBE37,
+    0xC30C8EA1,
+    0x5A05DF1B,
+    0x2D02EF8D,
 };
 
 // Log the hash function's arguments on a CRC32 trace-breakpoint hit. ESP is
@@ -10438,7 +10796,7 @@ static const uint32_t crc32_table[256] = {
 // [esp+8] is believed to be the length -- when it does not look like one,
 // fall back to the NUL terminator. Guarded because the string can cross into
 // an unmapped page even when the pointer itself passes the range check.
-static void EmuCrc32TraceLog(ULONG Esp, const CONTEXT *Ctx)
+static void EmuCrc32TraceLog(ULONG Esp, const CONTEXT* Ctx)
 {
     __try
     {
@@ -10465,7 +10823,7 @@ static void EmuCrc32TraceLog(ULONG Esp, const CONTEXT *Ctx)
             return;
         }
 
-        const char *s = (const char*)(uintptr_t)str_ptr;
+        const char* s = (const char*)(uintptr_t)str_ptr;
         char buf[512];
         uint32_t limit = (str_len > 0 && str_len < sizeof(buf)) ? str_len : sizeof(buf) - 1;
         uint32_t n;
@@ -10495,7 +10853,7 @@ static void EmuCrc32TraceLog(ULONG Esp, const CONTEXT *Ctx)
 // inside a mapped PE image resolve to NULL so callers can skip them.
 // VirtualQuery's AllocationBase doubles as the module handle for any address
 // inside a loaded image.
-static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, size_t BufferSize)
+static const char* EmuHostAddressToModuleOffset(ULONG Address, char* Buffer, size_t BufferSize)
 {
     MEMORY_BASIC_INFORMATION mbi;
 
@@ -10510,7 +10868,7 @@ static const char *EmuHostAddressToModuleOffset(ULONG Address, char *Buffer, siz
     if(GetModuleFileNameA((HMODULE)mbi.AllocationBase, Path, sizeof(Path)) == 0)
         return NULL; // committed but not a PE image (heap, stack, file mapping)
 
-    const char *Name = strrchr(Path, '\\');
+    const char* Name = strrchr(Path, '\\');
     Name = (Name != NULL) ? Name + 1 : Path;
     _snprintf(Buffer, BufferSize - 1, "%s+0x%X", Name, Address - (ULONG)mbi.AllocationBase);
     Buffer[BufferSize - 1] = '\0';
@@ -10561,7 +10919,7 @@ static bool EmuTryContinueStackGuard(LPEXCEPTION_POINTERS e)
         return false;
     }
 
-    NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+    NT_TIB* Tib = (NT_TIB*)NtCurrentTeb();
     const ULONG OldLimit = (ULONG)Tib->StackLimit;
     const ULONG FaultAddress =
         (ULONG)e->ExceptionRecord->ExceptionInformation[1];
@@ -10635,8 +10993,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         {
             printf("EXC| code=0x%08lX eip=0x%08lX addr=0x%08lX esp=0x%08lX\n",
                    e->ExceptionRecord->ExceptionCode, (ULONG)e->ContextRecord->Eip,
-                   e->ExceptionRecord->NumberParameters >= 2 ?
-                       (ULONG)e->ExceptionRecord->ExceptionInformation[1] : 0,
+                   e->ExceptionRecord->NumberParameters >= 2 ? (ULONG)e->ExceptionRecord->ExceptionInformation[1] : 0,
                    (ULONG)e->ContextRecord->Esp);
             fflush(stdout);
         }
@@ -10668,7 +11025,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     // repair of the live TIB is safe.
     if(g_bEmuFSContentSwap && (ULONG)e->ContextRecord->Eip >= 0x10000000)
     {
-        NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+        NT_TIB* Tib = (NT_TIB*)NtCurrentTeb();
         ULONG Esp = e->ContextRecord->Esp;
 
         if(Esp < (ULONG)Tib->StackLimit || Esp >= (ULONG)Tib->StackBase)
@@ -10717,8 +11074,12 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         // at dispatch time every live registration sits above ESP -- records
         // below it are provably stale.
         {
-            struct SehRecord { SehRecord *Next; void *Handler; };
-            SehRecord *Head = (SehRecord*)Tib->ExceptionList;
+            struct SehRecord
+            {
+                SehRecord* Next;
+                void* Handler;
+            };
+            SehRecord* Head = (SehRecord*)Tib->ExceptionList;
             ULONG Pruned = 0;
 
             while(Pruned < 64 && Head != (SehRecord*)0xFFFFFFFF && (ULONG)Head < Esp)
@@ -10942,7 +11303,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     // threads those bounds may not describe the stack actually in use, so
     // print the verdict and walk the chain with module attribution.
     {
-        NT_TIB *Tib = (NT_TIB*)NtCurrentTeb();
+        NT_TIB* Tib = (NT_TIB*)NtCurrentTeb();
         ULONG Esp = e->ContextRecord->Esp;
         bool EspInBounds = (Esp >= (ULONG)Tib->StackLimit && Esp < (ULONG)Tib->StackBase);
 
@@ -10950,8 +11311,12 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
                GetCurrentThreadId(), Tib->StackBase, Tib->StackLimit, Tib->ExceptionList,
                EspInBounds ? "inside" : "OUTSIDE");
 
-        struct SehRecord { SehRecord *Next; void *Handler; };
-        SehRecord *Rec = (SehRecord*)Tib->ExceptionList;
+        struct SehRecord
+        {
+            SehRecord* Next;
+            void* Handler;
+        };
+        SehRecord* Rec = (SehRecord*)Tib->ExceptionList;
         char Where[MAX_PATH + 16];
         for(ULONG i = 0; i < 8 && Rec != (SehRecord*)0xFFFFFFFF; i++)
         {
@@ -10964,7 +11329,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 
             bool RecInBounds = ((ULONG)Rec >= (ULONG)Tib->StackLimit &&
                                 (ULONG)Rec < (ULONG)Tib->StackBase);
-            const char *HandlerName =
+            const char* HandlerName =
                 EmuHostAddressToModuleOffset((ULONG)Rec->Handler, Where, sizeof(Where));
             printf("Emu (0x%lX): Vectored SEH[%lu] rec=0x%p%s handler=0x%p%s%s\n",
                    GetCurrentThreadId(), i, Rec, RecInBounds ? "" : " (OUTSIDE stack bounds)",
@@ -10994,7 +11359,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     {
         ULONG ThrowInfo = (ULONG)e->ExceptionRecord->ExceptionInformation[2];
         ULONG Object = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
-        const char *TypeName = "(unreadable)";
+        const char* TypeName = "(unreadable)";
 
         if(EmuIsReadableRange(ThrowInfo + 12, 4))
         {
@@ -11016,7 +11381,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
 
         if(EmuIsReadableRange(Object, 16))
         {
-            ULONG *Data = (ULONG*)Object;
+            ULONG* Data = (ULONG*)Object;
             printf("Emu (0x%lX): Vectored C++ throw object data: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
                    GetCurrentThreadId(), Data[0], Data[1], Data[2], Data[3]);
         }
@@ -11066,7 +11431,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
             fflush(stdout);
             e->ContextRecord->Eip = ResumeAddress;
             e->ContextRecord->Esp = ResumeEsp;
-            e->ContextRecord->Eax = 0;   // callback "returned" 0/void
+            e->ContextRecord->Eax = 0; // callback "returned" 0/void
             if(WasXboxFS)
                 EmuSwapFS();
             return EXCEPTION_CONTINUE_EXECUTION;
@@ -11081,21 +11446,22 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         printf("Emu (0x%lX): Vectored bytes unavailable (unresolved XRef sentinel).\n",
                GetCurrentThreadId());
     }
-    else __try
-    {
-        BYTE *Instruction = (BYTE*)e->ContextRecord->Eip;
-        printf("Emu (0x%lX): Vectored bytes: 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X\n",
-               GetCurrentThreadId(), Instruction[0], Instruction[1], Instruction[2], Instruction[3],
-               Instruction[4], Instruction[5], Instruction[6], Instruction[7]);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-        printf("Emu (0x%lX): Vectored bytes unavailable.\n", GetCurrentThreadId());
-    }
+    else
+        __try
+        {
+            BYTE* Instruction = (BYTE*)e->ContextRecord->Eip;
+            printf("Emu (0x%lX): Vectored bytes: 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X 0x%.02X\n",
+                   GetCurrentThreadId(), Instruction[0], Instruction[1], Instruction[2], Instruction[3],
+                   Instruction[4], Instruction[5], Instruction[6], Instruction[7]);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            printf("Emu (0x%lX): Vectored bytes unavailable.\n", GetCurrentThreadId());
+        }
 
     __try
     {
-        DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+        DWORD* Stack = (DWORD*)e->ContextRecord->Esp;
 
         printf("Emu (0x%lX): Vectored stack: 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX 0x%.08lX\n",
                GetCurrentThreadId(), Stack[0], Stack[1], Stack[2], Stack[3], Stack[4], Stack[5], Stack[6], Stack[7],
@@ -11119,7 +11485,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
         if(EmuHostAddressToModuleOffset(e->ContextRecord->Eip, Where, sizeof(Where)) != NULL)
             printf("Emu (0x%lX): Vectored EIP = %s\n", GetCurrentThreadId(), Where);
 
-        DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+        DWORD* Stack = (DWORD*)e->ContextRecord->Esp;
         for(ULONG Slot = 0; Slot < 256; Slot++)
         {
             if(!EmuIsReadableRange((ULONG)&Stack[Slot], 4))
@@ -11147,7 +11513,7 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
     __try
     {
         char Where[MAX_PATH + 16];
-        DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+        DWORD* Stack = (DWORD*)e->ContextRecord->Esp;
         ULONG Frame = 0;
         for(ULONG Slot = 0; Slot < 256 && Frame < 24; Slot++)
         {
@@ -11160,12 +11526,12 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
             if(Ret < 6 || !EmuIsReadableRange(Ret - 6, 6))
                 continue;
 
-            const BYTE *p = (const BYTE*)Ret;
+            const BYTE* p = (const BYTE*)Ret;
             const bool bAfterCall =
-                p[-5] == 0xE8 ||                               // call rel32
-                (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) ||   // call r/m32 disp32
-                (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) ||   // call r/m32 disp8
-                (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10);     // call r/m32 / reg
+                p[-5] == 0xE8 ||                             // call rel32
+                (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) || // call r/m32 disp32
+                (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) || // call r/m32 disp8
+                (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10);   // call r/m32 / reg
             if(bAfterCall)
             {
                 printf("Emu (0x%lX): Vectored frame[%02lu] 0x%.08lX = %s (after call)\n",
@@ -11222,8 +11588,7 @@ static LONG WINAPI EmuUnhandledExceptionFilter(LPEXCEPTION_POINTERS e)
     {
         printf("UNHANDLED| code=0x%08lX eip=0x%08lX addr=0x%08lX esp=0x%08lX\n",
                e->ExceptionRecord->ExceptionCode, (ULONG)e->ContextRecord->Eip,
-               e->ExceptionRecord->NumberParameters >= 2 ?
-                   (ULONG)e->ExceptionRecord->ExceptionInformation[1] : 0,
+               e->ExceptionRecord->NumberParameters >= 2 ? (ULONG)e->ExceptionRecord->ExceptionInformation[1] : 0,
                (ULONG)e->ContextRecord->Esp);
         fflush(stdout);
     }
@@ -11246,7 +11611,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
         printf("--- cxbx runtime attach ---\n");
         cxbx::platform::InitializeSharedRuntime();
     }
-    
+
     if(fdwReason == DLL_PROCESS_DETACH)
     {
         // Name the ExitProcess caller. A title that dies with an access-violation
@@ -11262,12 +11627,12 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             {
                 MEMORY_BASIC_INFORMATION Memory = {};
                 char ModulePath[MAX_PATH] = {};
-                const char *ModuleName = "?";
+                const char* ModuleName = "?";
                 if(VirtualQuery(Frames[Index], &Memory, sizeof(Memory)) == sizeof(Memory) &&
                    GetModuleFileNameA(static_cast<HMODULE>(Memory.AllocationBase),
                                       ModulePath, sizeof(ModulePath)) != 0)
                 {
-                    const char *Slash = strrchr(ModulePath, '\\');
+                    const char* Slash = strrchr(ModulePath, '\\');
                     ModuleName = Slash != NULL ? Slash + 1 : ModulePath;
                 }
                 printf(" %p(%s+0x%lX)", Frames[Index], ModuleName,
@@ -11295,17 +11660,17 @@ extern "C" CXBXKRNL_API void NTAPI EmuNoFunc()
 {
     EmuConfigureLogFile();
 
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     printf("Emu (0x%X): EmuNoFunc()\n", GetCurrentThreadId());
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 }
 
 // ******************************************************************
 // * func: EmuVerifyVersion
 // ******************************************************************
-extern "C" CXBXKRNL_API bool NTAPI EmuVerifyVersion(const char *szVersion)
+extern "C" CXBXKRNL_API bool NTAPI EmuVerifyVersion(const char* szVersion)
 {
     if(strcmp(szVersion, _CXBX_VERSION) != 0)
         return false;
@@ -11319,7 +11684,7 @@ extern "C" CXBXKRNL_API bool NTAPI EmuVerifyVersion(const char *szVersion)
 extern "C" CXBXKRNL_API void NTAPI EmuCleanThread()
 {
     if(EmuIsXboxFS())
-        EmuSwapFS();    // Win2k/XP FS
+        EmuSwapFS(); // Win2k/XP FS
 
     EmuCleanupFS();
 
@@ -11329,27 +11694,26 @@ extern "C" CXBXKRNL_API void NTAPI EmuCleanThread()
 // ******************************************************************
 // * func: EmuInit
 // ******************************************************************
-extern "C" CXBXKRNL_API void NTAPI EmuInit
-(
-    void                   *pTLSData, 
-    Xbe::TLS               *pTLS,
-    Xbe::LibraryVersion    *pLibraryVersion,
-    DebugMode               DbgMode,
-    char                   *szDebugFilename,
-    Xbe::Header            *pXbeHeader,
-    uint32                  dwXbeHeaderSize,
-    void                  (*Entry)())
+extern "C" CXBXKRNL_API void NTAPI EmuInit(
+    void* pTLSData,
+    Xbe::TLS* pTLS,
+    Xbe::LibraryVersion* pLibraryVersion,
+    DebugMode DbgMode,
+    char* szDebugFilename,
+    Xbe::Header* pXbeHeader,
+    uint32 dwXbeHeaderSize,
+    void (*Entry)())
 {
-    g_pTLS       = pTLS;
-    g_pTLSData   = pTLSData;
-	g_pXbeHeader = pXbeHeader;
+    g_pTLS = pTLS;
+    g_pTLSData = pTLSData;
+    g_pXbeHeader = pXbeHeader;
 
     // This process runs title code from here on: never persist configuration
     // from it at exit (see EmuShared::Cleanup).
     cxbx::platform::DisableSharedRuntimePersist();
 
-	// For Unicode Conversions
-	setlocale(LC_ALL, "English");
+    // For Unicode Conversions
+    setlocale(LC_ALL, "English");
 
     // Back physical page 0 (64 KiB below the kernel image at 0x80010000) with
     // real memory. The XAPI USB stack keeps its device globals there and
@@ -11387,7 +11751,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
             SetConsoleTitle("cxbx : Kernel Debug Console");
 
             SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_RED);
-            
+
             printf("Emu (0x%X): Debug console allocated (DM_CONSOLE).\n", GetCurrentThreadId());
         }
     }
@@ -11433,7 +11797,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // * debug trace
     // ******************************************************************
     {
-        #ifdef _DEBUG_TRACE
+#ifdef _DEBUG_TRACE
         printf("Emu (0x%X): Debug Trace Enabled.\n", GetCurrentThreadId());
 
         printf("Emu (0x%X): EmuInit\n"
@@ -11449,41 +11813,41 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                ");\n",
                GetCurrentThreadId(), pTLSData, pTLS, pLibraryVersion, DbgMode, szDebugFilename, pXbeHeader, dwXbeHeaderSize, Entry);
 
-        #else
+#else
         printf("Emu (0x%X): Debug Trace Disabled.\n", GetCurrentThreadId());
-        #endif
+#endif
     }
 
     // ******************************************************************
-	// * Initialize current directory
+    // * Initialize current directory
     // ******************************************************************
-	{
+    {
         char szBuffer[cxbx::platform::kSharedXbePathCapacity];
 
         cxbx::platform::GetSharedXbePath(szBuffer);
 
         SetCurrentDirectory(szBuffer);
 
-		g_hCurDir = CreateFile(szBuffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        g_hCurDir = CreateFile(szBuffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 
         if(g_hCurDir == INVALID_HANDLE_VALUE)
-			EmuCleanup("Could not map D:\\\n");
-	}
+            EmuCleanup("Could not map D:\\\n");
+    }
 
     // ******************************************************************
-	// * Initialize T:\ and U:\ directories
+    // * Initialize T:\ and U:\ directories
     // ******************************************************************
     {
-		char szBuffer[260];
+        char szBuffer[260];
 
-        #ifdef _DEBUG
+#ifdef _DEBUG
         GetModuleFileName(GetModuleHandle("cxbxkrnl.dll"), szBuffer, 260);
-        #else
+#else
         GetModuleFileName(GetModuleHandle("cxbx.dll"), szBuffer, 260);
-        #endif
+#endif
 
-        sint32 spot=-1;
-        for(int v=0;v<260;v++)
+        sint32 spot = -1;
+        for(int v = 0; v < 260; v++)
         {
             if(szBuffer[v] == '\\')
                 spot = v;
@@ -11494,7 +11858,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         if(spot != -1)
             szBuffer[spot] = '\0';
 
-        Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
+        Xbe::Certificate* pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
 
         // Create TData Directory
         {
@@ -11502,7 +11866,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
             CreateDirectory(szBuffer, NULL);
 
-            sprintf(&szBuffer[spot+6], "\\%08x", pCertificate->dwTitleId);
+            sprintf(&szBuffer[spot + 6], "\\%08x", pCertificate->dwTitleId);
 
             CreateDirectory(szBuffer, NULL);
 
@@ -11518,7 +11882,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
             CreateDirectory(szBuffer, NULL);
 
-            sprintf(&szBuffer[spot+6], "\\%08x", pCertificate->dwTitleId);
+            sprintf(&szBuffer[spot + 6], "\\%08x", pCertificate->dwTitleId);
 
             CreateDirectory(szBuffer, NULL);
 
@@ -11535,7 +11899,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
             CreateDirectory(szBuffer, NULL);
 
             //* is it necessary to make this directory title unique?
-            sprintf(&szBuffer[spot+10], "\\%08x", pCertificate->dwTitleId);
+            sprintf(&szBuffer[spot + 10], "\\%08x", pCertificate->dwTitleId);
 
             CreateDirectory(szBuffer, NULL);
             //*/
@@ -11576,30 +11940,30 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         EmuInstallDsoundApuDestructorPatch(pXbeHeader);
         EmuInstallXapiRdtscQpcPatch(pXbeHeader);
         EmuInstallAutoBootLaunchData(pXbeHeader);
-        EmuInstallCallTrace(pXbeHeader);   // opt-in, last: displaces prologues
+        EmuInstallCallTrace(pXbeHeader); // opt-in, last: displaces prologues
 
         uint32 dwLibraryVersions = pXbeHeader->dwLibraryVersions;
-        uint32 dwHLEEntries      = HLEDataBaseSize/sizeof(HLEData);
+        uint32 dwHLEEntries = HLEDataBaseSize / sizeof(HLEData);
 
-        uint32 LastUnResolvedXRefs = UnResolvedXRefs+1;
+        uint32 LastUnResolvedXRefs = UnResolvedXRefs + 1;
         uint32 OrigUnResolvedXRefs = UnResolvedXRefs;
 
-        for(int p=0;UnResolvedXRefs < LastUnResolvedXRefs;p++)
+        for(int p = 0; UnResolvedXRefs < LastUnResolvedXRefs; p++)
         {
             printf("Emu (0x%X): Beginning HLE Pass %d...\n", GetCurrentThreadId(), p);
 
             LastUnResolvedXRefs = UnResolvedXRefs;
 
             bool bFoundD3D = false;
-            for(uint32 v=0;v<dwLibraryVersions;v++)
+            for(uint32 v = 0; v < dwLibraryVersions; v++)
             {
                 uint16 MajorVersion = pLibraryVersion[v].wMajorVersion;
                 uint16 MinorVersion = pLibraryVersion[v].wMinorVersion;
                 uint16 BuildVersion = pLibraryVersion[v].wBuildVersion;
 
-                char szLibraryName[9] = {0};
+                char szLibraryName[9] = { 0 };
 
-                for(uint32 c=0;c<8;c++)
+                for(uint32 c = 0; c < 8; c++)
                     szLibraryName[c] = pLibraryVersion[v].szName[c];
 
                 printf("Emu (0x%X): Locating HLE Information for %s %d.%d.%d...", GetCurrentThreadId(), szLibraryName, MajorVersion, MinorVersion, BuildVersion);
@@ -11619,7 +11983,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                     bFoundD3D = true;
                 }
 
-                bool found=false;
+                bool found = false;
 
                 // CXBX_HLE_SKIP holds a comma-separated library list (e.g.
                 // "DSOUND" or "DSOUND,XGRAPHC") whose HLE tables are NOT
@@ -11629,12 +11993,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                 // the first un-hooked guest method that receives it faults.
                 bool skipped_by_env = false;
                 {
-                    const char *skip = getenv("CXBX_HLE_SKIP");
+                    const char* skip = getenv("CXBX_HLE_SKIP");
                     if(skip != NULL && strstr(skip, szLibraryName) != NULL)
                         skipped_by_env = true;
                 }
 
-                for(uint32 d=0;d<dwHLEEntries && !skipped_by_env;d++)
+                for(uint32 d = 0; d < dwHLEEntries && !skipped_by_env; d++)
                 {
                     if(BuildVersion != HLEDataBase[d].BuildVersion || MinorVersion != HLEDataBase[d].MinorVersion || MajorVersion != HLEDataBase[d].MajorVersion || strcmp(szLibraryName, HLEDataBase[d].Library) != 0)
                         continue;
@@ -11656,7 +12020,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                         const uint32 upper =
                             pXbeHeader->dwBaseAddr +
                             pXbeHeader->dwSizeofImage;
-                        uint08 *pFunc = (uint08*)EmuLocateFunction(
+                        uint08* pFunc = (uint08*)EmuLocateFunction(
                             (OOVPA*)&XapiInitProcess_1_0_5455,
                             lower,
                             upper);
@@ -11668,10 +12032,9 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                             const int32 rtlCreateHeapRelative =
                                 *(const int32*)(pFunc + 0x4A);
                             XTL::g_pRtlCreateHeap =
-                                (XTL::pfRtlCreateHeap)(
-                                    pFunc +
-                                    0x4E +
-                                    rtlCreateHeapRelative);
+                                (XTL::pfRtlCreateHeap)(pFunc +
+                                                       0x4E +
+                                                       rtlCreateHeapRelative);
                             XTL::EmuXapiProcessHeap =
                                 *(PVOID**)(pFunc + 0x51);
 
@@ -11710,54 +12073,54 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                         uint32 lower = pXbeHeader->dwBaseAddr;
                         uint32 upper = pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage;
 
-				        // ******************************************************************
-				        // * Locate XapiProcessHeap
-				        // ******************************************************************
+                        // ******************************************************************
+                        // * Locate XapiProcessHeap
+                        // ******************************************************************
                         {
-                            void *pFunc = 0;
+                            void* pFunc = 0;
 
                             if(BuildVersion >= 4361)
-					            pFunc = EmuLocateFunction((OOVPA*)&XapiInitProcess_1_0_4361, lower, upper);
+                                pFunc = EmuLocateFunction((OOVPA*)&XapiInitProcess_1_0_4361, lower, upper);
                             else // 3911, 4034, 4134
                                 pFunc = EmuLocateFunction((OOVPA*)&XapiInitProcess_1_0_3911, lower, upper);
 
-					        if(pFunc != 0)
-					        {
-						        XTL::EmuXapiProcessHeap = *(PVOID**)((uint32)pFunc + 0x3E);
+                            if(pFunc != 0)
+                            {
+                                XTL::EmuXapiProcessHeap = *(PVOID**)((uint32)pFunc + 0x3E);
 
-						        XTL::g_pRtlCreateHeap = *(XTL::pfRtlCreateHeap*)((uint32)pFunc + 0x37);
-						        XTL::g_pRtlCreateHeap = (XTL::pfRtlCreateHeap)((uint32)pFunc + (uint32)XTL::g_pRtlCreateHeap + 0x37 + 0x04);
+                                XTL::g_pRtlCreateHeap = *(XTL::pfRtlCreateHeap*)((uint32)pFunc + 0x37);
+                                XTL::g_pRtlCreateHeap = (XTL::pfRtlCreateHeap)((uint32)pFunc + (uint32)XTL::g_pRtlCreateHeap + 0x37 + 0x04);
 
-						        printf("Emu (0x%X): 0x%.08X -> EmuXapiProcessHeap\n", GetCurrentThreadId(), XTL::EmuXapiProcessHeap);
-						        printf("Emu (0x%X): 0x%.08X -> RtlCreateHeap\n", GetCurrentThreadId(), XTL::g_pRtlCreateHeap);
-					        }
-				        }
+                                printf("Emu (0x%X): 0x%.08X -> EmuXapiProcessHeap\n", GetCurrentThreadId(), XTL::EmuXapiProcessHeap);
+                                printf("Emu (0x%X): 0x%.08X -> RtlCreateHeap\n", GetCurrentThreadId(), XTL::g_pRtlCreateHeap);
+                            }
+                        }
                     }
-			        else if(strcmp("D3D8", szLibraryName) == 0 && MajorVersion == 1 && MinorVersion == 0 && (BuildVersion == 4134 || BuildVersion == 4361 || BuildVersion == 4627))
-			        {
+                    else if(strcmp("D3D8", szLibraryName) == 0 && MajorVersion == 1 && MinorVersion == 0 && (BuildVersion == 4134 || BuildVersion == 4361 || BuildVersion == 4627))
+                    {
                         uint32 lower = pXbeHeader->dwBaseAddr;
                         uint32 upper = pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage;
 
-			        void *pFunc = EmuLocateFunction(
+                        void* pFunc = EmuLocateFunction(
                             BuildVersion == 4627
                                 ? (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4627
                                 : (OOVPA*)&IDirect3DDevice8_SetRenderState_CullMode_1_0_4134,
                             lower, upper);
 
                         // ******************************************************************
-				        // * Locate D3DDeferredRenderState
-				        // ******************************************************************
+                        // * Locate D3DDeferredRenderState
+                        // ******************************************************************
                         if(pFunc != 0 && (BuildVersion == 4134 || BuildVersion == 4361 || BuildVersion == 4627))
                         {
                             if(BuildVersion == 4134)
-                                XTL::EmuD3DDeferredRenderState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x248 + 82*4);  // TODO: Verify
+                                XTL::EmuD3DDeferredRenderState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x248 + 82 * 4); // TODO: Verify
                             else if(BuildVersion == 4361)
-						        XTL::EmuD3DDeferredRenderState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x200 + 82*4);
+                                XTL::EmuD3DDeferredRenderState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x200 + 82 * 4);
                             else if(BuildVersion == 4627)
-						        XTL::EmuD3DDeferredRenderState =
+                                XTL::EmuD3DDeferredRenderState =
                                     (DWORD*)(*(DWORD*)((uint32)pFunc + 0x2B) - 0x27C);
 
-                            for(int v=0;v<146;v++)
+                            for(int v = 0; v < 146; v++)
                                 XTL::EmuD3DDeferredRenderState[v] = X_D3DRS_UNK;
 
                             printf("Emu (0x%X): 0x%.08X -> EmuD3DDeferredRenderState\n", GetCurrentThreadId(), XTL::EmuD3DDeferredRenderState);
@@ -11769,8 +12132,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                         }
 
                         // ******************************************************************
-				        // * Locate D3DDeferredTextureState
-				        // ******************************************************************
+                        // * Locate D3DDeferredTextureState
+                        // ******************************************************************
                         {
                             if(BuildVersion == 4134)
                                 pFunc = EmuLocateFunction((OOVPA*)&IDirect3DDevice8_SetTextureState_TexCoordIndex_1_0_4134, lower, upper);
@@ -11782,11 +12145,11 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                             if(pFunc != 0)
                             {
                                 if(BuildVersion == 4134)
-					                XTL::EmuD3DDeferredTextureState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x18) - 0x70);
+                                    XTL::EmuD3DDeferredTextureState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x18) - 0x70);
                                 else
-					                XTL::EmuD3DDeferredTextureState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x19) - 0x70);
+                                    XTL::EmuD3DDeferredTextureState = (DWORD*)(*(DWORD*)((uint32)pFunc + 0x19) - 0x70);
 
-                                for(int v=0;v<32*4;v++)
+                                for(int v = 0; v < 32 * 4; v++)
                                     XTL::EmuD3DDeferredTextureState[v] = X_D3DTSS_UNK;
 
                                 printf("Emu (0x%X): 0x%.08X -> EmuD3DDeferredTextureState\n", GetCurrentThreadId(), XTL::EmuD3DDeferredTextureState);
@@ -11797,7 +12160,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
                                 EmuWarning("EmuD3DDeferredTextureState was not found!");
                             }
                         }
-			        }
+                    }
                 }
             }
 
@@ -11815,7 +12178,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // the kernel image at startup just like XDK soft-mod titles do.
     EmuInstallFakeKernelImage();
 
-	// ******************************************************************
+    // ******************************************************************
     // * Initialize FS Emulation
     // ******************************************************************
     {
@@ -11847,7 +12210,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
         // CXBX_CRC_DELAY=<ms>: arm later (via the timer-DPC thread) so a
         // hot-at-boot hook doesn't single-step the title to a crawl before
         // the interesting phase is reached.
-        const char *DelayValue = getenv("CXBX_CRC_DELAY");
+        const char* DelayValue = getenv("CXBX_CRC_DELAY");
         if(DelayValue != NULL)
         {
             g_Crc32ArmAtTick = GetTickCount64() + strtoul(DelayValue, NULL, 10);
@@ -11894,7 +12257,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // Section metadata lives in a relocated shadow because the original XBE
     // section table overlaps the generated PE section table.
     {
-        Xbe::Header *MemXbeHeader = (Xbe::Header*)0x00010000;
+        Xbe::Header* MemXbeHeader = (Xbe::Header*)0x00010000;
         const uint32 HeaderBase = pXbeHeader->dwBaseAddr;
         const uint32 SectionOffset = pXbeHeader->dwSectionHeadersAddr - HeaderBase;
         const uint32 SectionBytes = pXbeHeader->dwSections * sizeof(Xbe::SectionHeader);
@@ -11904,7 +12267,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
            SectionBytes > dwXbeHeaderSize - SectionOffset)
             EmuCleanup("Invalid XBE section metadata");
 
-        uint08 *HeaderShadow = (uint08*)VirtualAlloc(NULL, dwXbeHeaderSize,
+        uint08* HeaderShadow = (uint08*)VirtualAlloc(NULL, dwXbeHeaderSize,
                                                      MEM_RESERVE | MEM_COMMIT,
                                                      PAGE_READWRITE);
         if(HeaderShadow == NULL ||
@@ -11912,12 +12275,12 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
             EmuCleanup("Could not restore the guest XBE header view");
 
         memcpy(HeaderShadow, pXbeHeader, dwXbeHeaderSize);
-        Xbe::SectionHeader *ShadowSections =
+        Xbe::SectionHeader* ShadowSections =
             (Xbe::SectionHeader*)(HeaderShadow + SectionOffset);
 
         for(uint32 i = 0; i < pXbeHeader->dwSections; i++)
         {
-            uint32 *HeaderPointers[] = {
+            uint32* HeaderPointers[] = {
                 &ShadowSections[i].dwSectionNameAddr,
                 &ShadowSections[i].dwHeadSharedRefCountAddr,
                 &ShadowSections[i].dwTailSharedRefCountAddr,
@@ -11952,7 +12315,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
     // ******************************************************************
     __try
     {
-        EmuSwapFS();   // XBox FS
+        EmuSwapFS(); // XBox FS
 
         // _USE_XGMATH Disabled in mesh :[
         // halo : dword_0_2E2D18
@@ -11960,7 +12323,7 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit
 
         Entry();
 
-        EmuSwapFS();   // Win2k/XP FS
+        EmuSwapFS(); // Win2k/XP FS
     }
     __except(EmuException(GetExceptionInformation()))
     {
@@ -12085,21 +12448,21 @@ extern "C" CXBXKRNL_API void NTAPI EmuCleanup(const char* szErrorMessage, ...)
 extern "C" CXBXKRNL_API void NTAPI EmuPanic()
 {
     if(EmuIsXboxFS())
-        EmuSwapFS();   // Win2k/XP FS
+        EmuSwapFS(); // Win2k/XP FS
 
     printf("Emu (0x%X): EmuPanic()\n", GetCurrentThreadId());
 
     EmuCleanup("Kernel Panic!");
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 }
 
 // ******************************************************************
 // * func: EmuInstallWrapper
 // ******************************************************************
-inline void EmuInstallWrapper(void *FunctionAddr, void *WrapperAddr)
+inline void EmuInstallWrapper(void* FunctionAddr, void* WrapperAddr)
 {
-    uint08 *FuncBytes = (uint08*)FunctionAddr;
+    uint08* FuncBytes = (uint08*)FunctionAddr;
 
     *(uint08*)&FuncBytes[0] = 0xE9;
     *(uint32*)&FuncBytes[1] = (uint32)WrapperAddr - (uint32)FunctionAddr - 5;
@@ -12124,13 +12487,13 @@ static void EmuInstallNestopiaX13DSoundCounters(bool ResetCounters)
 
 static VOID WINAPI EmuNestopiaX13XapiInitProcess()
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     printf("Emu (0x%lX): NestopiaX 1.3 XapiInitProcess skipped.\n", GetCurrentThreadId());
 
     EmuInstallNestopiaX13DSoundCounters(true);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 }
 
 // Optionally seed the kernel LaunchDataPage so a homebrew emulator auto-boots a
@@ -12143,9 +12506,9 @@ static VOID WINAPI EmuNestopiaX13XapiInitProcess()
 // Header.dwLaunchDataType at +0x000, Header.dwTitleId at +0x004, and the 3 KiB
 // LaunchData blob at +0x400. XGetLaunchInfo validates the title ID for LDT_TITLE.
 // CUSTOM_LAUNCH_DATA is { DWORD magic; char szFilename[300]; ... }.
-static void EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader)
+static void EmuInstallAutoBootLaunchData(Xbe::Header* pXbeHeader)
 {
-    char rom[300] = {0};
+    char rom[300] = { 0 };
     const DWORD romLength = GetEnvironmentVariableA("CXBX_AUTOBOOT_ROM", rom, sizeof(rom));
     if(romLength == 0 || romLength >= sizeof(rom) || rom[0] == '\0')
     {
@@ -12163,10 +12526,10 @@ static void EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader)
     {
         return;
     }
-    const Xbe::Certificate *pCertificate = (Xbe::Certificate*)((uint08*)pXbeHeader +
-                                                                certificateOffset);
+    const Xbe::Certificate* pCertificate = (Xbe::Certificate*)((uint08*)pXbeHeader +
+                                                               certificateOffset);
 
-    unsigned char *Page = (unsigned char*)EmuAllocateContiguousMemoryHost(0x1000, 0x1000);
+    unsigned char* Page = (unsigned char*)EmuAllocateContiguousMemoryHost(0x1000, 0x1000);
     if(Page == NULL)
     {
         return;
@@ -12176,9 +12539,9 @@ static void EmuInstallAutoBootLaunchData(Xbe::Header *pXbeHeader)
     *(uint32*)(Page + 0x000) = 0;                       // Header.dwLaunchDataType = LDT_TITLE
     *(uint32*)(Page + 0x004) = pCertificate->dwTitleId; // Header.dwTitleId
 
-    unsigned char *LaunchData = Page + 0x400;
-    *(uint32*)(LaunchData + 0x000) = 0xEE456777;     // CUSTOM_LAUNCH_DATA.magic
-    strncpy((char*)(LaunchData + 0x004), rom, 299);  // CUSTOM_LAUNCH_DATA.szFilename[300]
+    unsigned char* LaunchData = Page + 0x400;
+    *(uint32*)(LaunchData + 0x000) = 0xEE456777;    // CUSTOM_LAUNCH_DATA.magic
+    strncpy((char*)(LaunchData + 0x004), rom, 299); // CUSTOM_LAUNCH_DATA.szFilename[300]
 
     xboxkrnl::LaunchDataPage = (xboxkrnl::DWORD)(uintptr_t)Page;
 
@@ -12202,24 +12565,25 @@ static void EmuInstallFakeKernelImage()
     ZeroMemory(Image, sizeof(Image));
 
     // IMAGE_DOS_HEADER
-    Image[0x00] = 'M'; Image[0x01] = 'Z';
-    *(ULONG*)(Image + 0x3C) = 0xF8;                 // e_lfanew -> IMAGE_NT_HEADERS
+    Image[0x00] = 'M';
+    Image[0x01] = 'Z';
+    *(ULONG*)(Image + 0x3C) = 0xF8; // e_lfanew -> IMAGE_NT_HEADERS
 
     // IMAGE_NT_HEADERS at 0xF8
-    BYTE *Pe = Image + 0xF8;
-    *(ULONG*)(Pe + 0x00) = 0x00004550;              // "PE\0\0"
-    *(USHORT*)(Pe + 0x04) = 0x014C;                 // FileHeader.Machine = i386
-    *(USHORT*)(Pe + 0x06) = 6;                      // FileHeader.NumberOfSections
-    *(USHORT*)(Pe + 0x14) = 0xE0;                   // FileHeader.SizeOfOptionalHeader
-    *(USHORT*)(Pe + 0x18) = 0x010B;                 // OptionalHeader.Magic = PE32
-    *(ULONG*)(Pe + 0x18 + 0x1C) = 0x80010000;       // OptionalHeader.ImageBase
-    *(ULONG*)(Pe + 0x18 + 0x38) = 0x00082000;       // OptionalHeader.SizeOfImage
-    *(ULONG*)(Pe + 0x18 + 0x5C) = 0x10;             // OptionalHeader.NumberOfRvaAndSizes
+    BYTE* Pe = Image + 0xF8;
+    *(ULONG*)(Pe + 0x00) = 0x00004550;        // "PE\0\0"
+    *(USHORT*)(Pe + 0x04) = 0x014C;           // FileHeader.Machine = i386
+    *(USHORT*)(Pe + 0x06) = 6;                // FileHeader.NumberOfSections
+    *(USHORT*)(Pe + 0x14) = 0xE0;             // FileHeader.SizeOfOptionalHeader
+    *(USHORT*)(Pe + 0x18) = 0x010B;           // OptionalHeader.Magic = PE32
+    *(ULONG*)(Pe + 0x18 + 0x1C) = 0x80010000; // OptionalHeader.ImageBase
+    *(ULONG*)(Pe + 0x18 + 0x38) = 0x00082000; // OptionalHeader.SizeOfImage
+    *(ULONG*)(Pe + 0x18 + 0x5C) = 0x10;       // OptionalHeader.NumberOfRvaAndSizes
 
     // Data directory 0: the export directory (lives in .edata, RVA 0x76000).
     const ULONG ExportDirRva = 0x00076000;
     const ULONG ExportOrdinalBase = 1;
-    const ULONG ExportFunctionCount = 366;          // real xboxkrnl exports ordinals 1..366
+    const ULONG ExportFunctionCount = 366; // real xboxkrnl exports ordinals 1..366
     *(ULONG*)(Pe + 0x18 + 0x60) = ExportDirRva;
     *(ULONG*)(Pe + 0x18 + 0x64) = 0x28 + ExportFunctionCount * 4;
 
@@ -12248,15 +12612,15 @@ static void EmuInstallFakeKernelImage()
         { { 'I', 'N', 'I', 'T', 0, 0, 0, 0 }, 0x0A000, 0x00078000 },
     };
     if(SkipInit)
-        memcpy(Sects[5].Name, ".init\0\0\0", 8);   // not 'INIT' -> title skips the ring-0 patch+reboot
+        memcpy(Sects[5].Name, ".init\0\0\0", 8); // not 'INIT' -> title skips the ring-0 patch+reboot
     for(int i = 0; i < 6; i++)
     {
-        BYTE *S = Sec + i * 0x28;
+        BYTE* S = Sec + i * 0x28;
         memcpy(S, Sects[i].Name, 8);
-        *(ULONG*)(S + 0x08) = Sects[i].VSize;       // VirtualSize
-        *(ULONG*)(S + 0x0C) = Sects[i].VAddr;       // VirtualAddress
-        *(ULONG*)(S + 0x10) = Sects[i].VSize;       // SizeOfRawData
-        *(ULONG*)(S + 0x14) = Sects[i].VAddr;       // PointerToRawData
+        *(ULONG*)(S + 0x08) = Sects[i].VSize; // VirtualSize
+        *(ULONG*)(S + 0x0C) = Sects[i].VAddr; // VirtualAddress
+        *(ULONG*)(S + 0x10) = Sects[i].VSize; // SizeOfRawData
+        *(ULONG*)(S + 0x14) = Sects[i].VAddr; // PointerToRawData
     }
 
     // IMAGE_EXPORT_DIRECTORY + AddressOfFunctions in .edata. The Xbox kernel
@@ -12267,11 +12631,11 @@ static void EmuInstallFakeKernelImage()
     // kernel functions directly, exactly like the launcher-patched XBE thunks.
     BYTE Edata[0x28 + ExportFunctionCount * 4];
     ZeroMemory(Edata, sizeof(Edata));
-    *(ULONG*)(Edata + 0x10) = ExportOrdinalBase;                // Base
-    *(ULONG*)(Edata + 0x14) = ExportFunctionCount;              // NumberOfFunctions
-    *(ULONG*)(Edata + 0x1C) = ExportDirRva + 0x28;              // AddressOfFunctions
+    *(ULONG*)(Edata + 0x10) = ExportOrdinalBase;   // Base
+    *(ULONG*)(Edata + 0x14) = ExportFunctionCount; // NumberOfFunctions
+    *(ULONG*)(Edata + 0x1C) = ExportDirRva + 0x28; // AddressOfFunctions
 
-    ULONG *FunctionRvas = (ULONG*)(Edata + 0x28);
+    ULONG* FunctionRvas = (ULONG*)(Edata + 0x28);
     for(ULONG Ordinal = ExportOrdinalBase; Ordinal < ExportOrdinalBase + ExportFunctionCount; Ordinal++)
         FunctionRvas[Ordinal - ExportOrdinalBase] = KernelThunkTable[Ordinal] - 0x80010000;
 
@@ -12308,7 +12672,7 @@ static void EmuInstallFakeKernelImage()
 // NOPs: the command is still posted, the poll simply falls through once.
 // Signature-matched at a fixed address, so a mismatch reports and patches
 // nothing.
-static void EmuInstallDsoundDspMailboxPatch(Xbe::Header *pXbeHeader)
+static void EmuInstallDsoundDspMailboxPatch(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000)
         return;
@@ -12327,7 +12691,7 @@ static void EmuInstallDsoundDspMailboxPatch(Xbe::Header *pXbeHeader)
     if(!EmuBytesMatch(SpinAddress, MailboxSpinSig, sizeof(MailboxSpinSig), pXbeHeader))
         return;
 
-    const uint08 MailboxAckPatch[] = { 0x90, 0x90 };   // nop ; nop (was jne -5)
+    const uint08 MailboxAckPatch[] = { 0x90, 0x90 }; // nop ; nop (was jne -5)
     EmuWriteBytes(SpinAddress + 5, MailboxAckPatch, sizeof(MailboxAckPatch));
 
     printf("Emu (0x%lX): DSOUND DSP mailbox spin (0x%.08lX) acknowledged on the DSP's behalf.\n",
@@ -12335,23 +12699,22 @@ static void EmuInstallDsoundDspMailboxPatch(Xbe::Header *pXbeHeader)
     fflush(stdout);
 }
 
-static bool EmuIsFceultra(Xbe::Header *pXbeHeader)
+static bool EmuIsFceultra(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000)
         return false;
 
-    Xbe::Certificate *pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
+    Xbe::Certificate* pCertificate = (Xbe::Certificate*)pXbeHeader->dwCertificateAddr;
     return pCertificate->dwTitleId == 0x10152007;
 }
 
-static void EmuInstallFceultraBootstrap(Xbe::Header *pXbeHeader)
+static void EmuInstallFceultraBootstrap(Xbe::Header* pXbeHeader)
 {
     if(!EmuIsFceultra(pXbeHeader))
         return;
 
     // XLaunchNewImage prologue: push ebp / mov ebp,esp / sub esp,0xC00 / mov eax,[0x10118]
-    const uint08 XLaunchNewImageSig[] =
-    {
+    const uint08 XLaunchNewImageSig[] = {
         0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x00, 0x0C, 0x00,
         0x00, 0xA1, 0x18, 0x01, 0x01, 0x00
     };
@@ -12410,21 +12773,21 @@ static const ULONG EmuCallTraceMaxSlots = 8;
 struct EmuCallTraceSlot
 {
     ULONG GuestAddress;
-    ULONG ReturnAddress;      // guest address just past the displaced bytes
+    ULONG ReturnAddress; // guest address just past the displaced bytes
     uint08 Displaced[16];
     ULONG DisplacedLength;
     volatile LONG Hits;
 };
 
 static EmuCallTraceSlot g_EmuCallTraceSlots[EmuCallTraceMaxSlots] = {};
-static uint08 *g_EmuCallTraceStubs = NULL;
+static uint08* g_EmuCallTraceStubs = NULL;
 
 extern "C" void EmuCallTraceReport(ULONG SlotIndex, ULONG CallerAddress)
 {
     if(SlotIndex >= EmuCallTraceMaxSlots)
         return;
 
-    EmuCallTraceSlot &Slot = g_EmuCallTraceSlots[SlotIndex];
+    EmuCallTraceSlot& Slot = g_EmuCallTraceSlots[SlotIndex];
     const LONG Hit = InterlockedIncrement(&Slot.Hits);
     if(Hit <= 4 || (Hit % 256) == 0)
     {
@@ -12436,19 +12799,47 @@ extern "C" void EmuCallTraceReport(ULONG SlotIndex, ULONG CallerAddress)
 
 // Length of the instruction(s) covering at least 5 bytes at Address, using a
 // small table of prologue forms actually seen in title code. 0 = unsupported.
-static ULONG EmuCallTracePrologueLength(const uint08 *Code)
+static ULONG EmuCallTracePrologueLength(const uint08* Code)
 {
     ULONG Length = 0;
     for(ULONG Guard = 0; Guard < 8 && Length < 5; Guard++)
     {
-        const uint08 *Op = Code + Length;
-        if(Op[0] >= 0x50 && Op[0] <= 0x57) { Length += 1; continue; }    // push r32 (any)
-        if(Op[0] == 0x83 && Op[1] == 0xEC) { Length += 3; continue; }    // sub esp,imm8
-        if(Op[0] == 0x81 && Op[1] == 0xEC) { Length += 6; continue; }    // sub esp,imm32
-        if(Op[0] >= 0xB8 && Op[0] <= 0xBF) { Length += 5; continue; }    // mov r32,imm32
-        if(Op[0] == 0x6A) { Length += 2; continue; }                     // push imm8
-        if(Op[0] == 0x68) { Length += 5; continue; }                     // push imm32
-        if(Op[0] == 0xA1) { Length += 5; continue; }                     // mov eax,[imm32]
+        const uint08* Op = Code + Length;
+        if(Op[0] >= 0x50 && Op[0] <= 0x57)
+        {
+            Length += 1;
+            continue;
+        } // push r32 (any)
+        if(Op[0] == 0x83 && Op[1] == 0xEC)
+        {
+            Length += 3;
+            continue;
+        } // sub esp,imm8
+        if(Op[0] == 0x81 && Op[1] == 0xEC)
+        {
+            Length += 6;
+            continue;
+        } // sub esp,imm32
+        if(Op[0] >= 0xB8 && Op[0] <= 0xBF)
+        {
+            Length += 5;
+            continue;
+        } // mov r32,imm32
+        if(Op[0] == 0x6A)
+        {
+            Length += 2;
+            continue;
+        } // push imm8
+        if(Op[0] == 0x68)
+        {
+            Length += 5;
+            continue;
+        } // push imm32
+        if(Op[0] == 0xA1)
+        {
+            Length += 5;
+            continue;
+        } // mov eax,[imm32]
 
         // mov r32,r/m32 (0x8B) and lea r32,m (0x8D) share the ModRM encoding,
         // so one length rule covers both -- these dominate real prologues and
@@ -12458,14 +12849,43 @@ static ULONG EmuCallTracePrologueLength(const uint08 *Code)
         {
             const uint08 Mod = (uint08)(Op[1] >> 6);
             const uint08 Rm = (uint08)(Op[1] & 7);
-            if(Mod == 3) { Length += 2; continue; }                      // reg,reg
-            if(Mod == 0 && Rm == 5) { Length += 6; continue; }           // [imm32]
-            if(Mod == 0 && Rm == 4) { Length += 3; continue; }           // [SIB]
-            if(Mod == 0) { Length += 2; continue; }                      // [reg]
-            if(Mod == 1 && Rm == 4) { Length += 4; continue; }           // [SIB+disp8]
-            if(Mod == 1) { Length += 3; continue; }                      // [reg+disp8]
-            if(Mod == 2 && Rm == 4) { Length += 7; continue; }           // [SIB+disp32]
-            Length += 6; continue;                                       // [reg+disp32]
+            if(Mod == 3)
+            {
+                Length += 2;
+                continue;
+            } // reg,reg
+            if(Mod == 0 && Rm == 5)
+            {
+                Length += 6;
+                continue;
+            } // [imm32]
+            if(Mod == 0 && Rm == 4)
+            {
+                Length += 3;
+                continue;
+            } // [SIB]
+            if(Mod == 0)
+            {
+                Length += 2;
+                continue;
+            } // [reg]
+            if(Mod == 1 && Rm == 4)
+            {
+                Length += 4;
+                continue;
+            } // [SIB+disp8]
+            if(Mod == 1)
+            {
+                Length += 3;
+                continue;
+            } // [reg+disp8]
+            if(Mod == 2 && Rm == 4)
+            {
+                Length += 7;
+                continue;
+            } // [SIB+disp32]
+            Length += 6;
+            continue; // [reg+disp32]
         }
         return 0;
     }
@@ -12473,7 +12893,7 @@ static ULONG EmuCallTracePrologueLength(const uint08 *Code)
     return Length >= 5 ? Length : 0;
 }
 
-static void EmuInstallCallTrace(Xbe::Header *pXbeHeader)
+static void EmuInstallCallTrace(Xbe::Header* pXbeHeader)
 {
     char Value[256] = {};
     if(GetEnvironmentVariableA("CXBX_CALL_TRACE", Value, sizeof(Value)) == 0)
@@ -12485,7 +12905,7 @@ static void EmuInstallCallTrace(Xbe::Header *pXbeHeader)
         return;
 
     ULONG SlotIndex = 0;
-    for(char *Token = strtok(Value, ","); Token != NULL && SlotIndex < EmuCallTraceMaxSlots;
+    for(char* Token = strtok(Value, ","); Token != NULL && SlotIndex < EmuCallTraceMaxSlots;
         Token = strtok(NULL, ","))
     {
         const ULONG Address = strtoul(Token, NULL, 16);
@@ -12505,7 +12925,7 @@ static void EmuInstallCallTrace(Xbe::Header *pXbeHeader)
             continue;
         }
 
-        EmuCallTraceSlot &Slot = g_EmuCallTraceSlots[SlotIndex];
+        EmuCallTraceSlot& Slot = g_EmuCallTraceSlots[SlotIndex];
         Slot.GuestAddress = Address;
         Slot.ReturnAddress = Address + Length;
         Slot.DisplacedLength = Length;
@@ -12513,19 +12933,28 @@ static void EmuInstallCallTrace(Xbe::Header *pXbeHeader)
 
         // Stub: pushad ; push [esp+32] (caller) ; push slot ; call report ;
         //       add esp,8 ; popad ; <displaced bytes> ; jmp back
-        uint08 *Stub = g_EmuCallTraceStubs + SlotIndex * 128;
+        uint08* Stub = g_EmuCallTraceStubs + SlotIndex * 128;
         ULONG At = 0;
-        Stub[At++] = 0x60;                                        // pushad
-        Stub[At++] = 0xFF; Stub[At++] = 0x74; Stub[At++] = 0x24;
-        Stub[At++] = 0x20;                                        // push [esp+32] = return addr
-        Stub[At++] = 0x68; *(ULONG*)&Stub[At] = SlotIndex; At += 4;
+        Stub[At++] = 0x60; // pushad
+        Stub[At++] = 0xFF;
+        Stub[At++] = 0x74;
+        Stub[At++] = 0x24;
+        Stub[At++] = 0x20; // push [esp+32] = return addr
+        Stub[At++] = 0x68;
+        *(ULONG*)&Stub[At] = SlotIndex;
+        At += 4;
         Stub[At++] = 0xE8;
-        *(LONG*)&Stub[At] = (LONG)((uint08*)&EmuCallTraceReport - (Stub + At + 4)); At += 4;
-        Stub[At++] = 0x83; Stub[At++] = 0xC4; Stub[At++] = 0x08;  // add esp,8
-        Stub[At++] = 0x61;                                        // popad
-        memcpy(Stub + At, Slot.Displaced, Length); At += Length;
+        *(LONG*)&Stub[At] = (LONG)((uint08*)&EmuCallTraceReport - (Stub + At + 4));
+        At += 4;
+        Stub[At++] = 0x83;
+        Stub[At++] = 0xC4;
+        Stub[At++] = 0x08; // add esp,8
+        Stub[At++] = 0x61; // popad
+        memcpy(Stub + At, Slot.Displaced, Length);
+        At += Length;
         Stub[At++] = 0xE9;
-        *(LONG*)&Stub[At] = (LONG)(Slot.ReturnAddress - (ULONG)(uintptr_t)(Stub + At + 4)); At += 4;
+        *(LONG*)&Stub[At] = (LONG)(Slot.ReturnAddress - (ULONG)(uintptr_t)(Stub + At + 4));
+        At += 4;
 
         uint08 Patch[16];
         memset(Patch, 0x90, Length);
@@ -12544,7 +12973,7 @@ static void EmuInstallCallTrace(Xbe::Header *pXbeHeader)
 // Find a unique occurrence of a byte pattern inside the mapped XBE image.
 // Returns the guest address of the single match, or 0 when the pattern is
 // absent or ambiguous (multiple hits).
-static uint32 EmuFindUniquePattern(Xbe::Header *pXbeHeader, const uint08 *Bytes, uint32 Count)
+static uint32 EmuFindUniquePattern(Xbe::Header* pXbeHeader, const uint08* Bytes, uint32 Count)
 {
     uint32 Base = pXbeHeader->dwBaseAddr;
     uint32 End = Base + pXbeHeader->dwSizeofImage;
@@ -12554,14 +12983,14 @@ static uint32 EmuFindUniquePattern(Xbe::Header *pXbeHeader, const uint08 *Bytes,
     {
         if(IsBadReadPtr((void*)Address, Count))
         {
-            Address += 0xFFF;   // skip toward the next page
+            Address += 0xFFF; // skip toward the next page
             continue;
         }
 
         if(memcmp((void*)Address, Bytes, Count) == 0)
         {
             if(Found != 0)
-                return 0;       // ambiguous
+                return 0; // ambiguous
             Found = Address;
         }
     }
@@ -12577,7 +13006,7 @@ static uint32 EmuFindUniquePattern(Xbe::Header *pXbeHeader, const uint08 *Bytes,
 // 0x0017502F, NestopiaX 1.3): find every occurrence of the pattern in the
 // image and rewrite it to bump a scratch counter instead, leaving the
 // accounting a harmless no-op.
-static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
+static void EmuInstallDsoundApuAccountingPatch(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000)
         return;
@@ -12599,11 +13028,11 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
     {
         if(IsBadReadPtr((void*)Address, 10))
         {
-            Address += 0xFFF;   // skip toward the next page
+            Address += 0xFFF; // skip toward the next page
             continue;
         }
 
-        const uint08 *p = (const uint08*)Address;
+        const uint08* p = (const uint08*)Address;
         if(p[0] != Head ||
            p[5] != 0x8B || (p[6] != 0x4B && p[6] != 0x4E) || p[7] != 0x08 ||
            (p[8] != 0x01 && p[8] != 0x29) || p[9] != 0x08)
@@ -12629,7 +13058,7 @@ static void EmuInstallDsoundApuAccountingPatch(Xbe::Header *pXbeHeader)
         fflush(stdout);
 }
 
-extern "C" ULONG g_EmuDsoundSingletonAddress;   // defined below the patch
+extern "C" ULONG g_EmuDsoundSingletonAddress; // defined below the patch
 
 // The XDK DSOUND ~CMcpxAPU destructor tears the audio core down: Terminate,
 // KeDisconnectInterrupt(m_Interrupt), timer/DPC cancel, shutdown-notification
@@ -12641,7 +13070,7 @@ extern "C" ULONG g_EmuDsoundSingletonAddress;   // defined below the patch
 // DSOUND singleton and the context-release patch above: the APU core is
 // immortal under the HLE -- locate the destructor by its (reloc-wildcarded)
 // entry and neutralise it to `ret`.
-static void EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader)
+static void EmuInstallDsoundApuDestructorPatch(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000)
         return;
@@ -12657,11 +13086,11 @@ static void EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader)
     {
         if(IsBadReadPtr((void*)Address, PatternLength))
         {
-            Address += 0xFFF;   // skip toward the next page
+            Address += 0xFFF; // skip toward the next page
             continue;
         }
 
-        const uint08 *p = (const uint08*)Address;
+        const uint08* p = (const uint08*)Address;
         if(p[0x00] != 0x53 || p[0x01] != 0x55 || p[0x02] != 0x56 ||
            p[0x03] != 0x8B || p[0x04] != 0xF1 || p[0x05] != 0x57 ||
            p[0x06] != 0xC7 || p[0x07] != 0x06 ||
@@ -12684,7 +13113,7 @@ static void EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader)
         if(InterruptFlag - InterruptBase > 0x100 || InterruptClear - InterruptBase > 0x100)
             continue;
 
-        const uint08 Patch[1] = { 0xC3 };   // thiscall, no args: plain ret
+        const uint08 Patch[1] = { 0xC3 }; // thiscall, no args: plain ret
         EmuWriteBytes(Address, Patch, sizeof(Patch));
 
         // CDirectSound::m_pDirectSound sits 0x58 before the KINTERRUPT static
@@ -12724,12 +13153,12 @@ static void EmuInstallDsoundApuDestructorPatch(Xbe::Header *pXbeHeader)
             if(memcmp((const void*)Clear, ClearPattern, sizeof(ClearPattern)) != 0)
                 continue;
 
-            const uint08 *Entry = (const uint08*)(Clear - 9);
+            const uint08* Entry = (const uint08*)(Clear - 9);
             if(Entry[0] != 0x56 || Entry[1] != 0x8B || Entry[2] != 0xF1 ||
                Entry[3] != 0xC7 || Entry[4] != 0x06)
                 continue;
 
-            const uint08 Ret[1] = { 0xC3 };   // thiscall, no args
+            const uint08 Ret[1] = { 0xC3 }; // thiscall, no args
             EmuWriteBytes(Clear - 9, Ret, sizeof(Ret));
             printf("Emu (0x%lX): DSOUND ~CDirectSound (0x%.08lX) neutralised.\n",
                    GetCurrentThreadId(), Clear - 9);
@@ -12777,10 +13206,9 @@ extern "C" void EmuDsoundSingletonKeepAlive()
 // (NestopiaX 1.3's 3-minute menu screensaver blanked the screen ~33s after
 // boot). The 17-byte function is byte-stable across XAPI builds and unique in
 // the image; redirect it to the 733 MHz-scaled EmuQueryPerformanceCounter.
-static void EmuInstallXapiRdtscQpcPatch(Xbe::Header *pXbeHeader)
+static void EmuInstallXapiRdtscQpcPatch(Xbe::Header* pXbeHeader)
 {
-    static const uint08 Signature[] =
-    {
+    static const uint08 Signature[] = {
         0x8B, 0x4C, 0x24, 0x04, 0x0F, 0x31, 0x89, 0x01,
         0x89, 0x51, 0x04, 0x33, 0xC0, 0x40, 0xC2, 0x04, 0x00
     };
@@ -12813,7 +13241,7 @@ extern "C" ULONG g_EmuDsoundApuContextTable = 0;
 // by pattern and jump over it (entering after its `push ebx` so the stack
 // stays balanced); the next CMcpxCore::Initialize simply refills the same
 // contexts via AllocateContext.
-static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader)
+static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000)
         return;
@@ -12829,11 +13257,11 @@ static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader)
     {
         if(IsBadReadPtr((void*)Address, PatternLength))
         {
-            Address += 0xFFF;   // skip toward the next page
+            Address += 0xFFF; // skip toward the next page
             continue;
         }
 
-        const uint08 *p = (const uint08*)Address;
+        const uint08* p = (const uint08*)Address;
         if(p[0x00] != 0x33 || p[0x01] != 0xFF || p[0x02] != 0x53 ||
            p[0x03] != 0x39 || p[0x04] != 0xAF ||
            p[0x09] != 0x74 || p[0x0A] != 0x16 ||
@@ -12870,7 +13298,7 @@ static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader)
         printf("Emu (0x%lX): DSOUND APU context release (0x%.08lX, table 0x%.08lX) neutralised.\n",
                GetCurrentThreadId(), Address, CtxBase);
         fflush(stdout);
-        return;   // one table per DSOUND; first unique match wins
+        return; // one table per DSOUND; first unique match wins
     }
 }
 
@@ -12883,7 +13311,7 @@ static void EmuInstallDsoundApuContextReleasePatch(Xbe::Header *pXbeHeader)
 // wrapper by its (position-independent) prologue signature anywhere in the
 // image and neutralise it to a no-op return -- the same targeted-patch
 // approach as EmuInstallFceultraBootstrap, made title-agnostic.
-static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
+static void EmuInstallCdxLaunchBootstrap(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000 || EmuIsNestopiaX13(pXbeHeader))
     {
@@ -12891,8 +13319,7 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
     }
 
     // XLaunchNewImage wrapper prologue: push ebp / mov ebp,esp / push args / push 1
-    const uint08 LaunchWrapperSig[] =
-    {
+    const uint08 LaunchWrapperSig[] = {
         0x55, 0x8B, 0xEC, 0xFF, 0x75, 0x18, 0xFF, 0x75, 0x14,
         0xFF, 0x75, 0x10, 0x6A, 0x01, 0xFF, 0x75, 0x0C, 0xFF, 0x75, 0x08
     };
@@ -12978,7 +13405,7 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
     //   mov esi,[D3D__pDevice] / je +6
     {
         const uint08 LazyHead[] = { 0x53, 0x8B, 0x1D };
-        const uint08 LazyMid[]  = { 0xF6, 0xC7, 0x01, 0x56, 0x8B, 0x35 };
+        const uint08 LazyMid[] = { 0xF6, 0xC7, 0x01, 0x56, 0x8B, 0x35 };
         const uint08 LazyTail[] = { 0x74, 0x06 };
         uint32 LazyAddr = 0;
         bool LazyAmbiguous = false;
@@ -13006,7 +13433,7 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
 
         if(LazyAddr != 0 && !LazyAmbiguous)
         {
-            const uint08 LazyPatch[] = { 0xC3 };   // ret
+            const uint08 LazyPatch[] = { 0xC3 }; // ret
             uint32 DirtyFlagsGlobal = *(uint32*)(LazyAddr + 3);
             EmuWriteBytes(LazyAddr, LazyPatch, sizeof(LazyPatch));
             printf("Emu (0x%lX): CDX D3D::LazySetState (0x%.08lX, dirty flags 0x%.08lX) neutralised (no raw pushbuffer flush).\n",
@@ -13019,12 +13446,12 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header *pXbeHeader)
 
 static DWORD WINAPI EmuNestopiaX13XLaunchNewImageA(LPCSTR lpTitlePath, PVOID pLaunchData)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     printf("Emu (0x%lX): NestopiaX 1.3 XLaunchNewImageA title=\"%s\" launchData=0x%.08lX.\n",
            GetCurrentThreadId(), lpTitlePath != NULL ? lpTitlePath : "(null)", (uint32)pLaunchData);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ERROR_GEN_FAILURE;
 }
@@ -13034,7 +13461,7 @@ static PVOID WINAPI EmuNestopiaX13GetXapiProcess()
     static uint08 XapiProcess[0x200];
     static bool Logged = false;
 
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     if(!Logged)
     {
@@ -13043,15 +13470,15 @@ static PVOID WINAPI EmuNestopiaX13GetXapiProcess()
         Logged = true;
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return XapiProcess;
 }
 
 static VOID WINAPI EmuNestopiaX13D3DDeviceGetCreationParameters(
-    XTL::D3DDEVICE_CREATION_PARAMETERS *pParameters)
+    XTL::D3DDEVICE_CREATION_PARAMETERS* pParameters)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     if(pParameters != NULL)
     {
@@ -13060,10 +13487,10 @@ static VOID WINAPI EmuNestopiaX13D3DDeviceGetCreationParameters(
         pParameters->BehaviorFlags = 0x40;
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 }
 
-static bool EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe::Header *pXbeHeader)
+static bool EmuBytesMatch(uint32 Address, const uint08* Bytes, uint32 Count, Xbe::Header* pXbeHeader)
 {
     if(Address < pXbeHeader->dwBaseAddr)
     {
@@ -13078,12 +13505,12 @@ static bool EmuBytesMatch(uint32 Address, const uint08 *Bytes, uint32 Count, Xbe
     return memcmp((void*)Address, Bytes, Count) == 0;
 }
 
-static void EmuWriteBytes(uint32 Address, const uint08 *Bytes, uint32 Count)
+static void EmuWriteBytes(uint32 Address, const uint08* Bytes, uint32 Count)
 {
     memcpy((void*)Address, Bytes, Count);
 }
 
-static bool EmuIsNestopiaX13(Xbe::Header *pXbeHeader)
+static bool EmuIsNestopiaX13(Xbe::Header* pXbeHeader)
 {
     if(pXbeHeader->dwBaseAddr != 0x00010000 || pXbeHeader->dwSizeofImage != 0x00314240)
     {
@@ -13101,136 +13528,114 @@ static bool EmuIsNestopiaX13(Xbe::Header *pXbeHeader)
     {
         return false;
     }
-    const Xbe::Certificate *pCertificate =
+    const Xbe::Certificate* pCertificate =
         (const Xbe::Certificate*)((const uint08*)pXbeHeader + CertificateOffset);
 
     return pCertificate->dwTitleId == 0xFFFF0780;
 }
 
-static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
+static void EmuInstallNestopiaX13Bootstrap(Xbe::Header* pXbeHeader)
 {
     if(!EmuIsNestopiaX13(pXbeHeader))
     {
         return;
     }
 
-    const uint08 XapiThreadStartupBytes[] =
-    {
+    const uint08 XapiThreadStartupBytes[] = {
         0x6A, 0x18, 0x68, 0xC0, 0x57, 0x1D, 0x00, 0xE8,
         0x9F, 0x74, 0x00, 0x00
     };
-    const uint08 XapiInitProcessBytes[] =
-    {
+    const uint08 XapiInitProcessBytes[] = {
         0xA1, 0x04, 0x50, 0x1C, 0x00, 0x8B, 0x00, 0x8B,
         0x0D, 0x0C, 0x50, 0x1C
     };
-    const uint08 XLaunchNewImageABytes[] =
-    {
+    const uint08 XLaunchNewImageABytes[] = {
         0xB8, 0x80, 0xFD, 0x1D, 0x00, 0x56, 0x8B, 0xF0,
         0x8B, 0xC8, 0xB8, 0x84
     };
-    const uint08 XapiProcessGetterBytes[] =
-    {
+    const uint08 XapiProcessGetterBytes[] = {
         0x64, 0xA1, 0x28, 0x00, 0x00, 0x00, 0x8B, 0x80,
         0x2C, 0x01, 0x00, 0x00, 0xC3
     };
-    const uint08 QueryPerformanceCounterBytes[] =
-    {
+    const uint08 QueryPerformanceCounterBytes[] = {
         0x8B, 0x4C, 0x24, 0x04, 0x0F, 0x31, 0x89, 0x01,
         0x89, 0x51, 0x04, 0x33, 0xC0, 0x40, 0xC2, 0x04,
         0x00
     };
-    const uint08 XapiBugCheckGuardBytes[] =
-    {
+    const uint08 XapiBugCheckGuardBytes[] = {
         0x64, 0x0F, 0xB6, 0x05, 0x24, 0x00, 0x00, 0x00,
         0x3C, 0x02, 0x72, 0x08, 0x6A, 0x0A, 0xFF, 0x15,
         0x9C, 0x50, 0x1C, 0x00
     };
-    const uint08 XapiPerThreadDataBytes[] =
-    {
+    const uint08 XapiPerThreadDataBytes[] = {
         0x64, 0xA1, 0x28, 0x00, 0x00, 0x00, 0x83, 0x78,
         0x28, 0x00, 0x74, 0x17
     };
-    const uint08 XapiFsCallbackBytes[] =
-    {
+    const uint08 XapiFsCallbackBytes[] = {
         0x64, 0xA1, 0x20, 0x00, 0x00, 0x00, 0x8B, 0x80,
         0x50, 0x02, 0x00, 0x00
     };
-    const uint08 D3DDeviceGetCreationParametersBytes[] =
-    {
+    const uint08 D3DDeviceGetCreationParametersBytes[] = {
         0x8B, 0x15, 0x48, 0xA0, 0x15, 0x00, 0x8B, 0x44,
         0x24, 0x04, 0x53, 0x56, 0x33, 0xC9, 0x8B, 0xF0
     };
-    const uint08 D3DDeviceSetFlickerFilterBytes[] =
-    {
+    const uint08 D3DDeviceSetFlickerFilterBytes[] = {
         0x8B, 0x0D, 0x80, 0x8F, 0x15, 0x00, 0x85, 0xC9,
         0xA1, 0x48, 0xA0, 0x15, 0x00, 0x56, 0x8B, 0x74
     };
-    const uint08 D3DDeviceSetSoftDisplayFilterBytes[] =
-    {
+    const uint08 D3DDeviceSetSoftDisplayFilterBytes[] = {
         0x8B, 0x0D, 0x7C, 0x8F, 0x15, 0x00, 0x85, 0xC9,
         0xA1, 0x48, 0xA0, 0x15, 0x00, 0x56, 0x8B, 0x74
     };
-    const uint08 D3DDeviceSetRenderStateNotInlineBytes[] =
-    {
+    const uint08 D3DDeviceSetRenderStateNotInlineBytes[] = {
         0x56, 0x8B, 0x74, 0x24, 0x08, 0x83, 0xFE, 0x5C,
         0x7D, 0x1F, 0x8B, 0x0C, 0xB5, 0xC0, 0x51, 0x1C
     };
-    const uint08 D3DDeviceSetTextureStageStateNotInlineBytes[] =
-    {
+    const uint08 D3DDeviceSetTextureStageStateNotInlineBytes[] = {
         0x8B, 0x44, 0x24, 0x08, 0x83, 0xF8, 0x0C, 0x7D,
         0x2E, 0x8B, 0x4C, 0x24, 0x04, 0xBA, 0x01, 0x00
     };
-    const uint08 DSoundApuHeapAllocateAccountingBytes[] =
-    {
+    const uint08 DSoundApuHeapAllocateAccountingBytes[] = {
         0xA1, 0x48, 0x70, 0x19, 0x00, 0x8B, 0x4B, 0x08,
         0x01, 0x08
     };
-    const uint08 DSoundApuHeapAllocateAccountingPatch[] =
-    {
+    const uint08 DSoundApuHeapAllocateAccountingPatch[] = {
         0x8B, 0x4B, 0x08, 0x01, 0x0D, 0xDC, 0x68, 0x19,
         0x00, 0x90
     };
-    const uint08 DSoundApuHeapFreeAccountingBytes[] =
-    {
+    const uint08 DSoundApuHeapFreeAccountingBytes[] = {
         0xA1, 0x48, 0x70, 0x19, 0x00, 0x8B, 0x4E, 0x08,
         0x29, 0x08
     };
-    const uint08 DSoundApuHeapFreeAccountingPatch[] =
-    {
+    const uint08 DSoundApuHeapFreeAccountingPatch[] = {
         0x8B, 0x4E, 0x08, 0x29, 0x0D, 0xDC, 0x68, 0x19,
         0x00, 0x90
     };
-    const uint08 DSoundApuHeapCommitAccountingBytes[] =
-    {
+    const uint08 DSoundApuHeapCommitAccountingBytes[] = {
         0xA1, 0x4C, 0x70, 0x19, 0x00, 0x8B, 0x4D, 0x0C,
         0x01, 0x08
     };
-    const uint08 DSoundApuHeapCommitAccountingPatch[] =
-    {
+    const uint08 DSoundApuHeapCommitAccountingPatch[] = {
         0x8B, 0x4D, 0x0C, 0x01, 0x0D, 0xD8, 0x68, 0x19,
         0x00, 0x90
     };
-    const uint08 DSoundApuHeapResetAccountingBytes[] =
-    {
+    const uint08 DSoundApuHeapResetAccountingBytes[] = {
         0xA1, 0x4C, 0x70, 0x19, 0x00, 0x83, 0x20, 0x00,
         0xA1, 0x48, 0x70, 0x19, 0x00, 0x83, 0x20, 0x00
     };
-    const uint08 DSoundApuHeapResetAccountingPatch[] =
-    {
+    const uint08 DSoundApuHeapResetAccountingPatch[] = {
         0x83, 0x25, 0xD8, 0x68, 0x19, 0x00, 0x00, 0x90,
         0x83, 0x25, 0xDC, 0x68, 0x19, 0x00, 0x00, 0x90
     };
 
     struct NestopiaFsCallbackPatch
     {
-        const char *Name;
+        const char* Name;
         uint32 From;
         uint32 To;
     };
 
-    const NestopiaFsCallbackPatch XapiFsCallbackPatches[] =
-    {
+    const NestopiaFsCallbackPatch XapiFsCallbackPatches[] = {
         { "Xapi thread start FS callback", 0x00132750, 0x00132767 },
         { "Xapi shutdown FS callback", 0x001331D9, 0x001331F2 },
         { "XapiProcessStartup FS notify", 0x001336AE, 0x001336F0 },
@@ -13445,7 +13850,7 @@ static void EmuInstallNestopiaX13Bootstrap(Xbe::Header *pXbeHeader)
 // ******************************************************************
 // * func: EmuLocateFunction
 // ******************************************************************
-void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
+void* EmuLocateFunction(OOVPA* Oovpa, uint32 lower, uint32 upper)
 {
     uint32 count = Oovpa->Count;
 
@@ -13458,41 +13863,41 @@ void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
     // ******************************************************************
     if(Oovpa->Large == 1)
     {
-        LOOVPA<1> *Loovpa = (LOOVPA<1>*)Oovpa;
+        LOOVPA<1>* Loovpa = (LOOVPA<1>*)Oovpa;
 
-        upper -= Loovpa->Lovp[count-1].Offset;
+        upper -= Loovpa->Lovp[count - 1].Offset;
 
         // ******************************************************************
         // * Search all of the image memory
         // ******************************************************************
-        for(uint32 cur=lower;cur<upper;cur++)
+        for(uint32 cur = lower; cur < upper; cur++)
         {
             uint32 v;
 
             // ******************************************************************
             // * check all cross references
             // ******************************************************************
-            for(v=0;v<Loovpa->XRefCount;v++)
+            for(v = 0; v < Loovpa->XRefCount; v++)
             {
                 uint32 Offset = Loovpa->Lovp[v].Offset;
-                uint32 Value  = Loovpa->Lovp[v].Value;
+                uint32 Value = Loovpa->Lovp[v].Value;
 
                 uint32 RealValue = *(uint32*)(cur + Offset);
 
                 if(XRefDataBase[Value] == -1)
-                    goto skipout_L;   // Unsatisfied XRef is not acceptable
+                    goto skipout_L; // Unsatisfied XRef is not acceptable
 
-                if(RealValue + cur + Offset+4 != XRefDataBase[Value])
+                if(RealValue + cur + Offset + 4 != XRefDataBase[Value])
                     break;
             }
 
             // ******************************************************************
             // * check all pairs, moving on if any do not match
             // ******************************************************************
-            for(v=0;v<count;v++)
+            for(v = 0; v < count; v++)
             {
                 uint32 Offset = Loovpa->Lovp[v].Offset;
-                uint32 Value  = Loovpa->Lovp[v].Value;
+                uint32 Value = Loovpa->Lovp[v].Value;
 
                 uint08 RealValue = *(uint08*)(cur + Offset);
 
@@ -13515,13 +13920,13 @@ void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
                         return (void*)cur;
                     }
                     else
-                        return 0;   // Already Found, no bother patching again
+                        return 0; // Already Found, no bother patching again
                 }
 
                 return (void*)cur;
             }
 
-            skipout_L:;
+        skipout_L:;
         }
     }
     // ******************************************************************
@@ -13529,33 +13934,33 @@ void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
     // ******************************************************************
     else
     {
-        SOOVPA<1> *Soovpa = (SOOVPA<1>*)Oovpa;
+        SOOVPA<1>* Soovpa = (SOOVPA<1>*)Oovpa;
 
-        upper -= Soovpa->Sovp[count-1].Offset;
+        upper -= Soovpa->Sovp[count - 1].Offset;
 
         // ******************************************************************
         // * Search all of the image memory
         // ******************************************************************
-        for(uint32 cur=lower;cur<upper;cur++)
+        for(uint32 cur = lower; cur < upper; cur++)
         {
             uint32 v;
 
-//            if( (cur == 0x0006A6C6) && (Soovpa->Sovp[v].Value == XREF_SETCURRENTPOSITION2) )
-//                _asm int 3
+            //            if( (cur == 0x0006A6C6) && (Soovpa->Sovp[v].Value == XREF_SETCURRENTPOSITION2) )
+            //                _asm int 3
             // ******************************************************************
             // * check all cross references
             // ******************************************************************
-            for(v=0;v<Soovpa->XRefCount;v++)
+            for(v = 0; v < Soovpa->XRefCount; v++)
             {
                 uint32 Offset = Soovpa->Sovp[v].Offset;
-                uint32 Value  = Soovpa->Sovp[v].Value;
+                uint32 Value = Soovpa->Sovp[v].Value;
 
                 uint32 RealValue = *(uint32*)(cur + Offset);
 
                 if(XRefDataBase[Value] == -1)
-                    goto skipout_S;   // Unsatisfied XRef is not acceptable
+                    goto skipout_S; // Unsatisfied XRef is not acceptable
 
-                if( (RealValue + cur + Offset + 4 != XRefDataBase[Value]))
+                if((RealValue + cur + Offset + 4 != XRefDataBase[Value]))
                     break;
             }
 
@@ -13565,10 +13970,10 @@ void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
                 // ******************************************************************
                 // * check all pairs, moving on if any do not match
                 // ******************************************************************
-                for(;v<count;v++)
+                for(; v < count; v++)
                 {
                     uint32 Offset = Soovpa->Sovp[v].Offset;
-                    uint32 Value  = Soovpa->Sovp[v].Value;
+                    uint32 Value = Soovpa->Sovp[v].Value;
 
                     uint08 RealValue = *(uint08*)(cur + Offset);
 
@@ -13592,13 +13997,13 @@ void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
                         return (void*)cur;
                     }
                     else
-                        return 0;   // Already Found, no bother patching again
+                        return 0; // Already Found, no bother patching again
                 }
 
                 return (void*)cur;
             }
 
-            skipout_S:;
+        skipout_S:;
         }
     }
 
@@ -13608,7 +14013,7 @@ void *EmuLocateFunction(OOVPA *Oovpa, uint32 lower, uint32 upper)
 // ******************************************************************
 // * func: EmuInstallWrappers
 // ******************************************************************
-void EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header *pXbeHeader)
+void EmuInstallWrappers(OOVPATable* OovpaTable, uint32 OovpaTableSize, void (*Entry)(), Xbe::Header* pXbeHeader)
 {
     uint32 lower = pXbeHeader->dwBaseAddr;
     uint32 upper = pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage;
@@ -13616,22 +14021,22 @@ void EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*En
     // ******************************************************************
     // * traverse the full OOVPA table
     // ******************************************************************
-    for(uint32 a=0;a<OovpaTableSize/sizeof(OOVPATable);a++)
+    for(uint32 a = 0; a < OovpaTableSize / sizeof(OOVPATable); a++)
     {
-        OOVPA *Oovpa = OovpaTable[a].Oovpa;
+        OOVPA* Oovpa = OovpaTable[a].Oovpa;
 
         uint32 scan = lower;
 
         do
         {
-            void *pFunc = EmuLocateFunction(Oovpa, scan, upper);
+            void* pFunc = EmuLocateFunction(Oovpa, scan, upper);
 
             if(pFunc == 0)
                 break;
 
-            #ifdef _DEBUG_TRACE
+#ifdef _DEBUG_TRACE
             printf("Emu (0x%X): 0x%.08X -> %s\n", GetCurrentThreadId(), pFunc, OovpaTable[a].szFuncName);
-            #endif
+#endif
 
             // Opt-in install trace (CXBX_HLE_TRACE): one line per patch with
             // the table entry index, so hook installation can be audited in
@@ -13655,8 +14060,7 @@ void EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*En
             // A PATCH_ALL entry keeps scanning past the match; the E9 jmp
             // just written makes re-matching the same address impossible.
             scan = (uint32)pFunc + 1;
-        }
-        while(OovpaTable[a].Flags & OOVPA_FLAG_PATCH_ALL);
+        } while(OovpaTable[a].Flags & OOVPA_FLAG_PATCH_ALL);
     }
 }
 
@@ -13665,7 +14069,7 @@ void EmuInstallWrappers(OOVPATable *OovpaTable, uint32 OovpaTableSize, void (*En
 // ******************************************************************
 void EmuXRefFailure()
 {
-    EmuSwapFS();    // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     printf("Emu (0x%lX): XRef-only function called from guest return address 0x%.08lX.\n",
            GetCurrentThreadId(), (ULONG)__builtin_return_address(0));
@@ -13728,12 +14132,12 @@ int EmuException(LPEXCEPTION_POINTERS e)
         cxbx::trace::RecordFlight(cxbx::trace::Event::Exception,
                                   static_cast<std::uint32_t>(e->ExceptionRecord->ExceptionCode));
         cxbx::trace::DumpFlightEmergency();
-		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
-		printf("Emu (0x%X): Recieved Exception [0x%.08X]@0x%.08X\n", GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+        printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
+        printf("Emu (0x%X): Recieved Exception [0x%.08X]@0x%.08X\n", GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
         printf("Emu (0x%X): ESP=0x%.08X EBP=0x%.08X\n", GetCurrentThreadId(), e->ContextRecord->Esp, e->ContextRecord->Ebp);
         __try
         {
-            DWORD *Stack = (DWORD*)e->ContextRecord->Esp;
+            DWORD* Stack = (DWORD*)e->ContextRecord->Esp;
 
             printf("Emu (0x%X): Stack: 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X 0x%.08X\n",
                    GetCurrentThreadId(), Stack[0], Stack[1], Stack[2], Stack[3], Stack[4], Stack[5], Stack[6], Stack[7]);
@@ -13742,18 +14146,18 @@ int EmuException(LPEXCEPTION_POINTERS e)
         {
             printf("Emu (0x%X): Stack unavailable.\n", GetCurrentThreadId());
         }
-		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
+        printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
     }
 
     fflush(stdout);
 
-	// ******************************************************************
-	// * Notify User
-	// ******************************************************************
-	{
-		char buffer[256];
+    // ******************************************************************
+    // * Notify User
+    // ******************************************************************
+    {
+        char buffer[256];
 
-		sprintf(buffer, "Recieved Exception [0x%.08X]@0x%.08X\n\nPress 'OK' to terminate emulation.\nPress 'Cancel' to debug.", e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+        sprintf(buffer, "Recieved Exception [0x%.08X]@0x%.08X\n\nPress 'OK' to terminate emulation.\nPress 'Cancel' to debug.", e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
 
         char szLogFile[260];
 
@@ -13776,8 +14180,8 @@ int EmuException(LPEXCEPTION_POINTERS e)
             ExitProcess(e->ExceptionRecord->ExceptionCode);
 
         if(MessageBox(XTL::g_hEmuWindow, buffer, "cxbx", MB_ICONSTOP | MB_OKCANCEL) == IDOK)
-			ExitProcess(1);
-	}
+            ExitProcess(1);
+    }
 
     // Restore the role the faulting code held (the entry swap above moved to the
     // host role); without this, declining the search in the Xbox role leaves the
@@ -13799,13 +14203,13 @@ int ExitException(LPEXCEPTION_POINTERS e)
     static int count = 0;
 
     // ******************************************************************
-	// * Debugging Information
-	// ******************************************************************
-	{
-		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
-		printf("Emu (0x%X): Recieved Exception [0x%.08X]@0x%.08X\n", GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
-		printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
-	}
+    // * Debugging Information
+    // ******************************************************************
+    {
+        printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
+        printf("Emu (0x%X): Recieved Exception [0x%.08X]@0x%.08X\n", GetCurrentThreadId(), e->ExceptionRecord->ExceptionCode, e->ContextRecord->Eip);
+        printf("Emu (0x%X): * * * * * EXCEPTION * * * * *\n", GetCurrentThreadId());
+    }
 
     fflush(stdout);
 

@@ -19,33 +19,30 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-
 /* Perform a binary search for KEY in BASE which has NMEMB elements
    of SIZE bytes each.  The comparisons are done by (*COMPAR)().  */
-PTR
-DEFUN(bsearch, (key, base, nmemb, size, compar),
-      register CONST PTR key AND register CONST PTR base AND
-      size_t nmemb AND register size_t size AND
-      register int EXFUN((*compar), (CONST PTR, CONST PTR)))
+PTR DEFUN(bsearch, (key, base, nmemb, size, compar),
+          register CONST PTR key AND register CONST PTR base AND
+              size_t nmemb AND register size_t size AND register int EXFUN((*compar), (CONST PTR, CONST PTR)))
 {
-  register size_t l, u, idx;
-  register CONST PTR p;
-  register int comparison;
+    register size_t l, u, idx;
+    register CONST PTR p;
+    register int comparison;
 
-  l = 0;
-  u = nmemb;
-  while (l < u)
+    l = 0;
+    u = nmemb;
+    while(l < u)
     {
-      idx = (l + u) / 2;
-      p = (PTR) (((CONST char *) base) + (idx * size));
-      comparison = (*compar)(key, p);
-      if (comparison < 0)
-	u = idx;
-      else if (comparison > 0)
-	l = idx + 1;
-      else
-	return (PTR) p;
+        idx = (l + u) / 2;
+        p = (PTR)(((CONST char*)base) + (idx * size));
+        comparison = (*compar)(key, p);
+        if(comparison < 0)
+            u = idx;
+        else if(comparison > 0)
+            l = idx + 1;
+        else
+            return (PTR)p;
     }
 
-  return NULL;
+    return NULL;
 }

@@ -21,7 +21,7 @@
 #define LOCK_PREFIX ""
 #endif
 
-#define ADDR (*(volatile long *) addr)
+#define ADDR (*(volatile long*)addr)
 
 /**
  * set_bit - Atomically set a bit in memory
@@ -35,14 +35,14 @@
  */
 /*static __inline__ void set_bit(int nr, volatile void * addr)
 {
-	__asm__ __volatile__( LOCK_PREFIX
-		"btsl %1,%0"
-		:"=m" (ADDR)
-		:"Ir" (nr));
+    __asm__ __volatile__( LOCK_PREFIX
+        "btsl %1,%0"
+        :"=m" (ADDR)
+        :"Ir" (nr));
 }
 */
 
-static  __inline void set_bit(int nr, volatile void * addr)
+static __inline void set_bit(int nr, volatile void* addr)
 {
     __asm
     {
@@ -62,7 +62,7 @@ static  __inline void set_bit(int nr, volatile void * addr)
  * If it's called on the same region of memory simultaneously, the effect
  * may be that only one operation succeeds.
  */
-static __inline void __set_bit(int nr, volatile void * addr)
+static __inline void __set_bit(int nr, volatile void* addr)
 {
     __asm
     {
@@ -83,7 +83,7 @@ static __inline void __set_bit(int nr, volatile void * addr)
  * you should call smp_mb__before_clear_bit() and/or smp_mb__after_clear_bit()
  * in order to ensure changes are visible on other processors.
  */
-static __inline void clear_bit(int nr, volatile void * addr)
+static __inline void clear_bit(int nr, volatile void* addr)
 {
     __asm
     {
@@ -93,8 +93,8 @@ static __inline void clear_bit(int nr, volatile void * addr)
             sbb		eax, eax
     }
 }
-#define smp_mb__before_clear_bit()	barrier()
-#define smp_mb__after_clear_bit()	barrier()
+#define smp_mb__before_clear_bit() barrier()
+#define smp_mb__after_clear_bit()  barrier()
 
 /**
  * __change_bit - Toggle a bit in memory
@@ -105,7 +105,7 @@ static __inline void clear_bit(int nr, volatile void * addr)
  * If it's called on the same region of memory simultaneously, the effect
  * may be that only one operation succeeds.
  */
-static __inline void __change_bit(int nr, volatile void * addr)
+static __inline void __change_bit(int nr, volatile void* addr)
 {
     __asm
     {
@@ -125,7 +125,7 @@ static __inline void __change_bit(int nr, volatile void * addr)
  * Note that @nr may be almost arbitrarily large; this function is not
  * restricted to acting on a single-word quantity.
  */
-static __inline void change_bit(int nr, volatile void * addr)
+static __inline void change_bit(int nr, volatile void* addr)
 {
     __asm
     {
@@ -141,26 +141,26 @@ static __inline void change_bit(int nr, volatile void * addr)
  * @nr: Bit to set
  * @addr: Address to count from
  *
- * This operation is atomic and cannot be reordered.  
+ * This operation is atomic and cannot be reordered.
  * It also implies a memory barrier.
  */
-static __inline int test_and_set_bit(int nr, volatile void * addr)
+static __inline int test_and_set_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    bts [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-/*	__asm__ __volatile__( LOCK_PREFIX
-		"btsl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
-		:"Ir" (nr) : "memory");
-	*/
-	return oldbit;
+    /*	__asm__ __volatile__( LOCK_PREFIX
+            "btsl %2,%1\n\tsbbl %0,%0"
+            :"=r" (oldbit),"=m" (ADDR)
+            :"Ir" (nr) : "memory");
+        */
+    return oldbit;
 }
 
 /**
@@ -168,26 +168,26 @@ static __inline int test_and_set_bit(int nr, volatile void * addr)
  * @nr: Bit to set
  * @addr: Address to count from
  *
- * This operation is non-atomic and can be reordered.  
+ * This operation is non-atomic and can be reordered.
  * If two examples of this operation race, one can appear to succeed
  * but actually fail.  You must protect multiple accesses with a lock.
  */
-static __inline int __test_and_set_bit(int nr, volatile void * addr)
+static __inline int __test_and_set_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    bts [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-	/*__asm__(
-		"btsl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
-		:"Ir" (nr));*/
-	return oldbit;
+    /*__asm__(
+        "btsl %2,%1\n\tsbbl %0,%0"
+        :"=r" (oldbit),"=m" (ADDR)
+        :"Ir" (nr));*/
+    return oldbit;
 }
 
 /**
@@ -195,28 +195,28 @@ static __inline int __test_and_set_bit(int nr, volatile void * addr)
  * @nr: Bit to set
  * @addr: Address to count from
  *
- * This operation is atomic and cannot be reordered.  
+ * This operation is atomic and cannot be reordered.
  * It also implies a memory barrier.
  */
-static __inline int test_and_clear_bit(int nr, volatile void * addr)
+static __inline int test_and_clear_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
 
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    btr [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-	/*
-	__asm__ __volatile__( LOCK_PREFIX
-		"btrl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
-		:"Ir" (nr) : "memory");
-		*/
-	return oldbit;
+    /*
+    __asm__ __volatile__( LOCK_PREFIX
+        "btrl %2,%1\n\tsbbl %0,%0"
+        :"=r" (oldbit),"=m" (ADDR)
+        :"Ir" (nr) : "memory");
+        */
+    return oldbit;
 }
 
 /**
@@ -224,50 +224,50 @@ static __inline int test_and_clear_bit(int nr, volatile void * addr)
  * @nr: Bit to set
  * @addr: Address to count from
  *
- * This operation is non-atomic and can be reordered.  
+ * This operation is non-atomic and can be reordered.
  * If two examples of this operation race, one can appear to succeed
  * but actually fail.  You must protect multiple accesses with a lock.
  */
-static __inline int __test_and_clear_bit(int nr, volatile void * addr)
+static __inline int __test_and_clear_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
 
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    btr [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-/*
-	__asm__(
-		"btrl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
-		:"Ir" (nr));
-		*/
-	return oldbit;
+    /*
+        __asm__(
+            "btrl %2,%1\n\tsbbl %0,%0"
+            :"=r" (oldbit),"=m" (ADDR)
+            :"Ir" (nr));
+            */
+    return oldbit;
 }
 
 /* WARNING: non atomic and it can be reordered! */
-static __inline int __test_and_change_bit(int nr, volatile void * addr)
+static __inline int __test_and_change_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
 
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    btc [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-/*
-	__asm__ __volatile__(
-		"btcl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
-		:"Ir" (nr) : "memory");*/
-	return oldbit;
+    /*
+        __asm__ __volatile__(
+            "btcl %2,%1\n\tsbbl %0,%0"
+            :"=r" (oldbit),"=m" (ADDR)
+            :"Ir" (nr) : "memory");*/
+    return oldbit;
 }
 
 /**
@@ -275,27 +275,27 @@ static __inline int __test_and_change_bit(int nr, volatile void * addr)
  * @nr: Bit to set
  * @addr: Address to count from
  *
- * This operation is atomic and cannot be reordered.  
+ * This operation is atomic and cannot be reordered.
  * It also implies a memory barrier.
  */
-static __inline int test_and_change_bit(int nr, volatile void * addr)
+static __inline int test_and_change_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
 
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    btc [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-	/*
-	__asm__ __volatile__( LOCK_PREFIX
-		"btcl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
-		:"Ir" (nr) : "memory");*/
-	return oldbit;
+    /*
+    __asm__ __volatile__( LOCK_PREFIX
+        "btcl %2,%1\n\tsbbl %0,%0"
+        :"=r" (oldbit),"=m" (ADDR)
+        :"Ir" (nr) : "memory");*/
+    return oldbit;
 }
 
 #if 0 /* Fool kernel-doc since it doesn't do macros yet */
@@ -307,34 +307,32 @@ static __inline int test_and_change_bit(int nr, volatile void * addr)
 static int test_bit(int nr, const volatile void * addr);
 #endif
 
-static __inline int constant_test_bit(int nr, const volatile void * addr)
+static __inline int constant_test_bit(int nr, const volatile void* addr)
 {
-	return ((1UL << (nr & 31)) & (((const volatile unsigned int *) addr)[nr >> 5])) != 0;
+    return ((1UL << (nr & 31)) & (((const volatile unsigned int*)addr)[nr >> 5])) != 0;
 }
 
-static __inline int variable_test_bit(int nr, volatile void * addr)
+static __inline int variable_test_bit(int nr, volatile void* addr)
 {
-	int oldbit;
+    int oldbit;
     __asm
     {
             mov eax, nr
             mov ebx, addr
     lock    bt  [ebx], eax
-            sbb eax, eax			// result into eax
-			mov	oldbit,eax			// store in oldbit for returning (0 or 1)
+            sbb eax, eax // result into eax
+			mov	oldbit,eax // store in oldbit for returning (0 or 1)
     }
-	/*
-	__asm__ __volatile__(
-		"btl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit)
-		:"m" (ADDR),"Ir" (nr));*/
-	return oldbit;
+    /*
+    __asm__ __volatile__(
+        "btl %2,%1\n\tsbbl %0,%0"
+        :"=r" (oldbit)
+        :"m" (ADDR),"Ir" (nr));*/
+    return oldbit;
 }
 
-#define test_bit(nr,addr) \
-(__builtin_constant_p(nr) ? \
- constant_test_bit((nr),(addr)) : \
- variable_test_bit((nr),(addr)))
+#define test_bit(nr, addr) \
+    (__builtin_constant_p(nr) ? constant_test_bit((nr), (addr)) : variable_test_bit((nr), (addr)))
 
 /**
  * find_first_zero_bit - find the first zero bit in a memory region
@@ -368,7 +366,7 @@ static __inline int find_first_zero_bit(void * addr, unsigned size)
 		:"1" ((size + 31) >> 5), "2" (addr), "b" (addr));
 	return res;
 }
-#endif 
+#endif
 /**
  * find_next_zero_bit - find the first zero bit in a memory region
  * @addr: The address to base the search on
@@ -378,16 +376,17 @@ static __inline int find_first_zero_bit(void * addr, unsigned size)
 // Portable replacement for the original x86 GCC-asm version (bsfl), which does
 // not compile under clang. Returns the bit number of the first zero bit at or
 // after `offset`, or `size` if there is none.
-static __inline__ int find_next_zero_bit (void * addr, int size, int offset)
+static __inline__ int find_next_zero_bit(void* addr, int size, int offset)
 {
-	const unsigned int * p = (const unsigned int *) addr;
-	int bit;
+    const unsigned int* p = (const unsigned int*)addr;
+    int bit;
 
-	for (bit = offset; bit < size; bit++) {
-		if (!((p[bit >> 5] >> (bit & 31)) & 1U))
-			return bit;
-	}
-	return size;
+    for(bit = offset; bit < size; bit++)
+    {
+        if(!((p[bit >> 5] >> (bit & 31)) & 1U))
+            return bit;
+    }
+    return size;
 }
 /**
  * ffz - find first zero in word.
@@ -395,20 +394,20 @@ static __inline__ int find_next_zero_bit (void * addr, int size, int offset)
  *
  * Undefined if no zero exists, so code should check against ~0UL first.
  */
-static __inline unsigned long ffz(unsigned long DWordValue )
+static __inline unsigned long ffz(unsigned long DWordValue)
 {
-	unsigned long OutputData;
+    unsigned long OutputData;
     __asm
     {
             xor eax, eax
             mov ebx, DWordValue
     lock    bsf eax, ebx
-			mov	OutputData,eax			// store in oldbit for returning (0 or 1)
+			mov	OutputData,eax // store in oldbit for returning (0 or 1)
     }
-/*	__asm__("bsfl %1,%0"
-		:"=r" (word)
-		:"r" (~word));*/
-	return OutputData;
+    /*	__asm__("bsfl %1,%0"
+            :"=r" (word)
+            :"r" (~word));*/
+    return OutputData;
 }
 
 #ifdef __KERNEL__
@@ -423,13 +422,13 @@ static __inline unsigned long ffz(unsigned long DWordValue )
  */
 static __inline__ int ffs(int x)
 {
-	int r;
+    int r;
 
-	__asm__("bsfl %1,%0\n\t"
-		"jnz 1f\n\t"
-		"movl $-1,%0\n"
-		"1:" : "=r" (r) : "rm" (x));
-	return r+1;
+    __asm__("bsfl %1,%0\n\t"
+            "jnz 1f\n\t"
+            "movl $-1,%0\n"
+            "1:" : "=r"(r) : "rm"(x));
+    return r + 1;
 }
 
 /**
@@ -441,24 +440,24 @@ static __inline__ int ffs(int x)
 
 #define hweight32(x) generic_hweight32(x)
 #define hweight16(x) generic_hweight16(x)
-#define hweight8(x) generic_hweight8(x)
+#define hweight8(x)  generic_hweight8(x)
 
 #endif /* __KERNEL__ */
 
 #ifdef __KERNEL__
 
-#define ext2_set_bit                 __test_and_set_bit
-#define ext2_clear_bit               __test_and_clear_bit
-#define ext2_test_bit                test_bit
-#define ext2_find_first_zero_bit     find_first_zero_bit
-#define ext2_find_next_zero_bit      find_next_zero_bit
+#define ext2_set_bit             __test_and_set_bit
+#define ext2_clear_bit           __test_and_clear_bit
+#define ext2_test_bit            test_bit
+#define ext2_find_first_zero_bit find_first_zero_bit
+#define ext2_find_next_zero_bit  find_next_zero_bit
 
 /* Bitmap functions for the minix filesystem.  */
-#define minix_test_and_set_bit(nr,addr) __test_and_set_bit(nr,addr)
-#define minix_set_bit(nr,addr) __set_bit(nr,addr)
-#define minix_test_and_clear_bit(nr,addr) __test_and_clear_bit(nr,addr)
-#define minix_test_bit(nr,addr) test_bit(nr,addr)
-#define minix_find_first_zero_bit(addr,size) find_first_zero_bit(addr,size)
+#define minix_test_and_set_bit(nr, addr)      __test_and_set_bit(nr, addr)
+#define minix_set_bit(nr, addr)               __set_bit(nr, addr)
+#define minix_test_and_clear_bit(nr, addr)    __test_and_clear_bit(nr, addr)
+#define minix_test_bit(nr, addr)              test_bit(nr, addr)
+#define minix_find_first_zero_bit(addr, size) find_first_zero_bit(addr, size)
 
 #endif /* __KERNEL__ */
 

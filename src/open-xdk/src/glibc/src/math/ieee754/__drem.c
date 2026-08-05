@@ -45,61 +45,61 @@ __CONSTVALUE double
 DEFUN(__drem, (x, y),
       double x AND double y)
 {
-  union ieee754_double ux, uy;
+    union ieee754_double ux, uy;
 
-  ux.d = x;
-  uy.d = y;
+    ux.d = x;
+    uy.d = y;
 #define x ux.d
-#define	y uy.d
+#define y uy.d
 
-  uy.ieee.negative = 0;
+    uy.ieee.negative = 0;
 
-  if (!__finite (x) || y == 0.0)
-    return NAN;
-  else if (__isnan (y))
-    return y;
-  else if (__isinf (y))
-    return x;
-  else if (uy.ieee.exponent <= 1)
+    if(!__finite(x) || y == 0.0)
+        return NAN;
+    else if(__isnan(y))
+        return y;
+    else if(__isinf(y))
+        return x;
+    else if(uy.ieee.exponent <= 1)
     {
-      /* Subnormal (or almost subnormal) Y value.  */
-      double b = __scalb (1.0, 54);
-      y *= b;
-      x = __drem (x, y);
-      x *= b;
-      return __drem (x, y) / b;
+        /* Subnormal (or almost subnormal) Y value.  */
+        double b = __scalb(1.0, 54);
+        y *= b;
+        x = __drem(x, y);
+        x *= b;
+        return __drem(x, y) / b;
     }
-  else if (y >= 1.7e308 / 2)
+    else if(y >= 1.7e308 / 2)
     {
-      y /= 2;
-      x /= 2;
-      return __drem (x, y) * 2;
+        y /= 2;
+        x /= 2;
+        return __drem(x, y) * 2;
     }
-  else
+    else
     {
-      union ieee754_double a;
-      double b;
-      unsigned int negative = ux.ieee.negative;
-      a.d = y + y;
-      b = y / 2;
-      ux.ieee.negative = 0;
-      while (x > a.d)
-	{
-	  unsigned short int k = ux.ieee.exponent - a.ieee.exponent;
-	  union ieee754_double tmp;
-	  tmp.d = a.d;
-	  tmp.ieee.exponent += k;
-	  if (x < tmp.d)
-	    --tmp.ieee.exponent;
-	  x -= tmp.d;
-	}
-      if (x > b)
-	{
-	  x -= y;
-	  if (x >= b)
-	    x -= y;
-	}
-      ux.ieee.negative ^= negative;
-      return x;
+        union ieee754_double a;
+        double b;
+        unsigned int negative = ux.ieee.negative;
+        a.d = y + y;
+        b = y / 2;
+        ux.ieee.negative = 0;
+        while(x > a.d)
+        {
+            unsigned short int k = ux.ieee.exponent - a.ieee.exponent;
+            union ieee754_double tmp;
+            tmp.d = a.d;
+            tmp.ieee.exponent += k;
+            if(x < tmp.d)
+                --tmp.ieee.exponent;
+            x -= tmp.d;
+        }
+        if(x > b)
+        {
+            x -= y;
+            if(x >= b)
+                x -= y;
+        }
+        ux.ieee.negative ^= negative;
+        return x;
     }
 }

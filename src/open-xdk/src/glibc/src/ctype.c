@@ -16,34 +16,35 @@
    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
    02111-1307 USA.  */
 
-#define	__NO_CTYPE
+#define __NO_CTYPE
 #include <ctype.h>
 
 /* Provide real-function versions of all the ctype macros.  */
 
-#define	func(name, type) \
-  int name (int c) { return __isctype (c, type); }
+#define func(name, type)           \
+    int name(int c)                \
+    {                              \
+        return __isctype(c, type); \
+    }
 
-func (isalnum, _ISalnum)
-func (isalpha, _ISalpha)
-func (iscntrl, _IScntrl)
-//func (isdigit, _ISdigit)
-func (islower, _ISlower)
-func (isgraph, _ISgraph)
-func (isprint, _ISprint)
-func (ispunct, _ISpunct)
-func (isspace, _ISspace)
-func (isupper, _ISupper)
-func (isxdigit, _ISxdigit)
+func(isalnum, _ISalnum)
+    func(isalpha, _ISalpha)
+        func(iscntrl, _IScntrl)
+    // func (isdigit, _ISdigit)
+    func(islower, _ISlower)
+        func(isgraph, _ISgraph)
+            func(isprint, _ISprint)
+                func(ispunct, _ISpunct)
+                    func(isspace, _ISspace)
+                        func(isupper, _ISupper)
+                            func(isxdigit, _ISxdigit)
 
-int
-tolower (int c)
+                                int tolower(int c)
 {
-  return c >= -128 && c < 256 ? __ctype_tolower[c] : c;
+    return c >= -128 && c < 256 ? __ctype_tolower[c] : c;
 }
 
-int
-toupper (int c)
+int toupper(int c)
 {
-  return c >= -128 && c < 256 ? __ctype_toupper[c] : c;
+    return c >= -128 && c < 256 ? __ctype_toupper[c] : c;
 }

@@ -1,31 +1,31 @@
 /* This part here added by roland@prep.ai.mit.edu for the GNU C library.  */
-   
-#include <math.h>		/* Done first so we can #undef.  */
+
+#include <math.h> /* Done first so we can #undef.  */
 #include <endian.h>
-#if	__BYTE_ORDER == __LITTLE_ENDIAN
+#if __BYTE_ORDER == __LITTLE_ENDIAN
 #undef national
 #define national
 #endif
 
-#undef	isinf
-#define	isinf	__isinf
-#undef	isnan
-#define	isnan	__isnan
-#undef	infnan
-#define	infnan	__infnan
-#undef	copysign
-#define	copysign	__copysign
-#undef	scalb
-#define	scalb	__scalb
-#undef	drem
-#define	drem	__drem
-#undef	logb
-#define	logb	__logb
-#undef	__finite
-#undef	finite
-#define	finite	__finite
-#undef	expm1
-#define	expm1	__expm1
+#undef isinf
+#define isinf __isinf
+#undef isnan
+#define isnan __isnan
+#undef infnan
+#define infnan __infnan
+#undef copysign
+#define copysign __copysign
+#undef scalb
+#define scalb __scalb
+#undef drem
+#define drem __drem
+#undef logb
+#define logb __logb
+#undef __finite
+#undef finite
+#define finite __finite
+#undef expm1
+#define expm1 __expm1
 
 /*
  * Copyright (c) 1988, 1993
@@ -65,63 +65,65 @@
 #include <sys/cdefs.h>
 #include <math.h>
 
-#if defined(vax)||defined(tahoe)
+#if defined(vax) || defined(tahoe)
 
 /* Deal with different ways to concatenate in cpp */
-#  ifdef __STDC__
-#    define	cat3(a,b,c) a ## b ## c
-#  else
-#    define	cat3(a,b,c) a/**/b/**/c
-#  endif
+#ifdef __STDC__
+#define cat3(a, b, c) a##b##c
+#else
+#define cat3(a, b, c) a /**/ b /**/ c
+#endif
 
 /* Deal with vax/tahoe byte order issues */
-#  ifdef vax
-#    define	cat3t(a,b,c) cat3(a,b,c)
-#  else
-#    define	cat3t(a,b,c) cat3(a,c,b)
-#  endif
+#ifdef vax
+#define cat3t(a, b, c) cat3(a, b, c)
+#else
+#define cat3t(a, b, c) cat3(a, c, b)
+#endif
 
-#  define vccast(name) (*(const double *)(cat3(name,,x)))
+#define vccast(name) (*(const double*)(cat3(name, , x)))
 
-   /*
-    * Define a constant to high precision on a Vax or Tahoe.
-    *
-    * Args are the name to define, the decimal floating point value,
-    * four 16-bit chunks of the float value in hex
-    * (because the vax and tahoe differ in float format!), the power
-    * of 2 of the hex-float exponent, and the hex-float mantissa.
-    * Most of these arguments are not used at compile time; they are
-    * used in a post-check to make sure the constants were compiled
-    * correctly.
-    *
-    * People who want to use the constant will have to do their own
-    *     #define foo vccast(foo)
-    * since CPP cannot do this for them from inside another macro (sigh).
-    * We define "vccast" if this needs doing.
-    */
-#  define vc(name, value, x1,x2,x3,x4, bexp, xval) \
-	const static long cat3(name,,x)[] = {cat3t(0x,x1,x2), cat3t(0x,x3,x4)};
+/*
+ * Define a constant to high precision on a Vax or Tahoe.
+ *
+ * Args are the name to define, the decimal floating point value,
+ * four 16-bit chunks of the float value in hex
+ * (because the vax and tahoe differ in float format!), the power
+ * of 2 of the hex-float exponent, and the hex-float mantissa.
+ * Most of these arguments are not used at compile time; they are
+ * used in a post-check to make sure the constants were compiled
+ * correctly.
+ *
+ * People who want to use the constant will have to do their own
+ *     #define foo vccast(foo)
+ * since CPP cannot do this for them from inside another macro (sigh).
+ * We define "vccast" if this needs doing.
+ */
+#define vc(name, value, x1, x2, x3, x4, bexp, xval) \
+    const static long cat3(name, , x)[] = { cat3t(0x, x1, x2), cat3t(0x, x3, x4) };
 
-#  define ic(name, value, bexp, xval) ;
+#define ic(name, value, bexp, xval) ;
 
-#else	/* vax or tahoe */
+#else /* vax or tahoe */
 
-   /* Hooray, we have an IEEE machine */
-#  undef vccast
-#  define vc(name, value, x1,x2,x3,x4, bexp, xval) ;
+/* Hooray, we have an IEEE machine */
+#undef vccast
+#define vc(name, value, x1, x2, x3, x4, bexp, xval) ;
 
-#  define ic(name, value, bexp, xval) \
-	const static double name = value;
+#define ic(name, value, bexp, xval) \
+    const static double name = value;
 
-#endif	/* defined(vax)||defined(tahoe) */
-
+#endif /* defined(vax)||defined(tahoe) */
 
 /*
  * Functions internal to the math package, yet not static.
  */
-extern double	__exp__E();
-extern double	__log__L();
+extern double __exp__E();
+extern double __log__L();
 
-struct Double {double a, b;};
+struct Double
+{
+    double a, b;
+};
 double __exp__D __P((double, double));
 struct Double __log__D __P((double));

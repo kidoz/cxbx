@@ -22,21 +22,21 @@ Cambridge, MA 02139, USA.  */
 /* Break VALUE into a normalized fraction and an integral power of 2.  */
 
 double
-frexp (value, exp)
-     double value;
-     int *exp;
+frexp(value, exp)
+double value;
+int* exp;
 {
-  if (value == 0)
+    if(value == 0)
     {
-      *exp = 0;
-      return 0;
+        *exp = 0;
+        return 0;
     }
-  else
+    else
     {
-      union ieee754_double u;
-      u.d = value;
-      *exp = u.ieee.exponent - 1022;
-      u.ieee.exponent = 1022;
-      return u.d;
+        union ieee754_double u;
+        u.d = value;
+        *exp = u.ieee.exponent - 1022;
+        u.ieee.exponent = 1022;
+        return u.d;
     }
 }

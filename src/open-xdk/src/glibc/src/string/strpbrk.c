@@ -19,17 +19,15 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-
 /* Find the first ocurrence in S of any character in ACCEPT.  */
-char *
-DEFUN(strpbrk, (s, accept),
-      register CONST char *s AND register CONST char *accept)
+char* DEFUN(strpbrk, (s, accept),
+            register CONST char* s AND register CONST char* accept)
 {
-  while (*s != '\0')
-    if (strchr(accept, *s) == NULL)
-      ++s;
-    else
-      return (char *) s;
+    while(*s != '\0')
+        if(strchr(accept, *s) == NULL)
+            ++s;
+        else
+            return (char*)s;
 
-  return NULL;
+    return NULL;
 }

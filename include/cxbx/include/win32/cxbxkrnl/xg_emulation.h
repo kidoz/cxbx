@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->xg_emulation.h
@@ -37,40 +37,34 @@
 // ******************************************************************
 // * func: EmuXGIsSwizzledFormat
 // ******************************************************************
-PVOID WINAPI EmuXGIsSwizzledFormat
-(
-    D3DFORMAT       Format
-);
+PVOID WINAPI EmuXGIsSwizzledFormat(
+    D3DFORMAT Format);
 
 // ******************************************************************
 // * func: EmuXGSwizzleRect
 // ******************************************************************
-VOID WINAPI EmuXGSwizzleRect
-(
-    LPCVOID       pSource, 
-    DWORD         Pitch,
-    LPCRECT       pRect,
-    LPVOID        pDest,
-    DWORD         Width,
-    DWORD         Height,
+VOID WINAPI EmuXGSwizzleRect(
+    LPCVOID pSource,
+    DWORD Pitch,
+    LPCRECT pRect,
+    LPVOID pDest,
+    DWORD Width,
+    DWORD Height,
     CONST LPPOINT pPoint,
-    DWORD         BytesPerPixel
-);
+    DWORD BytesPerPixel);
 
 // ******************************************************************
 // * func: EmuXGUnswizzleRect
 // ******************************************************************
-VOID WINAPI EmuXGUnswizzleRect
-(
-    PVOID           pSrcBuffer,
-    DWORD           dwWidth,
-    DWORD           dwHeight,
-    DWORD           dwDepth,
-    PVOID           pDstBuff,
-    DWORD           dwPitch,
-    RECT            rSrc,
-    POINT           poDst,
-    DWORD           dwBPP
-);
+VOID WINAPI EmuXGUnswizzleRect(
+    PVOID pSrcBuffer,
+    DWORD dwWidth,
+    DWORD dwHeight,
+    DWORD dwDepth,
+    PVOID pDstBuff,
+    DWORD dwPitch,
+    RECT rSrc,
+    POINT poDst,
+    DWORD dwBPP);
 
 #endif

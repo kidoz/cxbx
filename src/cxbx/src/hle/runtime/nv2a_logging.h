@@ -63,33 +63,33 @@
 #define NV_USER     0x800000u // per-channel FIFO submission (PUT/GET), 32 x 0x2000
 
 // A selection of high-value registers (absolute offsets).
-#define NV_PMC_BOOT_0                0x000000u // chip ID (fixed; verify value vs ref)
-#define NV_PMC_INTR_0                0x000100u
-#define NV_PMC_INTR_EN_0             0x000140u
-#define NV_PMC_ENABLE                0x000200u
-#define NV_PFIFO_INTR_0              0x002100u
-#define NV_PFIFO_INTR_EN_0           0x002140u
-#define NV_PFIFO_RAMHT               0x002210u // RAMHT base/size in RAMIN
-#define NV_PFIFO_RAMFC               0x002214u // RAMFC (FIFO context) base
-#define NV_PFIFO_RAMRO               0x002218u // RAMRO (runout) base
-#define NV_PFIFO_CACHE1_PUSH0        0x003200u
-#define NV_PFIFO_CACHE1_DMA_PUSH     0x003220u
-#define NV_PFIFO_CACHE1_DMA_STATE    0x003228u
-#define NV_PFIFO_CACHE1_DMA_INSTANCE 0x00322Cu
-#define NV_PFIFO_CACHE1_DMA_PUT      0x003240u // CPU writes; pusher target
-#define NV_PFIFO_CACHE1_DMA_GET      0x003244u // pusher progress
+#define NV_PMC_BOOT_0                  0x000000u // chip ID (fixed; verify value vs ref)
+#define NV_PMC_INTR_0                  0x000100u
+#define NV_PMC_INTR_EN_0               0x000140u
+#define NV_PMC_ENABLE                  0x000200u
+#define NV_PFIFO_INTR_0                0x002100u
+#define NV_PFIFO_INTR_EN_0             0x002140u
+#define NV_PFIFO_RAMHT                 0x002210u // RAMHT base/size in RAMIN
+#define NV_PFIFO_RAMFC                 0x002214u // RAMFC (FIFO context) base
+#define NV_PFIFO_RAMRO                 0x002218u // RAMRO (runout) base
+#define NV_PFIFO_CACHE1_PUSH0          0x003200u
+#define NV_PFIFO_CACHE1_DMA_PUSH       0x003220u
+#define NV_PFIFO_CACHE1_DMA_STATE      0x003228u
+#define NV_PFIFO_CACHE1_DMA_INSTANCE   0x00322Cu
+#define NV_PFIFO_CACHE1_DMA_PUT        0x003240u // CPU writes; pusher target
+#define NV_PFIFO_CACHE1_DMA_GET        0x003244u // pusher progress
 #define NV_PFIFO_CACHE1_DMA_SUBROUTINE 0x00324Cu
-#define NV_PFIFO_CACHE1_DMA_DCOUNT   0x0032A0u
-#define NV_PGRAPH_INTR               0x400100u
-#define NV_PGRAPH_INTR_EN            0x400140u
-#define NV_PGRAPH_STATUS             0x400700u // busy/idle
-#define NV_PGRAPH_FIFO               0x400720u
-#define NV_PGRAPH_CTX_CONTROL        0x400144u
-#define NV_PFB_CFG0                  0x100200u
-#define NV_PTIMER_TIME_0             0x009400u
-#define NV_PCRTC_INTR_0              0x600100u
-#define NV_PCRTC_START               0x600800u
-#define NV_PCRTC_RASTER              0x600808u
+#define NV_PFIFO_CACHE1_DMA_DCOUNT     0x0032A0u
+#define NV_PGRAPH_INTR                 0x400100u
+#define NV_PGRAPH_INTR_EN              0x400140u
+#define NV_PGRAPH_STATUS               0x400700u // busy/idle
+#define NV_PGRAPH_FIFO                 0x400720u
+#define NV_PGRAPH_CTX_CONTROL          0x400144u
+#define NV_PFB_CFG0                    0x100200u
+#define NV_PTIMER_TIME_0               0x009400u
+#define NV_PCRTC_INTR_0                0x600100u
+#define NV_PCRTC_START                 0x600800u
+#define NV_PCRTC_RASTER                0x600808u
 
 // ---------------------------------------------------------------------------
 // PGRAPH object classes used by the NV2A (nouveau nv_object.h numbering). The

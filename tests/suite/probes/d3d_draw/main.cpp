@@ -14,18 +14,19 @@
 #include "xdk_xtrace.h"
 
 static const D3DCOLOR COL_CLEAR = 0xFF0000FF; // blue
-static const D3DCOLOR COL_TRI   = 0xFF00FF00; // green
-static const D3DCOLOR COL_QUAD  = 0xFFFF0000; // red
+static const D3DCOLOR COL_TRI = 0xFF00FF00;   // green
+static const D3DCOLOR COL_QUAD = 0xFFFF0000;  // red
 
-struct VERTEX {
+struct VERTEX
+{
     float x, y, z, rhw;
     D3DCOLOR color;
 };
 #define FVF_VERTEX (D3DFVF_XYZRHW | D3DFVF_DIFFUSE)
 
-static DWORD read_pixel(void *pBits, INT pitch, int x, int y)
+static DWORD read_pixel(void* pBits, INT pitch, int x, int y)
 {
-    return (*(DWORD *)((BYTE *)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
+    return (*(DWORD*)((BYTE*)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
 }
 
 static void im_vertex(float x, float y)
@@ -43,18 +44,18 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS d3dpp;
     ZeroMemory(&d3dpp, sizeof(d3dpp));
-    d3dpp.BackBufferWidth  = 640;
+    d3dpp.BackBufferWidth = 640;
     d3dpp.BackBufferHeight = 480;
     d3dpp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    d3dpp.BackBufferCount  = 1;
-    d3dpp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    d3dpp.BackBufferCount = 1;
+    d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                     &d3dpp, &pDevice);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
-    if (FAILED(hr) || pDevice == NULL)
+    if(FAILED(hr) || pDevice == NULL)
         xt_end_and_exit();
 
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);
@@ -63,33 +64,35 @@ void __cdecl main()
 
     // Path 1: DrawVerticesUP, triangle list covering the left half.
     static const VERTEX tris[6] = {
-        {   0.0f,   0.0f, 0.0f, 1.0f, COL_TRI },
-        { 320.0f,   0.0f, 0.0f, 1.0f, COL_TRI },
-        {   0.0f, 480.0f, 0.0f, 1.0f, COL_TRI },
-        { 320.0f,   0.0f, 0.0f, 1.0f, COL_TRI },
+        { 0.0f, 0.0f, 0.0f, 1.0f, COL_TRI },
+        { 320.0f, 0.0f, 0.0f, 1.0f, COL_TRI },
+        { 0.0f, 480.0f, 0.0f, 1.0f, COL_TRI },
+        { 320.0f, 0.0f, 0.0f, 1.0f, COL_TRI },
         { 320.0f, 480.0f, 0.0f, 1.0f, COL_TRI },
-        {   0.0f, 480.0f, 0.0f, 1.0f, COL_TRI },
+        { 0.0f, 480.0f, 0.0f, 1.0f, COL_TRI },
     };
     D3DDevice_DrawVerticesUP(D3DPT_TRIANGLELIST, 6, tris, sizeof(VERTEX));
 
     // Path 2: immediate-mode quad covering the top-right quarter.
     D3DDevice_Begin(D3DPT_QUADLIST);
     D3DDevice_SetVertexDataColor(D3DVSDE_DIFFUSE, COL_QUAD);
-    im_vertex(320.0f,   0.0f);
-    im_vertex(640.0f,   0.0f);
+    im_vertex(320.0f, 0.0f);
+    im_vertex(640.0f, 0.0f);
     im_vertex(640.0f, 240.0f);
     im_vertex(320.0f, 240.0f);
     D3DDevice_End();
 
     // Single readback at the end.
-    D3DSurface *pBB = D3DDevice_GetBackBuffer2(0);
+    D3DSurface* pBB = D3DDevice_GetBackBuffer2(0);
     xt_chk("d3d.backbuffer_ok", 1, pBB != NULL);
-    if (pBB != NULL) {
+    if(pBB != NULL)
+    {
         D3DLOCKED_RECT lr;
         lr.pBits = NULL;
         D3DSurface_LockRect(pBB, &lr, NULL, D3DLOCK_READONLY);
         xt_chk("d3d.lock_ok", 1, lr.pBits != NULL);
-        if (lr.pBits != NULL) {
+        if(lr.pBits != NULL)
+        {
             xt_chk_u32("d3d.px_tri", COL_TRI & 0xFFFFFF,
                        read_pixel(lr.pBits, lr.Pitch, 160, 240));
             xt_chk_u32("d3d.px_quad", COL_QUAD & 0xFFFFFF,

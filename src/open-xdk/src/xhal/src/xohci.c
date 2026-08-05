@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : OpenXDK
 // *
 // * desc : Open Source XBox Development Kit
@@ -28,7 +28,7 @@ void xohci_init()
         uint32 revision = READ_REGISTER_ULONG(&g_xohci_regs->hc_revision) & 0x000000FF;
 
         if(revision != 0x10)
-            HalReturnToFirmware(ReturnFirmwareReboot);  // TODO: Fatal Error
+            HalReturnToFirmware(ReturnFirmwareReboot); // TODO: Fatal Error
     }
 
     // ******************************************************************
@@ -39,7 +39,7 @@ void xohci_init()
         g_xohci.m_hcca = MmAllocateContiguousMemoryEx(256, 0, -1, 256, PAGE_READWRITE);
 
         if(g_xohci.m_hcca == NULL)
-            HalReturnToFirmware(ReturnFirmwareReboot);  // TODO: Fatal Error
+            HalReturnToFirmware(ReturnFirmwareReboot); // TODO: Fatal Error
 
         g_xohci.m_hcca_dma = MmGetPhysicalAddress(g_xohci.m_hcca);
 
@@ -52,8 +52,8 @@ void xohci_init()
     {
         uint32 control = READ_REGISTER_ULONG(&g_xohci_regs->hc_control);
 
-        if( (control & XOHCI_CTRL_HCFS) != XOHCI_USB_RESET || (control & XOHCI_CTRL_IR))
-            HalReturnToFirmware(ReturnFirmwareReboot);  // TODO: Fatal Error
+        if((control & XOHCI_CTRL_HCFS) != XOHCI_USB_RESET || (control & XOHCI_CTRL_IR))
+            HalReturnToFirmware(ReturnFirmwareReboot); // TODO: Fatal Error
     }
 
     // ******************************************************************
@@ -62,7 +62,8 @@ void xohci_init()
     {
         DWORD start = KeTickCount;
 
-        while( (start + 10) < KeTickCount );
+        while((start + 10) < KeTickCount)
+            ;
     }
 
     // ******************************************************************
@@ -82,10 +83,10 @@ void xohci_init()
         {
             DWORD start = KeTickCount;
 
-            while( (READ_REGISTER_ULONG(&g_xohci_regs->hc_cmdstatus) & XOHCI_HCR) != 0)
+            while((READ_REGISTER_ULONG(&g_xohci_regs->hc_cmdstatus) & XOHCI_HCR) != 0)
             {
                 if(KeTickCount > start + 10)
-                    HalReturnToFirmware(ReturnFirmwareReboot);  // TODO: Fatal Error
+                    HalReturnToFirmware(ReturnFirmwareReboot); // TODO: Fatal Error
             }
         }
 
@@ -136,7 +137,7 @@ void xohci_init()
             }
 
             // hc_periodic_start = 90% of FrameInterval field of fminterval
-            WRITE_REGISTER_ULONG(&g_xohci_regs->hc_periodic_start, (fminterval*9)/10);
+            WRITE_REGISTER_ULONG(&g_xohci_regs->hc_periodic_start, (fminterval * 9) / 10);
 
             // make sure fminterval is set correctly (from usb_ohci.c linux 2.4.19)
             fminterval |= ((((fminterval - 210) * 6) / 7) << 16);
@@ -159,7 +160,7 @@ void xohci_init()
     {
         int v;
 
-        for(v=0;v<50*5;v++)
+        for(v = 0; v < 50 * 5; v++)
         {
             vga_clear();
 
@@ -174,13 +175,12 @@ void xohci_init()
             vga_vsync();
 
             vga_flip();
-
         }
 
         // set host controller functional state to XOHCI_USB_SUSPEND
         WRITE_REGISTER_ULONG(&g_xohci_regs->hc_control, XOHCI_USB_SUSPEND);
 
-        for(v=0;v<50*5;v++)
+        for(v = 0; v < 50 * 5; v++)
         {
             vga_clear();
 
@@ -195,7 +195,6 @@ void xohci_init()
             vga_vsync();
 
             vga_flip();
-
         }
     }
 

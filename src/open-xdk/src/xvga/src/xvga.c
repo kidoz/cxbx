@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : OpenXDK
 // *
 // * desc : Open Source XBox Development Kit
@@ -23,8 +23,8 @@ static void write_vgareg(int port, int index, int value);
 // ******************************************************************
 void xvga_setmode(xvga_mode mode)
 {
-    vga_reg *table = 0;
-    uint32   tsize = 0;
+    vga_reg* table = 0;
+    uint32 tsize = 0;
 
     switch(mode)
     {
@@ -52,11 +52,11 @@ void xvga_setmode(xvga_mode mode)
     {
         uint32 v = 0;
 
-        for(v=0;v<tsize;v++)
+        for(v = 0; v < tsize; v++)
             write_vgareg(table[v].port, table[v].index, table[v].value);
     }
 
-//    CRTC_WRITEL(FB_REG, 0xF0040240 );
+    //    CRTC_WRITEL(FB_REG, 0xF0040240 );
 }
 
 // ******************************************************************
@@ -65,10 +65,12 @@ void xvga_setmode(xvga_mode mode)
 void xvga_wait_vblank()
 {
     // wait until we are not vblank
-    while(CRTC_READ(VERTICAL_BLANK) & 0x08);
+    while(CRTC_READ(VERTICAL_BLANK) & 0x08)
+        ;
 
     // wait until we are in vblank
-    while(!(CRTC_READ(VERTICAL_BLANK) & 0x08));
+    while(!(CRTC_READ(VERTICAL_BLANK) & 0x08))
+        ;
 }
 
 // ******************************************************************
@@ -77,10 +79,12 @@ void xvga_wait_vblank()
 void xvga_wait_vblank_end()
 {
     // wait until we are in vblank
-    while(CRTC_READ(VERTICAL_BLANK) ^ 0x08);
+    while(CRTC_READ(VERTICAL_BLANK) ^ 0x08)
+        ;
 
     // wait until we are not vblank
-    while(CRTC_READ(VERTICAL_BLANK) & 0x08);
+    while(CRTC_READ(VERTICAL_BLANK) & 0x08)
+        ;
 }
 
 // ******************************************************************
@@ -115,11 +119,11 @@ void write_vgareg(int port, int index, int value)
     }
     else if(port == 0x03C3)
     {
-        *(char * const)0x000c03c3 = value;
+        *(char* const)0x000c03c3 = value;
     }
     else
     {
-        char *real_port = 0;
+        char* real_port = 0;
 
         if(port == 0x03CE || port == 0x03CF || port == 0x03C4 || port == 0x03C5)
         {
@@ -129,7 +133,7 @@ void write_vgareg(int port, int index, int value)
         {
             real_port = (char*)(port + 0xFD601000);
         }
-	
+
         real_port[0] = index;
         real_port[1] = value;
     }

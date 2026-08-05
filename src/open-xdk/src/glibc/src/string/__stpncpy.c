@@ -22,66 +22,63 @@ Cambridge, MA 02139, USA.  */
 #include <cstring>
 #include <memcopy.h>
 
-
 /* Copy no more than N characters of SRC to DEST, returning the address of
    the last character written into DEST.  */
-char *
-DEFUN(__stpncpy, (dest, src, n), char *dest AND CONST char *src AND size_t n)
+char* DEFUN(__stpncpy, (dest, src, n), char* dest AND CONST char* src AND size_t n)
 {
-  reg_char c;
-  char *s = dest;
+    reg_char c;
+    char* s = dest;
 
-  --dest;
+    --dest;
 
-  if (n >= 4)
+    if(n >= 4)
     {
-      size_t n4 = n >> 2;
+        size_t n4 = n >> 2;
 
-      for (;;)
-	{
-	  c = *src++;
-	  *++dest = c;
-	  if (c == '\0')
-	    break;
-	  c = *src++;
-	  *++dest = c;
-	  if (c == '\0')
-	    break;
-	  c = *src++;
-	  *++dest = c;
-	  if (c == '\0')
-	    break;
-	  c = *src++;
-	  *++dest = c;
-	  if (c == '\0')
-	    break;
-	  if (--n4 == 0)
-	    goto last_chars;
-	}
-      n = n - (dest - s) - 1;
-      if (n == 0)
-	return dest;
-      goto zero_fill;
+        for(;;)
+        {
+            c = *src++;
+            *++dest = c;
+            if(c == '\0')
+                break;
+            c = *src++;
+            *++dest = c;
+            if(c == '\0')
+                break;
+            c = *src++;
+            *++dest = c;
+            if(c == '\0')
+                break;
+            c = *src++;
+            *++dest = c;
+            if(c == '\0')
+                break;
+            if(--n4 == 0)
+                goto last_chars;
+        }
+        n = n - (dest - s) - 1;
+        if(n == 0)
+            return dest;
+        goto zero_fill;
     }
 
- last_chars:
-  n &= 3;
-  if (n == 0)
-    return s;
+last_chars:
+    n &= 3;
+    if(n == 0)
+        return s;
 
-  do
+    do
     {
-      c = *src++;
-      *++dest = c;
-      if (--n == 0)
-	return dest;
-    }
-  while (c != '\0');
+        c = *src++;
+        *++dest = c;
+        if(--n == 0)
+            return dest;
+    } while(c != '\0');
 
- zero_fill:
-  do
-    *++dest = '\0';
-  while (--n > 0);
+zero_fill:
+    do
+        *++dest = '\0';
+    while(--n > 0);
 
-  return dest;
+    return dest;
 }

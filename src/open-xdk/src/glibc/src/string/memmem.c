@@ -20,27 +20,23 @@ Cambridge, MA 02139, USA.  */
 #include <stddef.h>
 #include <cstring>
 
-
 /* Return the first occurrence of NEEDLE in HAYSTACK.  */
-PTR
-DEFUN(memmem, (haystack, haystack_len,
-	       needle, needle_len),
-      CONST PTRCONST haystack AND CONST size_t haystack_len AND
-      CONST PTRCONST needle AND CONST size_t needle_len)
+PTR DEFUN(memmem, (haystack, haystack_len, needle, needle_len),
+          CONST PTRCONST haystack AND CONST size_t haystack_len AND
+              CONST PTRCONST needle AND CONST size_t needle_len)
 {
-  register CONST char *begin;
-  register CONST char *CONST last_possible
-    = (CONST char *) haystack + haystack_len - needle_len;
+    register CONST char* begin;
+    register CONST char* CONST last_possible = (CONST char*)haystack + haystack_len - needle_len;
 
-  if (needle_len == 0)
-    return (PTR) &((CONST char *) haystack)[needle_len - 1];
+    if(needle_len == 0)
+        return (PTR) & ((CONST char*)haystack)[needle_len - 1];
 
-  for (begin = (CONST char *) haystack; begin <= last_possible; ++begin)
-    if (begin[0] == ((CONST char *) needle)[0] &&
-	!memcmp ((CONST PTR) &begin[1],
-		 (CONST PTR) ((CONST char *) needle + 1),
-		 needle_len - 1))
-      return (PTR) begin;
+    for(begin = (CONST char*)haystack; begin <= last_possible; ++begin)
+        if(begin[0] == ((CONST char*)needle)[0] &&
+           !memcmp((CONST PTR)&begin[1],
+                   (CONST PTR)((CONST char*)needle + 1),
+                   needle_len - 1))
+            return (PTR)begin;
 
-  return NULL;
+    return NULL;
 }

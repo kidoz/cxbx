@@ -23,5 +23,5 @@ Cambridge, MA 02139, USA.  */
 __CONSTVALUE double
 DEFUN(_atan, (x), register double x)
 {
-  return atan2(x, 1.0);
+    return atan2(x, 1.0);
 }

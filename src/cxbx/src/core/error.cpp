@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->core->error.cpp
@@ -41,13 +41,13 @@
 bool Error::ClearError()
 {
     if(m_bFatal)
-		return false;
+        return false;
 
     delete[] m_szError;
 
     m_szError = 0;
 
-    m_bFatal  = false;
+    m_bFatal = false;
 
     return true;
 }
@@ -55,7 +55,7 @@ bool Error::ClearError()
 // ******************************************************************
 // * func : SetError
 // ******************************************************************
-void Error::SetError(const char *x_szError, bool x_bFatal)
+void Error::SetError(const char* x_szError, bool x_bFatal)
 {
     if(m_szError == 0)
         m_szError = new char[256];

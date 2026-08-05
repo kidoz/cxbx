@@ -23,9 +23,8 @@ Cambridge, MA 02139, USA.  */
 #include <errno.h>
 #include <ctype.h>
 
-
-#ifndef	UNSIGNED
-#define	UNSIGNED	0
+#ifndef UNSIGNED
+#define UNSIGNED 0
 #endif
 
 /* Convert NPTR to an `unsigned long int' or `long int' in base BASE.
@@ -34,130 +33,129 @@ Cambridge, MA 02139, USA.  */
    If BASE is < 2 or > 36, it is reset to 10.
    If ENDPTR is not NULL, a pointer to the character after the last
    one converted is stored in *ENDPTR.  */
-#if	UNSIGNED
+#if UNSIGNED
 unsigned long int
-#define	strtol	strtoul
+#define strtol strtoul
 #else
 long int
 #endif
-strtol (nptr, endptr, base)
-     const char *nptr;
-     char **endptr;
-     int base;
+    strtol(nptr, endptr, base)
+        const char* nptr;
+char** endptr;
+int base;
 {
-  int negative;
-  register unsigned long int cutoff;
-  register unsigned int cutlim;
-  register unsigned long int i;
-  register const char *s;
-  register unsigned char c;
-  const char *save;
-  int overflow;
+    int negative;
+    register unsigned long int cutoff;
+    register unsigned int cutlim;
+    register unsigned long int i;
+    register const char* s;
+    register unsigned char c;
+    const char* save;
+    int overflow;
 
-  if (base < 0 || base == 1 || base > 36)
-    base = 10;
+    if(base < 0 || base == 1 || base > 36)
+        base = 10;
 
-  s = nptr;
+    s = nptr;
 
-  /* Skip white space.  */
-  while (isspace (*s))
-    ++s;
-  if (*s == '\0')
-    goto noconv;
+    /* Skip white space.  */
+    while(isspace(*s))
+        ++s;
+    if(*s == '\0')
+        goto noconv;
 
-  /* Check for a sign.  */
-  if (*s == '-')
+    /* Check for a sign.  */
+    if(*s == '-')
     {
-      negative = 1;
-      ++s;
+        negative = 1;
+        ++s;
     }
-  else if (*s == '+')
+    else if(*s == '+')
     {
-      negative = 0;
-      ++s;
+        negative = 0;
+        ++s;
     }
-  else
-    negative = 0;
-
-  if (base == 16 && s[0] == '0' && toupper (s[1]) == 'X')
-    s += 2;
-
-  /* If BASE is zero, figure it out ourselves.  */
-  if (base == 0)
-    if (*s == '0')
-      {
-	if (toupper (s[1]) == 'X')
-	  {
-	    s += 2;
-	    base = 16;
-	  }
-	else
-	  base = 8;
-      }
     else
-      base = 10;
+        negative = 0;
 
-  /* Save the pointer so we can check later if anything happened.  */
-  save = s;
+    if(base == 16 && s[0] == '0' && toupper(s[1]) == 'X')
+        s += 2;
 
-  cutoff = ULONG_MAX / (unsigned long int) base;
-  cutlim = ULONG_MAX % (unsigned long int) base;
+    /* If BASE is zero, figure it out ourselves.  */
+    if(base == 0)
+        if(*s == '0')
+        {
+            if(toupper(s[1]) == 'X')
+            {
+                s += 2;
+                base = 16;
+            }
+            else
+                base = 8;
+        }
+        else
+            base = 10;
 
-  overflow = 0;
-  i = 0;
-  for (c = *s; c != '\0'; c = *++s)
+    /* Save the pointer so we can check later if anything happened.  */
+    save = s;
+
+    cutoff = ULONG_MAX / (unsigned long int)base;
+    cutlim = ULONG_MAX % (unsigned long int)base;
+
+    overflow = 0;
+    i = 0;
+    for(c = *s; c != '\0'; c = *++s)
     {
-      if (isdigit (c))
-	c -= '0';
-      else if (isalpha (c))
-	c = toupper (c) - 'A' + 10;
-      else
-	break;
-      if (c >= base)
-	break;
-      /* Check for overflow.  */
-      if (i > cutoff || (i == cutoff && c > cutlim))
-	overflow = 1;
-      else
-	{
-	  i *= (unsigned long int) base;
-	  i += c;
-	}
+        if(isdigit(c))
+            c -= '0';
+        else if(isalpha(c))
+            c = toupper(c) - 'A' + 10;
+        else
+            break;
+        if(c >= base)
+            break;
+        /* Check for overflow.  */
+        if(i > cutoff || (i == cutoff && c > cutlim))
+            overflow = 1;
+        else
+        {
+            i *= (unsigned long int)base;
+            i += c;
+        }
     }
 
-  /* Check if anything actually happened.  */
-  if (s == save)
-    goto noconv;
+    /* Check if anything actually happened.  */
+    if(s == save)
+        goto noconv;
 
-  /* Store in ENDPTR the address of one character
-     past the last character we converted.  */
-  if (endptr != NULL)
-    *endptr = (char *) s;
+    /* Store in ENDPTR the address of one character
+       past the last character we converted.  */
+    if(endptr != NULL)
+        *endptr = (char*)s;
 
-#if	!UNSIGNED
-  /* Check for a value that is within the range of
-     `unsigned long int', but outside the range of `long int'.  */
-  if (i > (negative ?
-	   NEGU32((unsigned long int) LONG_MIN) : (unsigned long int) LONG_MAX))
-    overflow = 1;
+#if !UNSIGNED
+    /* Check for a value that is within the range of
+       `unsigned long int', but outside the range of `long int'.  */
+    if(i > (negative ? NEGU32((unsigned long int)LONG_MIN) : (unsigned long int)LONG_MAX))
+        overflow = 1;
 #endif
 
-  if (overflow)
+    if(overflow)
     {
-      errno = ERANGE;
-#if	UNSIGNED
-      return ULONG_MAX;
+        errno = ERANGE;
+#if UNSIGNED
+        return ULONG_MAX;
 #else
-      return negative ? LONG_MIN : LONG_MAX;
+        return negative ? LONG_MIN : LONG_MAX;
 #endif
     }
 
-  /* Return the result of the appropriate sign.  */
-  return (negative ? NEGU32(i) : i);
+    /* Return the result of the appropriate sign.  */
+    return (negative ? NEGU32(i) : i);
 
 noconv:
-  /* There was no number to convert.  */
-  if (endptr != NULL)
-    *endptr = (char *) nptr;
-  return 0L;
+    /* There was no number to convert.  */
+    if(endptr != NULL)
+        *endptr = (char*)nptr;
+    return 0L;
 }

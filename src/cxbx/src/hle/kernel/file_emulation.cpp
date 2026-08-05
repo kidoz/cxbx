@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->file_emulation.cpp
@@ -40,10 +40,10 @@
 EmuHandle EmuHandle::Handles[EMU_MAX_HANDLES];
 
 // Pointer to first free handle in array, or NULL if none
-volatile EmuHandle *EmuHandle::FirstFree;
+volatile EmuHandle* EmuHandle::FirstFree;
 
 // Pointer to last free handle in array, or NULL if none
-volatile EmuHandle *EmuHandle::LastFree;
+volatile EmuHandle* EmuHandle::LastFree;
 
 // Lock on the handle system
 CRITICAL_SECTION EmuHandle::HandleLock;
@@ -53,25 +53,25 @@ CRITICAL_SECTION EmuHandle::HandleLock;
 // ******************************************************************
 bool EmuHandle::Initialize()
 {
-	size_t x;
+    size_t x;
 
-	// Initialize the critical section
-	InitializeCriticalSection(&HandleLock);
+    // Initialize the critical section
+    InitializeCriticalSection(&HandleLock);
 
-	// Mark all handles as free.  We also set up the linked list of
-	// free handles here.
-	for (x = 0; x < EMU_MAX_HANDLES; x++)
-	{
-		Handles[x].m_Type = EMUHANDLE_TYPE_EMPTY;
-		Handles[x].m_NextFree = &Handles[x + 1];
-	}
+    // Mark all handles as free.  We also set up the linked list of
+    // free handles here.
+    for(x = 0; x < EMU_MAX_HANDLES; x++)
+    {
+        Handles[x].m_Type = EMUHANDLE_TYPE_EMPTY;
+        Handles[x].m_NextFree = &Handles[x + 1];
+    }
 
-	// The last entry should have a NULL next entry
-	Handles[EMU_MAX_HANDLES - 1].m_NextFree = NULL;
+    // The last entry should have a NULL next entry
+    Handles[EMU_MAX_HANDLES - 1].m_NextFree = NULL;
 
-	// Set up the head and tail pointers
-	FirstFree = &Handles[0];
-	LastFree = &Handles[EMU_MAX_HANDLES];
+    // Set up the head and tail pointers
+    FirstFree = &Handles[0];
+    LastFree = &Handles[EMU_MAX_HANDLES];
 
     return true;
 }
@@ -82,7 +82,7 @@ bool EmuHandle::Initialize()
 // ******************************************************************
 inline void EmuHandle::Lock(void)
 {
-	EnterCriticalSection(&HandleLock);
+    EnterCriticalSection(&HandleLock);
 }
 
 // ******************************************************************
@@ -91,36 +91,36 @@ inline void EmuHandle::Lock(void)
 // ******************************************************************
 inline void EmuHandle::Unlock(void)
 {
-	LeaveCriticalSection(&HandleLock);
+    LeaveCriticalSection(&HandleLock);
 }
 
 // ******************************************************************
 // * func: EmuHandle::Allocate
 // *    Allocates a new handle
 // ******************************************************************
-EmuHandle volatile *EmuHandle::Allocate(void)
+EmuHandle volatile* EmuHandle::Allocate(void)
 {
-	volatile EmuHandle *Handle;
+    volatile EmuHandle* Handle;
 
-	// Lock the database
-	Lock();
+    // Lock the database
+    Lock();
 
-	// Get the first free entry
-	Handle = FirstFree;
+    // Get the first free entry
+    Handle = FirstFree;
 
-	// Remove it from the list
-	FirstFree = Handle->m_NextFree;
+    // Remove it from the list
+    FirstFree = Handle->m_NextFree;
 
-	// If it was the last handle, clear LastFree
-	if (!Handle->m_NextFree)
-		LastFree = NULL;
+    // If it was the last handle, clear LastFree
+    if(!Handle->m_NextFree)
+        LastFree = NULL;
 
-	// Initialize the handle's fields
-	Handle->m_Type = EMUHANDLE_TYPE_ALLOCATED;
-	Handle->m_Object = NULL;
+    // Initialize the handle's fields
+    Handle->m_Type = EMUHANDLE_TYPE_ALLOCATED;
+    Handle->m_Object = NULL;
 
-	// Unlock the database
-	Unlock();
+    // Unlock the database
+    Unlock();
 
-	return Handle;
+    return Handle;
 }

@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	drem
+#undef drem
 function_alias(drem, __drem, __CONSTVALUE double, (x, y),
-	       DEFUN(drem, (x, y), double x AND double y))
+               DEFUN(drem, (x, y), double x AND double y))

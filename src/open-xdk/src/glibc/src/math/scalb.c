@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	scalb
+#undef scalb
 function_alias(scalb, __scalb, __CONSTVALUE double, (x, n),
-	       DEFUN(scalb, (x, n), double x AND int n))
+               DEFUN(scalb, (x, n), double x AND int n))

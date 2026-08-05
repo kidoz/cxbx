@@ -32,13 +32,13 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS pp;
     ZeroMemory(&pp, sizeof(pp));
-    pp.BackBufferWidth  = 640;
+    pp.BackBufferWidth = 640;
     pp.BackBufferHeight = 480;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    pp.BackBufferCount  = 1;
-    pp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferCount = 1;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &pDevice);
     xt_chk("xmv.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
@@ -48,7 +48,7 @@ void __cdecl main()
     }
 
     // Container parse + decoder spin-up.
-    XMVDecoder *pDecoder = NULL;
+    XMVDecoder* pDecoder = NULL;
     hr = XMVDecoder_CreateDecoderForFile(0, "D:\\Media\\Videos\\Test.xmv", &pDecoder);
     xt_chk("xmv.create_ok", 1, SUCCEEDED(hr) && pDecoder != NULL);
     if(FAILED(hr) || pDecoder == NULL)
@@ -112,11 +112,11 @@ void __cdecl main()
                XMVDecoder_GetSynchronizationStream(pDecoder));
 
     // Frame target: a YUY2 texture the exact size of the video.
-    IDirect3DTexture8 *pTex = NULL;
+    IDirect3DTexture8* pTex = NULL;
     hr = pDevice->CreateTexture(desc.Width, desc.Height, 1, 0, D3DFMT_YUY2, 0, &pTex);
     xt_chk("xmv.texture_ok", 1, SUCCEEDED(hr) && pTex != NULL);
 
-    IDirect3DSurface8 *pSurface = NULL;
+    IDirect3DSurface8* pSurface = NULL;
     if(pTex != NULL)
     {
         pTex->GetSurfaceLevel(0, &pSurface);
@@ -144,7 +144,7 @@ void __cdecl main()
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
-        gotFrame = 0;   // decoder faulted -> no frame produced
+        gotFrame = 0; // decoder faulted -> no frame produced
     }
     xt_chk("xmv.frame_decoded", 1, gotFrame);
     xt_chk("xmv.frame_time_written", 1, gotFrame && frameTime != 0xFFFFFFFF);

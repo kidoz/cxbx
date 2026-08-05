@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	rint
+#undef rint
 function_alias(rint, __rint, __CONSTVALUE double, (x),
-	       DEFUN(rint, (x), double x))
+               DEFUN(rint, (x), double x))

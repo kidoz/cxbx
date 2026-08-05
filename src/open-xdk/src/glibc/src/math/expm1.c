@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	expm1
+#undef expm1
 function_alias(expm1, __expm1, __CONSTVALUE double, (x),
-	       DEFUN(expm1, (x), double x))
+               DEFUN(expm1, (x), double x))

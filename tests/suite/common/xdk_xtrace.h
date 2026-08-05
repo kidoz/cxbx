@@ -22,7 +22,7 @@ static int xt_fails = 0;
 // CXBX HLE probes use this to distinguish an unsupported XDK library variant
 // from a semantic failure inside a host wrapper. Retail/debug/instrumented D3D
 // libraries contain different code, so each variant must be patched explicitly.
-#define XT_GUEST_TOP 0x04000000UL
+#define XT_GUEST_TOP     0x04000000UL
 #define XT_XREF_SENTINEL 0x7FFFFFFFUL
 
 static DWORD xt_jump_target(const unsigned char* p)

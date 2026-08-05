@@ -24,12 +24,12 @@ Cambridge, MA 02139, USA.  */
 __CONSTVALUE double
 DEFUN(__copysign, (x, y), double x AND double y)
 {
-  union ieee754_double ux, uy;
+    union ieee754_double ux, uy;
 
-  ux.d = x;
-  uy.d = y;
+    ux.d = x;
+    uy.d = y;
 
-  ux.ieee.negative = uy.ieee.negative;
+    ux.ieee.negative = uy.ieee.negative;
 
-  return ux.d;
+    return ux.d;
 }

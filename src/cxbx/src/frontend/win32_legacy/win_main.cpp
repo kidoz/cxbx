@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbx->win_main.cpp
@@ -40,7 +40,7 @@
 #include <cstdio>
 #include <cstring>
 
-static void AppendLogLine(const char *szLogFile, const char *szLine)
+static void AppendLogLine(const char* szLogFile, const char* szLine)
 {
     if(szLogFile == NULL || szLogFile[0] == '\0')
         return;
@@ -56,7 +56,7 @@ static void AppendLogLine(const char *szLogFile, const char *szLine)
     CloseHandle(hFile);
 }
 
-static void ConfigureLogFile(const char *szLogFile)
+static void ConfigureLogFile(const char* szLogFile)
 {
     if(szLogFile == NULL || szLogFile[0] == '\0')
         return;
@@ -65,23 +65,23 @@ static void ConfigureLogFile(const char *szLogFile)
 
     SetEnvironmentVariable("CXBX_LOG_FILE", szLogFile);
 
-    FILE *out = freopen(szLogFile, "a", stdout);
+    FILE* out = freopen(szLogFile, "a", stdout);
     if(out != NULL)
         setvbuf(out, NULL, _IONBF, 0);
 
-    FILE *err = freopen(szLogFile, "a", stderr);
+    FILE* err = freopen(szLogFile, "a", stderr);
     if(err != NULL)
         setvbuf(err, NULL, _IONBF, 0);
 
     printf("\n--- cxbx launcher start ---\n");
 }
 
-static void GetModuleDirectory(char *szDirectory)
+static void GetModuleDirectory(char* szDirectory)
 {
     GetModuleFileName(NULL, szDirectory, 260);
 
-    sint32 spot=-1;
-    for(int v=0; v<260; v++)
+    sint32 spot = -1;
+    for(int v = 0; v < 260; v++)
     {
         if(szDirectory[v] == '\\')
             spot = v;
@@ -93,14 +93,14 @@ static void GetModuleDirectory(char *szDirectory)
         szDirectory[spot] = '\0';
 }
 
-static void BuildTempExePath(const char *szXbePath, char *szExePath)
+static void BuildTempExePath(const char* szXbePath, char* szExePath)
 {
     char szTempRoot[260];
     char szBaseName[260];
 
     GetTempPath(259, szTempRoot);
 
-    const char *szName = strrchr(szXbePath, '\\');
+    const char* szName = strrchr(szXbePath, '\\');
     if(szName == NULL)
         szName = strrchr(szXbePath, '/');
     if(szName != NULL)
@@ -111,7 +111,7 @@ static void BuildTempExePath(const char *szXbePath, char *szExePath)
     strncpy(szBaseName, szName, sizeof(szBaseName) - 1);
     szBaseName[sizeof(szBaseName) - 1] = '\0';
 
-    char *szExtension = strrchr(szBaseName, '.');
+    char* szExtension = strrchr(szBaseName, '.');
     if(szExtension != NULL)
         strcpy(szExtension, ".exe");
     else
@@ -120,12 +120,12 @@ static void BuildTempExePath(const char *szXbePath, char *szExePath)
     snprintf(szExePath, 260, "%s%s", szTempRoot, szBaseName);
 }
 
-static void BuildXbeDirectory(const char *szXbePath, char *szDirectory)
+static void BuildXbeDirectory(const char* szXbePath, char* szDirectory)
 {
     strncpy(szDirectory, szXbePath, 259);
     szDirectory[259] = '\0';
 
-    char *szSlash = strrchr(szDirectory, '\\');
+    char* szSlash = strrchr(szDirectory, '\\');
     if(szSlash == NULL)
         szSlash = strrchr(szDirectory, '/');
 
@@ -135,7 +135,7 @@ static void BuildXbeDirectory(const char *szXbePath, char *szDirectory)
         GetModuleDirectory(szDirectory);
 }
 
-static void BuildAbsolutePath(const char *szPath, char *szAbsolutePath)
+static void BuildAbsolutePath(const char* szPath, char* szAbsolutePath)
 {
     DWORD dwAbsolutePath = GetFullPathName(szPath, 260, szAbsolutePath, NULL);
     if(dwAbsolutePath == 0 || dwAbsolutePath >= 260)
@@ -145,7 +145,7 @@ static void BuildAbsolutePath(const char *szPath, char *szAbsolutePath)
     }
 }
 
-static void CopyRuntimeDllNextToExe(const char *szExePath)
+static void CopyRuntimeDllNextToExe(const char* szExePath)
 {
     char szModuleDirectory[260];
     char szSourceDll[260];
@@ -157,7 +157,7 @@ static void CopyRuntimeDllNextToExe(const char *szExePath)
     strncpy(szTargetDll, szExePath, sizeof(szTargetDll) - 1);
     szTargetDll[sizeof(szTargetDll) - 1] = '\0';
 
-    char *szSlash = strrchr(szTargetDll, '\\');
+    char* szSlash = strrchr(szTargetDll, '\\');
     if(szSlash == NULL)
         szSlash = strrchr(szTargetDll, '/');
 
@@ -172,7 +172,7 @@ static void CopyRuntimeDllNextToExe(const char *szExePath)
         printf("cxbx: failed to copy runtime DLL from %s to %s (error=%lu).\n", szSourceDll, szTargetDll, GetLastError());
 }
 
-static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
+static int RunXbeBatch(const char* szXbePath, const char* szLogFile)
 {
     char szAbsoluteXbePath[260];
     BuildAbsolutePath(szXbePath, szAbsoluteXbePath);
@@ -190,7 +190,7 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     BuildTempExePath(szAbsoluteXbePath, szExePath);
     printf("cxbx: batch converting to %s.\n", szExePath);
 
-    char szDebugFilename[260] = {0};
+    char szDebugFilename[260] = { 0 };
     DebugMode DebugMode = DM_NONE;
 
     if(szLogFile != NULL && szLogFile[0] != '\0')
@@ -240,14 +240,14 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     // from it, keeping those "physical" pointers below the 64 MiB Xbox RAM line.
     MEMORY_BASIC_INFORMATION mbi;
     memset(&mbi, 0, sizeof(mbi));
-    void *pReserved = NULL;
+    void* pReserved = NULL;
     ULONG reserveSize = 0;
     if(VirtualQueryEx(pi.hProcess, (void*)(uintptr_t)0x01000000, &mbi, sizeof(mbi)) != 0 &&
        mbi.State == MEM_FREE && (uintptr_t)mbi.BaseAddress == 0x01000000)
     {
-        reserveSize = (ULONG)mbi.RegionSize & ~0xFFFFul;   // 64 KiB granularity
+        reserveSize = (ULONG)mbi.RegionSize & ~0xFFFFul; // 64 KiB granularity
         if(reserveSize > 0x03000000)
-            reserveSize = 0x03000000;                      // cap at the 64 MiB line
+            reserveSize = 0x03000000; // cap at the 64 MiB line
         if(reserveSize >= 0x00100000)
             pReserved = VirtualAllocEx(pi.hProcess, (void*)(uintptr_t)0x01000000,
                                        reserveSize, MEM_RESERVE, PAGE_READWRITE);
@@ -264,11 +264,15 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
     // pages still fault on guest access, so trap-and-emulate is unchanged.
     // Best-effort per 16 MiB chunk; on a non-LAA image these fail closed.
     {
-        static const struct { ULONG Base; ULONG Size; } kFences[] = {
-            { 0x80000000, 0x10000000 },   // Xbox physical identity view
-            { 0xF0000000, 0x0D000000 },   // physical/AGP shadow aperture
-            { 0xFD000000, 0x01000000 },   // NV2A MMIO
-            { 0xFE000000, 0x01000000 },   // APU/ACI/USB/NVNET stub MMIO
+        static const struct
+        {
+            ULONG Base;
+            ULONG Size;
+        } kFences[] = {
+            { 0x80000000, 0x10000000 }, // Xbox physical identity view
+            { 0xF0000000, 0x0D000000 }, // physical/AGP shadow aperture
+            { 0xFD000000, 0x01000000 }, // NV2A MMIO
+            { 0xFE000000, 0x01000000 }, // APU/ACI/USB/NVNET stub MMIO
         };
         for(unsigned f = 0; f < sizeof(kFences) / sizeof(kFences[0]); f++)
         {
@@ -309,11 +313,11 @@ static int RunXbeBatch(const char *szXbePath, const char *szLogFile)
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     bool bBatchRun = false;
-    const char *szXbeArg = NULL;
-    const char *szLogFile = NULL;
-    char szDefaultLogFile[260] = {0};
+    const char* szXbeArg = NULL;
+    const char* szLogFile = NULL;
+    char szDefaultLogFile[260] = { 0 };
 
-    for(int v=1; v<__argc; v++)
+    for(int v = 1; v < __argc; v++)
     {
         if(strcmp(__argv[v], "--run") == 0)
         {
@@ -341,8 +345,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     {
         GetModuleFileName(NULL, szDefaultLogFile, 260);
 
-        sint32 spot=-1;
-        for(int v=0; v<260; v++)
+        sint32 spot = -1;
+        for(int v = 0; v < 260; v++)
         {
             if(szDefaultLogFile[v] == '\\')
                 spot = v;
@@ -381,7 +385,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return ret;
     }
 
-    WndMain *MainWindow = new WndMain(hInstance);
+    WndMain* MainWindow = new WndMain(hInstance);
 
     while(!MainWindow->isCreated() && MainWindow->ProcessMessages())
         Sleep(10);

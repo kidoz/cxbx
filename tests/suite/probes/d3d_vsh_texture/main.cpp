@@ -4,9 +4,9 @@
 #include "cpu_bridge.h"
 
 static const D3DCOLOR COL_CLEAR = 0xFF0000FF;
-static const D3DCOLOR COL_RED   = 0xFFFF0000;
+static const D3DCOLOR COL_RED = 0xFFFF0000;
 static const D3DCOLOR COL_GREEN = 0xFF00FF00;
-static const D3DCOLOR COL_BLUE  = 0xFF0000FF;
+static const D3DCOLOR COL_BLUE = 0xFF0000FF;
 static const D3DCOLOR COL_WHITE = 0xFFFFFFFF;
 
 struct VERTEX
@@ -118,12 +118,12 @@ void __cdecl main()
     // the red quadrant. A two-component bridge instead samples (0.75,0.75),
     // selecting white and making the regression unambiguous.
     const VERTEX quad[6] = {
-        {{-0.75f,  0.75f, 0.5f, 1.0f}, COL_WHITE, {0.75f, 0.75f, 0.0f, 3.0f}},
-        {{-0.25f,  0.75f, 0.5f, 1.0f}, COL_WHITE, {0.75f, 0.75f, 0.0f, 3.0f}},
-        {{-0.75f,  0.25f, 0.5f, 1.0f}, COL_WHITE, {0.75f, 0.75f, 0.0f, 3.0f}},
-        {{-0.25f,  0.75f, 0.5f, 1.0f}, COL_WHITE, {0.75f, 0.75f, 0.0f, 3.0f}},
-        {{-0.25f,  0.25f, 0.5f, 1.0f}, COL_WHITE, {0.75f, 0.75f, 0.0f, 3.0f}},
-        {{-0.75f,  0.25f, 0.5f, 1.0f}, COL_WHITE, {0.75f, 0.75f, 0.0f, 3.0f}}
+        { { -0.75f, 0.75f, 0.5f, 1.0f }, COL_WHITE, { 0.75f, 0.75f, 0.0f, 3.0f } },
+        { { -0.25f, 0.75f, 0.5f, 1.0f }, COL_WHITE, { 0.75f, 0.75f, 0.0f, 3.0f } },
+        { { -0.75f, 0.25f, 0.5f, 1.0f }, COL_WHITE, { 0.75f, 0.75f, 0.0f, 3.0f } },
+        { { -0.25f, 0.75f, 0.5f, 1.0f }, COL_WHITE, { 0.75f, 0.75f, 0.0f, 3.0f } },
+        { { -0.25f, 0.25f, 0.5f, 1.0f }, COL_WHITE, { 0.75f, 0.75f, 0.0f, 3.0f } },
+        { { -0.75f, 0.25f, 0.5f, 1.0f }, COL_WHITE, { 0.75f, 0.75f, 0.0f, 3.0f } }
     };
 
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);

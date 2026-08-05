@@ -16,9 +16,9 @@
 static const D3DCOLOR CLEAR_A = 0xFF206080; // first clear (swapped away)
 static const D3DCOLOR CLEAR_B = 0xFFC03050; // final clear (verified)
 
-static DWORD read_pixel(void *pBits, INT pitch, int x, int y)
+static DWORD read_pixel(void* pBits, INT pitch, int x, int y)
 {
-    return (*(DWORD *)((BYTE *)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
+    return (*(DWORD*)((BYTE*)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
 }
 
 void __cdecl main()
@@ -32,18 +32,18 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS d3dpp;
     ZeroMemory(&d3dpp, sizeof(d3dpp));
-    d3dpp.BackBufferWidth  = 640;
+    d3dpp.BackBufferWidth = 640;
     d3dpp.BackBufferHeight = 480;
     d3dpp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    d3dpp.BackBufferCount  = 1;
-    d3dpp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    d3dpp.BackBufferCount = 1;
+    d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                     &d3dpp, &pDevice);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
-    if (FAILED(hr) || pDevice == NULL)
+    if(FAILED(hr) || pDevice == NULL)
         xt_end_and_exit();
 
     // Clear + Swap: the host Present must accept the converted parameters.
@@ -53,14 +53,16 @@ void __cdecl main()
     // Final frame: clear to a distinct color, then verify actual pixels.
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, CLEAR_B, 1.0f, 0);
 
-    D3DSurface *pBB = D3DDevice_GetBackBuffer2(0);
+    D3DSurface* pBB = D3DDevice_GetBackBuffer2(0);
     xt_chk("d3d.backbuffer_ok", 1, pBB != NULL);
-    if (pBB != NULL) {
+    if(pBB != NULL)
+    {
         D3DLOCKED_RECT lr;
         lr.pBits = NULL;
         D3DSurface_LockRect(pBB, &lr, NULL, D3DLOCK_READONLY);
         xt_chk("d3d.lock_ok", 1, lr.pBits != NULL);
-        if (lr.pBits != NULL) {
+        if(lr.pBits != NULL)
+        {
             DWORD want = CLEAR_B & 0x00FFFFFF;
             xt_chk_u32("d3d.px_topleft", want, read_pixel(lr.pBits, lr.Pitch, 10, 10));
             xt_chk_u32("d3d.px_center", want, read_pixel(lr.pBits, lr.Pitch, 320, 240));

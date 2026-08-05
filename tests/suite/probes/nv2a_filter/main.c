@@ -19,19 +19,28 @@
 #include <pbkit/pbkit.h>
 #include <pbkit/nv_regs.h>
 
-#define ATTR_POSITION 0
+#define ATTR_POSITION  0
 #define ATTR_TEXCOORD0 9
 #define VTX_FMT(type, size, stride) \
     (((uint32_t)(stride) << 8) | ((uint32_t)(size) << 4) | (uint32_t)(type))
 
 #define FBW 640
 #define FBH 480
-#define TW 2
-#define TH 2
+#define TW  2
+#define TH  2
 
-typedef struct { float x, y, z; float u, v; } Vertex;
+typedef struct
+{
+    float x, y, z;
+    float u, v;
+} Vertex;
 
-static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static uint32_t f2u(float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    return u;
+}
 
 int main(void)
 {
@@ -42,56 +51,70 @@ int main(void)
     XVideoSetMode(FBW, FBH, 32, REFRESH_DEFAULT);
     int status = pb_init();
     xt_check_bool("nv2a_filter.pb_init", 1, status == 0);
-    if (status != 0) return xt_end();
+    if(status != 0) return xt_end();
 
-    uint32_t *bb = (uint32_t *)pb_back_buffer();
+    uint32_t* bb = (uint32_t*)pb_back_buffer();
     uint32_t pitch_px = pb_back_buffer_pitch() / 4;
     uint32_t bbh = pb_back_buffer_height();
     xt_check_bool("nv2a_filter.back_buffer", 1, bb != NULL && pitch_px != 0);
-    if (bb == NULL || pitch_px == 0) { pb_kill(); return xt_end(); }
-    for (uint32_t i = 0; i < pitch_px * bbh; i++) bb[i] = 0xFF000000u;
+    if(bb == NULL || pitch_px == 0)
+    {
+        pb_kill();
+        return xt_end();
+    }
+    for(uint32_t i = 0; i < pitch_px * bbh; i++)
+        bb[i] = 0xFF000000u;
 
-    uint32_t *tex = (uint32_t *)MmAllocateContiguousMemoryEx(
+    uint32_t* tex = (uint32_t*)MmAllocateContiguousMemoryEx(
         TW * TH * 4, 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_filter.tex_alloc", 1, tex != NULL);
-    if (tex == NULL) { pb_kill(); return xt_end(); }
+    if(tex == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
     tex[0] = 0xFFFF0000u; // TL red
     tex[1] = 0xFF00FF00u; // TR green
     tex[2] = 0xFF0000FFu; // BL blue
     tex[3] = 0xFFFFFFFFu; // BR white
 
-    Vertex *vb = (Vertex *)MmAllocateContiguousMemoryEx(
+    Vertex* vb = (Vertex*)MmAllocateContiguousMemoryEx(
         4 * sizeof(Vertex), 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_filter.vbuf_alloc", 1, vb != NULL);
-    if (vb == NULL) { pb_kill(); return xt_end(); }
-    vb[0] = (Vertex){   0.0f,   0.0f, 0.0f, 0.0f, 0.0f };
-    vb[1] = (Vertex){ 640.0f,   0.0f, 0.0f, 1.0f, 0.0f };
+    if(vb == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
+    vb[0] = (Vertex){ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    vb[1] = (Vertex){ 640.0f, 0.0f, 0.0f, 1.0f, 0.0f };
     vb[2] = (Vertex){ 640.0f, 480.0f, 0.0f, 1.0f, 1.0f };
-    vb[3] = (Vertex){   0.0f, 480.0f, 0.0f, 0.0f, 1.0f };
-    uint32_t vbAddr  = (uint32_t)(uintptr_t)vb;
+    vb[3] = (Vertex){ 0.0f, 480.0f, 0.0f, 0.0f, 1.0f };
+    uint32_t vbAddr = (uint32_t)(uintptr_t)vb;
     uint32_t texAddr = (uint32_t)(uintptr_t)tex;
 
-    for (int rep = 0; rep < 4; rep++) {
-        uint32_t *p = pb_begin();
+    for(int rep = 0; rep < 4; rep++)
+    {
+        uint32_t* p = pb_begin();
         p = pb_push1(p, NV097_SET_SURFACE_CLIP_HORIZONTAL, ((uint32_t)FBW << 16));
-        p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL,   ((uint32_t)FBH << 16));
+        p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL, ((uint32_t)FBH << 16));
         p = pb_push1(p, NV097_SET_SURFACE_PITCH, pb_back_buffer_pitch() & 0xFFFF);
         p = pb_push1(p, NV097_SET_SURFACE_COLOR_OFFSET, (uint32_t)(uintptr_t)bb);
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0,  f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4,  f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8,  f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8, f2u(0.0f));
         p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 12, f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12,  f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12, f2u(1.0f));
         // Bind the texture with a LINEAR magnification filter (MAG = 2 in bits 24-27).
-        p = pb_push1(p, NV097_SET_TEXTURE_OFFSET,     texAddr);
-        p = pb_push1(p, NV097_SET_TEXTURE_FORMAT,     (0x12u << 8) | (0x02u << 4));
+        p = pb_push1(p, NV097_SET_TEXTURE_OFFSET, texAddr);
+        p = pb_push1(p, NV097_SET_TEXTURE_FORMAT, (0x12u << 8) | (0x02u << 4));
         p = pb_push1(p, NV097_SET_TEXTURE_IMAGE_RECT, (TW << 16) | TH);
-        p = pb_push1(p, NV097_SET_TEXTURE_ADDRESS,    0x00030303u);
-        p = pb_push1(p, NV097_SET_TEXTURE_CONTROL0,   0x4003ffc0u);
-        p = pb_push1(p, NV097_SET_TEXTURE_FILTER,     (0x2u << 24) | (0x2u << 16));
+        p = pb_push1(p, NV097_SET_TEXTURE_ADDRESS, 0x00030303u);
+        p = pb_push1(p, NV097_SET_TEXTURE_CONTROL0, 0x4003ffc0u);
+        p = pb_push1(p, NV097_SET_TEXTURE_FILTER, (0x2u << 24) | (0x2u << 16));
         p = pb_push1(p, NV097_SET_SHADER_STAGE_PROGRAM,
                      NV097_SET_SHADER_STAGE_PROGRAM_STAGE0_2D_PROJECTIVE);
 
@@ -106,11 +129,12 @@ int main(void)
         p = pb_push1(p, NV097_DRAW_ARRAYS, ((4u - 1u) << 24) | 0u);
         p = pb_push1(p, NV097_SET_BEGIN_END, NV097_SET_BEGIN_END_OP_END);
         pb_end(p);
-        while (pb_busy()) ;
+        while(pb_busy())
+            ;
     }
 
 #define PX(x, y) (bb[(uint32_t)(y) * pitch_px + (uint32_t)(x)] | 0xFF000000u)
-    uint32_t center = PX(320, 240);   // u=v=0.5 -> average of all four texels
+    uint32_t center = PX(320, 240); // u=v=0.5 -> average of all four texels
     xt_ev("nv2a_filter.center=0x%08lX", (unsigned long)center);
     int cr = (center >> 16) & 0xFF, cg = (center >> 8) & 0xFF, cbb = center & 0xFF;
     // Bilinear: R,G,B all near 127 (red+green+blue+white averaged), balanced.

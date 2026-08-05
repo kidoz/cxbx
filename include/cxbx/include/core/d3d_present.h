@@ -32,8 +32,8 @@ inline constexpr bool CpuFallbackTextureUsable(bool stage0TextureBound,
 }
 
 inline constexpr CpuFallbackMaterial SelectCpuFallbackMaterial(bool pixelShaderFallback,
-                                                                bool pixelShaderBound,
-                                                                bool stage0TextureUsable) noexcept
+                                                               bool pixelShaderBound,
+                                                               bool stage0TextureUsable) noexcept
 {
     if(pixelShaderBound && !pixelShaderFallback)
     {
@@ -51,7 +51,7 @@ inline constexpr bool CpuFallbackTextureNeedsProjection(unsigned int textureMode
 }
 
 inline constexpr bool ProjectCpuFallbackTextureCoordinates(float (&coordinates)[4],
-                                                            unsigned int textureMode) noexcept
+                                                           unsigned int textureMode) noexcept
 {
     if(!CpuFallbackTextureNeedsProjection(textureMode) ||
        (coordinates[3] > -1.0e-6f && coordinates[3] < 1.0e-6f))

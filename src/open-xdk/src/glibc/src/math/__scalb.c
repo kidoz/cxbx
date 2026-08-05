@@ -20,10 +20,10 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	__scalb
-double __scalb( x, n)
+#undef __scalb
+double __scalb(x, n)
 double x;
 int n;
 {
-   return ldexp( x, n);
+    return ldexp(x, n);
 };

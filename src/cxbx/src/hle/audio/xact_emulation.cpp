@@ -14,7 +14,7 @@ namespace XTL
 {
 #include "xact_emulation.h"
 #include "dsound_emulation.h"
-};
+}; // namespace XTL
 
 struct XactNotificationRegistration;
 struct XactQueuedNotification;

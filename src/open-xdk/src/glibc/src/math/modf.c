@@ -19,13 +19,13 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <math.h>
 
-#undef	modf
+#undef modf
 
 /* Break VALUE into integral and fractional parts.  */
 double
-DEFUN(modf, (value, iptr), double value AND double *iptr)
+DEFUN(modf, (value, iptr), double value AND double* iptr)
 {
-  register double ipart = floor(value);
-  *iptr = ipart;
-  return value - ipart;
+    register double ipart = floor(value);
+    *iptr = ipart;
+    return value - ipart;
 }

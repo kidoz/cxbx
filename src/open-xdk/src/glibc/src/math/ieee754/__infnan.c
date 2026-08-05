@@ -31,18 +31,18 @@ Cambridge, MA 02139, USA.  */
 double
 DEFUN(__infnan, (error), int error)
 {
-  switch (error)
+    switch(error)
     {
-    case ERANGE:
-      errno = ERANGE;
-      return HUGE_VAL;
+        case ERANGE:
+            errno = ERANGE;
+            return HUGE_VAL;
 
-    case - ERANGE:
-      errno = ERANGE;
-      return - HUGE_VAL;
+        case -ERANGE:
+            errno = ERANGE;
+            return -HUGE_VAL;
 
-    default:
-      errno = EDOM;
-      return NAN;
+        default:
+            errno = EDOM;
+            return NAN;
     }
 }

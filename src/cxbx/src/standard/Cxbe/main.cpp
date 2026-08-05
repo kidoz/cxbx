@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->standard->cxbe->main.cpp
@@ -40,28 +40,28 @@
 // * Static Global(s)
 // ******************************************************************
 static void ShowUsage();
-static void MakeUpper(char *str);
+static void MakeUpper(char* str);
 
 // ******************************************************************
 // * func : main
 // ******************************************************************
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
-    char szErrorMessage[266] = {0};
-    char szExeFilename[266]  = {0};
-    char szXbeFilename[266]  = {0};
-    char szDumpFilename[266] = {0};
-    char szXbeTitle[256]     = "Untitled";
-    bool bRetail             = true;
+    char szErrorMessage[266] = { 0 };
+    char szExeFilename[266] = { 0 };
+    char szXbeFilename[266] = { 0 };
+    char szDumpFilename[266] = { 0 };
+    char szXbeTitle[256] = "Untitled";
+    bool bRetail = true;
 
     // ******************************************************************
     // * parse command line
     // ******************************************************************
-    for(int v=1;v<argc;v++)
+    for(int v = 1; v < argc; v++)
     {
-        char *szOption    = 0;
-        char *szParam     = 0;
-        uint  dwParamSize = 0;
+        char* szOption = 0;
+        char* szParam = 0;
+        uint dwParamSize = 0;
 
         // ******************************************************************
         // * if this isn't an option, it must be the exe file
@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
         {
             uint dwColon = (uint)-1;
 
-            for(uint c=1;argv[v][c] != 0;c++)
+            for(uint c = 1; argv[v][c] != 0; c++)
             {
                 if(argv[v][c] == ':')
                 {
@@ -96,7 +96,7 @@ int main(int argc, char *argv[])
             argv[v][dwColon] = '\0';
 
             szOption = &argv[v][1];
-            szParam  = &argv[v][dwColon + 1];
+            szParam = &argv[v][dwColon + 1];
 
             while(szParam[dwParamSize] != 0)
                 dwParamSize++;
@@ -106,8 +106,8 @@ int main(int argc, char *argv[])
         // * interpret the current switch
         // ******************************************************************
         {
-            char szOptionU[266] = {0};
-            char szParamU[266] = {0};
+            char szOptionU[266] = { 0 };
+            char szParamU[266] = { 0 };
 
             strncpy(szOptionU, szOption, 265);
             strncpy(szParamU, szParam, 265);
@@ -168,15 +168,15 @@ int main(int argc, char *argv[])
     {
         strcpy(szXbeFilename, szExeFilename);
 
-        char *szFilename = &szXbeFilename[0];
+        char* szFilename = &szXbeFilename[0];
 
         // ******************************************************************
         // * locate last \ or / (if there are any)
         // ******************************************************************
         {
-            for(int c=0;szXbeFilename[c] != 0;c++)
+            for(int c = 0; szXbeFilename[c] != 0; c++)
                 if(szXbeFilename[c] == '\\' || szXbeFilename[c] == '/')
-                    szFilename = &szXbeFilename[c+1];
+                    szFilename = &szXbeFilename[c + 1];
         }
 
         // ******************************************************************
@@ -185,11 +185,11 @@ int main(int argc, char *argv[])
         {
             char szWorkingU[266];
 
-            char *szWorking = szFilename;
+            char* szWorking = szFilename;
 
             strncpy(szWorkingU, szWorking, 265);
 
-            for(int c=0;szFilename[c] != 0;c++)
+            for(int c = 0; szFilename[c] != 0; c++)
                 if(szFilename[c] == '.')
                     szWorking = &szFilename[c];
 
@@ -206,7 +206,7 @@ int main(int argc, char *argv[])
     // * open, and convert exe file
     // ******************************************************************
     {
-        Exe *ExeFile = new Exe(szExeFilename);
+        Exe* ExeFile = new Exe(szExeFilename);
 
         if(ExeFile->GetError() != 0)
         {
@@ -214,7 +214,7 @@ int main(int argc, char *argv[])
             goto cleanup;
         }
 
-        Xbe *XbeFile = new Xbe(ExeFile, szXbeTitle, bRetail);
+        Xbe* XbeFile = new Xbe(ExeFile, szXbeTitle, bRetail);
 
         if(XbeFile->GetError() != 0)
         {
@@ -224,7 +224,7 @@ int main(int argc, char *argv[])
 
         if(szDumpFilename[0] != 0)
         {
-            FILE *outfile = fopen(szDumpFilename, "wt");
+            FILE* outfile = fopen(szDumpFilename, "wt");
             XbeFile->DumpInformation(outfile);
             fclose(outfile);
 
@@ -257,7 +257,7 @@ cleanup:
     if(szErrorMessage[0] != 0)
     {
         ShowUsage();
-    
+
         printf("\n");
         printf(" *  Error : %s\n", szErrorMessage);
 
@@ -272,11 +272,10 @@ cleanup:
 // ******************************************************************
 static void ShowUsage()
 {
-    printf
-    (
+    printf(
         "CXBE XBE->EXE (XBox->win32) Relinker (CXBX core Version " _CXBX_VERSION ")\n"
         "Copyright (C) Aaron Robinson 2002-2003. All rights reserved.\n"
-        "\n" 
+        "\n"
         "Usage : cxbe [options] [exefile]\n"
         "\n"
         "Options :\n"
@@ -284,14 +283,13 @@ static void ShowUsage()
         "  -OUT:filename\n"
         "  -DUMPINFO:filename\n"
         "  -TITLE:title\n"
-        "  -MODE:{debug|retail}\n"
-    );
+        "  -MODE:{debug|retail}\n");
 }
 
 // ******************************************************************
 // * MakeUpper
 // ******************************************************************
-static void MakeUpper(char *str)
+static void MakeUpper(char* str)
 {
     while(*str != '\0')
     {

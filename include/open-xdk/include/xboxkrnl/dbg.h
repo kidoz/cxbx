@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : OpenXDK
 // *
 // * desc : Open Source XBox Development Kit
@@ -12,15 +12,11 @@
 #ifndef XBOXKRNL_DBG_H
 #define XBOXKRNL_DBG_H
 
-XBSYSAPI VOID *DbgBreakPoint;
-XBSYSAPI VOID *DbgBreakPointWithStatus;
-XBSYSAPI VOID *DbgLoadImageSymbols;
-XBSYSAPI VOID *DbgPrint;
-XBSYSAPI VOID *DbgPrompt;
-XBSYSAPI VOID *DbgUnLoadImageSymbols;
+XBSYSAPI VOID* DbgBreakPoint;
+XBSYSAPI VOID* DbgBreakPointWithStatus;
+XBSYSAPI VOID* DbgLoadImageSymbols;
+XBSYSAPI VOID* DbgPrint;
+XBSYSAPI VOID* DbgPrompt;
+XBSYSAPI VOID* DbgUnLoadImageSymbols;
 
 #endif
-
-
-
-

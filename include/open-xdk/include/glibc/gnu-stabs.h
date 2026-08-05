@@ -16,27 +16,26 @@ License along with the GNU C Library; see the file COPYING.LIB.  If
 not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
-#ifndef	__GNU_STABS_H
+#ifndef __GNU_STABS_H
 
-#define	__GNU_STABS_H	1
+#define __GNU_STABS_H 1
 
-//#ifdef	HAVE_GNU_LD
+// #ifdef	HAVE_GNU_LD
 
 //
 //
 // GNU-STABS for rand.c stuff
 //
 /* Alias a function:
-   	function_alias(creat, _creat, int, (file, mode),
-		       DEFUN(creat, (file, mode),
-		             CONST char *file AND int mode))
+    function_alias(creat, _creat, int, (file, mode),
+               DEFUN(creat, (file, mode),
+                     CONST char *file AND int mode))
    Yes, this is very repetitive.  Nothing you can do about it, so shut up.  */
-#define	function_alias(name, _name, type, args, defun) \
-  symbol_alias (_name, name);
+#define function_alias(name, _name, type, args, defun) \
+    symbol_alias(_name, name);
 
 #define function_alias_void(name, _name, args, defun) \
-  symbol_alias (_name, name);
-
+    symbol_alias(_name, name);
 
 #ifdef NO_UNDERSCORES
 #define __SYMBOL_PREFIX
@@ -44,20 +43,20 @@ Cambridge, MA 02139, USA.  */
 #define __SYMBOL_PREFIX "_"
 #endif
 
-// Make references to ALIAS refer to SYMBOL.  
+// Make references to ALIAS refer to SYMBOL.
 /*
 #define	symbol_alias(symbol, alias)	\
   asm(".stabs \"" __SYMBOL_PREFIX #alias "\",11,0,0,0\n"\
       ".stabs \"" __SYMBOL_PREFIX #symbol "\",1,0,0,0")
 
-// Issue a warning message from the linker whenever SYMBOL is referenced.  
+// Issue a warning message from the linker whenever SYMBOL is referenced.
 #define	warn_references(symbol, msg)	\
   asm(".stabs \"" msg "\",30,0,0,0\n"	\
       ".stabs \"" __SYMBOL_PREFIX #symbol "\",1,0,0,0")
 
 #define	stub_warning(name) \
   warn_references(name, \
-		  "warning: " #name " is not implemented and will always fail")
+          "warning: " #name " is not implemented and will always fail")
 
 #define	text_set_element(set, symbol)	\
   asm(".stabs \"" __SYMBOL_PREFIX #set "\",23,0,0," __SYMBOL_PREFIX #symbol)
@@ -66,7 +65,7 @@ Cambridge, MA 02139, USA.  */
 #define	bss_set_element(set, symbol)	\
   asm(".stabs \"" __SYMBOL_PREFIX #set "\",27,0,0," __SYMBOL_PREFIX #symbol)
 
-#else	// No GNU stabs.  
+#else	// No GNU stabs.
 
 #define	function_alias(name, _name, type, args, defun) \
   type defun { return _name args; }
@@ -75,6 +74,6 @@ Cambridge, MA 02139, USA.  */
   void defun { _name args; }
 
   */
-//#endif	// GNU stabs. 
+// #endif	// GNU stabs.
 
-#endif	// gnu-stabs.h
+#endif // gnu-stabs.h

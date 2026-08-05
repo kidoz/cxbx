@@ -19,8 +19,8 @@ License along with the GNU C Library; see the file COPYING.LIB.  If
 not, write to the Free Software Foundation, Inc., 675 Mass Ave,
 Cambridge, MA 02139, USA.  */
 
-#ifndef	   _HUGE_VAL_H
-#define	   _HUGE_VAL_H	1
+#ifndef _HUGE_VAL_H
+#define _HUGE_VAL_H 1
 
 #include "sys/cdefs.h"
 #include "endian.h"
@@ -28,20 +28,19 @@ Cambridge, MA 02139, USA.  */
 /* IEEE positive infinity.  */
 
 #if __BYTE_ORDER == __BIG_ENDIAN
-#define	__huge_val_bytes	{ 0x7f, 0xf0, 0, 0, 0, 0, 0, 0 }
+#define __huge_val_bytes { 0x7f, 0xf0, 0, 0, 0, 0, 0, 0 }
 #endif
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-#define	__huge_val_bytes	{ 0, 0, 0, 0, 0, 0, 0xf0, 0x7f }
+#define __huge_val_bytes { 0, 0, 0, 0, 0, 0, 0xf0, 0x7f }
 #endif
 
-#ifdef	__GNUC__
-#define	HUGE_VAL \
-  (__extension__ ((union { unsigned char __c[8];			      \
-			   double __d; })				      \
-		  { __huge_val_bytes }).__d)
-#else	/* Not GCC.  */
+#ifdef __GNUC__
+#define HUGE_VAL \
+    (__extension__((union { unsigned char __c[8];			      \
+			   double __d; }){ __huge_val_bytes }).__d)
+#else /* Not GCC.  */
 static __const unsigned char __huge_val[8] = __huge_val_bytes;
-#define	HUGE_VAL	(*(__const double *) __huge_val)
-#endif	/* GCC.  */
+#define HUGE_VAL (*(__const double*)__huge_val)
+#endif /* GCC.  */
 
-#endif	   /* huge_val.h */
+#endif /* huge_val.h */

@@ -30,17 +30,17 @@ namespace cxbx::d3d
 
 struct PixelShaderConstant
 {
-    unsigned index;   // ps.1.1 constant register c<index>
+    unsigned index;        // ps.1.1 constant register c<index>
     unsigned xboxRegister; // SetPixelShaderConstant register, or 16 for literals
-    float value[4];   // BGRA-source dword expanded to RGBA floats
+    float value[4];        // BGRA-source dword expanded to RGBA floats
 };
 
 struct PixelShaderTranslation
 {
     std::vector<std::uint32_t> bytecode;
     std::vector<PixelShaderConstant> constants;
-    unsigned arithmetic = 0;   // emitted arithmetic instruction count
-    unsigned textures = 0;     // emitted tex instruction count
+    unsigned arithmetic = 0; // emitted arithmetic instruction count
+    unsigned textures = 0;   // emitted tex instruction count
     const char* failure = nullptr;
 
     bool ok() const noexcept { return failure == nullptr; }
@@ -50,16 +50,16 @@ namespace detail::psh
 {
 
 // X_D3DPIXELSHADERDEF dword indices (see the struct in the XDK d3d8types.h).
-inline constexpr unsigned AlphaInputs = 0;           // [8]
+inline constexpr unsigned AlphaInputs = 0; // [8]
 inline constexpr unsigned FinalInputsABCD = 8;
 inline constexpr unsigned FinalInputsEFG = 9;
-inline constexpr unsigned Constant0 = 10;            // [8]
-inline constexpr unsigned Constant1 = 18;            // [8]
-inline constexpr unsigned AlphaOutputs = 26;         // [8]
-inline constexpr unsigned RgbInputs = 34;            // [8]
+inline constexpr unsigned Constant0 = 10;    // [8]
+inline constexpr unsigned Constant1 = 18;    // [8]
+inline constexpr unsigned AlphaOutputs = 26; // [8]
+inline constexpr unsigned RgbInputs = 34;    // [8]
 inline constexpr unsigned FinalConstant0 = 43;
 inline constexpr unsigned FinalConstant1 = 44;
-inline constexpr unsigned RgbOutputs = 45;           // [8]
+inline constexpr unsigned RgbOutputs = 45; // [8]
 inline constexpr unsigned CombinerCount = 53;
 inline constexpr unsigned TextureModes = 54;
 inline constexpr unsigned C0Mapping = 57;
@@ -145,7 +145,7 @@ inline bool OperandIsOne(const Operand& op) noexcept
 }
 
 inline bool OperandsAreComplementary(const Operand& identity,
-                                    const Operand& inverted) noexcept
+                                     const Operand& inverted) noexcept
 {
     return identity.reg == inverted.reg &&
            identity.alphaChannel == inverted.alphaChannel &&
@@ -166,8 +166,8 @@ struct Emitter
     // Constants may share a value but have different Xbox runtime mappings.
     std::vector<ConstantSlotEntry> constantSlots;
     bool zeroConstantUsed = false;
-    std::uint32_t writtenRegs = 0;   // bit per PS_REGISTER already written
-    std::uint32_t scratchReg = 0;    // PS_REGISTER used as scratch (0 = none)
+    std::uint32_t writtenRegs = 0; // bit per PS_REGISTER already written
+    std::uint32_t scratchReg = 0;  // PS_REGISTER used as scratch (0 = none)
     unsigned stageC0Register = 0;
     unsigned stageC1Register = 0;
 
@@ -258,13 +258,13 @@ struct Emitter
         switch(op.mapping)
         {
             case MapUnsignedIdentity: modifier = 0; break;
-            case MapUnsignedInvert:   modifier = SmComp; break;
-            case MapExpandNormal:     modifier = SmSign; break;
-            case MapExpandNegate:     modifier = SmSignNeg; break;
-            case MapHalfbiasNormal:   modifier = SmBias; break;
-            case MapHalfbiasNegate:   modifier = SmBiasNeg; break;
-            case MapSignedIdentity:   modifier = 0; break;
-            case MapSignedNegate:     modifier = SmNeg; break;
+            case MapUnsignedInvert: modifier = SmComp; break;
+            case MapExpandNormal: modifier = SmSign; break;
+            case MapExpandNegate: modifier = SmSignNeg; break;
+            case MapHalfbiasNormal: modifier = SmBias; break;
+            case MapHalfbiasNegate: modifier = SmBiasNeg; break;
+            case MapSignedIdentity: modifier = 0; break;
+            case MapSignedNegate: modifier = SmNeg; break;
         }
 
         return 0x80000000u | (reg.type << 28) | modifier | swizzle | reg.number;
@@ -310,9 +310,9 @@ struct Portion
     Operand a, b, c, d;
     unsigned abDest, cdDest, sumDest;
     bool abDot, cdDot, mux;
-    std::uint32_t shift;       // ps.1.1 dest-shift bits
-    bool biasOutput;           // PS_COMBINEROUTPUT_BIAS (unsupported)
-    bool blueToAlpha;          // AB/CD_BLUE_TO_ALPHA (unsupported)
+    std::uint32_t shift; // ps.1.1 dest-shift bits
+    bool biasOutput;     // PS_COMBINEROUTPUT_BIAS (unsupported)
+    bool blueToAlpha;    // AB/CD_BLUE_TO_ALPHA (unsupported)
 };
 
 inline Portion DecodePortion(std::uint32_t inputs, std::uint32_t output) noexcept
@@ -335,7 +335,7 @@ inline Portion DecodePortion(std::uint32_t inputs, std::uint32_t output) noexcep
         case 0x10u: p.shift = ShiftX2; break;
         case 0x20u: p.shift = ShiftX4; break;
         case 0x30u: p.shift = ShiftD2; break;
-        default:    p.shift = 0; break;
+        default: p.shift = 0; break;
     }
     p.blueToAlpha = (flags & 0xC0u) != 0;
     return p;
@@ -369,10 +369,12 @@ inline PixelShaderTranslation TranslatePixelShader(
     constexpr std::uint8_t LiveAlpha = 0x2u;
     std::array<std::array<bool, 2>, 8> livePortions{};
     std::array<std::uint8_t, 16> liveChannels{};
-    auto operandChannel = [](const Operand& op) {
+    auto operandChannel = [](const Operand& op)
+    {
         return op.alphaChannel ? LiveAlpha : LiveRgb;
     };
-    auto noteLiveOperand = [&](const Operand& op) {
+    auto noteLiveOperand = [&](const Operand& op)
+    {
         if(op.reg != RegZero)
             liveChannels[op.reg] |= operandChannel(op);
     };
@@ -464,9 +466,11 @@ inline PixelShaderTranslation TranslatePixelShader(
     // ---- Pass 1: which registers are read/written, and where scratch fits.
     std::uint32_t readRegs = 0, destRegs = 0, textureLoadRegs = 0;
     std::uint32_t combinerWrittenRegs = 0;
-    auto noteInputs = [&](std::uint32_t inputs, std::uint32_t output) {
+    auto noteInputs = [&](std::uint32_t inputs, std::uint32_t output)
+    {
         const Portion p = DecodePortion(inputs, output);
-        auto noteOperand = [&](const Operand& op) {
+        auto noteOperand = [&](const Operand& op)
+        {
             readRegs |= 1u << op.reg;
             if(op.reg >= RegT0 && op.reg <= RegT3 &&
                (combinerWrittenRegs & (1u << op.reg)) == 0)
@@ -474,7 +478,8 @@ inline PixelShaderTranslation TranslatePixelShader(
                 textureLoadRegs |= 1u << op.reg;
             }
         };
-        auto noteProduct = [&](const Operand& x, const Operand& y, bool needed) {
+        auto noteProduct = [&](const Operand& x, const Operand& y, bool needed)
+        {
             // A zero product can still write a destination, but it does not
             // read either source register. This matters for inactive texture
             // stages whose value only appears in a discarded zero product.
@@ -487,7 +492,8 @@ inline PixelShaderTranslation TranslatePixelShader(
         noteProduct(p.a, p.b, p.abDest != RegZero || p.sumDest != RegZero);
         noteProduct(p.c, p.d, p.cdDest != RegZero || p.sumDest != RegZero);
     };
-    auto noteOutputs = [&](std::uint32_t output) {
+    auto noteOutputs = [&](std::uint32_t output)
+    {
         destRegs |= 1u << (output & 0xFu);
         destRegs |= 1u << ((output >> 4) & 0xFu);
         destRegs |= 1u << ((output >> 8) & 0xFu);
@@ -525,7 +531,8 @@ inline PixelShaderTranslation TranslatePixelShader(
         const Operand b = DecodeOperand(def[FinalInputsABCD], 1);
         const Operand c = DecodeOperand(def[FinalInputsABCD], 2);
         const Operand d = DecodeOperand(def[FinalInputsABCD], 3);
-        auto noteFinalOperand = [&](const Operand& op) {
+        auto noteFinalOperand = [&](const Operand& op)
+        {
             readRegs |= 1u << op.reg;
             if(op.reg >= RegT0 && op.reg <= RegT3 &&
                (combinerWrittenRegs & (1u << op.reg)) == 0)
@@ -633,15 +640,27 @@ inline PixelShaderTranslation TranslatePixelShader(
                 continue;
             const bool alphaPortion = portionIndex == 1;
             const Portion p = alphaPortion
-                ? DecodePortion(def[AlphaInputs + stage], def[AlphaOutputs + stage])
-                : DecodePortion(def[RgbInputs + stage], def[RgbOutputs + stage]);
+                                  ? DecodePortion(def[AlphaInputs + stage], def[AlphaOutputs + stage])
+                                  : DecodePortion(def[RgbInputs + stage], def[RgbOutputs + stage]);
 
             if(p.abDest == RegZero && p.cdDest == RegZero && p.sumDest == RegZero)
                 continue; // fully discarded portion
 
-            if(p.mux)                    { emitter.Fail("mux"); break; }
-            if(p.biasOutput)             { emitter.Fail("output_bias"); break; }
-            if(p.blueToAlpha)            { emitter.Fail("blue_to_alpha"); break; }
+            if(p.mux)
+            {
+                emitter.Fail("mux");
+                break;
+            }
+            if(p.biasOutput)
+            {
+                emitter.Fail("output_bias");
+                break;
+            }
+            if(p.blueToAlpha)
+            {
+                emitter.Fail("blue_to_alpha");
+                break;
+            }
             if(alphaPortion && (p.abDot || p.cdDot))
             {
                 emitter.Fail("alpha_dot");
@@ -670,24 +689,28 @@ inline PixelShaderTranslation TranslatePixelShader(
             }
 
             const std::uint32_t mask = alphaPortion ? MaskA : MaskRgb;
-            auto src = [&](const Operand& op) {
+            auto src = [&](const Operand& op)
+            {
                 return emitter.SourceToken(op, alphaPortion, stageC0, stageC1);
             };
-            auto dst = [&](unsigned reg) {
+            auto dst = [&](unsigned reg)
+            {
                 return emitter.DestToken(reg, mask, p.shift);
             };
-            auto regSrc = [&](unsigned reg) {
+            auto regSrc = [&](unsigned reg)
+            {
                 // Read back a register this portion just wrote (no mapping).
                 return emitter.SourceToken({ reg, alphaPortion, MapSignedIdentity },
                                            alphaPortion, stageC0, stageC1);
             };
             auto product = [&](unsigned destReg, const Operand& x, const Operand& y,
-                               bool dot) {
+                               bool dot)
+            {
                 if(OperandIsZero(x) || OperandIsZero(y))
                 {
                     emitter.Arithmetic(OpMov, dst(destReg),
                                        { emitter.SourceToken({ RegZero, false,
-                                                              MapUnsignedIdentity },
+                                                               MapUnsignedIdentity },
                                                              alphaPortion, stageC0,
                                                              stageC1) });
                     return;
@@ -816,7 +839,8 @@ inline PixelShaderTranslation TranslatePixelShader(
         const Operand c = DecodeOperand(def[FinalInputsABCD], 2);
         const Operand d = DecodeOperand(def[FinalInputsABCD], 3);
 
-        auto isIdentity = [](const Operand& op) {
+        auto isIdentity = [](const Operand& op)
+        {
             return op.mapping == MapUnsignedIdentity ||
                    op.mapping == MapSignedIdentity;
         };
@@ -842,10 +866,12 @@ inline PixelShaderTranslation TranslatePixelShader(
             const std::uint32_t c1 = def[FinalConstant1];
             emitter.stageC0Register = def[FinalCombinerConstants] & 0xFu;
             emitter.stageC1Register = (def[FinalCombinerConstants] >> 4) & 0xFu;
-            auto src = [&](const Operand& op) {
+            auto src = [&](const Operand& op)
+            {
                 return emitter.SourceToken(op, false, c0, c1);
             };
-            auto isR0RgbIdentity = [&](const Operand& op) {
+            auto isR0RgbIdentity = [&](const Operand& op)
+            {
                 return op.reg == RegR0 && !op.alphaChannel &&
                        (op.mapping == MapUnsignedIdentity ||
                         op.mapping == MapSignedIdentity);
@@ -900,7 +926,8 @@ inline PixelShaderTranslation TranslatePixelShader(
                     emitter.Arithmetic(
                         OpAdd, emitter.DestToken(RegR0, MaskRgb, 0),
                         { emitter.SourceToken({ emitter.scratchReg, false,
-                                                MapSignedIdentity }, false, c0, c1),
+                                                MapSignedIdentity },
+                                              false, c0, c1),
                           src(d) });
                 }
                 else

@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->cxbx.h
@@ -46,23 +46,23 @@
 // ******************************************************************
 // * Caustik's favorite typedefs
 // ******************************************************************
-typedef signed int     sint;
-typedef unsigned int   uint;
-typedef char           int08;
-typedef short          int16;
-typedef long           int32;
-typedef unsigned char  uint08;
+typedef signed int sint;
+typedef unsigned int uint;
+typedef char int08;
+typedef short int16;
+typedef long int32;
+typedef unsigned char uint08;
 typedef unsigned short uint16;
-typedef unsigned long  uint32;
-typedef signed char    sint08;
-typedef signed short   sint16;
-typedef signed long    sint32;
+typedef unsigned long uint32;
+typedef signed char sint08;
+typedef signed short sint16;
+typedef signed long sint32;
 
 // ******************************************************************
 // * Define this to trace intercepted function calls
 // ******************************************************************
-//#define _DEBUG_TRACE
-//#define _DEBUG_WARNINGS
+// #define _DEBUG_TRACE
+// #define _DEBUG_WARNINGS
 
 // ******************************************************************
 // * Version information
@@ -81,7 +81,7 @@ static uint32 RoundUp(uint32 dwValue, uint32 dwMult)
     if(dwMult == 0)
         return dwValue;
 
-    return dwValue - (dwValue-1)%dwMult + (dwMult - 1);
+    return dwValue - (dwValue - 1) % dwMult + (dwMult - 1);
 }
 
 // ******************************************************************

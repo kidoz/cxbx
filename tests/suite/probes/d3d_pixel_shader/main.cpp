@@ -15,39 +15,40 @@
 #include "xdk_xtrace.h"
 
 static const D3DCOLOR COL_CLEAR = 0xFF0000FF; // blue
-static const D3DCOLOR COL_TEX   = 0xFFFF4000; // texture: r=255 g=64 b=0
+static const D3DCOLOR COL_TEX = 0xFFFF4000;   // texture: r=255 g=64 b=0
 static const D3DCOLOR COL_WHITE = 0xFFFFFFFF;
 
 static const DWORD EXPECT_MODULATE = 0xFF4000;
-static const DWORD EXPECT_MAPPED   = 0xFF00FF;
+static const DWORD EXPECT_MAPPED = 0xFF00FF;
 
-struct VERTEX {
+struct VERTEX
+{
     float x, y, z, rhw;
     D3DCOLOR color;
     float u, v;
 };
 #define FVF_VERTEX (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1)
 
-static DWORD read_pixel(void *pBits, INT pitch, int x, int y)
+static DWORD read_pixel(void* pBits, INT pitch, int x, int y)
 {
-    return (*(DWORD *)((BYTE *)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
+    return (*(DWORD*)((BYTE*)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
 }
 
 static void draw_quad(float x0, float y0)
 {
     const VERTEX tris[6] = {
-        { x0,          y0,          0.0f, 1.0f, COL_WHITE, 0.0f, 0.0f },
-        { x0 + 128.0f, y0,          0.0f, 1.0f, COL_WHITE, 1.0f, 0.0f },
-        { x0,          y0 + 128.0f, 0.0f, 1.0f, COL_WHITE, 0.0f, 1.0f },
-        { x0 + 128.0f, y0,          0.0f, 1.0f, COL_WHITE, 1.0f, 0.0f },
+        { x0, y0, 0.0f, 1.0f, COL_WHITE, 0.0f, 0.0f },
+        { x0 + 128.0f, y0, 0.0f, 1.0f, COL_WHITE, 1.0f, 0.0f },
+        { x0, y0 + 128.0f, 0.0f, 1.0f, COL_WHITE, 0.0f, 1.0f },
+        { x0 + 128.0f, y0, 0.0f, 1.0f, COL_WHITE, 1.0f, 0.0f },
         { x0 + 128.0f, y0 + 128.0f, 0.0f, 1.0f, COL_WHITE, 1.0f, 1.0f },
-        { x0,          y0 + 128.0f, 0.0f, 1.0f, COL_WHITE, 0.0f, 1.0f },
+        { x0, y0 + 128.0f, 0.0f, 1.0f, COL_WHITE, 0.0f, 1.0f },
     };
     D3DDevice_DrawVerticesUP(D3DPT_TRIANGLELIST, 6, tris, sizeof(VERTEX));
 }
 
 // One-combiner shader: r0.rgb = map(t0) * v0, r0.a = t0.a * v0.a.
-static void build_shader(D3DPIXELSHADERDEF *psDef, DWORD textureMapping)
+static void build_shader(D3DPIXELSHADERDEF* psDef, DWORD textureMapping)
 {
     memset(psDef, 0, sizeof(*psDef));
     psDef->PSCombinerCount = PS_COMBINERCOUNT(1, 0);
@@ -66,7 +67,7 @@ static void build_shader(D3DPIXELSHADERDEF *psDef, DWORD textureMapping)
         PS_REGISTER_DISCARD, PS_REGISTER_DISCARD, PS_REGISTER_R0, 0);
 }
 
-static void build_mapped_constant_shader(D3DPIXELSHADERDEF *psDef)
+static void build_mapped_constant_shader(D3DPIXELSHADERDEF* psDef)
 {
     memset(psDef, 0, sizeof(*psDef));
     psDef->PSCombinerCount = PS_COMBINERCOUNT(1, 0);
@@ -95,36 +96,38 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS d3dpp;
     ZeroMemory(&d3dpp, sizeof(d3dpp));
-    d3dpp.BackBufferWidth  = 640;
+    d3dpp.BackBufferWidth = 640;
     d3dpp.BackBufferHeight = 480;
     d3dpp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    d3dpp.BackBufferCount  = 1;
-    d3dpp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    d3dpp.BackBufferCount = 1;
+    d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                     &d3dpp, &pDevice);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
-    if (FAILED(hr) || pDevice == NULL)
+    if(FAILED(hr) || pDevice == NULL)
         xt_end_and_exit();
 
     // Solid-color linear texture (converts 1:1 to host A8R8G8B8).
-    D3DTexture *pTex = D3DDevice_CreateTexture2(8, 8, 1, 1, 0,
+    D3DTexture* pTex = D3DDevice_CreateTexture2(8, 8, 1, 1, 0,
                                                 D3DFMT_LIN_A8R8G8B8,
                                                 D3DRTYPE_TEXTURE);
     xt_chk("d3d.tex_create_ok", 1, pTex != NULL);
-    if (pTex == NULL)
+    if(pTex == NULL)
         xt_end_and_exit();
 
     D3DLOCKED_RECT tlr;
     tlr.pBits = NULL;
     D3DTexture_LockRect(pTex, 0, &tlr, NULL, 0);
     xt_chk("d3d.tex_lock_ok", 1, tlr.pBits != NULL);
-    if (tlr.pBits != NULL) {
-        for (int y = 0; y < 8; y++) {
-            DWORD *row = (DWORD *)((BYTE *)tlr.pBits + y * tlr.Pitch);
-            for (int x = 0; x < 8; x++)
+    if(tlr.pBits != NULL)
+    {
+        for(int y = 0; y < 8; y++)
+        {
+            DWORD* row = (DWORD*)((BYTE*)tlr.pBits + y * tlr.Pitch);
+            for(int x = 0; x < 8; x++)
                 row[x] = COL_TEX;
         }
     }
@@ -158,14 +161,16 @@ void __cdecl main()
     D3DDevice_SetPixelShader(0);
 
     // Single readback at the end.
-    D3DSurface *pBB = D3DDevice_GetBackBuffer2(0);
+    D3DSurface* pBB = D3DDevice_GetBackBuffer2(0);
     xt_chk("d3d.backbuffer_ok", 1, pBB != NULL);
-    if (pBB != NULL) {
+    if(pBB != NULL)
+    {
         D3DLOCKED_RECT lr;
         lr.pBits = NULL;
         D3DSurface_LockRect(pBB, &lr, NULL, D3DLOCK_READONLY);
         xt_chk("d3d.lock_ok", 1, lr.pBits != NULL);
-        if (lr.pBits != NULL) {
+        if(lr.pBits != NULL)
+        {
             xt_chk_u32("ps.px_modulate", EXPECT_MODULATE,
                        read_pixel(lr.pBits, lr.Pitch, 128, 128));
             xt_chk_u32("ps.px_mapped", EXPECT_MAPPED,

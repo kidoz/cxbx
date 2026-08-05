@@ -8,15 +8,15 @@
 #include "xtest.h"
 #include <stdint.h>
 
-#define APU_BASE     0xFE800000u
-#define REG32(off)   (*(volatile uint32_t *)(APU_BASE + (uint32_t)(off)))
-#define REG16(off)   (*(volatile uint16_t *)(APU_BASE + (uint32_t)(off)))
+#define APU_BASE   0xFE800000u
+#define REG32(off) (*(volatile uint32_t*)(APU_BASE + (uint32_t)(off)))
+#define REG16(off) (*(volatile uint16_t*)(APU_BASE + (uint32_t)(off)))
 
-#define XGSCNT              0x0000200Cu   // global sample counter (free-running)
-#define VP_PIO_FREE         0x00020010u   // voice-processor PIO-free status
-#define VP_PIO_QUEUE_EMPTY  0x00000080u
-#define SCRATCH             0x00000100u   // a plain (non-special) register
-#define SCRATCH16           0x00000104u   // a plain register for 16-bit access
+#define XGSCNT             0x0000200Cu // global sample counter (free-running)
+#define VP_PIO_FREE        0x00020010u // voice-processor PIO-free status
+#define VP_PIO_QUEUE_EMPTY 0x00000080u
+#define SCRATCH            0x00000100u // a plain (non-special) register
+#define SCRATCH16          0x00000104u // a plain register for 16-bit access
 
 int main(void)
 {

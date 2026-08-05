@@ -23,24 +23,22 @@ Cambridge, MA 02139, USA.  */
 /* Compare S1 and S2, ignoring case, returning less than, equal to or
    greater than zero if S1 is lexiographically less than,
    equal to or greater than S2.  */
-int
-DEFUN(strcasecmp, (s1, s2), CONST char *s1 AND CONST char *s2)
+int DEFUN(strcasecmp, (s1, s2), CONST char* s1 AND CONST char* s2)
 {
-  register CONST unsigned char *p1 = (CONST unsigned char *) s1;
-  register CONST unsigned char *p2 = (CONST unsigned char *) s2;
-  unsigned char c1, c2;
+    register CONST unsigned char* p1 = (CONST unsigned char*)s1;
+    register CONST unsigned char* p2 = (CONST unsigned char*)s2;
+    unsigned char c1, c2;
 
-  if (p1 == p2)
-    return 0;
+    if(p1 == p2)
+        return 0;
 
-  do
+    do
     {
-      c1 = tolower (*p1++);
-      c2 = tolower (*p2++);
-      if (c1 == '\0')
-	break;
-    }
-  while (c1 == c2);
+        c1 = tolower(*p1++);
+        c2 = tolower(*p2++);
+        if(c1 == '\0')
+            break;
+    } while(c1 == c2);
 
-  return c1 - c2;
+    return c1 - c2;
 }

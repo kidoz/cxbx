@@ -21,36 +21,35 @@ Cambridge, MA 02139, USA.  */
 #include <cstring>
 
 /* Return the first ocurrence of NEEDLE in HAYSTACK.  */
-char *
-DEFUN(strstr, (haystack, needle),
-      CONST char *haystack AND
-      CONST char *needle)
+char* DEFUN(strstr, (haystack, needle),
+            CONST char* haystack AND
+                CONST char* needle)
 {
-  register CONST char *CONST needle_end = strchr(needle, '\0');
-  register CONST char *CONST haystack_end = strchr(haystack, '\0');
-  register CONST size_t needle_len = needle_end - needle;
-  register CONST size_t needle_last = needle_len - 1;
-  register CONST char *begin;
+    register CONST char* CONST needle_end = strchr(needle, '\0');
+    register CONST char* CONST haystack_end = strchr(haystack, '\0');
+    register CONST size_t needle_len = needle_end - needle;
+    register CONST size_t needle_last = needle_len - 1;
+    register CONST char* begin;
 
-  if (needle_len == 0)
-    return (char *) haystack;	/* ANSI 4.11.5.7, line 25.  */
-  if ((size_t) (haystack_end - haystack) < needle_len)
-    return NULL;
+    if(needle_len == 0)
+        return (char*)haystack; /* ANSI 4.11.5.7, line 25.  */
+    if((size_t)(haystack_end - haystack) < needle_len)
+        return NULL;
 
-  for (begin = &haystack[needle_last]; begin < haystack_end; ++begin)
+    for(begin = &haystack[needle_last]; begin < haystack_end; ++begin)
     {
-      register CONST char *n = &needle[needle_last];
-      register CONST char *h = begin;
+        register CONST char* n = &needle[needle_last];
+        register CONST char* h = begin;
 
-      do
-	if (*h != *n)
-	  goto loop;		/* continue for loop */
-      while (--n >= needle && --h >= haystack);
+        do
+            if(*h != *n)
+                goto loop; /* continue for loop */
+        while(--n >= needle && --h >= haystack);
 
-      return (char *) h;
+        return (char*)h;
 
     loop:;
     }
 
-  return NULL;
+    return NULL;
 }

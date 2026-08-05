@@ -12,16 +12,16 @@
 #include <pbkit/pbkit.h>
 #include <pbkit/nv_regs.h>
 
-#define ATTR_POSITION 0
+#define ATTR_POSITION  0
 #define ATTR_TEXCOORD0 9
 #define ATTR_TEXCOORD1 10
 #define VTX_FMT(type, size, stride) \
     (((uint32_t)(stride) << 8) | ((uint32_t)(size) << 4) | (uint32_t)(type))
 
-#define FBW 640
-#define FBH 480
-#define TW 2
-#define TH 2
+#define FBW                  640
+#define FBH                  480
+#define TW                   2
+#define TH                   2
 #define TEXTURE_STAGE_STRIDE 0x40u
 
 typedef struct
@@ -36,9 +36,18 @@ typedef struct
 // mov oT1, v10 (FINAL)
 // Encoded with the NV2A instruction fields used by EmuVshDecoder.
 static const uint32_t VP_PROGRAM[12] = {
-    0x00000000u, 0x0020001Bu, 0x0836006Cu, 0x0000F800u,
-    0x00000000u, 0x0020121Bu, 0x0836006Cu, 0x0000F848u,
-    0x00000000u, 0x0020141Bu, 0x0836006Cu, 0x0000F851u,
+    0x00000000u,
+    0x0020001Bu,
+    0x0836006Cu,
+    0x0000F800u,
+    0x00000000u,
+    0x0020121Bu,
+    0x0836006Cu,
+    0x0000F848u,
+    0x00000000u,
+    0x0020141Bu,
+    0x0836006Cu,
+    0x0000F851u,
 };
 
 static uint32_t f2u(float value)
@@ -138,10 +147,10 @@ int main(void)
     }
 
     const Vertex quad[4] = {
-        {64.0f, 64.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f},
-        {320.0f, 64.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f},
-        {320.0f, 320.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f},
-        {64.0f, 320.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f},
+        { 64.0f, 64.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f },
+        { 320.0f, 64.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f },
+        { 320.0f, 320.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f },
+        { 64.0f, 320.0f, 0.0f, 0.25f, 0.25f, 0.75f, 0.25f },
     };
     memcpy(vertices, quad, sizeof(quad));
 
@@ -182,7 +191,7 @@ int main(void)
         push = bind_texture(push, 1, (uint32_t)(uintptr_t)texture1);
         push = pb_push1(push, NV097_SET_SHADER_STAGE_PROGRAM,
                         NV097_SET_SHADER_STAGE_PROGRAM_STAGE0_2D_PROJECTIVE |
-                        (NV097_SET_SHADER_STAGE_PROGRAM_STAGE1_2D_PROJECTIVE << 5));
+                            (NV097_SET_SHADER_STAGE_PROGRAM_STAGE1_2D_PROJECTIVE << 5));
 
         // One general combiner: r0.rgb/a = t0 * t1, followed by r0 passthrough.
         push = pb_push1(push, NV097_SET_COMBINER_CONTROL, 1u);

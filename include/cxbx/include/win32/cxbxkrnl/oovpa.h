@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->oovpa.h
@@ -39,14 +39,14 @@
 // ******************************************************************
 // * Take THIS C++ !!
 // ******************************************************************
-template <class BaseClass, typename MFT> inline void *MFPtoFP( MFT pMemFunc)
+template <class BaseClass, typename MFT>
+inline void* MFPtoFP(MFT pMemFunc)
 {
     union
     {
         MFT pMemFunc;
         void (*pFunc)();
-    }
-    ThisConv;
+    } ThisConv;
 
     ThisConv.pMemFunc = pMemFunc;
 
@@ -70,7 +70,8 @@ struct OOVPA
 // ******************************************************************
 // * Large Optimized (Offset,Value)-Pair Array
 // ******************************************************************
-template <uint16 COUNT> struct LOOVPA
+template <uint16 COUNT>
+struct LOOVPA
 {
     uint16 Large : 1;
     uint16 Count : 15;
@@ -83,14 +84,14 @@ template <uint16 COUNT> struct LOOVPA
     {
         uint16 Offset;
         uint08 Value;
-    }
-    Lovp[COUNT];
+    } Lovp[COUNT];
 };
 
 // ******************************************************************
 // * Small Optimized (Offset,Value)-Pair Array
 // ******************************************************************
-template <uint16 COUNT> struct SOOVPA
+template <uint16 COUNT>
+struct SOOVPA
 {
     uint16 Large : 1;
     uint16 Count : 15;
@@ -103,8 +104,7 @@ template <uint16 COUNT> struct SOOVPA
     {
         uint08 Offset;
         uint08 Value;
-    }
-    Sovp[COUNT];
+    } Sovp[COUNT];
 };
 
 // Patch EVERY match of the signature, not just the first. For families of
@@ -121,13 +121,13 @@ template <uint16 COUNT> struct SOOVPA
 // ******************************************************************
 struct OOVPATable
 {
-    OOVPA *Oovpa;
+    OOVPA* Oovpa;
 
-    void  *lpRedirect;
+    void* lpRedirect;
 
-    #ifdef _DEBUG_TRACE
-    char  *szFuncName;
-    #endif
+#ifdef _DEBUG_TRACE
+    char* szFuncName;
+#endif
 
     // OOVPA_FLAG_* bits; existing aggregate initializers leave this 0.
     uint32 Flags;

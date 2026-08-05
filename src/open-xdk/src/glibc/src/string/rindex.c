@@ -19,9 +19,9 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-#undef	rindex
+#undef rindex
 
 #include <gnu-stabs.h>
 
-function_alias(rindex, strrchr, char *, (s, c),
-	       DEFUN(rindex, (s, c), CONST char *s AND int c))
+function_alias(rindex, strrchr, char*, (s, c),
+               DEFUN(rindex, (s, c), CONST char* s AND int c))

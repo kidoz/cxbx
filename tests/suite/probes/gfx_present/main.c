@@ -26,10 +26,7 @@
 
 static uint32_t pattern_px(int x, int y)
 {
-    return 0xFF000000u
-         | ((uint32_t)((x * 4) & 0xFF) << 16)
-         | ((uint32_t)((y * 4) & 0xFF) << 8)
-         | (uint32_t)((x ^ y) & 0xFF);
+    return 0xFF000000u | ((uint32_t)((x * 4) & 0xFF) << 16) | ((uint32_t)((y * 4) & 0xFF) << 8) | (uint32_t)((x ^ y) & 0xFF);
 }
 
 int main(void)
@@ -43,29 +40,31 @@ int main(void)
     int status = pb_init();
     xt_ev("gfx_present.pb_init_status=%d", status);
     xt_check_bool("gfx_present.pb_init", 1, status == 0);
-    if (status != 0)
+    if(status != 0)
         return xt_end();
 
-    unsigned char *fb = XVideoGetFB();
+    unsigned char* fb = XVideoGetFB();
     xt_ev("gfx_present.fb=0x%08lX", (unsigned long)(uintptr_t)fb);
     xt_check_bool("gfx_present.fb_nonnull", 1, fb != NULL);
-    if (fb == NULL) {
+    if(fb == NULL)
+    {
         pb_kill();
         return xt_end();
     }
 
     // Compose a deterministic full-screen frame directly in the scanout surface.
-    volatile uint32_t *px = (volatile uint32_t *)fb;
-    for (int y = 0; y < FBH; y++)
-        for (int x = 0; x < FBW; x++)
+    volatile uint32_t* px = (volatile uint32_t*)fb;
+    for(int y = 0; y < FBH; y++)
+        for(int x = 0; x < FBW; x++)
             px[y * FBW + x] = pattern_px(x, y);
 
     // Present: flip the CRTC scanout base to this surface. This is the
     // NV_PCRTC_START write the capture intercepts. Do it a few times so the
     // target sees a stable, repeated frame.
-    for (int i = 0; i < 4; i++) {
-        pb_show_debug_screen();   // sets PCRTC_START = XVideoGetFB()
-        while (pb_busy())
+    for(int i = 0; i < 4; i++)
+    {
+        pb_show_debug_screen(); // sets PCRTC_START = XVideoGetFB()
+        while(pb_busy())
             ;
     }
 

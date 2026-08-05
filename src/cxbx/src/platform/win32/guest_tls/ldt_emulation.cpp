@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->ldt_emulation.cpp
@@ -39,7 +39,7 @@
 #include "emulation_runtime.h"
 #include "fs_emulation.h"
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #include <windows.h>
 
 // ******************************************************************
@@ -47,7 +47,7 @@
 // ******************************************************************
 namespace NtDll
 {
-    #include "ntdll_emulation.h"
+#include "ntdll_emulation.h"
 };
 
 // ******************************************************************
@@ -72,8 +72,8 @@ void EmuInitLDT()
 {
     InitializeCriticalSection(&EmuLDTLock);
 
-    for(uint32 v=0;v<MAXIMUM_XBOX_THREADS;v++)
-        FreeLDTEntries[v] = (uint16)((v*8) + 7 + 8);
+    for(uint32 v = 0; v < MAXIMUM_XBOX_THREADS; v++)
+        FreeLDTEntries[v] = (uint16)((v * 8) + 7 + 8);
 }
 
 // ******************************************************************
@@ -83,7 +83,7 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
 {
     NtDll::LDT_ENTRY LDTEntry;
 
-    int x=0;
+    int x = 0;
 
     EnterCriticalSection(&EmuLDTLock);
 
@@ -91,7 +91,7 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
     // * Locate a free LDT entry
     // ******************************************************************
     {
-        for(x=0;x<MAXIMUM_XBOX_THREADS;x++)
+        for(x = 0; x < MAXIMUM_XBOX_THREADS; x++)
             if(FreeLDTEntries[x])
                 break;
 
@@ -99,7 +99,7 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
         {
             LeaveCriticalSection(&EmuLDTLock);
 
-			EmuCleanup("Could not locate free LDT entry (too many threads?)");
+            EmuCleanup("Could not locate free LDT entry (too many threads?)");
 
             return 0;
         }
@@ -109,22 +109,22 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
     // * Set up selector information
     // ******************************************************************
     {
-        LDTEntry.BaseLow                    = (WORD)(dwBaseAddr & 0xFFFF);
-        LDTEntry.HighWord.Bits.BaseMid      = (dwBaseAddr >> 16) & 0xFF;
-        LDTEntry.HighWord.Bits.BaseHi       = (dwBaseAddr >> 24) & 0xFF;
-	    LDTEntry.HighWord.Bits.Type         = 0x13; // RW data segment
-	    LDTEntry.HighWord.Bits.Dpl          = 3;    // user segment
-	    LDTEntry.HighWord.Bits.Pres         = 1;    // present
-	    LDTEntry.HighWord.Bits.Sys          = 0;
-	    LDTEntry.HighWord.Bits.Reserved_0   = 0;
-	    LDTEntry.HighWord.Bits.Default_Big  = 1;    // 386 segment
-	    LDTEntry.HighWord.Bits.Granularity  = (dwLimit >= 0x00100000) ? 1 : 0;
+        LDTEntry.BaseLow = (WORD)(dwBaseAddr & 0xFFFF);
+        LDTEntry.HighWord.Bits.BaseMid = (dwBaseAddr >> 16) & 0xFF;
+        LDTEntry.HighWord.Bits.BaseHi = (dwBaseAddr >> 24) & 0xFF;
+        LDTEntry.HighWord.Bits.Type = 0x13; // RW data segment
+        LDTEntry.HighWord.Bits.Dpl = 3;     // user segment
+        LDTEntry.HighWord.Bits.Pres = 1;    // present
+        LDTEntry.HighWord.Bits.Sys = 0;
+        LDTEntry.HighWord.Bits.Reserved_0 = 0;
+        LDTEntry.HighWord.Bits.Default_Big = 1; // 386 segment
+        LDTEntry.HighWord.Bits.Granularity = (dwLimit >= 0x00100000) ? 1 : 0;
 
         if(LDTEntry.HighWord.Bits.Granularity)
             dwLimit >>= 12;
 
-        LDTEntry.LimitLow                   = (WORD)(dwLimit & 0xFFFF);
-	    LDTEntry.HighWord.Bits.LimitHi      = (dwLimit >> 16) & 0xF;
+        LDTEntry.LimitLow = (WORD)(dwLimit & 0xFFFF);
+        LDTEntry.HighWord.Bits.LimitHi = (dwLimit >> 16) & 0xF;
     }
 
     // ******************************************************************
@@ -142,7 +142,7 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
             return 0;
         }
 
-        NTSTATUS Status = NtDll::NtSetLdtEntries((x*8)+7+8, LDTEntry, 0, LDTEntry);
+        NTSTATUS Status = NtDll::NtSetLdtEntries((x * 8) + 7 + 8, LDTEntry, 0, LDTEntry);
 
         if(!NT_SUCCESS(Status))
         {
@@ -159,7 +159,7 @@ uint16 EmuAllocateLDT(uint32 dwBaseAddr, uint32 dwLimit)
 
     FreeLDTEntries[x] = 0;
 
-    return (x*8)+7+8;
+    return (x * 8) + 7 + 8;
 }
 
 // ******************************************************************
@@ -178,7 +178,7 @@ void EmuDeallocateLDT(uint16 wSelector)
 
     NtDll::NtSetLdtEntries(wSelector, LDTEntry, 0, LDTEntry);
 
-    FreeLDTEntries[(wSelector >> 3)-1] = wSelector;
+    FreeLDTEntries[(wSelector >> 3) - 1] = wSelector;
 
     LeaveCriticalSection(&EmuLDTLock);
 

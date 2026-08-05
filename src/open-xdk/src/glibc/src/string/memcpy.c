@@ -22,34 +22,33 @@ Cambridge, MA 02139, USA.  */
 #include <cstring>
 #include <memcopy.h>
 
-PTR
-DEFUN(memcpy, (dstpp, srcpp, len),
-      PTR dstpp AND CONST PTR srcpp AND size_t len)
+PTR DEFUN(memcpy, (dstpp, srcpp, len),
+          PTR dstpp AND CONST PTR srcpp AND size_t len)
 {
-  unsigned long int dstp = (long int) dstpp;
-  unsigned long int srcp = (long int) srcpp;
+    unsigned long int dstp = (long int)dstpp;
+    unsigned long int srcp = (long int)srcpp;
 
-  /* Copy from the beginning to the end.  */
+    /* Copy from the beginning to the end.  */
 
-  /* If there not too few bytes to copy, use word copy.  */
-  if (len >= OP_T_THRES)
+    /* If there not too few bytes to copy, use word copy.  */
+    if(len >= OP_T_THRES)
     {
-      /* Copy just a few bytes to make DSTP aligned.  */
-      len -= (NEGU32(dstp)) % OPSIZ;
-      BYTE_COPY_FWD (dstp, srcp, (NEGU32(dstp)) % OPSIZ);
+        /* Copy just a few bytes to make DSTP aligned.  */
+        len -= (NEGU32(dstp)) % OPSIZ;
+        BYTE_COPY_FWD(dstp, srcp, (NEGU32(dstp)) % OPSIZ);
 
-      /* Copy from SRCP to DSTP taking advantage of the known
-	 alignment of DSTP.  Number of bytes remaining is put
-	 in the third argumnet, i.e. in LEN.  This number may
-	 vary from machine to machine.  */
+        /* Copy from SRCP to DSTP taking advantage of the known
+       alignment of DSTP.  Number of bytes remaining is put
+       in the third argumnet, i.e. in LEN.  This number may
+       vary from machine to machine.  */
 
-      WORD_COPY_FWD (dstp, srcp, len, len);
+        WORD_COPY_FWD(dstp, srcp, len, len);
 
-      /* Fall out and copy the tail.  */
+        /* Fall out and copy the tail.  */
     }
 
-  /* There are just a few bytes to copy.  Use byte memory operations.  */
-  BYTE_COPY_FWD (dstp, srcp, len);
+    /* There are just a few bytes to copy.  Use byte memory operations.  */
+    BYTE_COPY_FWD(dstp, srcp, len);
 
-  return dstpp;
+    return dstpp;
 }

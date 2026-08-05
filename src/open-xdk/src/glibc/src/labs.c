@@ -19,7 +19,7 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	labs
+#undef labs
 
 // Windows defines this as an intrinsic
 

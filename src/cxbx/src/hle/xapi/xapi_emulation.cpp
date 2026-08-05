@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->xapi_emulation.cpp
@@ -34,7 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #define POINTER_64 __ptr64
 
 #include <windows.h>
@@ -51,7 +51,7 @@
 // ******************************************************************
 namespace NtDll
 {
-    #include "ntdll_emulation.h"
+#include "ntdll_emulation.h"
 };
 
 // ******************************************************************
@@ -61,7 +61,7 @@ namespace XTL
 {
 #include "xapi_emulation.h"
 #include "dinput_emulation.h"
-};
+}; // namespace XTL
 
 static bool EmuHeapTraceEnabled()
 {
@@ -88,7 +88,8 @@ static ULONG EmuHeapAllocationHash(PVOID Memory)
 {
     return (reinterpret_cast<ULONG>(Memory) >> 3) &
            (static_cast<ULONG>(sizeof(g_EmuHeapAllocations) /
-                               sizeof(g_EmuHeapAllocations[0])) - 1);
+                               sizeof(g_EmuHeapAllocations[0])) -
+            1);
 }
 
 static void EmuTrackHeapAllocation(HANDLE Heap, PVOID Memory)
@@ -100,7 +101,7 @@ static void EmuTrackHeapAllocation(HANDLE Heap, PVOID Memory)
 
     AcquireSRWLockExclusive(&g_EmuHeapAllocationLock);
     const ULONG Capacity = static_cast<ULONG>(sizeof(g_EmuHeapAllocations) /
-                                               sizeof(g_EmuHeapAllocations[0]));
+                                              sizeof(g_EmuHeapAllocations[0]));
     ULONG Slot = EmuHeapAllocationHash(Memory);
     ULONG Tombstone = Capacity;
     for(ULONG Probe = 0; Probe < Capacity; ++Probe)
@@ -139,7 +140,7 @@ static bool EmuUntrackHeapAllocation(HANDLE Heap, PVOID Memory)
     bool Found = false;
     AcquireSRWLockExclusive(&g_EmuHeapAllocationLock);
     const ULONG Capacity = static_cast<ULONG>(sizeof(g_EmuHeapAllocations) /
-                                               sizeof(g_EmuHeapAllocations[0]));
+                                              sizeof(g_EmuHeapAllocations[0]));
     ULONG Slot = EmuHeapAllocationHash(Memory);
     for(ULONG Probe = 0; Probe < Capacity; ++Probe)
     {
@@ -411,22 +412,20 @@ static EmuInputHandleStatus EmuXInputValidateHandle(HANDLE handle, DWORD* port)
 // ******************************************************************
 // * func: EmuRtlCreateHeap
 // ******************************************************************
-PVOID WINAPI XTL::EmuRtlCreateHeap
-(
-    IN ULONG   Flags,
-    IN PVOID   Base OPTIONAL,
-    IN ULONG   Reserve OPTIONAL,
-    IN ULONG   Commit,
+PVOID WINAPI XTL::EmuRtlCreateHeap(
+    IN ULONG Flags,
+    IN PVOID Base OPTIONAL,
+    IN ULONG Reserve OPTIONAL,
+    IN ULONG Commit,
     IN BOOLEAN Lock OPTIONAL,
-    IN PVOID   RtlHeapParams OPTIONAL
-)
+    IN PVOID RtlHeapParams OPTIONAL)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuRtlCreateHeap\n"
                "(\n"
@@ -439,7 +438,7 @@ PVOID WINAPI XTL::EmuRtlCreateHeap
                ");\n",
                GetCurrentThreadId(), Flags, Base, Reserve, Commit, Lock, RtlHeapParams);
     }
-    #endif
+#endif
 
     NtDll::RTL_HEAP_DEFINITION RtlHeapDefinition;
 
@@ -455,7 +454,7 @@ PVOID WINAPI XTL::EmuRtlCreateHeap
                Flags, Reserve, Commit, reinterpret_cast<ULONG>(pRet));
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return pRet;
 }
@@ -463,19 +462,17 @@ PVOID WINAPI XTL::EmuRtlCreateHeap
 // ******************************************************************
 // * func: EmuRtlAllocateHeap
 // ******************************************************************
-PVOID WINAPI XTL::EmuRtlAllocateHeap
-(
+PVOID WINAPI XTL::EmuRtlAllocateHeap(
     IN HANDLE hHeap,
-    IN DWORD  dwFlags,
-    IN SIZE_T dwBytes
-)
+    IN DWORD dwFlags,
+    IN SIZE_T dwBytes)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuRtlAllocateHeap\n"
                "(\n"
@@ -485,7 +482,7 @@ PVOID WINAPI XTL::EmuRtlAllocateHeap
                ");\n",
                GetCurrentThreadId(), hHeap, dwFlags, dwBytes);
     }
-    #endif
+#endif
 
     PVOID pRet = NtDll::RtlAllocateHeap(hHeap, dwFlags, dwBytes);
     EmuTrackHeapAllocation(hHeap, pRet);
@@ -497,7 +494,7 @@ PVOID WINAPI XTL::EmuRtlAllocateHeap
                static_cast<ULONG>(dwBytes), reinterpret_cast<ULONG>(pRet));
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return pRet;
 }
@@ -505,15 +502,13 @@ PVOID WINAPI XTL::EmuRtlAllocateHeap
 // ******************************************************************
 // * func: EmuRtlReAllocateHeap
 // ******************************************************************
-PVOID WINAPI XTL::EmuRtlReAllocateHeap
-(
+PVOID WINAPI XTL::EmuRtlReAllocateHeap(
     IN HANDLE hHeap,
-    IN DWORD  dwFlags,
-    IN PVOID  lpMem,
-    IN SIZE_T dwBytes
-)
+    IN DWORD dwFlags,
+    IN PVOID lpMem,
+    IN SIZE_T dwBytes)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     const bool Tracked = EmuUntrackHeapAllocation(hHeap, lpMem);
     PVOID pRet = NtDll::RtlReAllocateHeap(hHeap, dwFlags, lpMem, dwBytes);
@@ -534,7 +529,7 @@ PVOID WINAPI XTL::EmuRtlReAllocateHeap
                reinterpret_cast<ULONG>(pRet));
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return pRet;
 }
@@ -542,19 +537,17 @@ PVOID WINAPI XTL::EmuRtlReAllocateHeap
 // ******************************************************************
 // * func: EmuRtlFreeHeap
 // ******************************************************************
-BOOL WINAPI XTL::EmuRtlFreeHeap
-(
+BOOL WINAPI XTL::EmuRtlFreeHeap(
     IN HANDLE hHeap,
-    IN DWORD  dwFlags,
-    IN PVOID  lpMem
-)
+    IN DWORD dwFlags,
+    IN PVOID lpMem)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuRtlFreeHeap\n"
                "(\n"
@@ -564,7 +557,7 @@ BOOL WINAPI XTL::EmuRtlFreeHeap
                ");\n",
                GetCurrentThreadId(), hHeap, dwFlags, lpMem);
     }
-    #endif
+#endif
 
     const bool Tracked = EmuUntrackHeapAllocation(hHeap, lpMem);
     const bool ProcessOwned = !Tracked && EmuProcessHeapOwns(lpMem);
@@ -593,7 +586,7 @@ BOOL WINAPI XTL::EmuRtlFreeHeap
         }
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return bRet;
 }
@@ -601,19 +594,17 @@ BOOL WINAPI XTL::EmuRtlFreeHeap
 // ******************************************************************
 // * func: EmuRtlSizeHeap
 // ******************************************************************
-SIZE_T WINAPI XTL::EmuRtlSizeHeap
-(
+SIZE_T WINAPI XTL::EmuRtlSizeHeap(
     IN HANDLE hHeap,
-    IN DWORD  dwFlags,
-    IN PVOID  lpMem
-)
+    IN DWORD dwFlags,
+    IN PVOID lpMem)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuRtlSizeHeap\n"
                "(\n"
@@ -623,11 +614,11 @@ SIZE_T WINAPI XTL::EmuRtlSizeHeap
                ");\n",
                GetCurrentThreadId(), hHeap, dwFlags, lpMem);
     }
-    #endif
+#endif
 
     SIZE_T ret = NtDll::RtlSizeHeap(hHeap, dwFlags, lpMem);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ret;
 }
@@ -636,17 +627,15 @@ SIZE_T WINAPI XTL::EmuRtlSizeHeap
 // * func: XapiUnknownBad1
 // ******************************************************************
 // NOTE: This does some hard disk verification and other things
-VOID WINAPI XTL::EmuXapiUnknownBad1
-(
-    IN DWORD dwUnknown
-)
+VOID WINAPI XTL::EmuXapiUnknownBad1(
+    IN DWORD dwUnknown)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXapiUnknownBad1\n"
                "(\n"
@@ -654,9 +643,9 @@ VOID WINAPI XTL::EmuXapiUnknownBad1
                ");\n",
                GetCurrentThreadId(), dwUnknown);
     }
-    #endif
+#endif
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return;
 }
@@ -664,17 +653,15 @@ VOID WINAPI XTL::EmuXapiUnknownBad1
 // ******************************************************************
 // * func: EmuQueryPerformanceCounter
 // ******************************************************************
-BOOL WINAPI XTL::EmuQueryPerformanceCounter
-(
-    PLARGE_INTEGER lpPerformanceCount
-)
+BOOL WINAPI XTL::EmuQueryPerformanceCounter(
+    PLARGE_INTEGER lpPerformanceCount)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuQueryPerformanceCounter\n"
                "(\n"
@@ -682,7 +669,7 @@ BOOL WINAPI XTL::EmuQueryPerformanceCounter
                ");\n",
                GetCurrentThreadId(), lpPerformanceCount);
     }
-    #endif
+#endif
 
     static const LONGLONG XboxTscFrequency = 733333333;
     static LONGLONG HostStart = 0;
@@ -715,7 +702,7 @@ BOOL WINAPI XTL::EmuQueryPerformanceCounter
     LONGLONG Part = (Elapsed % HostFrequency) * XboxTscFrequency / HostFrequency;
     lpPerformanceCount->QuadPart = Whole + Part;
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return TRUE;
 }
@@ -723,17 +710,15 @@ BOOL WINAPI XTL::EmuQueryPerformanceCounter
 // ******************************************************************
 // * func: EmuQueryPerformanceFrequency
 // ******************************************************************
-BOOL WINAPI XTL::EmuQueryPerformanceFrequency
-(
-    PLARGE_INTEGER lpFrequency
-)
+BOOL WINAPI XTL::EmuQueryPerformanceFrequency(
+    PLARGE_INTEGER lpFrequency)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuQueryPerformanceFrequency\n"
                "(\n"
@@ -741,11 +726,11 @@ BOOL WINAPI XTL::EmuQueryPerformanceFrequency
                ");\n",
                GetCurrentThreadId(), lpFrequency);
     }
-    #endif
+#endif
 
     lpFrequency->QuadPart = 733333333;
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return TRUE;
 }
@@ -753,25 +738,23 @@ BOOL WINAPI XTL::EmuQueryPerformanceFrequency
 // ******************************************************************
 // * func: EmuXMountUtilityDrive
 // ******************************************************************
-BOOL WINAPI XTL::EmuXMountUtilityDrive
-(
-    BOOL    fFormatClean
-)
+BOOL WINAPI XTL::EmuXMountUtilityDrive(
+    BOOL fFormatClean)
 {
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
-        EmuSwapFS();   // Win2k/XP FS
+        EmuSwapFS(); // Win2k/XP FS
         printf("EmuXapi (0x%X): EmuXMountUtilityDrive\n"
                "(\n"
                "   fFormatClean        : 0x%.08X\n"
                ");\n",
                GetCurrentThreadId(), fFormatClean);
-        EmuSwapFS();   // XBox FS
+        EmuSwapFS(); // XBox FS
     }
-    #endif
+#endif
 
     return TRUE;
 }
@@ -779,18 +762,16 @@ BOOL WINAPI XTL::EmuXMountUtilityDrive
 // ******************************************************************
 // * func: EmuXInitDevices
 // ******************************************************************
-VOID WINAPI XTL::EmuXInitDevices
-(
-    DWORD   Unknown1,
-    PVOID   Unknown2
-)
+VOID WINAPI XTL::EmuXInitDevices(
+    DWORD Unknown1,
+    PVOID Unknown2)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXInitDevices\n"
                "(\n"
@@ -799,11 +780,11 @@ VOID WINAPI XTL::EmuXInitDevices
                ");\n",
                GetCurrentThreadId(), Unknown1, Unknown2);
     }
-    #endif
+#endif
 
     // TODO: Initialize devices if/when necessary
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return;
 }
@@ -811,17 +792,15 @@ VOID WINAPI XTL::EmuXInitDevices
 // ******************************************************************
 // * func: EmuXGetDevices
 // ******************************************************************
-DWORD WINAPI XTL::EmuXGetDevices
-(
-    PXPP_DEVICE_TYPE DeviceType
-)
+DWORD WINAPI XTL::EmuXGetDevices(
+    PXPP_DEVICE_TYPE DeviceType)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXGetDevices\n"
                "(\n"
@@ -829,22 +808,25 @@ DWORD WINAPI XTL::EmuXGetDevices
                ");\n",
                GetCurrentThreadId(), DeviceType);
     }
-    #endif
+#endif
 
     DWORD ret = 0;
 
-    if (DeviceType != nullptr) {
+    if(DeviceType != nullptr)
+    {
         const EmuInputConnectionSnapshot snapshot =
             EmuXInputConnectionSnapshot(true, true);
         EmuXInputRefreshDeviceType(DeviceType, snapshot);
         ret = DeviceType->CurrentConnected;
         DeviceType->ChangeConnected = 0;
         DeviceType->PreviousConnected = DeviceType->CurrentConnected;
-    } else {
+    }
+    else
+    {
         EmuCleanup("Unknown DeviceType");
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ret;
 }
@@ -852,19 +834,17 @@ DWORD WINAPI XTL::EmuXGetDevices
 // ******************************************************************
 // * func: EmuXGetDeviceChanges
 // ******************************************************************
-BOOL WINAPI XTL::EmuXGetDeviceChanges
-(
+BOOL WINAPI XTL::EmuXGetDeviceChanges(
     PXPP_DEVICE_TYPE DeviceType,
-    PDWORD           pdwInsertions,                  
-    PDWORD           pdwRemovals                     
-)
+    PDWORD pdwInsertions,
+    PDWORD pdwRemovals)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXGetDeviceChanges\n"
                "(\n"
@@ -874,17 +854,21 @@ BOOL WINAPI XTL::EmuXGetDeviceChanges
                ");\n",
                GetCurrentThreadId(), DeviceType, pdwInsertions, pdwRemovals);
     }
-    #endif
+#endif
 
     BOOL changed = FALSE;
-    if (DeviceType != nullptr && pdwInsertions != nullptr && pdwRemovals != nullptr) {
+    if(DeviceType != nullptr && pdwInsertions != nullptr && pdwRemovals != nullptr)
+    {
         const EmuInputConnectionSnapshot snapshot =
             EmuXInputConnectionSnapshot(true, true);
         EmuXInputRefreshDeviceType(DeviceType, snapshot);
-        if (DeviceType->ChangeConnected == 0) {
+        if(DeviceType->ChangeConnected == 0)
+        {
             *pdwInsertions = 0;
             *pdwRemovals = 0;
-        } else {
+        }
+        else
+        {
             *pdwInsertions = DeviceType->CurrentConnected &
                              ~DeviceType->PreviousConnected;
             *pdwRemovals = DeviceType->PreviousConnected &
@@ -902,7 +886,7 @@ BOOL WINAPI XTL::EmuXGetDeviceChanges
         }
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return changed;
 }
@@ -910,20 +894,18 @@ BOOL WINAPI XTL::EmuXGetDeviceChanges
 // ******************************************************************
 // * func: EmuXInputOpen
 // ******************************************************************
-HANDLE WINAPI XTL::EmuXInputOpen
-(
-    IN PXPP_DEVICE_TYPE             DeviceType,
-    IN DWORD                        dwPort,
-    IN DWORD                        dwSlot,
-    IN PXINPUT_POLLING_PARAMETERS   pPollingParameters OPTIONAL
-)
+HANDLE WINAPI XTL::EmuXInputOpen(
+    IN PXPP_DEVICE_TYPE DeviceType,
+    IN DWORD dwPort,
+    IN DWORD dwSlot,
+    IN PXINPUT_POLLING_PARAMETERS pPollingParameters OPTIONAL)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXInputOpen\n"
                "(\n"
@@ -934,19 +916,21 @@ HANDLE WINAPI XTL::EmuXInputOpen
                ");\n",
                GetCurrentThreadId(), DeviceType, dwPort, dwSlot, pPollingParameters);
     }
-    #endif
+#endif
 
     HANDLE ret = nullptr;
 
-    if (DeviceType != nullptr && dwPort < 4) {
+    if(DeviceType != nullptr && dwPort < 4)
+    {
         const EmuInputConnectionSnapshot snapshot =
             EmuXInputConnectionSnapshot(false, false);
-        if ((snapshot.currentMask & (1u << dwPort)) != 0) {
+        if((snapshot.currentMask & (1u << dwPort)) != 0)
+        {
             ret = EmuXInputMakeHandle(dwPort, snapshot.generations[dwPort]);
         }
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ret;
 }
@@ -954,17 +938,15 @@ HANDLE WINAPI XTL::EmuXInputOpen
 // ******************************************************************
 // * func: EmuXInputClose
 // ******************************************************************
-VOID WINAPI XTL::EmuXInputClose
-(
-    IN HANDLE hDevice
-)
+VOID WINAPI XTL::EmuXInputClose(
+    IN HANDLE hDevice)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXInputClose\n"
                "(\n"
@@ -972,11 +954,11 @@ VOID WINAPI XTL::EmuXInputClose
                ");\n",
                GetCurrentThreadId(), hDevice);
     }
-    #endif
+#endif
 
     // TODO: Actually clean up the device when/if necessary
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return;
 }
@@ -984,18 +966,16 @@ VOID WINAPI XTL::EmuXInputClose
 // ******************************************************************
 // * func: EmuXInputGetCapabilities
 // ******************************************************************
-DWORD WINAPI XTL::EmuXInputGetCapabilities
-(
-    IN  HANDLE               hDevice,
-    OUT PXINPUT_CAPABILITIES pCapabilities
-)
+DWORD WINAPI XTL::EmuXInputGetCapabilities(
+    IN HANDLE hDevice,
+    OUT PXINPUT_CAPABILITIES pCapabilities)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXInputGetCapabilities\n"
                "(\n"
@@ -1004,19 +984,25 @@ DWORD WINAPI XTL::EmuXInputGetCapabilities
                ");\n",
                GetCurrentThreadId(), hDevice, pCapabilities);
     }
-    #endif
+#endif
 
     DWORD ret = ERROR_INVALID_HANDLE;
     DWORD port = 0;
 
-    if (pCapabilities == nullptr) {
+    if(pCapabilities == nullptr)
+    {
         ret = ERROR_INVALID_PARAMETER;
-    } else {
+    }
+    else
+    {
         const EmuInputHandleStatus status =
             EmuXInputValidateHandle(hDevice, &port);
-        if (status == EmuInputHandleStatus::Disconnected) {
+        if(status == EmuInputHandleStatus::Disconnected)
+        {
             ret = ERROR_DEVICE_NOT_CONNECTED;
-        } else if (status == EmuInputHandleStatus::Connected) {
+        }
+        else if(status == EmuInputHandleStatus::Connected)
+        {
             ZeroMemory(pCapabilities, sizeof(*pCapabilities));
             pCapabilities->SubType = XINPUT_DEVSUBTYPE_GC_GAMEPAD;
             pCapabilities->In.Gamepad.wButtons = 0x00FFu;
@@ -1032,7 +1018,7 @@ DWORD WINAPI XTL::EmuXInputGetCapabilities
         }
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ret;
 }
@@ -1142,18 +1128,16 @@ static bool EmuXInputInjectState(XTL::PXINPUT_STATE pState)
 // ******************************************************************
 // * func: EmuInputGetState
 // ******************************************************************
-DWORD WINAPI XTL::EmuXInputGetState
-(
-    IN  HANDLE         hDevice,
-    OUT PXINPUT_STATE  pState
-)
+DWORD WINAPI XTL::EmuXInputGetState(
+    IN HANDLE hDevice,
+    OUT PXINPUT_STATE pState)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXInputGetState\n"
                "(\n"
@@ -1162,35 +1146,49 @@ DWORD WINAPI XTL::EmuXInputGetState
                ");\n",
                GetCurrentThreadId(), hDevice, pState);
     }
-    #endif
+#endif
 
     DWORD ret = ERROR_INVALID_HANDLE;
     DWORD port = 0;
 
-    if (pState == nullptr) {
+    if(pState == nullptr)
+    {
         ret = ERROR_INVALID_PARAMETER;
-    } else {
+    }
+    else
+    {
         const EmuInputHandleStatus status =
             EmuXInputValidateHandle(hDevice, &port);
-        if (status == EmuInputHandleStatus::Disconnected) {
+        if(status == EmuInputHandleStatus::Disconnected)
+        {
             ret = ERROR_DEVICE_NOT_CONNECTED;
-        } else if (status == EmuInputHandleStatus::Connected &&
-                   port == 0 && EmuXInputInjectState(pState)) {
+        }
+        else if(status == EmuInputHandleStatus::Connected &&
+                port == 0 && EmuXInputInjectState(pState))
+        {
             ret = ERROR_SUCCESS;
-        } else if (status == EmuInputHandleStatus::Connected) {
-            __try {
-                if (EmuDInputPoll(port, pState)) {
+        }
+        else if(status == EmuInputHandleStatus::Connected)
+        {
+            __try
+            {
+                if(EmuDInputPoll(port, pState))
+                {
                     ret = ERROR_SUCCESS;
-                } else {
+                }
+                else
+                {
                     ret = ERROR_DEVICE_NOT_CONNECTED;
                 }
-            } __except(EXCEPTION_EXECUTE_HANDLER) {
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
                 ret = ERROR_DEVICE_NOT_CONNECTED;
             }
         }
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ret;
 }
@@ -1248,18 +1246,16 @@ DWORD WINAPI XTL::EmuXInputPoll(
 // ******************************************************************
 // * func: EmuInputGetState
 // ******************************************************************
-DWORD WINAPI XTL::EmuXInputSetState
-(
-    IN     HANDLE           hDevice,
-    IN OUT PXINPUT_FEEDBACK pFeedback
-)
+DWORD WINAPI XTL::EmuXInputSetState(
+    IN HANDLE hDevice,
+    IN OUT PXINPUT_FEEDBACK pFeedback)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXInputSetState\n"
                "(\n"
@@ -1268,29 +1264,37 @@ DWORD WINAPI XTL::EmuXInputSetState
                ");\n",
                GetCurrentThreadId(), hDevice, pFeedback);
     }
-    #endif
+#endif
 
     DWORD ret = ERROR_INVALID_HANDLE;
     DWORD port = 0;
 
-    if (pFeedback == nullptr) {
+    if(pFeedback == nullptr)
+    {
         ret = ERROR_INVALID_PARAMETER;
-    } else {
+    }
+    else
+    {
         const EmuInputHandleStatus status =
             EmuXInputValidateHandle(hDevice, &port);
-        if (status == EmuInputHandleStatus::Disconnected) {
+        if(status == EmuInputHandleStatus::Disconnected)
+        {
             ret = ERROR_DEVICE_NOT_CONNECTED;
-        } else if (status == EmuInputHandleStatus::Connected &&
-                   port == 0 && EmuXInputInjectionConfigured()) {
+        }
+        else if(status == EmuInputHandleStatus::Connected &&
+                port == 0 && EmuXInputInjectionConfigured())
+        {
             ret = ERROR_SUCCESS;
-        } else if (status == EmuInputHandleStatus::Connected) {
+        }
+        else if(status == EmuInputHandleStatus::Connected)
+        {
             ret = EmuDInputSetState(port, pFeedback->Rumble.wLeftMotorSpeed,
                                     pFeedback->Rumble.wRightMotorSpeed);
         }
         pFeedback->Header.dwStatus = ret;
     }
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return ret;
 }
@@ -1298,19 +1302,17 @@ DWORD WINAPI XTL::EmuXInputSetState
 // ******************************************************************
 // * func: EmuCreateMutex
 // ******************************************************************
-HANDLE WINAPI XTL::EmuCreateMutex
-(
-    LPSECURITY_ATTRIBUTES   lpMutexAttributes,
-    BOOL                    bInitialOwner,
-    LPCSTR                  lpName
-)
+HANDLE WINAPI XTL::EmuCreateMutex(
+    LPSECURITY_ATTRIBUTES lpMutexAttributes,
+    BOOL bInitialOwner,
+    LPCSTR lpName)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuCreateMutex\n"
                "(\n"
@@ -1320,11 +1322,11 @@ HANDLE WINAPI XTL::EmuCreateMutex
                ");\n",
                GetCurrentThreadId(), lpMutexAttributes, bInitialOwner, lpName, lpName);
     }
-    #endif
+#endif
 
-    HANDLE hRet = CreateMutex((SECURITY_ATTRIBUTES *)lpMutexAttributes, bInitialOwner, lpName);
+    HANDLE hRet = CreateMutex((SECURITY_ATTRIBUTES*)lpMutexAttributes, bInitialOwner, lpName);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return hRet;
 }
@@ -1332,17 +1334,15 @@ HANDLE WINAPI XTL::EmuCreateMutex
 // ******************************************************************
 // * func: EmuCloseHandle
 // ******************************************************************
-BOOL WINAPI XTL::EmuCloseHandle
-(
-    HANDLE hObject
-)
+BOOL WINAPI XTL::EmuCloseHandle(
+    HANDLE hObject)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuCloseHandle\n"
                "(\n"
@@ -1350,11 +1350,11 @@ BOOL WINAPI XTL::EmuCloseHandle
                ");\n",
                GetCurrentThreadId(), hObject);
     }
-    #endif
+#endif
 
     BOOL bRet = CloseHandle(hObject);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return bRet;
 }
@@ -1362,18 +1362,16 @@ BOOL WINAPI XTL::EmuCloseHandle
 // ******************************************************************
 // * func: EmuSetThreadPriority
 // ******************************************************************
-BOOL WINAPI XTL::EmuSetThreadPriority
-(
-    HANDLE  hThread,
-    int     nPriority
-)
+BOOL WINAPI XTL::EmuSetThreadPriority(
+    HANDLE hThread,
+    int nPriority)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuSetThreadPriority\n"
                "(\n"
@@ -1382,11 +1380,11 @@ BOOL WINAPI XTL::EmuSetThreadPriority
                ");\n",
                GetCurrentThreadId(), hThread, nPriority);
     }
-    #endif
+#endif
 
     BOOL bRet = SetThreadPriority(hThread, nPriority);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return bRet;
 }
@@ -1394,18 +1392,16 @@ BOOL WINAPI XTL::EmuSetThreadPriority
 // ******************************************************************
 // * func: EmuGetExitCodeThread
 // ******************************************************************
-BOOL WINAPI XTL::EmuGetExitCodeThread
-(
-    HANDLE  hThread,
-    LPDWORD lpExitCode
-)
+BOOL WINAPI XTL::EmuGetExitCodeThread(
+    HANDLE hThread,
+    LPDWORD lpExitCode)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuGetExitCodeThread\n"
                "(\n"
@@ -1414,11 +1410,11 @@ BOOL WINAPI XTL::EmuGetExitCodeThread
                ");\n",
                GetCurrentThreadId(), hThread, lpExitCode);
     }
-    #endif
+#endif
 
     BOOL bRet = GetExitCodeThread(hThread, lpExitCode);
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return bRet;
 }
@@ -1428,38 +1424,38 @@ BOOL WINAPI XTL::EmuGetExitCodeThread
 // ******************************************************************
 VOID WINAPI XTL::EmuXapiInitProcess()
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXapiInitProcess();\n", GetCurrentThreadId());
     }
-    #endif
+#endif
 
     // ******************************************************************
-	// * Call RtlCreateHeap
+    // * Call RtlCreateHeap
     // ******************************************************************
-	{
+    {
         RTL_HEAP_PARAMETERS HeapParameters;
 
-		ZeroMemory(&HeapParameters, sizeof(HeapParameters));
+        ZeroMemory(&HeapParameters, sizeof(HeapParameters));
 
         HeapParameters.Length = sizeof(HeapParameters);
 
-		EmuSwapFS();   // XBox FS
+        EmuSwapFS(); // XBox FS
 
-		uint32 dwPeHeapReserve = g_pXbeHeader->dwPeHeapReserve;
-		uint32 dwPeHeapCommit  = g_pXbeHeader->dwPeHeapCommit;
+        uint32 dwPeHeapReserve = g_pXbeHeader->dwPeHeapReserve;
+        uint32 dwPeHeapCommit = g_pXbeHeader->dwPeHeapCommit;
 
         PVOID dwResult = 0;
 
-        #define HEAP_GROWABLE 0x00000002
+#define HEAP_GROWABLE 0x00000002
 
         *XTL::EmuXapiProcessHeap = XTL::g_pRtlCreateHeap(HEAP_GROWABLE, 0, dwPeHeapReserve, dwPeHeapCommit, 0, &HeapParameters);
-	}
+    }
 
     return;
 }
@@ -1477,31 +1473,29 @@ XTL::pfRtlCreateHeap XTL::g_pRtlCreateHeap;
 // ******************************************************************
 // * func: EmuXapiThreadStartup
 // ******************************************************************
-VOID WINAPI XTL::EmuXapiThreadStartup
-(
+VOID WINAPI XTL::EmuXapiThreadStartup(
     DWORD dwDummy1,
-    DWORD dwDummy2
-)
+    DWORD dwDummy2)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXapiThreadStartup\n"
                "(\n"
                "   dwDummy1            : 0x%.08X\n"
                "   dwDummy2            : 0x%.08X\n"
                ");\n",
-                GetCurrentThreadId(), dwDummy1, dwDummy2);
+               GetCurrentThreadId(), dwDummy1, dwDummy2);
     }
-    #endif
+#endif
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
-	// TODO: Call thread notify routines ?
+    // TODO: Call thread notify routines ?
 
     __asm
     {
@@ -1546,12 +1540,12 @@ XTL::NTSTATUS CDECL XTL::XapiSetupPerTitleDriveLetters(DWORD dwTitleId, LPCWSTR 
 // ******************************************************************
 VOID WINAPI XTL::EmuXapiBootDash(DWORD UnknownA, DWORD UnknownB, DWORD UnknownC)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXapiBootDash\n"
                "(\n"
@@ -1559,13 +1553,13 @@ VOID WINAPI XTL::EmuXapiBootDash(DWORD UnknownA, DWORD UnknownB, DWORD UnknownC)
                "   UnknownB            : 0x%.08X\n"
                "   UnknownC            : 0x%.08X\n"
                ");\n",
-                GetCurrentThreadId(), UnknownA, UnknownB, UnknownC);
+               GetCurrentThreadId(), UnknownA, UnknownB, UnknownC);
     }
-    #endif
+#endif
 
     EmuCleanup("Emulation Terminated (XapiBootDash)");
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     return;
 }
@@ -1575,22 +1569,22 @@ VOID WINAPI XTL::EmuXapiBootDash(DWORD UnknownA, DWORD UnknownB, DWORD UnknownC)
 // ******************************************************************
 HANDLE WINAPI XTL::EmuXCalculateSignatureBegin(DWORD dwFlags)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): XCalculateSignatureBegin\n"
                "(\n"
                "   dwFlags             : 0x%.08X\n"
                ");\n",
-                GetCurrentThreadId(), dwFlags);
+               GetCurrentThreadId(), dwFlags);
     }
-    #endif
+#endif
 
-    EmuSwapFS();   // XBox FS
+    EmuSwapFS(); // XBox FS
 
     // return a fake handle value for now
     return (PVOID)0xAAAAAAAA;

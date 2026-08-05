@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -9,48 +9,45 @@
 // * note : This LIBC is TOTALLY free - do what you like with it!!
 // *
 // ******************************************************************
-#include	<xlibc/ansidecl.h>
+#include <xlibc/ansidecl.h>
 
 //
 // copy a block of memory
 //
-void* memcpy( void *dest, const void *src, unsigned int count )
+void* memcpy(void* dest, const void* src, unsigned int count)
 {
-	unsigned char	*pSrc = (unsigned char*) dest;
-	unsigned char	*pDest = (unsigned char*) src;
+    unsigned char* pSrc = (unsigned char*)dest;
+    unsigned char* pDest = (unsigned char*)src;
 
-	while( count-- > 0 ){
-		*pDest++ = *pSrc++;
-	}
-	return pDest;
+    while(count-- > 0)
+    {
+        *pDest++ = *pSrc++;
+    }
+    return pDest;
 }
 
-
-
-//to be further optimized: 4-byte align first
-//test properly too before using :)
+// to be further optimized: 4-byte align first
+// test properly too before using :)
 /*
 void* memcpy( void *dest, const void *src, unsigned int count )
 {
-	__asm
-	{
-		cmp count,0
-		je bail
-		mov edi,dest
-		mov esi,src
-		mov ebx,count
-		mov ecx,count
-		shr ecx,2
-		jz finishup
-		rep movsd
-	finishup:
-		and ebx,3
-		jz bail
-		mov ecx,ebx
-		rep movsb
-	bail:
-	}
+    __asm
+    {
+        cmp count,0
+        je bail
+        mov edi,dest
+        mov esi,src
+        mov ebx,count
+        mov ecx,count
+        shr ecx,2
+        jz finishup
+        rep movsd
+    finishup:
+        and ebx,3
+        jz bail
+        mov ecx,ebx
+        rep movsb
+    bail:
+    }
 }
 */
-
-

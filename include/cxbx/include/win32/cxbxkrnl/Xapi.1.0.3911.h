@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->Xapi.1.0.3911.h
@@ -36,8 +36,8 @@
 
 #include "oovpa.h"
 
-extern SOOVPA<7>    XapiInitProcess_1_0_3911;
-extern OOVPATable   XAPI_1_0_3911[];
-extern uint32       XAPI_1_0_3911_SIZE;
+extern SOOVPA<7> XapiInitProcess_1_0_3911;
+extern OOVPATable XAPI_1_0_3911[];
+extern uint32 XAPI_1_0_3911_SIZE;
 
 #endif

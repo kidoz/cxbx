@@ -24,12 +24,12 @@ Cambridge, MA 02139, USA.  */
 __CONSTVALUE int
 DEFUN(__isnan, (value), double value)
 {
-  union ieee754_double u;
+    union ieee754_double u;
 
-  u.d = value;
+    u.d = value;
 
-  /* IEEE 754 NaN's have the maximum possible
-     exponent and a nonzero mantissa.  */
-  return ((u.ieee.exponent & 0x7ff) == 0x7ff &&
-	  (u.ieee.mantissa0 != 0 || u.ieee.mantissa1 != 0));
+    /* IEEE 754 NaN's have the maximum possible
+       exponent and a nonzero mantissa.  */
+    return ((u.ieee.exponent & 0x7ff) == 0x7ff &&
+            (u.ieee.mantissa0 != 0 || u.ieee.mantissa1 != 0));
 }

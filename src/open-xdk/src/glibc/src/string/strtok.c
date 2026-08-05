@@ -20,54 +20,52 @@ Cambridge, MA 02139, USA.  */
 #include <errno.h>
 #include <cstring>
 
-
-static char *olds = NULL;
+static char* olds = NULL;
 
 /* Parse S into tokens separated by characters in DELIM.
    If S is NULL, the last string strtok() was called with is
    used.  For example:
-	char s[] = "-abc=-def";
-	x = strtok(s, "-");		// x = "abc"
-	x = strtok(NULL, "=-");		// x = "def"
-	x = strtok(NULL, "=");		// x = NULL
-		// s = "abc\0-def\0"
+    char s[] = "-abc=-def";
+    x = strtok(s, "-");		// x = "abc"
+    x = strtok(NULL, "=-");		// x = "def"
+    x = strtok(NULL, "=");		// x = NULL
+        // s = "abc\0-def\0"
 */
-char *
-DEFUN(strtok, (s, delim),
-      register char *s AND register CONST char *delim)
+char* DEFUN(strtok, (s, delim),
+            register char* s AND register CONST char* delim)
 {
-  char *token;
+    char* token;
 
-  if (s == NULL)
+    if(s == NULL)
     {
-      if (olds == NULL)
-	{
-	  errno = EINVAL;
-	  return NULL;
-	}
-      else
-	s = olds;
+        if(olds == NULL)
+        {
+            errno = EINVAL;
+            return NULL;
+        }
+        else
+            s = olds;
     }
 
-  /* Scan leading delimiters.  */
-  s += strspn(s, delim);
-  if (*s == '\0')
+    /* Scan leading delimiters.  */
+    s += strspn(s, delim);
+    if(*s == '\0')
     {
-      olds = NULL;
-      return NULL;
+        olds = NULL;
+        return NULL;
     }
 
-  /* Find the end of the token.  */
-  token = s;
-  s = strpbrk(token, delim);
-  if (s == NULL)
-    /* This token finishes the string.  */
-    olds = NULL;
-  else
+    /* Find the end of the token.  */
+    token = s;
+    s = strpbrk(token, delim);
+    if(s == NULL)
+        /* This token finishes the string.  */
+        olds = NULL;
+    else
     {
-      /* Terminate the token and make OLDS point past it.  */
-      *s = '\0';
-      olds = s + 1;
+        /* Terminate the token and make OLDS point past it.  */
+        *s = '\0';
+        olds = s + 1;
     }
-  return token;
+    return token;
 }

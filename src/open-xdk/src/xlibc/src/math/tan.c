@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,23 +14,24 @@
 
 #ifndef __GNUC__
 
-
-double tan(double f) {
-	float temp;
-	__asm {
+double tan(double f)
+{
+    float temp;
+    __asm {
 		fld f
 		fptan
-		fstp temp //get rid of the 1 pushed on the stack
-	}
+		fstp temp // get rid of the 1 pushed on the stack
+    }
 }
 
-float tanf(float f)	{
-	float temp;
-	__asm {
+float tanf(float f)
+{
+    float temp;
+    __asm {
 		fld f
 		fptan
-		fstp temp //get rid of the 1 pushed on the stack
-	}
+		fstp temp // get rid of the 1 pushed on the stack
+    }
 }
 
 #else

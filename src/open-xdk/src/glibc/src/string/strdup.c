@@ -21,18 +21,16 @@ Cambridge, MA 02139, USA.  */
 #include <cstdlib>
 #include <cstring>
 
-
 /* Duplicate S, returning an identical malloc'd string.  */
-char *
-DEFUN(strdup, (s), CONST char *s)
+char* DEFUN(strdup, (s), CONST char* s)
 {
-  size_t len = strlen(s) + 1;
-  PTR new = malloc(len);
+    size_t len = strlen(s) + 1;
+    PTR new = malloc(len);
 
-  if (new == NULL)
-    return NULL;
+    if(new == NULL)
+        return NULL;
 
-  memcpy(new, (PTR) s, len);
+    memcpy(new, (PTR)s, len);
 
-  return (char *) new;
+    return (char*)new;
 }

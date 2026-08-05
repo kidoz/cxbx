@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	isinf
+#undef isinf
 function_alias(isinf, __isinf, __CONSTVALUE int, (value),
-	       DEFUN(isinf, (value), double value))
+               DEFUN(isinf, (value), double value))

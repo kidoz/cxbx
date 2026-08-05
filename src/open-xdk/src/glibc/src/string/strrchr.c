@@ -19,26 +19,24 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-
 /* Find the last ocurrence of C in S.  */
-char *
-DEFUN(strrchr, (s, c), CONST char *s AND int c)
+char* DEFUN(strrchr, (s, c), CONST char* s AND int c)
 {
-  register CONST char *found, *p;
+    register CONST char *found, *p;
 
-  c = (unsigned char) c;
+    c = (unsigned char)c;
 
-  /* Since strchr is fast, we use it rather than the obvious loop.  */
-  
-  if (c == '\0')
-    return strchr(s, '\0');
+    /* Since strchr is fast, we use it rather than the obvious loop.  */
 
-  found = NULL;
-  while ((p = strchr(s, c)) != NULL)
+    if(c == '\0')
+        return strchr(s, '\0');
+
+    found = NULL;
+    while((p = strchr(s, c)) != NULL)
     {
-      found = p;
-      s = p + 1;
+        found = p;
+        s = p + 1;
     }
 
-  return (char *) found;
+    return (char*)found;
 }

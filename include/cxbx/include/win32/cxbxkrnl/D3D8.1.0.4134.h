@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->D3D8.1.0.4134.h
@@ -40,6 +40,6 @@ extern SOOVPA<10> IDirect3DDevice8_SetTextureState_TexCoordIndex_1_0_4134;
 extern SOOVPA<13> IDirect3DDevice8_SetRenderState_CullMode_1_0_4134;
 
 extern OOVPATable D3D8_1_0_4134[];
-extern uint32     D3D8_1_0_4134_SIZE;
+extern uint32 D3D8_1_0_4134_SIZE;
 
 #endif

@@ -20,8 +20,8 @@
  * Never include this file directly; use <sys/types.h> instead.
  */
 
-#ifndef	_BITS_TYPES_H
-#define	_BITS_TYPES_H	1
+#ifndef _BITS_TYPES_H
+#define _BITS_TYPES_H 1
 
 #include <features.h>
 
@@ -39,11 +39,11 @@ typedef long long int __quad_t;
 #else
 typedef struct
 {
-  long __val[2];
+    long __val[2];
 } __quad_t;
 typedef struct
 {
-  __u_long __val[2];
+    __u_long __val[2];
 } __u_quad_t;
 #endif
 typedef signed char __int8_t;
@@ -56,35 +56,34 @@ typedef unsigned int __uint32_t;
 typedef signed long long int __int64_t;
 typedef unsigned long long int __uint64_t;
 #endif
-typedef __quad_t *__qaddr_t;
+typedef __quad_t* __qaddr_t;
 
-typedef int __dev_t;		/* Type of device numbers.  */
-typedef unsigned int __uid_t;	/* Type of user identifications.  */
-typedef unsigned int __gid_t;	/* Type of group identifications.  */
-typedef unsigned int __ino_t;	/* Type of file serial numbers.  */
-typedef __quad_t __ino64_t;	/* Type of file serial numbers (LFS).  */
-typedef unsigned int __mode_t;	/* Type of file attribute bitmasks.  */
+typedef int __dev_t;                  /* Type of device numbers.  */
+typedef unsigned int __uid_t;         /* Type of user identifications.  */
+typedef unsigned int __gid_t;         /* Type of group identifications.  */
+typedef unsigned int __ino_t;         /* Type of file serial numbers.  */
+typedef __quad_t __ino64_t;           /* Type of file serial numbers (LFS).  */
+typedef unsigned int __mode_t;        /* Type of file attribute bitmasks.  */
 typedef unsigned short int __nlink_t; /* Type of file link counts.  */
-typedef long int __off_t;	/* Type of file sizes and offsets.  */
-typedef __quad_t __loff_t;	/* Type of file sizes and offsets.  */
-typedef __loff_t __off64_t;	/* Type of file sizes and offsets (LFS).  */
-typedef int __pid_t;		/* Type of process identifications.  */
-typedef int __ssize_t;		/* Type of a byte count, or error.  */
-typedef __u_quad_t __fsid_t;	/* Type of file system IDs.  */
-typedef long int __clock_t;	/* Type of CPU usage counts.  */
-typedef long int __rlim_t;	/* Type for resource measurement.  */
-typedef __quad_t __rlim64_t;	/* Type for resource measurement (LFS).  */
-typedef unsigned int __id_t;	/* General type for IDs.  */
+typedef long int __off_t;             /* Type of file sizes and offsets.  */
+typedef __quad_t __loff_t;            /* Type of file sizes and offsets.  */
+typedef __loff_t __off64_t;           /* Type of file sizes and offsets (LFS).  */
+typedef int __pid_t;                  /* Type of process identifications.  */
+typedef int __ssize_t;                /* Type of a byte count, or error.  */
+typedef __u_quad_t __fsid_t;          /* Type of file system IDs.  */
+typedef long int __clock_t;           /* Type of CPU usage counts.  */
+typedef long int __rlim_t;            /* Type for resource measurement.  */
+typedef __quad_t __rlim64_t;          /* Type for resource measurement (LFS).  */
+typedef unsigned int __id_t;          /* General type for IDs.  */
 
 /* Everythin' else.  */
-typedef long int __daddr_t;	/* The type of a disk address.  */
-typedef char *__caddr_t;
+typedef long int __daddr_t; /* The type of a disk address.  */
+typedef char* __caddr_t;
 typedef long int __time_t;
 typedef unsigned int __useconds_t;
 typedef long int __suseconds_t;
-typedef long int __swblk_t;	/* Type of a swap block maybe?  */
-typedef long int __key_t;	/* Type of an IPC key */
-
+typedef long int __swblk_t; /* Type of a swap block maybe?  */
+typedef long int __key_t;   /* Type of an IPC key */
 
 /* Clock ID used in clock and timer functions.  */
 typedef int __clockid_t;
@@ -92,14 +91,11 @@ typedef int __clockid_t;
 /* Timer ID returned by `timer_create'.  */
 typedef int __timer_t;
 
-
 /* Number of descriptors that can fit in an `fd_set'.  */
-#define	__FD_SETSIZE	256
-
+#define __FD_SETSIZE 256
 
 /* XXX Used in `struct shmid_ds'.  */
 typedef unsigned short int __ipc_pid_t;
-
 
 /* Type to represent block size.  */
 typedef unsigned int __blksize_t;

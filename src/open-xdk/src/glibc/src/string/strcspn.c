@@ -22,17 +22,17 @@ Cambridge, MA 02139, USA.  */
 /* Return the length of the maximum inital segment of S
    which contains no characters from REJECT.  */
 size_t
-strcspn (s, reject)
-     register const char *s;
-     register const char *reject;
+strcspn(s, reject)
+register const char* s;
+register const char* reject;
 {
-  register size_t count = 0;
+    register size_t count = 0;
 
-  while (*s != '\0')
-    if (strchr (reject, *s++) == NULL)
-      ++count;
-    else
-      return count;
+    while(*s != '\0')
+        if(strchr(reject, *s++) == NULL)
+            ++count;
+        else
+            return count;
 
-  return count;
+    return count;
 }

@@ -20,33 +20,33 @@ void __cdecl main()
     LPDIRECTSOUND pDS = NULL;
     HRESULT hr = DirectSoundCreate(NULL, &pDS, NULL);
     xt_chk("ds.create_hr", 1, SUCCEEDED(hr) && pDS != NULL);
-    if (FAILED(hr) || pDS == NULL)
+    if(FAILED(hr) || pDS == NULL)
         xt_end_and_exit();
 
     // 22050 Hz 16-bit mono PCM, a 440 Hz-ish square wave.
     WAVEFORMATEX wfx;
     ZeroMemory(&wfx, sizeof(wfx));
-    wfx.wFormatTag      = WAVE_FORMAT_PCM;
-    wfx.nChannels       = 1;
-    wfx.nSamplesPerSec  = 22050;
-    wfx.wBitsPerSample  = 16;
-    wfx.nBlockAlign     = 2;
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1;
+    wfx.nSamplesPerSec = 22050;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = 2;
     wfx.nAvgBytesPerSec = 22050 * 2;
 
     DSBUFFERDESC dsbd;
     ZeroMemory(&dsbd, sizeof(dsbd));
-    dsbd.dwSize        = sizeof(dsbd);
-    dsbd.dwFlags       = 0;
+    dsbd.dwSize = sizeof(dsbd);
+    dsbd.dwFlags = 0;
     dsbd.dwBufferBytes = BUF_BYTES;
-    dsbd.lpwfxFormat   = &wfx;
+    dsbd.lpwfxFormat = &wfx;
 
     LPDIRECTSOUNDBUFFER pBuf = NULL;
     hr = IDirectSound_CreateSoundBuffer(pDS, &dsbd, &pBuf, NULL);
     xt_chk("ds.buffer_ok", 1, SUCCEEDED(hr) && pBuf != NULL);
-    if (FAILED(hr) || pBuf == NULL)
+    if(FAILED(hr) || pBuf == NULL)
         xt_end_and_exit();
 
-    for (int i = 0; i < (int)(BUF_BYTES / 2); i++)
+    for(int i = 0; i < (int)(BUF_BYTES / 2); i++)
         g_pcm[i] = ((i / 25) & 1) ? 6000 : -6000;
 
     xt_chk("ds.setdata_hr", 1,

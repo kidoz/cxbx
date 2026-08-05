@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->fs_emulation.h
@@ -39,13 +39,13 @@
 // word @ FS:[0x14] := wSwapFS
 // byte @ FS:[0x16] := bIsXboxFS
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #include <windows.h>
 
 // ******************************************************************
 // * func: EmuGenerateFS
 // ******************************************************************
-extern void EmuGenerateFS(Xbe::TLS *pTLS, void *pTLSData);
+extern void EmuGenerateFS(Xbe::TLS* pTLS, void* pTLSData);
 
 // ******************************************************************
 // * func: EmuCleanupFS
@@ -76,11 +76,11 @@ extern bool g_bEmuFSUnavailable;
 // * the selector swap with the one shared selector.
 struct EmuFsSwapState
 {
-    bool          Active;    // this thread installed the swap (via EmuGenerateFS)
-    bool          IsXbox;    // true: slots hold the Xbox KPCR; false: the host TEB
-    unsigned long Xbox[5];   // SelfPcr(0x1C), Prcb(0x20), Irql/ClientId(0x24), CurrentThread(0x28), TlsPtr(0x04)
-    unsigned long Host[5];   // original host TEB values at those offsets (0x04 = the real StackBase,
-                             // which host SEH dispatch validates handler frames against)
+    bool Active;           // this thread installed the swap (via EmuGenerateFS)
+    bool IsXbox;           // true: slots hold the Xbox KPCR; false: the host TEB
+    unsigned long Xbox[5]; // SelfPcr(0x1C), Prcb(0x20), Irql/ClientId(0x24), CurrentThread(0x28), TlsPtr(0x04)
+    unsigned long Host[5]; // original host TEB values at those offsets (0x04 = the real StackBase,
+                           // which host SEH dispatch validates handler frames against)
 };
 extern bool g_bEmuFSContentSwap;
 extern thread_local EmuFsSwapState g_EmuFsSwap;
@@ -122,10 +122,18 @@ static inline void EmuFsSwapExchange()
         mov eax, fs:[0x04]
         mov s4, eax
     }
-    unsigned long *save = Actual ? g_EmuFsSwap.Xbox : g_EmuFsSwap.Host;
-    unsigned long *load = Actual ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
-    save[0] = s0; save[1] = s1; save[2] = s2; save[3] = s3; save[4] = s4;
-    s0 = load[0]; s1 = load[1]; s2 = load[2]; s3 = load[3]; s4 = load[4];
+    unsigned long* save = Actual ? g_EmuFsSwap.Xbox : g_EmuFsSwap.Host;
+    unsigned long* load = Actual ? g_EmuFsSwap.Host : g_EmuFsSwap.Xbox;
+    save[0] = s0;
+    save[1] = s1;
+    save[2] = s2;
+    save[3] = s3;
+    save[4] = s4;
+    s0 = load[0];
+    s1 = load[1];
+    s2 = load[2];
+    s3 = load[3];
+    s4 = load[4];
     // Enter the guest at PASSIVE_LEVEL: force the KPCR.Irql byte (low byte of
     // the 0x24 slot) to 0 on every Xbox-role load. Two failure modes leave a
     // stale nonzero byte there otherwise -- an interruption (VEH repair,
@@ -140,7 +148,7 @@ static inline void EmuFsSwapExchange()
     if(!Actual)
         s2 &= 0xFFFFFF00;
     __asm
-    {
+        {
         mov eax, s0
         mov fs:[0x1C], eax
         mov eax, s1
@@ -151,7 +159,7 @@ static inline void EmuFsSwapExchange()
         mov fs:[0x28], eax
         mov eax, s4
         mov fs:[0x04], eax
-    }
+        }
     g_EmuFsSwap.IsXbox = !Actual;
 }
 
@@ -173,7 +181,7 @@ static inline void EmuFsSwapEnsureRole(bool Xbox)
 // ******************************************************************
 // * func: EmuGetCurrentThread
 // ******************************************************************
-extern void *EmuGetCurrentThread();
+extern void* EmuGetCurrentThread();
 
 // ******************************************************************
 // * func: EmuAdjustCurrentThreadKernelApcDisable

@@ -20,8 +20,17 @@
 
 static volatile int g_connects = 0;
 
-static void on_connect(struct udev_t *udev, int param)    { (void)udev; (void)param; g_connects++; }
-static void on_disconnect(struct udev_t *udev, int param) { (void)udev; (void)param; }
+static void on_connect(struct udev_t* udev, int param)
+{
+    (void)udev;
+    (void)param;
+    g_connects++;
+}
+static void on_disconnect(struct udev_t* udev, int param)
+{
+    (void)udev;
+    (void)param;
+}
 
 int main(void)
 {
@@ -32,15 +41,15 @@ int main(void)
     // Bring up the host controller + connect the OHCI interrupt (the ISR that
     // queues the DPC running the frame/done-queue processing).
     usbh_core_init();
-    usbh_install_conn_callback((CONN_FUNC *)on_connect, (CONN_FUNC *)on_disconnect);
+    usbh_install_conn_callback((CONN_FUNC*)on_connect, (CONN_FUNC*)on_disconnect);
     usbh_ohci_irq_init();
-    xt_check_bool("usb_hid.core_init", 1, 1);   // reaching here = the stack initialized
+    xt_check_bool("usb_hid.core_init", 1, 1); // reaching here = the stack initialized
 
     // Pump the hub poll (~2 s worth). This is where a connected port is reset
     // and the device is enumerated over control transfers.
-    struct usbhid_dev *hid = NULL;
+    struct usbhid_dev* hid = NULL;
     int polls = 0;
-    for (int i = 0; i < 500 && hid == NULL; i++)
+    for(int i = 0; i < 500 && hid == NULL; i++)
     {
         usbh_pooling_hubs();
         polls++;

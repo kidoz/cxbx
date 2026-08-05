@@ -19,9 +19,9 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	srand
+#undef srand
 
 #include "gnu-stabs.h"
 
 function_alias(srand, __srandom, void, (seed),
-	       DEFUN(srand, (seed), unsigned int seed))
+               DEFUN(srand, (seed), unsigned int seed))

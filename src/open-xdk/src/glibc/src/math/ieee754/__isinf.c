@@ -25,14 +25,14 @@ Cambridge, MA 02139, USA.  */
 __CONSTVALUE int
 DEFUN(__isinf, (value), double value)
 {
-  union ieee754_double u;
+    union ieee754_double u;
 
-  u.d = value;
-  /* An IEEE 754 infinity has an exponent with the
-     maximum possible value and a zero mantissa.  */
-  if ((u.ieee.exponent & 0x7ff) == 0x7ff &&
-      u.ieee.mantissa0 == 0 && u.ieee.mantissa1 == 0)
-    return u.ieee.negative ? -1 : 1;
+    u.d = value;
+    /* An IEEE 754 infinity has an exponent with the
+       maximum possible value and a zero mantissa.  */
+    if((u.ieee.exponent & 0x7ff) == 0x7ff &&
+       u.ieee.mantissa0 == 0 && u.ieee.mantissa1 == 0)
+        return u.ieee.negative ? -1 : 1;
 
-  return 0;
+    return 0;
 }

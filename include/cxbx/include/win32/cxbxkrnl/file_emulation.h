@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->file_emulation.h
@@ -39,7 +39,7 @@
 // ******************************************************************
 namespace xboxkrnl
 {
-    #include <xboxkrnl/xboxkrnl.h>
+#include <xboxkrnl/xboxkrnl.h>
 };
 
 #include <cstdio>
@@ -49,7 +49,7 @@ namespace xboxkrnl
 // ******************************************************************
 namespace NtDll
 {
-    #include "ntdll_emulation.h"
+#include "ntdll_emulation.h"
 };
 
 #include "emulation_runtime.h"
@@ -64,48 +64,48 @@ namespace NtDll
 // ******************************************************************
 class EmuHandle
 {
-    public:
-        // Type of handle
-        volatile enum _EmuHandleType m_Type;
+  public:
+    // Type of handle
+    volatile enum _EmuHandleType m_Type;
 
-        // To keep the size 8 bytes, these 2 items are in a union
-	    union
-	    {
-		    // Pointer to actual object (when handle is valid)
-		    volatile class EmuNtObject *m_Object;
+    // To keep the size 8 bytes, these 2 items are in a union
+    union
+    {
+        // Pointer to actual object (when handle is valid)
+        volatile class EmuNtObject* m_Object;
 
-            // Pointer to next free handle
-		    volatile EmuHandle *m_NextFree;
-	    };
+        // Pointer to next free handle
+        volatile EmuHandle* m_NextFree;
+    };
 
-        // Close this handle
-	    NtDll::NTSTATUS Close(void);
+    // Close this handle
+    NtDll::NTSTATUS Close(void);
 
-	    // Initialize the EmuHandle system
-        static bool Initialize();
+    // Initialize the EmuHandle system
+    static bool Initialize();
 
-        // Close all open handles
-	    static void CloseAll(void);
+    // Close all open handles
+    static void CloseAll(void);
 
-        // Allocate an empty handle
-	    static volatile EmuHandle *Allocate(void);
+    // Allocate an empty handle
+    static volatile EmuHandle* Allocate(void);
 
-    private:
-	    // Array of EmuHandles in the system
-	    static EmuHandle Handles[EMU_MAX_HANDLES];
+  private:
+    // Array of EmuHandles in the system
+    static EmuHandle Handles[EMU_MAX_HANDLES];
 
-        // Pointer to first free handle in array, or NULL if none
-	    volatile static EmuHandle *FirstFree;
+    // Pointer to first free handle in array, or NULL if none
+    volatile static EmuHandle* FirstFree;
 
-        // Pointer to last free handle in array, or NULL if none
-	    volatile static EmuHandle *LastFree;
+    // Pointer to last free handle in array, or NULL if none
+    volatile static EmuHandle* LastFree;
 
-        // Lock on the handle system
-	    static CRITICAL_SECTION HandleLock;
+    // Lock on the handle system
+    static CRITICAL_SECTION HandleLock;
 
-	    // Quick functions to lock/unlock
-	    inline static void Lock(void);
-	    inline static void Unlock(void);
+    // Quick functions to lock/unlock
+    inline static void Lock(void);
+    inline static void Unlock(void);
 };
 
 // ******************************************************************
@@ -113,53 +113,52 @@ class EmuHandle
 // ******************************************************************
 typedef enum _EmuHandleType
 {
-	// Unallocated handle
-	EMUHANDLE_TYPE_EMPTY = 0,
+    // Unallocated handle
+    EMUHANDLE_TYPE_EMPTY = 0,
 
     // Allocated but so far unused handle
-	EMUHANDLE_TYPE_ALLOCATED,
+    EMUHANDLE_TYPE_ALLOCATED,
 
     // File handle with no really special features
-	EMUHANDLE_TYPE_FILE,
+    EMUHANDLE_TYPE_FILE,
 
     // Fake file/directory/directory object/partition handle
-	EMUHANDLE_TYPE_OBJECT
-}
-EmuHandleType;
+    EMUHANDLE_TYPE_OBJECT
+} EmuHandleType;
 
 // ******************************************************************
 // * An NT fake object
 // ******************************************************************
 class EmuNtObject
 {
-    public:
-	    // Decrements the reference count of this object (never override)
-	    void NtClose(void);
+  public:
+    // Decrements the reference count of this object (never override)
+    void NtClose(void);
 
-	    // These functions mimic the Nt* calls
+    // These functions mimic the Nt* calls
 
-	    // Increments the reference count of this object
-	    // For file handles, a whole new EmuFile structure is returned.
-	    // For other objects (the default implementation), "this" is returned.
-	    virtual EmuNtObject *NtDuplicateObject(void);
+    // Increments the reference count of this object
+    // For file handles, a whole new EmuFile structure is returned.
+    // For other objects (the default implementation), "this" is returned.
+    virtual EmuNtObject* NtDuplicateObject(void);
 
-    protected:
-	    // Object name (Unicode, because we handle after-conversion strings)
-	    const WCHAR *Name;
-	    ULONG NameLength;
-	    // Permanent status
-	    bool PermanentFlag;
+  protected:
+    // Object name (Unicode, because we handle after-conversion strings)
+    const WCHAR* Name;
+    ULONG NameLength;
+    // Permanent status
+    bool PermanentFlag;
 
-	    // Called by close() when the reference count reaches zero
-	    virtual void Free(void) = 0;
-	    // Constructor
-	    EmuNtObject(void);
-	    // Destructor
-	    virtual ~EmuNtObject() = 0;
+    // Called by close() when the reference count reaches zero
+    virtual void Free(void) = 0;
+    // Constructor
+    EmuNtObject(void);
+    // Destructor
+    virtual ~EmuNtObject() = 0;
 
-    private:
-	    // Reference count
-	    ULONG RefCount;
+  private:
+    // Reference count
+    ULONG RefCount;
 };
 
 // ******************************************************************
@@ -167,14 +166,14 @@ class EmuNtObject
 // ******************************************************************
 class EmuNtFile : public EmuNtObject
 {
-    public:
-	    // We need to override NtDuplicateObject in this case
+  public:
+    // We need to override NtDuplicateObject in this case
 
-    private:
-	    // The Windows file handle
-	    HANDLE File;
-	    // Pointer to the volume from which this came
-	    //EmuNtVolume *Volume;
+  private:
+    // The Windows file handle
+    HANDLE File;
+    // Pointer to the volume from which this came
+    // EmuNtVolume *Volume;
 };
 
 // ******************************************************************
@@ -190,7 +189,7 @@ static inline bool IsEmuHandle(xboxkrnl::HANDLE hFile)
 // ******************************************************************
 // * convert from 'special' emulated handle to a pointer
 // ******************************************************************
-static inline EmuHandle *EmuHandleToPtr(xboxkrnl::HANDLE hFile)
+static inline EmuHandle* EmuHandleToPtr(xboxkrnl::HANDLE hFile)
 {
     return (EmuHandle*)((uint32)hFile - 0x80000000);
 }
@@ -198,7 +197,7 @@ static inline EmuHandle *EmuHandleToPtr(xboxkrnl::HANDLE hFile)
 // ******************************************************************
 // * convert from 'special' emulated handle to a pointer
 // ******************************************************************
-static inline HANDLE PtrToEmuHandle(EmuHandle *pEmuHandle)
+static inline HANDLE PtrToEmuHandle(EmuHandle* pEmuHandle)
 {
     return (HANDLE)((uint32)pEmuHandle + 0x80000000);
 }

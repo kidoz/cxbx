@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -12,12 +12,11 @@
 
 #include <math.h>
 
-
-double asin(double r) {
-	return atan( r / sqrt(1. - r * r) );
+double asin(double r)
+{
+    return atan(r / sqrt(1. - r * r));
 }
 
-
-//float asinf( float r ) {
+// float asinf( float r ) {
 //	return atanf( r / sqrtf(1.f - r * r) );
-//}
+// }

@@ -17,7 +17,8 @@
 
 static const D3DCOLOR COL_CLEAR = 0xFF202020;
 
-struct VERTEX {
+struct VERTEX
+{
     float x, y, z, rhw;
     D3DCOLOR color;
     float u, v;
@@ -29,7 +30,8 @@ struct VERTEX {
 static int swz(int x, int y)
 {
     int off = 0;
-    for (int b = 0; b < 3; b++) { // 8x8 -> 3 bits each
+    for(int b = 0; b < 3; b++)
+    { // 8x8 -> 3 bits each
         off |= ((x >> b) & 1) << (2 * b);
         off |= ((y >> b) & 1) << (2 * b + 1);
     }
@@ -43,9 +45,9 @@ static D3DCOLOR texel_color(int x, int y)
            ((DWORD)(0x20 + y * 0x1C) << 8) | 0x55;
 }
 
-static DWORD read_pixel(void *pBits, INT pitch, int x, int y)
+static DWORD read_pixel(void* pBits, INT pitch, int x, int y)
 {
-    return (*(DWORD *)((BYTE *)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
+    return (*(DWORD*)((BYTE*)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
 }
 
 static DWORD g_upload[64]; // what we wrote, in memory order
@@ -59,42 +61,43 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS d3dpp;
     ZeroMemory(&d3dpp, sizeof(d3dpp));
-    d3dpp.BackBufferWidth  = 640;
+    d3dpp.BackBufferWidth = 640;
     d3dpp.BackBufferHeight = 480;
     d3dpp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    d3dpp.BackBufferCount  = 1;
-    d3dpp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    d3dpp.BackBufferCount = 1;
+    d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                     &d3dpp, &pDevice);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
-    if (FAILED(hr) || pDevice == NULL)
+    if(FAILED(hr) || pDevice == NULL)
         xt_end_and_exit();
 
     // SWIZZLED-format texture; upload the texels in Morton order, exactly as
     // a title with pre-swizzled assets does.
-    D3DTexture *pTex = D3DDevice_CreateTexture2(8, 8, 1, 1, 0,
+    D3DTexture* pTex = D3DDevice_CreateTexture2(8, 8, 1, 1, 0,
                                                 D3DFMT_A8R8G8B8, // swizzled!
                                                 D3DRTYPE_TEXTURE);
     xt_chk("d3d.tex_create_ok", 1, pTex != NULL);
-    if (pTex == NULL)
+    if(pTex == NULL)
         xt_end_and_exit();
 
-    for (int y = 0; y < 8; y++)
-        for (int x = 0; x < 8; x++)
+    for(int y = 0; y < 8; y++)
+        for(int x = 0; x < 8; x++)
             g_upload[swz(x, y)] = texel_color(x, y);
 
     D3DLOCKED_RECT tlr;
     tlr.pBits = NULL;
     D3DTexture_LockRect(pTex, 0, &tlr, NULL, 0);
     xt_chk("d3d.tex_lock_ok", 1, tlr.pBits != NULL);
-    if (tlr.pBits != NULL) {
+    if(tlr.pBits != NULL)
+    {
         // A swizzled texture is one contiguous Morton-ordered block; write it
         // through the row pointers the host lock reports.
-        for (int row = 0; row < 8; row++)
-            memcpy((BYTE *)tlr.pBits + row * tlr.Pitch, &g_upload[row * 8], 8 * 4);
+        for(int row = 0; row < 8; row++)
+            memcpy((BYTE*)tlr.pBits + row * tlr.Pitch, &g_upload[row * 8], 8 * 4);
     }
 
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);
@@ -104,27 +107,32 @@ void __cdecl main()
 
     // 64x64 quad at (64,64): 8x point-filtered magnification.
     static const VERTEX tris[6] = {
-        {  64.0f,  64.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 0.0f },
-        { 128.0f,  64.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
-        {  64.0f, 128.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
-        { 128.0f,  64.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
+        { 64.0f, 64.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 0.0f },
+        { 128.0f, 64.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
+        { 64.0f, 128.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
+        { 128.0f, 64.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
         { 128.0f, 128.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 1.0f },
-        {  64.0f, 128.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
+        { 64.0f, 128.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
     };
     D3DDevice_DrawVerticesUP(D3DPT_TRIANGLELIST, 6, tris, sizeof(VERTEX));
 
-    D3DSurface *pBB = D3DDevice_GetBackBuffer2(0);
+    D3DSurface* pBB = D3DDevice_GetBackBuffer2(0);
     xt_chk("d3d.backbuffer_ok", 1, pBB != NULL);
-    if (pBB != NULL) {
+    if(pBB != NULL)
+    {
         D3DLOCKED_RECT lr;
         lr.pBits = NULL;
         D3DSurface_LockRect(pBB, &lr, NULL, D3DLOCK_READONLY);
         xt_chk("d3d.lock_ok", 1, lr.pBits != NULL);
-        if (lr.pBits != NULL) {
+        if(lr.pBits != NULL)
+        {
             // Texels where linear and unswizzled interpretations DIFFER.
-            static const struct { int tx, ty; } samples[3] =
-                { { 2, 1 }, { 5, 3 }, { 6, 6 } };
-            for (int i = 0; i < 3; i++) {
+            static const struct
+            {
+                int tx, ty;
+            } samples[3] = { { 2, 1 }, { 5, 3 }, { 6, 6 } };
+            for(int i = 0; i < 3; i++)
+            {
                 int tx = samples[i].tx, ty = samples[i].ty;
                 // center of the 8x8-pixel block for texel (tx,ty)
                 DWORD got = read_pixel(lr.pBits, lr.Pitch,

@@ -19,11 +19,10 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-#undef	stpncpy
+#undef stpncpy
 
 #include <gnu-stabs.h>
 
-function_alias(stpncpy, __stpncpy, char *, (dest, src, n),
-	       DEFUN(stpncpy, (dest, src, n),
-		     char *dest AND CONST char *src AND size_t n))
-
+function_alias(stpncpy, __stpncpy, char*, (dest, src, n),
+               DEFUN(stpncpy, (dest, src, n),
+                     char* dest AND CONST char* src AND size_t n))

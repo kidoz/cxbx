@@ -25,22 +25,22 @@ Cambridge, MA 02139, USA.  */
 __CONSTVALUE double
 DEFUN(__logb, (x), double x)
 {
-  union ieee754_double u;
+    union ieee754_double u;
 
-  if (__isnan (x))
-    return x;
-  else if (__isinf (x))
-    return HUGE_VAL;
-  else if (x == 0.0)
-    return - HUGE_VAL;
+    if(__isnan(x))
+        return x;
+    else if(__isinf(x))
+        return HUGE_VAL;
+    else if(x == 0.0)
+        return -HUGE_VAL;
 
-  u.d = x;
+    u.d = x;
 
-  if (u.ieee.exponent == 0)
-    /* A denormalized number.
-       Multiplying by 2 ** DBL_MANT_DIG normalizes it;
-       we then subtract the DBL_MANT_DIG we added to the exponent.  */
-    return (__logb (x * ldexp (1.0, DBL_MANT_DIG)) - DBL_MANT_DIG);
+    if(u.ieee.exponent == 0)
+        /* A denormalized number.
+           Multiplying by 2 ** DBL_MANT_DIG normalizes it;
+           we then subtract the DBL_MANT_DIG we added to the exponent.  */
+        return (__logb(x * ldexp(1.0, DBL_MANT_DIG)) - DBL_MANT_DIG);
 
-  return (int) u.ieee.exponent - (DBL_MAX_EXP - 1);
+    return (int)u.ieee.exponent - (DBL_MAX_EXP - 1);
 }

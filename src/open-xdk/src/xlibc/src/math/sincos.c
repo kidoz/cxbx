@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,33 +14,37 @@
 
 #ifdef _MSC_VER
 
-double sin(double f) {
-	__asm {
+double sin(double f)
+{
+    __asm {
 		fld f
 		fsin
-	}
+    }
 }
-double cos(double f) {
-	__asm {
+double cos(double f)
+{
+    __asm {
 		fld f
 		fcos
-	}
+    }
 }
 
-float sinf(float f) {
-	__asm {
+float sinf(float f)
+{
+    __asm {
 		fld f
 		fsin
-	}
+    }
 }
-float cosf(float f)	{
-	__asm {
+float cosf(float f)
+{
+    __asm {
 		fld f
 		fcos
-	}
+    }
 }
 #else
 
-OPENXDK_UNIMPLEMENTEDC(sin/cos)
+OPENXDK_UNIMPLEMENTEDC(sin / cos)
 
 #endif

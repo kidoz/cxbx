@@ -21,12 +21,13 @@
 #include "xdk_xtrace.h"
 
 static const D3DCOLOR RT_CLEAR = 0xFF00FF00; // green -- RT right half
-static const D3DCOLOR RT_LEFT  = 0xFFFF0000; // red   -- RT left half
+static const D3DCOLOR RT_LEFT = 0xFFFF0000;  // red   -- RT left half
 static const D3DCOLOR BB_CLEAR = 0xFF0000FF; // blue  -- untouched back buffer
 
 #define RT_SIZE 256
 
-struct VTX {
+struct VTX
+{
     float x, y, z, rhw;
     D3DCOLOR color;
     float u, v;
@@ -34,9 +35,9 @@ struct VTX {
 #define FVF_COL (D3DFVF_XYZRHW | D3DFVF_DIFFUSE)
 #define FVF_TEX (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1)
 
-static DWORD read_pixel(void *pBits, INT pitch, int x, int y)
+static DWORD read_pixel(void* pBits, INT pitch, int x, int y)
 {
-    return (*(DWORD *)((BYTE *)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
+    return (*(DWORD*)((BYTE*)pBits + y * pitch + x * 4)) & 0x00FFFFFF;
 }
 
 void __cdecl main()
@@ -48,48 +49,48 @@ void __cdecl main()
 
     D3DPRESENT_PARAMETERS d3dpp;
     ZeroMemory(&d3dpp, sizeof(d3dpp));
-    d3dpp.BackBufferWidth  = 640;
+    d3dpp.BackBufferWidth = 640;
     d3dpp.BackBufferHeight = 480;
     d3dpp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    d3dpp.BackBufferCount  = 1;
-    d3dpp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    d3dpp.BackBufferCount = 1;
+    d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-    D3DDevice *pDevice = NULL;
+    D3DDevice* pDevice = NULL;
     HRESULT hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, NULL,
                                     D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                     &d3dpp, &pDevice);
     xt_chk("d3d.device_ok", 1, SUCCEEDED(hr) && pDevice != NULL);
-    if (FAILED(hr) || pDevice == NULL)
+    if(FAILED(hr) || pDevice == NULL)
         xt_end_and_exit();
 
     // Snapshot the implicit back-buffer render target so we can restore it.
-    D3DSurface *pOriginalRT = D3DDevice_GetRenderTarget2();
+    D3DSurface* pOriginalRT = D3DDevice_GetRenderTarget2();
     xt_chk("d3d.orig_rt_ok", 1, pOriginalRT != NULL);
 
     // Create the render-to-texture pair the way a title does: a colour texture
     // with RENDERTARGET usage and a depth texture with DEPTHSTENCIL usage.
     // Before the fix these came back as plain managed textures whose surfaces
     // SetRenderTarget rejected.
-    D3DTexture *pRTTex = D3DDevice_CreateTexture2(RT_SIZE, RT_SIZE, 1, 1,
+    D3DTexture* pRTTex = D3DDevice_CreateTexture2(RT_SIZE, RT_SIZE, 1, 1,
                                                   D3DUSAGE_RENDERTARGET,
                                                   D3DFMT_LIN_A8R8G8B8,
                                                   D3DRTYPE_TEXTURE);
     xt_chk("d3d.rt_tex_create_ok", 1, pRTTex != NULL);
 
-    D3DTexture *pDSTex = D3DDevice_CreateTexture2(RT_SIZE, RT_SIZE, 1, 1,
+    D3DTexture* pDSTex = D3DDevice_CreateTexture2(RT_SIZE, RT_SIZE, 1, 1,
                                                   D3DUSAGE_DEPTHSTENCIL,
                                                   D3DFMT_LIN_D24S8,
                                                   D3DRTYPE_TEXTURE);
     xt_chk("d3d.ds_tex_create_ok", 1, pDSTex != NULL);
-    if (pRTTex == NULL || pDSTex == NULL)
+    if(pRTTex == NULL || pDSTex == NULL)
         xt_end_and_exit();
 
-    D3DSurface *pRTSurf = D3DTexture_GetSurfaceLevel2(pRTTex, 0);
+    D3DSurface* pRTSurf = D3DTexture_GetSurfaceLevel2(pRTTex, 0);
     xt_chk("d3d.rt_surf_ok", 1, pRTSurf != NULL);
 
-    D3DSurface *pDSSurf = D3DTexture_GetSurfaceLevel2(pDSTex, 0);
+    D3DSurface* pDSSurf = D3DTexture_GetSurfaceLevel2(pDSTex, 0);
     xt_chk("d3d.ds_surf_ok", 1, pDSSurf != NULL);
-    if (pRTSurf == NULL || pDSSurf == NULL)
+    if(pRTSurf == NULL || pDSSurf == NULL)
         xt_end_and_exit();
 
     D3DDevice_SetRenderState_CullMode(D3DCULL_NONE);
@@ -109,12 +110,12 @@ void __cdecl main()
         const float mid = (float)(RT_SIZE / 2);
         const float max = (float)RT_SIZE;
         VTX left[6] = {
-            {   0.0f, 0.0f, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
-            {    mid, 0.0f, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
-            {   0.0f,  max, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
-            {    mid, 0.0f, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
-            {    mid,  max, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
-            {   0.0f,  max, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
+            { 0.0f, 0.0f, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
+            { mid, 0.0f, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
+            { 0.0f, max, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
+            { mid, 0.0f, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
+            { mid, max, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
+            { 0.0f, max, 0.0f, 1.0f, RT_LEFT, 0.0f, 0.0f },
         };
         D3DDevice_DrawVerticesUP(D3DPT_TRIANGLELIST, 6, left, sizeof(VTX));
     }
@@ -133,25 +134,27 @@ void __cdecl main()
     {
         const float s = (float)RT_SIZE;
         VTX quad[6] = {
-            {  0.0f, 0.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 0.0f },
-            {     s, 0.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
-            {  0.0f,    s, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
-            {     s, 0.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
-            {     s,    s, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 1.0f },
-            {  0.0f,    s, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
+            { 0.0f, 0.0f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 0.0f },
+            { s, 0.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
+            { 0.0f, s, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
+            { s, 0.0f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
+            { s, s, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 1.0f },
+            { 0.0f, s, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
         };
         D3DDevice_DrawVerticesUP(D3DPT_TRIANGLELIST, 6, quad, sizeof(VTX));
     }
 
     // -- Single readback at the end ---------------------------------------
-    D3DSurface *pBB = D3DDevice_GetBackBuffer2(0);
+    D3DSurface* pBB = D3DDevice_GetBackBuffer2(0);
     xt_chk("d3d.backbuffer_ok", 1, pBB != NULL);
-    if (pBB != NULL) {
+    if(pBB != NULL)
+    {
         D3DLOCKED_RECT lr;
         lr.pBits = NULL;
         D3DSurface_LockRect(pBB, &lr, NULL, D3DLOCK_READONLY);
         xt_chk("d3d.lock_ok", 1, lr.pBits != NULL);
-        if (lr.pBits != NULL) {
+        if(lr.pBits != NULL)
+        {
             // Sampled render target: left half red, right half green. Reading
             // at the region centres keeps clear of the internal boundary so
             // texture filtering cannot smear the result.

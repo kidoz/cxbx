@@ -14,39 +14,39 @@
 #include <windows.h>
 #include <xboxkrnl/xboxkrnl.h>
 
-#define ACI_BASE     0xFEC00000u
-#define REG8(off)    (*(volatile uint8_t  *)(ACI_BASE + (uint32_t)(off)))
-#define REG16(off)   (*(volatile uint16_t *)(ACI_BASE + (uint32_t)(off)))
-#define REG32(off)   (*(volatile uint32_t *)(ACI_BASE + (uint32_t)(off)))
+#define ACI_BASE   0xFEC00000u
+#define REG8(off)  (*(volatile uint8_t*)(ACI_BASE + (uint32_t)(off)))
+#define REG16(off) (*(volatile uint16_t*)(ACI_BASE + (uint32_t)(off)))
+#define REG32(off) (*(volatile uint32_t*)(ACI_BASE + (uint32_t)(off)))
 
 // PCM-Out channel block at NABM(+0x100) + 0x10.
-#define PO_BDBAR     0x110u          // buffer descriptor list base (dword)
-#define PO_CIV       0x114u          // current index (byte)
-#define PO_LVI       0x115u          // last valid index (byte)
-#define PO_SR        0x116u          // status (word)
-#define PO_PICB      0x118u          // position in current buffer (word)
-#define PO_CR        0x11Bu          // control (byte)
+#define PO_BDBAR 0x110u // buffer descriptor list base (dword)
+#define PO_CIV   0x114u // current index (byte)
+#define PO_LVI   0x115u // last valid index (byte)
+#define PO_SR    0x116u // status (word)
+#define PO_PICB  0x118u // position in current buffer (word)
+#define PO_CR    0x11Bu // control (byte)
 
-#define GLOB_STA     0x130u
+#define GLOB_STA 0x130u
 
-#define CR_RUN       0x01u
-#define CR_IOCE      0x10u
-#define SR_DMA_HALT  0x01u
-#define SR_CELV      0x02u
-#define SR_LVBCI     0x04u
-#define SR_BCIS      0x08u
-#define STA_PCM_OUT  0x40u
+#define CR_RUN      0x01u
+#define CR_IOCE     0x10u
+#define SR_DMA_HALT 0x01u
+#define SR_CELV     0x02u
+#define SR_LVBCI    0x04u
+#define SR_BCIS     0x08u
+#define STA_PCM_OUT 0x40u
 
 static void delay_ms(int ms)
 {
     LARGE_INTEGER interval;
-    interval.QuadPart = -10000LL * ms;   // relative, 100 ns units
+    interval.QuadPart = -10000LL * ms; // relative, 100 ns units
     KeDelayExecutionThread(KernelMode, FALSE, &interval);
 }
 
 int main(void)
 {
-    static uint32_t bdl[32 * 2];   // descriptor list backing (content unused by the model)
+    static uint32_t bdl[32 * 2]; // descriptor list backing (content unused by the model)
     int polls;
 
     xt_begin("v1", "ac97_dma");
@@ -62,8 +62,9 @@ int main(void)
     REG8(PO_CR) = CR_RUN | CR_IOCE;
 
     // The engine must advance CIV to the last valid index.
-    for (polls = 0; polls < 100; polls++) {
-        if (REG8(PO_CIV) == 2u)
+    for(polls = 0; polls < 100; polls++)
+    {
+        if(REG8(PO_CIV) == 2u)
             break;
         delay_ms(5);
     }
@@ -82,8 +83,9 @@ int main(void)
     // together with the halt state below)
 
     // Once the last valid buffer completes the channel halts with CELV|LVBCI.
-    for (polls = 0; polls < 100; polls++) {
-        if ((REG16(PO_SR) & SR_DMA_HALT) != 0)
+    for(polls = 0; polls < 100; polls++)
+    {
+        if((REG16(PO_SR) & SR_DMA_HALT) != 0)
             break;
         delay_ms(5);
     }
@@ -95,8 +97,9 @@ int main(void)
 
     // Moving LVI forward resumes the queue: CIV advances again.
     REG8(PO_LVI) = 4u;
-    for (polls = 0; polls < 100; polls++) {
-        if (REG8(PO_CIV) == 4u)
+    for(polls = 0; polls < 100; polls++)
+    {
+        if(REG8(PO_CIV) == 4u)
             break;
         delay_ms(5);
     }

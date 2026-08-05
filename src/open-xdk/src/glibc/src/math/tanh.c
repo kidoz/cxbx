@@ -38,7 +38,7 @@ static char sccsid[] = "@(#)tanh.c	8.1 (Berkeley) 6/4/93";
 /* TANH(X)
  * RETURN THE HYPERBOLIC TANGENT OF X
  * DOUBLE PRECISION (VAX D FORMAT 56 BITS, IEEE DOUBLE 53 BITS)
- * CODED IN C BY K.C. NG, 1/8/85; 
+ * CODED IN C BY K.C. NG, 1/8/85;
  * REVISED BY K.C. NG on 2/8/85, 2/11/85, 3/7/85, 3/24/85.
  *
  * Required system supported functions :
@@ -75,25 +75,31 @@ static char sccsid[] = "@(#)tanh.c	8.1 (Berkeley) 6/4/93";
 double _tanh(x)
 double x;
 {
-	static double one=1.0, two=2.0, small = 1.0e-10, big = 1.0e10;
-	double expm1(), t, copysign(), sign;
-	int finite();
+    static double one = 1.0, two = 2.0, small = 1.0e-10, big = 1.0e10;
+    double expm1(), t, copysign(), sign;
+    int finite();
 
-#if !defined(vax)&&!defined(tahoe)
-	if(x!=x) return(x);	/* x is NaN */
-#endif	/* !defined(vax)&&!defined(tahoe) */
+#if !defined(vax) && !defined(tahoe)
+    if(x != x) return (x); /* x is NaN */
+#endif                     /* !defined(vax)&&!defined(tahoe) */
 
-	sign=copysign(one,x);
-	x=copysign(x,one);
-	if(x < 22.0) 
-	    if( x > one )
-		return(copysign(one-two/(expm1(x+x)+two),sign));
-	    else if ( x > small )
-		{t= -expm1(-(x+x)); return(copysign(t/(two-t),sign));}
-	    else		/* raise the INEXACT flag for non-zero x */
-		{(big+x); return(copysign(x,sign));}
-	else if(finite(x))
-	    return (sign+1.0E-37); /* raise the INEXACT flag */
-	else
-	    return(sign);	/* x is +- INF */
+    sign = copysign(one, x);
+    x = copysign(x, one);
+    if(x < 22.0)
+        if(x > one)
+            return (copysign(one - two / (expm1(x + x) + two), sign));
+        else if(x > small)
+        {
+            t = -expm1(-(x + x));
+            return (copysign(t / (two - t), sign));
+        }
+        else /* raise the INEXACT flag for non-zero x */
+        {
+            (big + x);
+            return (copysign(x, sign));
+        }
+    else if(finite(x))
+        return (sign + 1.0E-37); /* raise the INEXACT flag */
+    else
+        return (sign); /* x is +- INF */
 }

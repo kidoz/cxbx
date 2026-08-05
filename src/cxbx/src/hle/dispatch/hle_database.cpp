@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->hle_database.cpp
@@ -34,7 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #define POINTER_64 __ptr64
 
 #include <windows.h>
@@ -52,7 +52,7 @@ namespace XTL
 #include "xact_emulation.h"
 #include "xonline_emulation.h"
 #include "xg_emulation.h"
-};
+}; // namespace XTL
 
 #include "hle_database.h"
 
@@ -105,71 +105,61 @@ namespace XTL
 // ******************************************************************
 // * HLEDataBase
 // ******************************************************************
-HLEData HLEDataBase[] =
-{
+HLEData HLEDataBase[] = {
     // Xapilib Version 1.0.3911
     {
         "XAPILIB",
         1, 0, 3911,
         XAPI_1_0_3911,
-        XAPI_1_0_3911_SIZE
-    },
+        XAPI_1_0_3911_SIZE },
     // Xapilib Version 1.0.4034
     {
         "XAPILIB",
         1, 0, 4034,
         XAPI_1_0_4034,
-        XAPI_1_0_4034_SIZE
-    },
+        XAPI_1_0_4034_SIZE },
     // Xapilib Version 1.0.4134
     {
         "XAPILIB",
         1, 0, 4134,
         XAPI_1_0_4134,
-        XAPI_1_0_4134_SIZE
-    },
+        XAPI_1_0_4134_SIZE },
     // Xapilib Version 1.0.4361
     {
         "XAPILIB",
         1, 0, 4361,
         XAPI_1_0_4361,
-        XAPI_1_0_4361_SIZE
-    },
+        XAPI_1_0_4361_SIZE },
     // Xapilib Version 1.0.4627
     {
         "XAPILIB",
         1, 0, 4627,
         XAPI_1_0_4627,
-        XAPI_1_0_4627_SIZE
-    },
+        XAPI_1_0_4627_SIZE },
     // Xapilib Version 1.0.4928: verified heap, input, and thread entry points.
     {
         "XAPILIB",
         1, 0, 4928,
         XAPI_1_0_4928,
-        XAPI_1_0_4928_SIZE
-    },
+        XAPI_1_0_4928_SIZE },
     // Xapilib Version 1.0.5233
     {
         "XAPILIB",
         1, 0, 5233,
         XAPI_1_0_5233,
-        XAPI_1_0_5233_SIZE
-    },
+        XAPI_1_0_5233_SIZE },
     // Xapilib Version 1.0.5455
     {
         "XAPILIB",
         1, 0, 5455,
         XAPI_1_0_5455,
-        XAPI_1_0_5455_SIZE
-    },
+        XAPI_1_0_5455_SIZE },
     // Xapilib Version 1.0.5659
     {
         "XAPILIB",
         1, 0, 5659,
         XAPI_1_0_5659,
-        XAPI_1_0_5659_SIZE
-    },
+        XAPI_1_0_5659_SIZE },
     // Xapilib Version 1.0.5849 (generated from XDK 5849 xapilib.lib; the
     // XInput/device family only -- enables headless input via
     // CXBX_INPUT_STATE. XInitDevices deliberately unhooked, see the .inl.)
@@ -177,80 +167,69 @@ HLEData HLEDataBase[] =
         "XAPILIB",
         1, 0, 5849,
         XAPI_1_0_5849,
-        XAPI_1_0_5849_SIZE
-    },
+        XAPI_1_0_5849_SIZE },
     // Xapilib Version 1.0.5933 (NestopiaX 1.3): adjacent build, reuse 5849 table
     {
         "XAPILIB",
         1, 0, 5933,
         XAPI_1_0_5849,
-        XAPI_1_0_5849_SIZE
-    },
+        XAPI_1_0_5849_SIZE },
     // D3D8 Version 1.0.3911 (early retail era, generated from XDK 3911 d3d8.lib)
     {
         "D3D8",
         1, 0, 3911,
         D3D8_1_0_3911,
-        D3D8_1_0_3911_SIZE
-    },
+        D3D8_1_0_3911_SIZE },
     // D3D8 Version 1.0.3925
     {
         "D3D8",
         1, 0, 3925,
         D3D8_1_0_3925,
-        D3D8_1_0_3925_SIZE
-    },
+        D3D8_1_0_3925_SIZE },
     // D3D8 Version 1.0.4034
     {
         "D3D8",
         1, 0, 4034,
         D3D8_1_0_4034,
-        D3D8_1_0_4034_SIZE
-    },
+        D3D8_1_0_4034_SIZE },
     // D3D8 Version 1.0.4134
     {
         "D3D8",
         1, 0, 4134,
         D3D8_1_0_4134,
-        D3D8_1_0_4134_SIZE
-    },
+        D3D8_1_0_4134_SIZE },
     // D3D8 Version 1.0.4361
     {
         "D3D8",
         1, 0, 4361,
         D3D8_1_0_4361,
-        D3D8_1_0_4361_SIZE
-    },
+        D3D8_1_0_4361_SIZE },
     // D3D8 Version 1.0.4627
     {
         "D3D8",
         1, 0, 4627,
         D3D8_1_0_4627,
-        D3D8_1_0_4627_SIZE
-    },
+        D3D8_1_0_4627_SIZE },
     // D3D8 Version 1.0.4928: verified shared entries plus image-derived
     // texture and fence ownership redirects.
     {
         "D3D8",
         1, 0, 4928,
         D3D8_1_0_4627,
-        D3D8_1_0_4627_SIZE
-    },
+        D3D8_1_0_4627_SIZE },
     // D3D8 Version 1.0.5233
     {
         "D3D8",
         1, 0, 5233,
         D3D8_1_0_5233,
-        D3D8_1_0_5233_SIZE
-    },
+        D3D8_1_0_5233_SIZE },
     // D3D8 Version 1.0.5344 (generated from XDK 5344 d3d8.lib; fills the
     // mid-cycle gap between 4627 and 5558 that many 2003-era titles link)
     {
         "D3D8",
         1, 0, 5344,
         D3D8_1_0_5344,
-        D3D8_1_0_5344_SIZE
-    },
+        D3D8_1_0_5344_SIZE },
     // D3D8 Version 1.0.5558 (generated from XDK 5558 d3d8.lib -- the
     // other/xbox-sdks archive; unlocks FCEUltra's HLE route, which was
     // previously native-only and stalled on the PFIFO GET-writeback wait)
@@ -258,43 +237,37 @@ HLEData HLEDataBase[] =
         "D3D8",
         1, 0, 5558,
         D3D8_1_0_5558,
-        D3D8_1_0_5558_SIZE
-    },
+        D3D8_1_0_5558_SIZE },
     // D3D8 Version 1.0.5659 (generated from XDK 5659 d3d8.lib; adjacent to 5849)
     {
         "D3D8",
         1, 0, 5659,
         D3D8_1_0_5659,
-        D3D8_1_0_5659_SIZE
-    },
+        D3D8_1_0_5659_SIZE },
     // D3D8 Version 1.0.5788 (generated from XDK 5788 d3d8.lib; adjacent to 5849)
     {
         "D3D8",
         1, 0, 5788,
         D3D8_1_0_5788,
-        D3D8_1_0_5788_SIZE
-    },
+        D3D8_1_0_5788_SIZE },
     // D3D8 Version 1.0.5849 (generated from XDK 5849 d3d8.lib; unlocks z26x + 5849 samples)
     {
         "D3D8",
         1, 0, 5849,
         D3D8_1_0_5849,
-        D3D8_1_0_5849_SIZE
-    },
+        D3D8_1_0_5849_SIZE },
     // D3D8 debug library Version 1.0.5849
     {
         "D3D8D",
         1, 0, 5849,
         D3D8D_1_0_5849,
-        D3D8D_1_0_5849_SIZE
-    },
+        D3D8D_1_0_5849_SIZE },
     // D3D8 profile library Version 1.0.5849
     {
         "D3D8I",
         1, 0, 5849,
         D3D8I_1_0_5849,
-        D3D8I_1_0_5849_SIZE
-    },
+        D3D8I_1_0_5849_SIZE },
     // D3D8 Version 1.0.5933 (NestopiaX 1.3): adjacent build to 5849 -- reuse its
     // table; each OOVPA still has to byte-match, so only genuinely unchanged
     // functions resolve.
@@ -302,79 +275,68 @@ HLEData HLEDataBase[] =
         "D3D8",
         1, 0, 5933,
         D3D8_1_0_5849,
-        D3D8_1_0_5849_SIZE
-    },
+        D3D8_1_0_5849_SIZE },
     // DSound Version 1.0.3936
     {
         "DSOUND",
         1, 0, 3936,
         DSound_1_0_3936,
-        DSound_1_0_3936_SIZE
-    },
+        DSound_1_0_3936_SIZE },
     // DSound Version 1.0.4361
     {
         "DSOUND",
         1, 0, 4361,
         DSound_1_0_4361,
-        DSound_1_0_4361_SIZE
-    },
+        DSound_1_0_4361_SIZE },
     // DSound Version 1.0.4627
     {
         "DSOUND",
         1, 0, 4627,
         DSound_1_0_4627,
-        DSound_1_0_4627_SIZE
-    },
+        DSound_1_0_4627_SIZE },
     // DSound Version 1.0.4928: image-verified public device, buffer, and
     // stream boundary. The table order preserves forward-looking signatures.
     {
         "DSOUND",
         1, 0, 4928,
         DSound_1_0_4928,
-        DSound_1_0_4928_SIZE
-    },
+        DSound_1_0_4928_SIZE },
     // DSound Version 1.0.5233
     {
         "DSOUND",
         1, 0, 5233,
         DSound_1_0_5233,
-        DSound_1_0_5233_SIZE
-    },
+        DSound_1_0_5233_SIZE },
     // DSound Version 1.0.3911 (generated from XDK 3911 dsound.lib)
     {
         "DSOUND",
         1, 0, 3911,
         DSound_1_0_3911,
-        DSound_1_0_3911_SIZE
-    },
+        DSound_1_0_3911_SIZE },
     // DSound Version 1.0.5344 (generated from XDK 5344 dsound.lib)
     {
         "DSOUND",
         1, 0, 5344,
         DSound_1_0_5344,
-        DSound_1_0_5344_SIZE
-    },
+        DSound_1_0_5344_SIZE },
     // DSound Version 1.0.5558 (generated from XDK 5558 dsound.lib)
     {
         "DSOUND",
         1, 0, 5558,
         DSound_1_0_5558,
-        DSound_1_0_5558_SIZE
-    },
+        DSound_1_0_5558_SIZE },
     // DSound Version 1.0.5659 (generated from XDK 5659 dsound.lib)
     {
         "DSOUND",
         1, 0, 5659,
         DSound_1_0_5659,
-        DSound_1_0_5659_SIZE
-    },
+        DSound_1_0_5659_SIZE },
     // DSound Version 1.0.5788 (generated from XDK 5788 dsound.lib)
     {
         "DSOUND",
         1, 0, 5788,
         DSound_1_0_5788,
-        DSound_1_0_5788_SIZE
-    },
+        DSound_1_0_5788_SIZE },
     // DSound Version 1.0.5849 (generated from XDK 5849 dsound.lib; the
     // create/setter/buffer-method surface plus DoWork -- see
     // DSound.1.0.5849.inl).
@@ -382,66 +344,57 @@ HLEData HLEDataBase[] =
         "DSOUND",
         1, 0, 5849,
         DSound_1_0_5849,
-        DSound_1_0_5849_SIZE
-    },
+        DSound_1_0_5849_SIZE },
     // DSound Version 1.0.5933: exact static-buffer lifecycle signatures from
     // the 5933 SDK. This keeps NestopiaX's PCM ring entirely inside HLE state.
     {
         "DSOUND",
         1, 0, 5933,
         DSound_1_0_5933,
-        DSound_1_0_5933_SIZE
-    },
+        DSound_1_0_5933_SIZE },
     // XACT engine Version 1.0.5849
     {
         "XACTENG",
         1, 0, 5849,
         XACTENG_1_0_5849,
-        XACTENG_1_0_5849_SIZE
-    },
+        XACTENG_1_0_5849_SIZE },
     // XG Version 1.0.4361
     {
         "XGRAPHC",
         1, 0, 4361,
         XG_1_0_4361,
-        XG_1_0_4361_SIZE
-    },
+        XG_1_0_4361_SIZE },
     // XG Version 1.0.4627
     {
         "XGRAPHC",
         1, 0, 4627,
         XG_1_0_4627,
-        XG_1_0_4627_SIZE
-    },
+        XG_1_0_4627_SIZE },
     // XG Version 1.0.4928: XGSwizzleRect is byte-identical to the verified
     // 5659 image-derived body and resolves at the independent 4928 symbol.
     {
         "XGRAPHC",
         1, 0, 4928,
         XG_1_0_5659,
-        XG_1_0_5659_SIZE
-    },
+        XG_1_0_5659_SIZE },
     // XG Version 1.0.5659
     {
         "XGRAPHC",
         1, 0, 5659,
         XG_1_0_5659,
-        XG_1_0_5659_SIZE
-    },
+        XG_1_0_5659_SIZE },
     // XG Version 1.0.5849 (generated from XDK 5849 xgraphics.lib)
     {
         "XGRAPHC",
         1, 0, 5849,
         XG_1_0_5849,
-        XG_1_0_5849_SIZE
-    },
+        XG_1_0_5849_SIZE },
     // XG LTCG Version 1.0.5849
     {
         "XGRAPHCL",
         1, 0, 5849,
         XG_LTCG_1_0_5849,
-        XG_LTCG_1_0_5849_SIZE
-    },
+        XG_LTCG_1_0_5849_SIZE },
     // XG Version 1.0.5933 (NestopiaX 1.3): adjacent build to 5849 -- reuse its
     // table; the OOVPA byte-matches, so only genuinely unchanged functions
     // resolve. XGRAPHC is a stateless utility library, so a partial hook is
@@ -450,37 +403,32 @@ HLEData HLEDataBase[] =
         "XGRAPHC",
         1, 0, 5933,
         XG_1_0_5849,
-        XG_1_0_5849_SIZE
-    },
+        XG_1_0_5849_SIZE },
     // XNet Version 1.0.3911
     {
         "XNETS",
         1, 0, 3911,
         XNet_1_0_3911,
-        XNet_1_0_3911_SIZE
-    },
+        XNet_1_0_3911_SIZE },
     // XOnline Version 1.0.4361
     {
         "XONLINE",
         1, 0, 4361,
         XOnline_1_0_4361,
-        XOnline_1_0_4361_SIZE
-    },
+        XOnline_1_0_4361_SIZE },
     // XOnline Version 1.0.5849
     {
         "XONLINE",
         1, 0, 5849,
         XOnline_1_0_5849,
-        XOnline_1_0_5849_SIZE
-    },
+        XOnline_1_0_5849_SIZE },
     // Secure XOnline Version 1.0.5849. XNetStartup and WSAStartup have the
     // same bodies in the secure and non-secure archives for this build.
     {
         "XONLINES",
         1, 0, 5849,
         XOnline_1_0_5849,
-        XOnline_1_0_5849_SIZE
-    },
+        XOnline_1_0_5849_SIZE },
 };
 
 // ******************************************************************
@@ -676,7 +624,7 @@ extern uint32 XRefDataBase[] = {
 // ******************************************************************
 // * track XRef location
 // ******************************************************************
-extern uint32 UnResolvedXRefs = sizeof(XRefDataBase)/sizeof(uint32);
+extern uint32 UnResolvedXRefs = sizeof(XRefDataBase) / sizeof(uint32);
 
 // ******************************************************************
 // * Search Speed Optimization

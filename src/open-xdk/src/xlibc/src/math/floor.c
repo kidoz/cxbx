@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,36 +14,36 @@
 
 #ifdef _MSC_VER
 
-extern int     _RoundDown;
+extern int _RoundDown;
 
 double floor(double f)
 {
-	int temp;
-	__asm
-	{
+    int temp;
+    __asm
+    {
 		fstcw temp
 		fldcw _RoundDown
 		fld f
 		frndint
 		fldcw temp
-	}
+    }
 }
 
 float floorf(float f)
 {
-	int temp;
-	__asm
-	{
+    int temp;
+    __asm
+    {
 		fstcw temp
 		fldcw _RoundDown
 		fld f
 		frndint
 		fldcw temp
-	}
+    }
 }
 
 #else
 
 OPENXDK_UNIMPLEMENTEDC(floor)
 
-#endif 
+#endif

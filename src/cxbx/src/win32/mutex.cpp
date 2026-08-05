@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->mutex.cpp
@@ -56,7 +56,7 @@ void Mutex::Lock()
             Sleep(1);
 
         // Are we the the new owner?
-        if (!m_OwnerProcess)
+        if(!m_OwnerProcess)
         {
             // Take ownership
             InterlockedExchange(&m_OwnerProcess, (LONG)GetCurrentProcessId());
@@ -72,8 +72,8 @@ void Mutex::Lock()
         // If a different process owns this mutex right now, unlock
         // the mutex lock and wait.  The reading need not be
         // interlocked.
-        if ((m_OwnerProcess != (LONG) GetCurrentProcessId()) ||
-            (m_OwnerThread  != (LONG) GetCurrentThreadId()))
+        if((m_OwnerProcess != (LONG)GetCurrentProcessId()) ||
+           (m_OwnerThread != (LONG)GetCurrentThreadId()))
         {
             // Unlock the mutex itself
             InterlockedExchange(&m_MutexLock, 0);
@@ -102,7 +102,7 @@ void Mutex::Unlock()
         Sleep(1);
 
     // Decrement the lock count
-    if (!InterlockedDecrement(&m_LockCount))
+    if(!InterlockedDecrement(&m_LockCount))
     {
         // Mark the mutex as now unused
         InterlockedExchange(&m_OwnerProcess, 0);

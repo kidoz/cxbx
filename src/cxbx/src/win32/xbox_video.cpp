@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->Win32->xbox_video.cpp
@@ -53,32 +53,37 @@ XBVideo::~XBVideo()
 // ******************************************************************
 // * func: XBVideo::Load
 // ******************************************************************
-void XBVideo::Load(const char *szRegistryKey)
+void XBVideo::Load(const char* szRegistryKey)
 {
     // ******************************************************************
     // * Load Configuration from Registry
     // ******************************************************************
     {
-        DWORD   dwDisposition, dwType, dwSize;
-        HKEY    hKey;
+        DWORD dwDisposition, dwType, dwSize;
+        HKEY hKey;
 
         if(RegCreateKeyEx(HKEY_CURRENT_USER, szRegistryKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_QUERY_VALUE, NULL, &hKey, &dwDisposition) == ERROR_SUCCESS)
         {
-            int v=0;
+            int v = 0;
 
-            dwType = REG_SZ; dwSize = 100;
+            dwType = REG_SZ;
+            dwSize = 100;
             RegQueryValueEx(hKey, "VideoResolution", NULL, &dwType, (PBYTE)m_szVideoResolution, &dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegQueryValueEx(hKey, "DisplayAdapter", NULL, &dwType, (PBYTE)&m_dwDisplayAdapter, &dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegQueryValueEx(hKey, "Direct3DDevice", NULL, &dwType, (PBYTE)&m_dwDirect3DDevice, &dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegQueryValueEx(hKey, "Fullscreen", NULL, &dwType, (PBYTE)&m_bFullscreen, &dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegQueryValueEx(hKey, "VSync", NULL, &dwType, (PBYTE)&m_bVSync, &dwSize);
 
             RegCloseKey(hKey);
@@ -89,32 +94,37 @@ void XBVideo::Load(const char *szRegistryKey)
 // ******************************************************************
 // * func: XBVideo::Save
 // ******************************************************************
-void XBVideo::Save(const char *szRegistryKey)
+void XBVideo::Save(const char* szRegistryKey)
 {
     // ******************************************************************
     // * Save Configuration to Registry
     // ******************************************************************
     {
-        DWORD   dwDisposition, dwType, dwSize;
-        HKEY    hKey;
+        DWORD dwDisposition, dwType, dwSize;
+        HKEY hKey;
 
         if(RegCreateKeyEx(HKEY_CURRENT_USER, szRegistryKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, NULL, &hKey, &dwDisposition) == ERROR_SUCCESS)
         {
-            int v=0;
+            int v = 0;
 
-            dwType = REG_SZ; dwSize = 100;
+            dwType = REG_SZ;
+            dwSize = 100;
             RegSetValueEx(hKey, "VideoResolution", 0, dwType, (PBYTE)m_szVideoResolution, dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegSetValueEx(hKey, "DisplayAdapter", 0, dwType, (PBYTE)&m_dwDisplayAdapter, dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegSetValueEx(hKey, "Direct3DDevice", 0, dwType, (PBYTE)&m_dwDirect3DDevice, dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegSetValueEx(hKey, "Fullscreen", 0, dwType, (PBYTE)&m_bFullscreen, dwSize);
 
-            dwType = REG_DWORD; dwSize = sizeof(DWORD);
+            dwType = REG_DWORD;
+            dwSize = sizeof(DWORD);
             RegSetValueEx(hKey, "VSync", 0, dwType, (PBYTE)&m_bVSync, dwSize);
 
             RegCloseKey(hKey);

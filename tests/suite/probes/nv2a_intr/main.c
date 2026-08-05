@@ -7,13 +7,13 @@
 #include "xtest.h"
 #include <stdint.h>
 
-#define NV2A_BASE   0xFD000000u
-#define REG32(off)  (*(volatile uint32_t *)(NV2A_BASE + (uint32_t)(off)))
+#define NV2A_BASE  0xFD000000u
+#define REG32(off) (*(volatile uint32_t*)(NV2A_BASE + (uint32_t)(off)))
 
-#define PMC_INTR_0        0x000100u
-#define PFIFO_INTR_0      0x002100u
-#define PFIFO_INTR_EN_0   0x002140u
-#define PGRAPH_INTR_EN    0x400140u
+#define PMC_INTR_0      0x000100u
+#define PFIFO_INTR_0    0x002100u
+#define PFIFO_INTR_EN_0 0x002140u
+#define PGRAPH_INTR_EN  0x400140u
 
 int main(void)
 {

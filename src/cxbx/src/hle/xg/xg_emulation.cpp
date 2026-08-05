@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->xg_emulation.cpp
@@ -34,7 +34,7 @@
 #define _CXBXKRNL_INTERNAL
 #define _XBOXKRNL_LOCAL_
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #define POINTER_64 __ptr64
 
 #include <windows.h>
@@ -49,7 +49,7 @@
 // ******************************************************************
 namespace NtDll
 {
-    #include "ntdll_emulation.h"
+#include "ntdll_emulation.h"
 };
 
 using VOID = void;
@@ -62,11 +62,11 @@ namespace XTL
 #define DIRECT3D_VERSION 0x0800
 #include <d3d8.h>
 #include "xg_emulation.h"
-};
+}; // namespace XTL
 
-extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE *Data, ULONG Size);
+extern "C" bool EmuWritePhysicalMapBytesFromHle(ULONG Address, const BYTE* Data, ULONG Size);
 
-static void EmuXGCopyToGuest(void *Destination, const void *Source, size_t Size)
+static void EmuXGCopyToGuest(void* Destination, const void* Source, size_t Size)
 {
     if(Size == 0)
     {
@@ -74,7 +74,7 @@ static void EmuXGCopyToGuest(void *Destination, const void *Source, size_t Size)
     }
 
     if(EmuWritePhysicalMapBytesFromHle((ULONG)(ULONG_PTR)Destination,
-                                       (const BYTE *)Source, (ULONG)Size))
+                                       (const BYTE*)Source, (ULONG)Size))
     {
         return;
     }
@@ -99,25 +99,23 @@ static bool EmuXGTextureTraceEnabled()
 // ******************************************************************
 // * func: EmuXGIsSwizzledFormat
 // ******************************************************************
-PVOID WINAPI XTL::EmuXGIsSwizzledFormat
-(
-    XTL::D3DFORMAT Format
-)
+PVOID WINAPI XTL::EmuXGIsSwizzledFormat(
+    XTL::D3DFORMAT Format)
 {
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
-        EmuSwapFS();   // Win2k/XP FS
+        EmuSwapFS(); // Win2k/XP FS
         printf("EmuXapi (0x%X): EmuXGIsSwizzledFormat\n"
                "(\n"
                "   Format              : 0x%.08X\n"
                ");\n",
                GetCurrentThreadId(), Format);
-        EmuSwapFS();   // Xbox FS
+        EmuSwapFS(); // Xbox FS
     }
-    #endif
+#endif
 
     return FALSE;
 }
@@ -125,19 +123,17 @@ PVOID WINAPI XTL::EmuXGIsSwizzledFormat
 // ******************************************************************
 // * func: EmuXGSwizzleRect
 // ******************************************************************
-VOID WINAPI XTL::EmuXGSwizzleRect
-(
-    LPCVOID       pSource, 
-    DWORD         Pitch,
-    LPCRECT       pRect,
-    LPVOID        pDest,
-    DWORD         Width,
-    DWORD         Height,
+VOID WINAPI XTL::EmuXGSwizzleRect(
+    LPCVOID pSource,
+    DWORD Pitch,
+    LPCRECT pRect,
+    LPVOID pDest,
+    DWORD Width,
+    DWORD Height,
     CONST LPPOINT pPoint,
-    DWORD         BytesPerPixel
-)
+    DWORD BytesPerPixel)
 {
-    EmuSwapFS();   // Win2k/XP FS
+    EmuSwapFS(); // Win2k/XP FS
 
     if(EmuXGTextureTraceEnabled())
     {
@@ -154,10 +150,10 @@ VOID WINAPI XTL::EmuXGSwizzleRect
         fflush(stdout);
     }
 
-    // ******************************************************************
-    // * debug trace
-    // ******************************************************************
-    #ifdef _DEBUG_TRACE
+// ******************************************************************
+// * debug trace
+// ******************************************************************
+#ifdef _DEBUG_TRACE
     {
         printf("EmuXapi (0x%X): EmuXGSwizzleRect\n"
                "(\n"
@@ -173,7 +169,7 @@ VOID WINAPI XTL::EmuXGSwizzleRect
                GetCurrentThreadId(), pSource, Pitch, pRect, pDest, Width, Height,
                pPoint, BytesPerPixel);
     }
-    #endif
+#endif
 
     const LONG sourceLeft = (pRect != NULL) ? pRect->left : 0;
     const LONG sourceTop = (pRect != NULL) ? pRect->top : 0;
@@ -189,7 +185,7 @@ VOID WINAPI XTL::EmuXGSwizzleRect
        copyHeight <= 0 || destinationLeft >= static_cast<LONG>(Width) ||
        destinationTop >= static_cast<LONG>(Height) || BytesPerPixel == 0)
     {
-        EmuSwapFS();   // Xbox FS
+        EmuSwapFS(); // Xbox FS
         return;
     }
 
@@ -225,7 +221,7 @@ VOID WINAPI XTL::EmuXGSwizzleRect
         EmuXGCopyToGuest(destination, source, rowBytes);
     }
 
-    EmuSwapFS();   // Xbox FS
+    EmuSwapFS(); // Xbox FS
 
     return;
 }
@@ -233,119 +229,123 @@ VOID WINAPI XTL::EmuXGSwizzleRect
 // ******************************************************************
 // * func: EmuXGUnswizzleRect
 // ******************************************************************
-VOID WINAPI XTL::EmuXGUnswizzleRect
-(
-    PVOID           pSrcBuff,
-    DWORD           dwWidth,
-    DWORD           dwHeight,
-    DWORD           dwDepth,
-    PVOID           pDstBuff,
-    DWORD           dwPitch,
-    RECT            rSrc,
-    POINT           poDst,
-    DWORD           dwBPP
-)
+VOID WINAPI XTL::EmuXGUnswizzleRect(
+    PVOID pSrcBuff,
+    DWORD dwWidth,
+    DWORD dwHeight,
+    DWORD dwDepth,
+    PVOID pDstBuff,
+    DWORD dwPitch,
+    RECT rSrc,
+    POINT poDst,
+    DWORD dwBPP)
 {
-	DWORD dwOffsetU = 0, dwMaskU = 0;
+    DWORD dwOffsetU = 0, dwMaskU = 0;
     DWORD dwOffsetV = 0, dwMaskV = 0;
     DWORD dwOffsetW = 0, dwMaskW = 0;
 
-	DWORD i = 1;
-	DWORD j = 1;
+    DWORD i = 1;
+    DWORD j = 1;
 
-	while( (i < dwWidth) || (i < dwHeight) || (i < dwDepth) )
+    while((i < dwWidth) || (i < dwHeight) || (i < dwDepth))
     {
         if(i < dwWidth)
         {
-			dwMaskU |= j;
-			j<<=1;
-		}
+            dwMaskU |= j;
+            j <<= 1;
+        }
 
         if(i < dwHeight)
         {
-			dwMaskV |= j;
-			j<<=1;
-		}
+            dwMaskV |= j;
+            j <<= 1;
+        }
 
         if(i < dwDepth)
         {
-			dwMaskW |= j;   
-            j<<=1;  
+            dwMaskW |= j;
+            j <<= 1;
         }
 
-        i<<=1;
-	}
+        i <<= 1;
+    }
 
     DWORD dwSU = 0;
-	DWORD dwSV = 0;
-	DWORD dwSW = 0;
-	DWORD dwMaskMax=0;
+    DWORD dwSV = 0;
+    DWORD dwSW = 0;
+    DWORD dwMaskMax = 0;
 
-	// get the biggest mask
-	if(dwMaskU > dwMaskV)
-		dwMaskMax=dwMaskU;
-	else
-		dwMaskMax=dwMaskV;
-	if(dwMaskW > dwMaskMax)
-		dwMaskMax=dwMaskW;
+    // get the biggest mask
+    if(dwMaskU > dwMaskV)
+        dwMaskMax = dwMaskU;
+    else
+        dwMaskMax = dwMaskV;
+    if(dwMaskW > dwMaskMax)
+        dwMaskMax = dwMaskW;
 
-	for(i = 1; i <= dwMaskMax; i<<=1)
+    for(i = 1; i <= dwMaskMax; i <<= 1)
     {
-		if(i<=dwMaskU)
+        if(i <= dwMaskU)
         {
-			if(dwMaskU & i) dwSU |= (dwOffsetU & i);
-			else            dwOffsetU<<=1;
-		}
+            if(dwMaskU & i)
+                dwSU |= (dwOffsetU & i);
+            else
+                dwOffsetU <<= 1;
+        }
 
-        if(i<=dwMaskV)
+        if(i <= dwMaskV)
         {
-			if(dwMaskV & i) dwSV |= (dwOffsetV & i);
-			else            dwOffsetV<<=1;
-		}
-		
-        if(i<=dwMaskW)
+            if(dwMaskV & i)
+                dwSV |= (dwOffsetV & i);
+            else
+                dwOffsetV <<= 1;
+        }
+
+        if(i <= dwMaskW)
         {
-			if(dwMaskW & i) dwSW |= (dwOffsetW & i);
-			else            dwOffsetW<<=1;
-		}
-	}
+            if(dwMaskW & i)
+                dwSW |= (dwOffsetW & i);
+            else
+                dwOffsetW <<= 1;
+        }
+    }
 
-	DWORD dwW = dwSW;
-	DWORD dwV = dwSV;
-	DWORD dwU = dwSU;
+    DWORD dwW = dwSW;
+    DWORD dwV = dwSV;
+    DWORD dwU = dwSU;
 
-	// A title can register a texture whose declared dimensions imply more
-	// swizzled source bytes than its actual data buffer holds; the Morton walk
-	// below then reads past the source and faults (Turok's Resource_Register
-	// path, EmuXGUnswizzleRect source overrun). pSrcBuff is a host pointer above
-	// the guest-physical window, so an SEH guard catches the overrun without
-	// disturbing the MMIO/physical fault path -- abandon the copy and keep the
-	// partially unswizzled texture rather than killing the process (one wrong
-	// texture beats a dead title, matching Resource_Register's other guards).
-	__try
-	{
-	for(DWORD z=0; z<dwDepth; z++)
-	{
-		dwV = dwSV;
+    // A title can register a texture whose declared dimensions imply more
+    // swizzled source bytes than its actual data buffer holds; the Morton walk
+    // below then reads past the source and faults (Turok's Resource_Register
+    // path, EmuXGUnswizzleRect source overrun). pSrcBuff is a host pointer above
+    // the guest-physical window, so an SEH guard catches the overrun without
+    // disturbing the MMIO/physical fault path -- abandon the copy and keep the
+    // partially unswizzled texture rather than killing the process (one wrong
+    // texture beats a dead title, matching Resource_Register's other guards).
+    __try
+    {
+        for(DWORD z = 0; z < dwDepth; z++)
+        {
+            dwV = dwSV;
 
-		for(DWORD y=0; y<dwHeight; y++)
-		{
-			dwU = dwSU;
+            for(DWORD y = 0; y < dwHeight; y++)
+            {
+                dwU = dwSU;
 
-			for (DWORD x=0; x<dwWidth; x++)
-			{
-				memcpy(pDstBuff, &((BYTE*)pSrcBuff)[(dwU|dwV|dwW)*dwBPP], dwBPP);
-				pDstBuff=(PVOID)(((DWORD)pDstBuff)+dwBPP);
+                for(DWORD x = 0; x < dwWidth; x++)
+                {
+                    memcpy(pDstBuff, &((BYTE*)pSrcBuff)[(dwU | dwV | dwW) * dwBPP], dwBPP);
+                    pDstBuff = (PVOID)(((DWORD)pDstBuff) + dwBPP);
 
-				dwU = (dwU - dwMaskU) & dwMaskU;
-			}
-			pDstBuff=(PVOID)(((DWORD)pDstBuff)+(dwPitch-dwWidth*dwBPP));
-			dwV = (dwV - dwMaskV) & dwMaskV;
-		}
-		dwW = (dwW - dwMaskW) & dwMaskW;
-	}
-	}
-	__except(EXCEPTION_EXECUTE_HANDLER)
-	{
-	}
+                    dwU = (dwU - dwMaskU) & dwMaskU;
+                }
+                pDstBuff = (PVOID)(((DWORD)pDstBuff) + (dwPitch - dwWidth * dwBPP));
+                dwV = (dwV - dwMaskV) & dwMaskV;
+            }
+            dwW = (dwW - dwMaskW) & dwMaskW;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
 }

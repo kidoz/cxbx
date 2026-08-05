@@ -19,14 +19,13 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-PTR
-DEFUN(memfrob, (s, n),
-      PTR s AND size_t n)
+PTR DEFUN(memfrob, (s, n),
+          PTR s AND size_t n)
 {
-  register char *p = (char *) s;
+    register char* p = (char*)s;
 
-  while (n-- > 0)
-    *p++ ^= 42;
+    while(n-- > 0)
+        *p++ ^= 42;
 
-  return s;
+    return s;
 }

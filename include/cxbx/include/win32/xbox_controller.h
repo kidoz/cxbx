@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbx->xbox_controller.h
@@ -46,11 +46,11 @@
 // ******************************************************************
 namespace XTL
 {
-    #include "xapi_emulation.h"
-    #define DIRECTINPUT_VERSION 0x0800
-    #include <dinput.h>
-    #include "dinput_emulation.h"
-};
+#include "xapi_emulation.h"
+#define DIRECTINPUT_VERSION 0x0800
+#include <dinput.h>
+#include "dinput_emulation.h"
+}; // namespace XTL
 
 // ******************************************************************
 // * Xbox Controller Object IDs
@@ -106,9 +106,9 @@ enum XBCtrlObject
 // ******************************************************************
 struct XBCtrlObjectCfg
 {
-    int dwDevice;   // offset into m_InputDevice
-    int dwInfo;     // extended information, depending on dwFlags
-    int dwFlags;    // flags explaining the data format
+    int dwDevice; // offset into m_InputDevice
+    int dwInfo;   // extended information, depending on dwFlags
+    int dwFlags;  // flags explaining the data format
 };
 
 // ******************************************************************
@@ -116,145 +116,143 @@ struct XBCtrlObjectCfg
 // ******************************************************************
 class XBController : public Error
 {
-    public:
-        // ******************************************************************
-        // * Initialization
-        // ******************************************************************
-        XBController();
-       ~XBController();
+  public:
+    // ******************************************************************
+    // * Initialization
+    // ******************************************************************
+    XBController();
+    ~XBController();
 
-        // ******************************************************************
-        // * Registry Load/Save
-        // ******************************************************************
-        void Load(const char *szRegistryKey);
-        void Save(const char *szRegistryKey);
+    // ******************************************************************
+    // * Registry Load/Save
+    // ******************************************************************
+    void Load(const char* szRegistryKey);
+    void Save(const char* szRegistryKey);
 
-        // ******************************************************************
-        // * Configuration
-        // ******************************************************************
-        void ConfigBegin(HWND hwnd, XBCtrlObject object);
-        bool ConfigPoll(char *szStatus);  // true if polling detected a change
-        void ConfigEnd();
+    // ******************************************************************
+    // * Configuration
+    // ******************************************************************
+    void ConfigBegin(HWND hwnd, XBCtrlObject object);
+    bool ConfigPoll(char* szStatus); // true if polling detected a change
+    void ConfigEnd();
 
-        // ******************************************************************
-        // * Listening
-        // ******************************************************************
-        void ListenBegin(HWND hwnd);
-        bool ListenPoll(XTL::XINPUT_STATE *Controller);
-        void ListenEnd();
-        bool HasInputDevice() const;
+    // ******************************************************************
+    // * Listening
+    // ******************************************************************
+    void ListenBegin(HWND hwnd);
+    bool ListenPoll(XTL::XINPUT_STATE* Controller);
+    void ListenEnd();
+    bool HasInputDevice() const;
 
-        // ******************************************************************
-        // * DirectInput Init / Cleanup
-        // ******************************************************************
-        void DInputInit(HWND hwnd);
-        void DInputCleanup();
+    // ******************************************************************
+    // * DirectInput Init / Cleanup
+    // ******************************************************************
+    void DInputInit(HWND hwnd);
+    void DInputCleanup();
 
-        // ******************************************************************
-        // * Check if a device is currently in the configuration
-        // ******************************************************************
-        bool DeviceIsUsed(const char *szDeviceName);
+    // ******************************************************************
+    // * Check if a device is currently in the configuration
+    // ******************************************************************
+    bool DeviceIsUsed(const char* szDeviceName);
 
-        // ******************************************************************
-        // * Input Device Name Lookup Table
-        // ******************************************************************
-        static const char *m_DeviceNameLookup[XBCTRL_OBJECT_COUNT];
+    // ******************************************************************
+    // * Input Device Name Lookup Table
+    // ******************************************************************
+    static const char* m_DeviceNameLookup[XBCTRL_OBJECT_COUNT];
 
-    private:
-        // ******************************************************************
-        // * Object Mapping
-        // ******************************************************************
-        void Map(XBCtrlObject object, const char *szDeviceName, int dwInfo, int dwFlags);
+  private:
+    // ******************************************************************
+    // * Object Mapping
+    // ******************************************************************
+    void Map(XBCtrlObject object, const char* szDeviceName, int dwInfo, int dwFlags);
 
-        // ******************************************************************
-        // * Find the look-up value for a DeviceName (creating if needed)
-        // ******************************************************************
-        int Insert(const char *szDeviceName);
+    // ******************************************************************
+    // * Find the look-up value for a DeviceName (creating if needed)
+    // ******************************************************************
+    int Insert(const char* szDeviceName);
 
-        // ******************************************************************
-        // * Update the object lookup offsets for a device
-        // ******************************************************************
-        void ReorderObjects(const char *szDeviceName, int pos);
+    // ******************************************************************
+    // * Update the object lookup offsets for a device
+    // ******************************************************************
+    void ReorderObjects(const char* szDeviceName, int pos);
 
-        // ******************************************************************
-        // * Controller and Objects Enumeration
-        // ******************************************************************
-        BOOL EnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi);
-        BOOL EnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi);
+    // ******************************************************************
+    // * Controller and Objects Enumeration
+    // ******************************************************************
+    BOOL EnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi);
+    BOOL EnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi);
 
-        // ******************************************************************
-        // * Wrapper Function for Enumeration
-        // ******************************************************************
-        friend BOOL CALLBACK WrapEnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi, LPVOID pvRef);
-        friend BOOL CALLBACK WrapEnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi, LPVOID pvRef);
+    // ******************************************************************
+    // * Wrapper Function for Enumeration
+    // ******************************************************************
+    friend BOOL CALLBACK WrapEnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi, LPVOID pvRef);
+    friend BOOL CALLBACK WrapEnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi, LPVOID pvRef);
 
-        // ******************************************************************
-        // * Device Names
-        // ******************************************************************
-        char m_DeviceName[XBCTRL_MAX_DEVICES][260];
+    // ******************************************************************
+    // * Device Names
+    // ******************************************************************
+    char m_DeviceName[XBCTRL_MAX_DEVICES][260];
 
-        // ******************************************************************
-        // * Object Configuration
-        // ******************************************************************
-        XBCtrlObjectCfg m_ObjectConfig[XBCTRL_OBJECT_COUNT];
+    // ******************************************************************
+    // * Object Configuration
+    // ******************************************************************
+    XBCtrlObjectCfg m_ObjectConfig[XBCTRL_OBJECT_COUNT];
 
-        // ******************************************************************
-        // * DirectInput
-        // ******************************************************************
-        XTL::LPDIRECTINPUT8 m_pDirectInput8;
+    // ******************************************************************
+    // * DirectInput
+    // ******************************************************************
+    XTL::LPDIRECTINPUT8 m_pDirectInput8;
 
-        // ******************************************************************
-        // * DirectInput Devices
-        // ******************************************************************
-        struct InputDevice
-        {
-            XTL::LPDIRECTINPUTDEVICE8 m_Device;
-            int                       m_Flags;
-        }
-        m_InputDevice[XBCTRL_MAX_DEVICES];
+    // ******************************************************************
+    // * DirectInput Devices
+    // ******************************************************************
+    struct InputDevice
+    {
+        XTL::LPDIRECTINPUTDEVICE8 m_Device;
+        int m_Flags;
+    } m_InputDevice[XBCTRL_MAX_DEVICES];
 
-        // ******************************************************************
-        // * DirectInput Enumeration Types
-        // ******************************************************************
-        enum XBCtrlState
-        {
-            XBCTRL_STATE_NONE = 0,
-            XBCTRL_STATE_CONFIG,
-            XBCTRL_STATE_LISTEN
-        };
-        // ******************************************************************
-        // * Current State
-        // ******************************************************************
-        enum XBCtrlState m_CurrentState;
+    // ******************************************************************
+    // * DirectInput Enumeration Types
+    // ******************************************************************
+    enum XBCtrlState
+    {
+        XBCTRL_STATE_NONE = 0,
+        XBCTRL_STATE_CONFIG,
+        XBCTRL_STATE_LISTEN
+    };
+    // ******************************************************************
+    // * Current State
+    // ******************************************************************
+    enum XBCtrlState m_CurrentState;
 
-        // ******************************************************************
-        // * Config State Variables
-        // ******************************************************************
-        LONG lPrevMouseX, lPrevMouseY, lPrevMouseZ;
-        XBCtrlObject CurConfigObject;
+    // ******************************************************************
+    // * Config State Variables
+    // ******************************************************************
+    LONG lPrevMouseX, lPrevMouseY, lPrevMouseZ;
+    XBCtrlObject CurConfigObject;
 
-        // ******************************************************************
-        // * Etc State Variables
-        // ******************************************************************
-        int m_dwInputDeviceCount;
-        int m_dwCurObject;
-
+    // ******************************************************************
+    // * Etc State Variables
+    // ******************************************************************
+    int m_dwInputDeviceCount;
+    int m_dwCurObject;
 };
 
 // ******************************************************************
 // * Device Flags
 // ******************************************************************
-#define DEVICE_FLAG_JOYSTICK      (1 << 0)
-#define DEVICE_FLAG_KEYBOARD      (1 << 1)
-#define DEVICE_FLAG_MOUSE         (1 << 2)
-#define DEVICE_FLAG_AXIS          (1 << 3)
-#define DEVICE_FLAG_BUTTON        (1 << 4)
-#define DEVICE_FLAG_POSITIVE      (1 << 5)
-#define DEVICE_FLAG_NEGATIVE      (1 << 6)
-#define DEVICE_FLAG_MOUSE_CLICK   (1 << 7)
-#define DEVICE_FLAG_MOUSE_LX      (1 << 8)
-#define DEVICE_FLAG_MOUSE_LY      (1 << 9)
-#define DEVICE_FLAG_MOUSE_LZ      (1 << 10)
+#define DEVICE_FLAG_JOYSTICK    (1 << 0)
+#define DEVICE_FLAG_KEYBOARD    (1 << 1)
+#define DEVICE_FLAG_MOUSE       (1 << 2)
+#define DEVICE_FLAG_AXIS        (1 << 3)
+#define DEVICE_FLAG_BUTTON      (1 << 4)
+#define DEVICE_FLAG_POSITIVE    (1 << 5)
+#define DEVICE_FLAG_NEGATIVE    (1 << 6)
+#define DEVICE_FLAG_MOUSE_CLICK (1 << 7)
+#define DEVICE_FLAG_MOUSE_LX    (1 << 8)
+#define DEVICE_FLAG_MOUSE_LY    (1 << 9)
+#define DEVICE_FLAG_MOUSE_LZ    (1 << 10)
 
 // ******************************************************************
 // * Detection Sensitivity

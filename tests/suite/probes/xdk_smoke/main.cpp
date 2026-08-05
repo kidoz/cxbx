@@ -14,16 +14,17 @@
 #include <string.h>
 #include <stdarg.h>
 
-extern "C" ULONG __cdecl DbgPrint(const char *Format, ...);
+extern "C" ULONG __cdecl DbgPrint(const char* Format, ...);
 extern "C" VOID __stdcall HalReturnToFirmware(ULONG Routine);
 
 static HANDLE g_trace = INVALID_HANDLE_VALUE;
 static int g_checks = 0;
 static int g_fails = 0;
 
-static void emit(const char *line)
+static void emit(const char* line)
 {
-    if (g_trace != INVALID_HANDLE_VALUE) {
+    if(g_trace != INVALID_HANDLE_VALUE)
+    {
         DWORD cb;
         WriteFile(g_trace, line, (DWORD)strlen(line), &cb, NULL);
         WriteFile(g_trace, "\n", 1, &cb, NULL);
@@ -31,7 +32,7 @@ static void emit(const char *line)
     DbgPrint("XT| %s\n", line);
 }
 
-static void emitf(const char *fmt, ...)
+static void emitf(const char* fmt, ...)
 {
     char line[480];
     va_list ap;
@@ -42,10 +43,10 @@ static void emitf(const char *fmt, ...)
     emit(line);
 }
 
-static void chk_bool(const char *name, int expect, int got)
+static void chk_bool(const char* name, int expect, int got)
 {
     g_checks++;
-    if (expect != got)
+    if(expect != got)
         g_fails++;
     emitf("CHK  %s expect=%d got=%d %s", name, expect, got,
           (expect == got) ? "PASS" : "FAIL");
@@ -69,32 +70,33 @@ void __cdecl main()
 
     // File write-readback through the XAPI CreateFile/ReadFile layer.
     static const char payload[] = "xdk-smoke-payload";
-    char readback[sizeof(payload)] = {0};
+    char readback[sizeof(payload)] = { 0 };
     DWORD cb = 0;
     BOOL wrote = FALSE, read = FALSE;
     HANDLE h = CreateFile("D:\\xdk_smoke.dat", GENERIC_WRITE, 0, NULL,
                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
+    if(h != INVALID_HANDLE_VALUE)
+    {
         wrote = WriteFile(h, payload, sizeof(payload), &cb, NULL) &&
                 cb == sizeof(payload);
         CloseHandle(h);
     }
     h = CreateFile("D:\\xdk_smoke.dat", GENERIC_READ, 0, NULL,
                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
+    if(h != INVALID_HANDLE_VALUE)
+    {
         read = ReadFile(h, readback, sizeof(readback), &cb, NULL) &&
                cb == sizeof(payload);
         CloseHandle(h);
     }
     chk_bool("xdk.file_write", 1, wrote);
-    chk_bool("xdk.file_readback", 1, read && memcmp(payload, readback,
-                                                    sizeof(payload)) == 0);
+    chk_bool("xdk.file_readback", 1, read && memcmp(payload, readback, sizeof(payload)) == 0);
 
     emitf("#result xdk_smoke verdict=%s checks=%d fail=%d",
           g_fails ? "FAIL" : "PASS", g_checks, g_fails);
     emit("#end");
 
-    if (g_trace != INVALID_HANDLE_VALUE)
+    if(g_trace != INVALID_HANDLE_VALUE)
         CloseHandle(g_trace);
 
     // Returning from main() would hand control to the XAPI runtime's

@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,36 +14,35 @@
 
 #ifdef _MSC_VER
 
-
 float fmodf(float f, float g)
 {
-	float temp1,temp2;
-	__asm
-	{
+    float temp1, temp2;
+    __asm
+    {
 		fld g
 		fld f
 		fprem
 		fstp temp2
 		fstp temp1
-	}
-	return temp2;
+    }
+    return temp2;
 }
 
 double fmod(double f, double g)
 {
-	double temp1,temp2;
-	__asm
-	{
+    double temp1, temp2;
+    __asm
+    {
 		fld g
 		fld f
 		fprem
 		fstp temp2
 		fstp temp1
-	}
-	return temp2;
+    }
+    return temp2;
 }
 #else
 
 OPENXDK_UNIMPLEMENTEDC(fmod)
 
-#endif 
+#endif

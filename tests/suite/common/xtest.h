@@ -8,7 +8,8 @@
 #include "xtrace.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // x86 EFLAGS bit masks (used by the cpu_flags probe).
@@ -22,9 +23,9 @@ extern "C" {
 // The condition/status flags an arithmetic instruction is defined to affect.
 #define XT_ARITH_FLAGS (XT_CF | XT_PF | XT_AF | XT_ZF | XT_SF | XT_OF)
 
-// Check a masked subset of EFLAGS, emitting one CHK line per selected flag
-// (named "<name>.CF", "<name>.OF", ...). Returns 1 if all selected flags match.
-int xt_check_flags(const char *name, uint32_t mask, uint32_t expect, uint32_t got);
+    // Check a masked subset of EFLAGS, emitting one CHK line per selected flag
+    // (named "<name>.CF", "<name>.OF", ...). Returns 1 if all selected flags match.
+    int xt_check_flags(const char* name, uint32_t mask, uint32_t expect, uint32_t got);
 
 #ifdef __cplusplus
 }

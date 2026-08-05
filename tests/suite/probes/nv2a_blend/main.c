@@ -25,9 +25,18 @@
 #define FBW 640
 #define FBH 480
 
-typedef struct { float x, y, z; uint32_t color; } Vertex;
+typedef struct
+{
+    float x, y, z;
+    uint32_t color;
+} Vertex;
 
-static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static uint32_t f2u(float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    return u;
+}
 
 int main(void)
 {
@@ -38,45 +47,54 @@ int main(void)
     XVideoSetMode(FBW, FBH, 32, REFRESH_DEFAULT);
     int status = pb_init();
     xt_check_bool("nv2a_blend.pb_init", 1, status == 0);
-    if (status != 0) return xt_end();
+    if(status != 0) return xt_end();
 
-    uint32_t *bb = (uint32_t *)pb_back_buffer();
+    uint32_t* bb = (uint32_t*)pb_back_buffer();
     uint32_t pitch_px = pb_back_buffer_pitch() / 4;
     xt_check_bool("nv2a_blend.back_buffer", 1, bb != NULL && pitch_px != 0);
-    if (bb == NULL || pitch_px == 0) { pb_kill(); return xt_end(); }
+    if(bb == NULL || pitch_px == 0)
+    {
+        pb_kill();
+        return xt_end();
+    }
 
     // A green quad with alpha 0x80 (~0.5) over the centre.
-    Vertex *vb = (Vertex *)MmAllocateContiguousMemoryEx(
+    Vertex* vb = (Vertex*)MmAllocateContiguousMemoryEx(
         4 * sizeof(Vertex), 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_blend.vbuf_alloc", 1, vb != NULL);
-    if (vb == NULL) { pb_kill(); return xt_end(); }
-    const uint32_t HALF_GREEN = 0x8000FF00u;   // A=0x80, G=0xFF
+    if(vb == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
+    const uint32_t HALF_GREEN = 0x8000FF00u; // A=0x80, G=0xFF
     vb[0] = (Vertex){ 160.0f, 120.0f, 0.0f, HALF_GREEN };
     vb[1] = (Vertex){ 480.0f, 120.0f, 0.0f, HALF_GREEN };
     vb[2] = (Vertex){ 480.0f, 360.0f, 0.0f, HALF_GREEN };
     vb[3] = (Vertex){ 160.0f, 360.0f, 0.0f, HALF_GREEN };
     uint32_t vbAddr = (uint32_t)(uintptr_t)vb;
 
-    for (int rep = 0; rep < 4; rep++) {
+    for(int rep = 0; rep < 4; rep++)
+    {
         // Fresh opaque red background each frame (blending accumulates otherwise).
-        for (uint32_t y = 0; y < FBH; y++)
-            for (uint32_t x = 0; x < FBW; x++)
+        for(uint32_t y = 0; y < FBH; y++)
+            for(uint32_t x = 0; x < FBW; x++)
                 bb[y * pitch_px + x] = 0xFFFF0000u;
 
-        uint32_t *p = pb_begin();
+        uint32_t* p = pb_begin();
         p = pb_push1(p, NV097_SET_SURFACE_CLIP_HORIZONTAL, ((uint32_t)FBW << 16));
-        p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL,   ((uint32_t)FBH << 16));
+        p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL, ((uint32_t)FBH << 16));
         p = pb_push1(p, NV097_SET_SURFACE_PITCH, pb_back_buffer_pitch() & 0xFFFF);
         p = pb_push1(p, NV097_SET_SURFACE_COLOR_OFFSET, (uint32_t)(uintptr_t)bb);
         // Identity viewport (screen-space positions).
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0,  f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4,  f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8,  f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4, f2u(0.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8, f2u(0.0f));
         p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 12, f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8,   f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12,  f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8, f2u(1.0f));
+        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12, f2u(1.0f));
         // Enable SRC_ALPHA / ONE_MINUS_SRC_ALPHA blending.
         p = pb_push1(p, NV097_SET_BLEND_ENABLE, 1);
         p = pb_push1(p, NV097_SET_BLEND_FUNC_SFACTOR, NV097_SET_BLEND_FUNC_SFACTOR_V_SRC_ALPHA);
@@ -94,12 +112,13 @@ int main(void)
         p = pb_push1(p, NV097_DRAW_ARRAYS, ((4u - 1u) << 24) | 0u);
         p = pb_push1(p, NV097_SET_BEGIN_END, NV097_SET_BEGIN_END_OP_END);
         pb_end(p);
-        while (pb_busy()) ;
+        while(pb_busy())
+            ;
     }
 
 #define PX(x, y) (bb[(uint32_t)(y) * pitch_px + (uint32_t)(x)] | 0xFF000000u)
-    uint32_t mixed  = PX(320, 240);   // inside the quad -> blended
-    uint32_t bgpx   = PX(40, 40);     // outside -> red background
+    uint32_t mixed = PX(320, 240); // inside the quad -> blended
+    uint32_t bgpx = PX(40, 40);    // outside -> red background
     xt_ev("nv2a_blend.mixed=0x%08lX bg=0x%08lX", (unsigned long)mixed, (unsigned long)bgpx);
 
     int mr = (mixed >> 16) & 0xFF, mg = (mixed >> 8) & 0xFF, mb = mixed & 0xFF;

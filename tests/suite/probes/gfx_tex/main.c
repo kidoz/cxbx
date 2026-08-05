@@ -26,10 +26,7 @@
 
 static uint32_t pattern_px(int x, int y)
 {
-    return 0xFF000000u
-         | ((uint32_t)((x * 4) & 0xFF) << 16)
-         | ((uint32_t)((y * 4) & 0xFF) << 8)
-         | (uint32_t)((x ^ y) & 0xFF);
+    return 0xFF000000u | ((uint32_t)((x * 4) & 0xFF) << 16) | ((uint32_t)((y * 4) & 0xFF) << 8) | (uint32_t)((x ^ y) & 0xFF);
 }
 
 int main(void)
@@ -44,42 +41,44 @@ int main(void)
     int status = pb_init();
     xt_ev("gfx_tex.pb_init_status=%d", status);
     xt_check_bool("gfx_tex.pb_init", 1, status == 0);
-    if (status != 0)
+    if(status != 0)
         return xt_end();
 
     // Known texture in contiguous, write-combined video memory.
-    uint32_t *tex = (uint32_t *)MmAllocateContiguousMemoryEx(
+    uint32_t* tex = (uint32_t*)MmAllocateContiguousMemoryEx(
         TW * TH * 4, 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("gfx_tex.tex_alloc", 1, tex != NULL);
-    if (tex == NULL) {
+    if(tex == NULL)
+    {
         pb_kill();
         return xt_end();
     }
 
-    for (int y = 0; y < TH; y++)
-        for (int x = 0; x < TW; x++)
+    for(int y = 0; y < TH; y++)
+        for(int x = 0; x < TW; x++)
             tex[y * TW + x] = pattern_px(x, y);
 
     // Cxbx programs the NV2A with raw host pointers into contiguous blocks; the
     // interception resolves either that or a physical address back to host mem.
     uint32_t texAddr = (uint32_t)tex;
-    uint32_t fmt     = (0x12u << 8) | (0x02u << 4);   // LU_A8R8G8B8, 2D
-    uint32_t rect    = (TW << 16) | TH;
+    uint32_t fmt = (0x12u << 8) | (0x02u << 4); // LU_A8R8G8B8, 2D
+    uint32_t rect = (TW << 16) | TH;
 
     xt_ev("gfx_tex.tex_addr=0x%08lX", (unsigned long)texAddr);
     xt_ev("gfx_tex.tex_fmt=0x%08lX rect=0x%08lX", (unsigned long)fmt, (unsigned long)rect);
 
     // Submit the descriptor + a primitive batch a handful of times; the
     // interception fires on SET_BEGIN_END with a bound stage-0 texture.
-    for (int i = 0; i < 8; i++) {
-        uint32_t *p = pb_begin();
-        p = pb_push1(p, NV097_SET_TEXTURE_OFFSET,     texAddr);
-        p = pb_push1(p, NV097_SET_TEXTURE_FORMAT,     fmt);
+    for(int i = 0; i < 8; i++)
+    {
+        uint32_t* p = pb_begin();
+        p = pb_push1(p, NV097_SET_TEXTURE_OFFSET, texAddr);
+        p = pb_push1(p, NV097_SET_TEXTURE_FORMAT, fmt);
         p = pb_push1(p, NV097_SET_TEXTURE_IMAGE_RECT, rect);
-        p = pb_push1(p, NV097_SET_BEGIN_END, 4);       // TRIANGLES (non-zero)
-        p = pb_push1(p, NV097_SET_BEGIN_END, 0);       // END
+        p = pb_push1(p, NV097_SET_BEGIN_END, 4); // TRIANGLES (non-zero)
+        p = pb_push1(p, NV097_SET_BEGIN_END, 0); // END
         pb_end(p);
-        while (pb_busy())
+        while(pb_busy())
             ;
     }
 

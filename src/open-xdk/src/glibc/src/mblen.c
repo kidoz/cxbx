@@ -19,13 +19,11 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	mblen
-
+#undef mblen
 
 /* Return the length of the multibyte character (if there is one)
    at S which is no longer than N characters.  */
-int
-DEFUN(mblen, (s, n), CONST char *s AND size_t n)
+int DEFUN(mblen, (s, n), CONST char* s AND size_t n)
 {
-  return(mbtowc((wchar_t *) NULL, s, n));
+    return (mbtowc((wchar_t*)NULL, s, n));
 }

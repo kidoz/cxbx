@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbxkrnl->hle_database.h
@@ -57,16 +57,15 @@
 // ******************************************************************
 extern struct HLEData
 {
-    char       *Library;
+    char* Library;
 
-    uint16      MajorVersion;
-    uint16      MinorVersion;
-    uint16      BuildVersion;
+    uint16 MajorVersion;
+    uint16 MinorVersion;
+    uint16 BuildVersion;
 
-    OOVPATable *OovpaTable;
-    uint32      OovpaTableSize;
-}
-HLEDataBase[];
+    OOVPATable* OovpaTable;
+    uint32 OovpaTableSize;
+} HLEDataBase[];
 
 // ******************************************************************
 // * HLEDataBaseSize
@@ -93,7 +92,7 @@ extern bool bXRefFirstPass;
 // ******************************************************************
 enum XRefDataBaseOffset
 {
-    XREF_XNINIT                 = 0,
+    XREF_XNINIT = 0,
     XREF_FCLOSEDEVICE,
     XREF_CLEARSTATEBLOCKFLAGS,
     XREF_RECORDSTATEBLOCK,

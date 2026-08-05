@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->xbox_controller.cpp
@@ -34,7 +34,7 @@
 #include "xbox_controller.h"
 
 // This is ridiculous
-#define FIELD_OFFSET(type,field)  ((ULONG)&(((type *)0)->field))
+#define FIELD_OFFSET(type, field) ((ULONG) & (((type*)0)->field))
 
 // ******************************************************************
 // * DirectInput enumeration callbacks (defined below, used before)
@@ -49,21 +49,21 @@ XBController::XBController()
 {
     m_CurrentState = XBCTRL_STATE_NONE;
 
-    int v=0;
+    int v = 0;
 
-    for(v=0;v<XBCTRL_MAX_DEVICES;v++)
+    for(v = 0; v < XBCTRL_MAX_DEVICES; v++)
     {
         m_DeviceName[v][0] = '\0';
 
         m_InputDevice[v].m_Device = NULL;
-        m_InputDevice[v].m_Flags  = 0;
+        m_InputDevice[v].m_Flags = 0;
     }
 
-    for(v=0;v<XBCTRL_OBJECT_COUNT;v++)
+    for(v = 0; v < XBCTRL_OBJECT_COUNT; v++)
     {
         m_ObjectConfig[v].dwDevice = -1;
-        m_ObjectConfig[v].dwInfo   = -1;
-        m_ObjectConfig[v].dwFlags  = 0;
+        m_ObjectConfig[v].dwInfo = -1;
+        m_ObjectConfig[v].dwFlags = 0;
     }
 
     m_pDirectInput8 = NULL;
@@ -85,7 +85,7 @@ XBController::~XBController()
 // ******************************************************************
 // * func: XBController::Load
 // ******************************************************************
-void XBController::Load(const char *szRegistryKey)
+void XBController::Load(const char* szRegistryKey)
 {
     if(m_CurrentState != XBCTRL_STATE_NONE)
     {
@@ -97,12 +97,12 @@ void XBController::Load(const char *szRegistryKey)
     // * Load Configuration from Registry
     // ******************************************************************
     {
-        DWORD   dwDisposition, dwType, dwSize;
-        HKEY    hKey;
+        DWORD dwDisposition, dwType, dwSize;
+        HKEY hKey;
 
         if(RegCreateKeyEx(HKEY_CURRENT_USER, szRegistryKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_QUERY_VALUE, NULL, &hKey, &dwDisposition) == ERROR_SUCCESS)
         {
-            int v=0;
+            int v = 0;
 
             // ******************************************************************
             // * Load Device Names
@@ -110,14 +110,15 @@ void XBController::Load(const char *szRegistryKey)
             {
                 char szValueName[64];
 
-                for(v=0;v<XBCTRL_MAX_DEVICES;v++)
+                for(v = 0; v < XBCTRL_MAX_DEVICES; v++)
                 {
                     // default is a null string
                     m_DeviceName[v][0] = '\0';
 
                     sprintf(szValueName, "DeviceName 0x%.02X", v);
 
-                    dwType = REG_SZ; dwSize = 260;
+                    dwType = REG_SZ;
+                    dwSize = 260;
                     RegQueryValueEx(hKey, szValueName, NULL, &dwType, (PBYTE)m_DeviceName[v], &dwSize);
                 }
             }
@@ -128,16 +129,17 @@ void XBController::Load(const char *szRegistryKey)
             {
                 char szValueName[64];
 
-                for(v=0;v<XBCTRL_OBJECT_COUNT;v++)
+                for(v = 0; v < XBCTRL_OBJECT_COUNT; v++)
                 {
                     // default object configuration
                     m_ObjectConfig[v].dwDevice = -1;
-                    m_ObjectConfig[v].dwInfo   = -1;
-                    m_ObjectConfig[v].dwFlags  = 0;
+                    m_ObjectConfig[v].dwInfo = -1;
+                    m_ObjectConfig[v].dwFlags = 0;
 
                     sprintf(szValueName, "Object : \"%s\"", m_DeviceNameLookup[v]);
 
-                    dwType = REG_BINARY; dwSize = sizeof(XBCtrlObjectCfg);
+                    dwType = REG_BINARY;
+                    dwSize = sizeof(XBCtrlObjectCfg);
                     RegQueryValueEx(hKey, szValueName, NULL, &dwType, (PBYTE)&m_ObjectConfig[v], &dwSize);
                 }
             }
@@ -150,7 +152,7 @@ void XBController::Load(const char *szRegistryKey)
 // ******************************************************************
 // * func: XBController::Save
 // ******************************************************************
-void XBController::Save(const char *szRegistryKey)
+void XBController::Save(const char* szRegistryKey)
 {
     if(m_CurrentState != XBCTRL_STATE_NONE)
     {
@@ -162,12 +164,12 @@ void XBController::Save(const char *szRegistryKey)
     // * Save Configuration to Registry
     // ******************************************************************
     {
-        DWORD   dwDisposition, dwType, dwSize;
-        HKEY    hKey;
+        DWORD dwDisposition, dwType, dwSize;
+        HKEY hKey;
 
         if(RegCreateKeyEx(HKEY_CURRENT_USER, szRegistryKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, NULL, &hKey, &dwDisposition) == ERROR_SUCCESS)
         {
-            int v=0;
+            int v = 0;
 
             // ******************************************************************
             // * Save Device Names
@@ -175,11 +177,12 @@ void XBController::Save(const char *szRegistryKey)
             {
                 char szValueName[64];
 
-                for(v=0;v<XBCTRL_MAX_DEVICES;v++)
+                for(v = 0; v < XBCTRL_MAX_DEVICES; v++)
                 {
                     sprintf(szValueName, "DeviceName 0x%.02X", v);
 
-                    dwType = REG_SZ; dwSize = 260;
+                    dwType = REG_SZ;
+                    dwSize = 260;
 
                     if(m_DeviceName[v][0] == '\0')
                         RegDeleteValue(hKey, szValueName);
@@ -194,11 +197,12 @@ void XBController::Save(const char *szRegistryKey)
             {
                 char szValueName[64];
 
-                for(v=0;v<XBCTRL_OBJECT_COUNT;v++)
+                for(v = 0; v < XBCTRL_OBJECT_COUNT; v++)
                 {
                     sprintf(szValueName, "Object : \"%s\"", m_DeviceNameLookup[v]);
 
-                    dwType = REG_BINARY; dwSize = sizeof(XBCtrlObjectCfg);
+                    dwType = REG_BINARY;
+                    dwSize = sizeof(XBCtrlObjectCfg);
 
                     if(m_ObjectConfig[v].dwDevice != -1)
                         RegSetValueEx(hKey, szValueName, NULL, dwType, (PBYTE)&m_ObjectConfig[v], dwSize);
@@ -240,7 +244,7 @@ void XBController::ConfigBegin(HWND hwnd, XBCtrlObject object)
 // ******************************************************************
 // * func: XBController::ConfigPoll
 // ******************************************************************
-bool XBController::ConfigPoll(char *szStatus)
+bool XBController::ConfigPoll(char* szStatus)
 {
     if(m_CurrentState != XBCTRL_STATE_CONFIG)
     {
@@ -248,8 +252,8 @@ bool XBController::ConfigPoll(char *szStatus)
         return false;
     }
 
-    XTL::DIDEVICEINSTANCE        DeviceInstance;
-    XTL::DIDEVICEOBJECTINSTANCE  ObjectInstance;
+    XTL::DIDEVICEINSTANCE DeviceInstance;
+    XTL::DIDEVICEOBJECTINSTANCE ObjectInstance;
 
     DeviceInstance.dwSize = sizeof(XTL::DIDEVICEINSTANCE);
     ObjectInstance.dwSize = sizeof(XTL::DIDEVICEOBJECTINSTANCE);
@@ -257,7 +261,7 @@ bool XBController::ConfigPoll(char *szStatus)
     // ******************************************************************
     // * Monitor for significant device state changes
     // ******************************************************************
-    for(int v=m_dwInputDeviceCount-1;v>=0;v--)
+    for(int v = m_dwInputDeviceCount - 1; v >= 0; v--)
     {
         // ******************************************************************
         // * Poll the current device
@@ -297,7 +301,7 @@ bool XBController::ConfigPoll(char *szStatus)
 
             if(abs(JoyState.lX) > DETECT_SENSITIVITY_JOYSTICK)
             {
-                dwHow   = FIELD_OFFSET(XTL::DIJOYSTATE, lX);
+                dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, lX);
                 dwFlags |= (JoyState.lX > 0) ? (DEVICE_FLAG_AXIS | DEVICE_FLAG_POSITIVE) : (DEVICE_FLAG_AXIS | DEVICE_FLAG_NEGATIVE);
             }
             else if(abs(JoyState.lY) > DETECT_SENSITIVITY_JOYSTICK)
@@ -325,30 +329,30 @@ bool XBController::ConfigPoll(char *szStatus)
                 dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, lRz);
                 dwFlags |= (JoyState.lRz > 0) ? (DEVICE_FLAG_AXIS | DEVICE_FLAG_POSITIVE) : (DEVICE_FLAG_AXIS | DEVICE_FLAG_NEGATIVE);
             }
-            else 
-                for(int b=0;b<2;b++)
+            else
+                for(int b = 0; b < 2; b++)
                     if(abs(JoyState.rglSlider[b]) > DETECT_SENSITIVITY_JOYSTICK)
                         dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rglSlider[b]);
-            else 
-                for(int b=0;b<4;b++)
-                    if(JoyState.rgdwPOV[b] > DETECT_SENSITIVITY_POV)
-                        dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rgdwPOV[b]);
-            else
-                for(int b=0;b<32;b++)
-                {
-                    if(JoyState.rgbButtons[b] > DETECT_SENSITIVITY_BUTTON)
-                    {
-                        dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rgbButtons[b]);
-                        dwFlags |= DEVICE_FLAG_BUTTON;
-                    }
-                }
+                    else
+                        for(int b = 0; b < 4; b++)
+                            if(JoyState.rgdwPOV[b] > DETECT_SENSITIVITY_POV)
+                                dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rgdwPOV[b]);
+                            else
+                                for(int b = 0; b < 32; b++)
+                                {
+                                    if(JoyState.rgbButtons[b] > DETECT_SENSITIVITY_BUTTON)
+                                    {
+                                        dwHow = FIELD_OFFSET(XTL::DIJOYSTATE, rgbButtons[b]);
+                                        dwFlags |= DEVICE_FLAG_BUTTON;
+                                    }
+                                }
 
             // ******************************************************************
             // * Retrieve Object Info
             // ******************************************************************
             if(dwHow != -1)
             {
-                const char *szDirection = (dwFlags & DEVICE_FLAG_AXIS) ? (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive " : "Negative " : "";
+                const char* szDirection = (dwFlags & DEVICE_FLAG_AXIS) ? (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive " : "Negative " : "";
 
                 m_InputDevice[v].m_Device->GetDeviceInfo(&DeviceInstance);
 
@@ -377,7 +381,7 @@ bool XBController::ConfigPoll(char *szStatus)
             // ******************************************************************
             // * Check for Keyboard State Change
             // ******************************************************************
-            for(int r=0;r<256;r++)
+            for(int r = 0; r < 256; r++)
             {
                 if(KeyState[r] != 0)
                 {
@@ -414,7 +418,7 @@ bool XBController::ConfigPoll(char *szStatus)
             // ******************************************************************
             // * Detect Button State Change
             // ******************************************************************
-            for(int r=0;r<4;r++)
+            for(int r = 0; r < 4; r++)
             {
                 // 0x80 is the mask for button push
                 if(MouseState.rgbButtons[r] & 0x80)
@@ -442,8 +446,8 @@ bool XBController::ConfigPoll(char *szStatus)
             // ******************************************************************
             else
             {
-                LONG lAbsDeltaX=0, lAbsDeltaY=0, lAbsDeltaZ=0;
-                LONG lDeltaX=0, lDeltaY=0, lDeltaZ=0;
+                LONG lAbsDeltaX = 0, lAbsDeltaY = 0, lAbsDeltaZ = 0;
+                LONG lDeltaX = 0, lDeltaY = 0, lDeltaZ = 0;
 
                 if(lPrevMouseX == -1 || lPrevMouseY == -1 || lPrevMouseZ == -1)
                     lDeltaX = lDeltaY = lDeltaZ = 0;
@@ -493,8 +497,8 @@ bool XBController::ConfigPoll(char *szStatus)
                 // ******************************************************************
                 if(dwHow != -1)
                 {
-                    const char *szDirection = (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive" : "Negative";
-                    char *szObjName = "Unknown";
+                    const char* szDirection = (dwFlags & DEVICE_FLAG_POSITIVE) ? "Positive" : "Negative";
+                    char* szObjName = "Unknown";
 
                     ObjectInstance.dwSize = sizeof(ObjectInstance);
 
@@ -539,7 +543,7 @@ void XBController::ConfigEnd()
 // ******************************************************************
 void XBController::ListenBegin(HWND hwnd)
 {
-    int v=0;
+    int v = 0;
 
     if(m_CurrentState != XBCTRL_STATE_NONE)
     {
@@ -551,10 +555,10 @@ void XBController::ListenBegin(HWND hwnd)
 
     DInputInit(hwnd);
 
-    for(v=XBCTRL_MAX_DEVICES-1;v>=m_dwInputDeviceCount;v--)
+    for(v = XBCTRL_MAX_DEVICES - 1; v >= m_dwInputDeviceCount; v--)
         m_DeviceName[v][0] = '\0';
 
-    for(v=0;v<XBCTRL_OBJECT_COUNT;v++)
+    for(v = 0; v < XBCTRL_OBJECT_COUNT; v++)
     {
         if(m_ObjectConfig[v].dwDevice >= m_dwInputDeviceCount)
         {
@@ -569,16 +573,16 @@ void XBController::ListenBegin(HWND hwnd)
 // ******************************************************************
 // * func: XBController::ListenPoll
 // ******************************************************************
-bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
+bool XBController::ListenPoll(XTL::XINPUT_STATE* Controller)
 {
     if(Controller == NULL)
     {
         return false;
     }
 
-    XTL::LPDIRECTINPUTDEVICE8 pDevice=NULL;
+    XTL::LPDIRECTINPUTDEVICE8 pDevice = NULL;
 
-    HRESULT hRet=0;
+    HRESULT hRet = 0;
     bool stateRead = false;
 
     // ******************************************************************
@@ -592,11 +596,11 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
     // ******************************************************************
     // * Poll all devices
     // ******************************************************************
-    for(int v=0;v<XBCTRL_OBJECT_COUNT;v++)
+    for(int v = 0; v < XBCTRL_OBJECT_COUNT; v++)
     {
         int dwDevice = m_ObjectConfig[v].dwDevice;
-        int dwFlags  = m_ObjectConfig[v].dwFlags;
-        int dwInfo   = m_ObjectConfig[v].dwInfo;
+        int dwFlags = m_ObjectConfig[v].dwFlags;
+        int dwInfo = m_ObjectConfig[v].dwInfo;
 
         if(dwDevice == -1)
             continue;
@@ -621,7 +625,7 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
         // ******************************************************************
         if(dwFlags & DEVICE_FLAG_JOYSTICK)
         {
-            XTL::DIJOYSTATE JoyState = {0};
+            XTL::DIJOYSTATE JoyState = { 0 };
 
             if(pDevice->GetDeviceState(sizeof(JoyState), &JoyState) != DI_OK)
                 continue;
@@ -629,13 +633,13 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
 
             if(dwFlags & DEVICE_FLAG_AXIS)
             {
-                LONG *pdwAxis = (LONG*)((uint32)&JoyState + dwInfo);
+                LONG* pdwAxis = (LONG*)((uint32)&JoyState + dwInfo);
                 wValue = (SHORT)(*pdwAxis);
 
                 if(dwFlags & DEVICE_FLAG_NEGATIVE)
                 {
                     if(wValue < 0)
-                        wValue = abs(wValue+1);
+                        wValue = abs(wValue + 1);
                     else
                         wValue = 0;
                 }
@@ -647,7 +651,7 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
             }
             else if(dwFlags & DEVICE_FLAG_BUTTON)
             {
-                BYTE *pbButton = (BYTE*)((uint32)&JoyState + dwInfo);
+                BYTE* pbButton = (BYTE*)((uint32)&JoyState + dwInfo);
 
                 if(*pbButton & 0x80)
                     wValue = 32767;
@@ -660,7 +664,7 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
         // ******************************************************************
         else if(dwFlags & DEVICE_FLAG_KEYBOARD)
         {
-            BYTE KeyboardState[256] = {0};
+            BYTE KeyboardState[256] = { 0 };
 
             if(pDevice->GetDeviceState(sizeof(KeyboardState), &KeyboardState) != DI_OK)
                 continue;
@@ -678,7 +682,7 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
         // ******************************************************************
         else if(dwFlags & DEVICE_FLAG_MOUSE)
         {
-            XTL::DIMOUSESTATE2 MouseState = {0};
+            XTL::DIMOUSESTATE2 MouseState = { 0 };
 
             if(pDevice->GetDeviceState(sizeof(MouseState), &MouseState) != DI_OK)
                 continue;
@@ -726,7 +730,7 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
                 if(dwFlags & DEVICE_FLAG_NEGATIVE)
                 {
                     if(wValue < 0)
-                        wValue = abs(wValue+1);
+                        wValue = abs(wValue + 1);
                     else
                         wValue = 0;
                 }
@@ -818,16 +822,22 @@ bool XBController::ListenPoll(XTL::XINPUT_STATE *Controller)
                         Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_DPAD_RIGHT;
                     break;
                 case XBCTRL_OBJECT_BACK:
-                    if (wValue > 0) {
+                    if(wValue > 0)
+                    {
                         Controller->Gamepad.wButtons |= XINPUT_GAMEPAD_BACK;
-                    } else {
+                    }
+                    else
+                    {
                         Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_BACK;
                     }
                     break;
                 case XBCTRL_OBJECT_START:
-                    if (wValue > 0) {
+                    if(wValue > 0)
+                    {
                         Controller->Gamepad.wButtons |= XINPUT_GAMEPAD_START;
-                    } else {
+                    }
+                    else
+                    {
                         Controller->Gamepad.wButtons &= ~XINPUT_GAMEPAD_START;
                     }
                     break;
@@ -876,9 +886,9 @@ bool XBController::HasInputDevice() const
 // ******************************************************************
 // * func: XBController::DeviceIsUsed
 // ******************************************************************
-bool XBController::DeviceIsUsed(const char *szDeviceName)
+bool XBController::DeviceIsUsed(const char* szDeviceName)
 {
-    for(int v=0;v<XBCTRL_MAX_DEVICES;v++)
+    for(int v = 0; v < XBCTRL_MAX_DEVICES; v++)
     {
         if(m_DeviceName[v][0] != '\0')
         {
@@ -901,14 +911,12 @@ void XBController::DInputInit(HWND hwnd)
     // * Create DirectInput Object
     // ******************************************************************
     {
-        HRESULT hRet = XTL::DirectInput8Create
-        (
+        HRESULT hRet = XTL::DirectInput8Create(
             GetModuleHandle(NULL),
             DIRECTINPUT_VERSION,
             XTL::IID_IDirectInput8,
             (void**)&m_pDirectInput8,
-            NULL
-        );
+            NULL);
 
         if(FAILED(hRet))
         {
@@ -922,13 +930,11 @@ void XBController::DInputInit(HWND hwnd)
     // ******************************************************************
     if(m_pDirectInput8 != 0)
     {
-        HRESULT hRet = m_pDirectInput8->EnumDevices
-        (
+        HRESULT hRet = m_pDirectInput8->EnumDevices(
             DI8DEVCLASS_GAMECTRL,
             WrapEnumGameCtrlCallback,
             this,
-            DIEDFL_ATTACHEDONLY
-        );
+            DIEDFL_ATTACHEDONLY);
 
         if(m_CurrentState == XBCTRL_STATE_CONFIG || DeviceIsUsed("SysKeyboard"))
         {
@@ -965,7 +971,7 @@ void XBController::DInputInit(HWND hwnd)
     // * Set cooperative level and acquire
     // ******************************************************************
     {
-        for(int v=m_dwInputDeviceCount-1;v>=0;v--)
+        for(int v = m_dwInputDeviceCount - 1; v >= 0; v--)
         {
             m_InputDevice[v].m_Device->SetCooperativeLevel(hwnd, DISCL_NONEXCLUSIVE | DISCL_FOREGROUND);
             m_InputDevice[v].m_Device->Acquire();
@@ -988,7 +994,7 @@ void XBController::DInputInit(HWND hwnd)
     // ******************************************************************
     // * Enumerate Controller objects
     // ******************************************************************
-    for(m_dwCurObject=0;m_dwCurObject<m_dwInputDeviceCount;m_dwCurObject++)
+    for(m_dwCurObject = 0; m_dwCurObject < m_dwInputDeviceCount; m_dwCurObject++)
         m_InputDevice[m_dwCurObject].m_Device->EnumObjects(WrapEnumObjectsCallback, this, DIDFT_ALL);
 }
 
@@ -997,7 +1003,7 @@ void XBController::DInputInit(HWND hwnd)
 // ******************************************************************
 void XBController::DInputCleanup()
 {
-    for(int v=m_dwInputDeviceCount-1;v>=0;v--)
+    for(int v = m_dwInputDeviceCount - 1; v >= 0; v--)
     {
         m_InputDevice[v].m_Device->Unacquire();
         m_InputDevice[v].m_Device->Release();
@@ -1018,22 +1024,22 @@ void XBController::DInputCleanup()
 // ******************************************************************
 // * func: XBController::Map
 // ******************************************************************
-void XBController::Map(XBCtrlObject object, const char *szDeviceName, int dwInfo, int dwFlags)
+void XBController::Map(XBCtrlObject object, const char* szDeviceName, int dwInfo, int dwFlags)
 {
     // Initialize InputMapping instance
     m_ObjectConfig[object].dwDevice = Insert(szDeviceName);
-    m_ObjectConfig[object].dwInfo   = dwInfo;
-    m_ObjectConfig[object].dwFlags  = dwFlags;
+    m_ObjectConfig[object].dwInfo = dwInfo;
+    m_ObjectConfig[object].dwFlags = dwFlags;
 
     // Purse unused device slots
-    for(int v=0;v<XBCTRL_MAX_DEVICES;v++)
+    for(int v = 0; v < XBCTRL_MAX_DEVICES; v++)
     {
         bool inuse = false;
 
-        for(int r=0;r<XBCTRL_OBJECT_COUNT;r++)
+        for(int r = 0; r < XBCTRL_OBJECT_COUNT; r++)
         {
             if(m_ObjectConfig[r].dwDevice == v)
-                inuse=true;
+                inuse = true;
         }
 
         if(!inuse)
@@ -1044,15 +1050,15 @@ void XBController::Map(XBCtrlObject object, const char *szDeviceName, int dwInfo
 // ******************************************************************
 // * func: XBController::Insert
 // ******************************************************************
-int XBController::Insert(const char *szDeviceName)
+int XBController::Insert(const char* szDeviceName)
 {
-    int v=0;
+    int v = 0;
 
-    for(v=0;v<XBCTRL_MAX_DEVICES;v++)
+    for(v = 0; v < XBCTRL_MAX_DEVICES; v++)
         if(strcmp(m_DeviceName[v], szDeviceName) == 0)
             return v;
 
-    for(v=0;v<XBCTRL_MAX_DEVICES;v++)
+    for(v = 0; v < XBCTRL_MAX_DEVICES; v++)
     {
         if(m_DeviceName[v][0] == '\0')
         {
@@ -1072,12 +1078,12 @@ int XBController::Insert(const char *szDeviceName)
 // ******************************************************************
 // * func: XBController::ReorderObjects
 // ******************************************************************
-void XBController::ReorderObjects(const char *szDeviceName, int pos)
+void XBController::ReorderObjects(const char* szDeviceName, int pos)
 {
-    int old = -1, v=0;
+    int old = -1, v = 0;
 
     // locate old device name position
-    for(v=0;v<XBCTRL_MAX_DEVICES;v++)
+    for(v = 0; v < XBCTRL_MAX_DEVICES; v++)
     {
         if(strcmp(m_DeviceName[v], szDeviceName) == 0)
         {
@@ -1094,7 +1100,7 @@ void XBController::ReorderObjects(const char *szDeviceName, int pos)
     }
 
     // Update all old values
-    for(v=0;v<XBCTRL_OBJECT_COUNT;v++)
+    for(v = 0; v < XBCTRL_OBJECT_COUNT; v++)
     {
         if(m_ObjectConfig[v].dwDevice == old)
             m_ObjectConfig[v].dwDevice = pos;
@@ -1114,7 +1120,7 @@ BOOL XBController::EnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi)
         return DIENUM_CONTINUE;
 
     HRESULT hRet = m_pDirectInput8->CreateDevice(lpddi->guidInstance, &m_InputDevice[m_dwInputDeviceCount].m_Device, NULL);
-    
+
     if(!FAILED(hRet))
     {
         m_InputDevice[m_dwInputDeviceCount].m_Flags = DEVICE_FLAG_JOYSTICK;
@@ -1135,14 +1141,14 @@ BOOL XBController::EnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi)
 {
     if(lpddoi->dwType & DIDFT_AXIS)
     {
-        XTL::DIPROPRANGE diprg; 
+        XTL::DIPROPRANGE diprg;
 
-        diprg.diph.dwSize       = sizeof(XTL::DIPROPRANGE); 
-        diprg.diph.dwHeaderSize = sizeof(XTL::DIPROPHEADER); 
-        diprg.diph.dwHow        = DIPH_BYID; 
-        diprg.diph.dwObj        = lpddoi->dwType;
-        diprg.lMin              = 0 - 32768; 
-        diprg.lMax              = 0 + 32767; 
+        diprg.diph.dwSize = sizeof(XTL::DIPROPRANGE);
+        diprg.diph.dwHeaderSize = sizeof(XTL::DIPROPHEADER);
+        diprg.diph.dwHow = DIPH_BYID;
+        diprg.diph.dwObj = lpddoi->dwType;
+        diprg.lMin = 0 - 32768;
+        diprg.lMax = 0 + 32767;
 
         HRESULT hRet = m_InputDevice[m_dwCurObject].m_Device->SetProperty(DIPROP_RANGE, &diprg.diph);
 
@@ -1151,14 +1157,14 @@ BOOL XBController::EnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi)
     }
     else if(lpddoi->dwType & DIDFT_BUTTON)
     {
-        XTL::DIPROPRANGE diprg; 
+        XTL::DIPROPRANGE diprg;
 
-        diprg.diph.dwSize       = sizeof(XTL::DIPROPRANGE); 
-        diprg.diph.dwHeaderSize = sizeof(XTL::DIPROPHEADER); 
-        diprg.diph.dwHow        = DIPH_BYID; 
-        diprg.diph.dwObj        = lpddoi->dwType;
-        diprg.lMin              = 0; 
-        diprg.lMax              = 255; 
+        diprg.diph.dwSize = sizeof(XTL::DIPROPRANGE);
+        diprg.diph.dwHeaderSize = sizeof(XTL::DIPROPHEADER);
+        diprg.diph.dwHow = DIPH_BYID;
+        diprg.diph.dwObj = lpddoi->dwType;
+        diprg.lMin = 0;
+        diprg.lMax = 255;
 
         HRESULT hRet = m_InputDevice[m_dwCurObject].m_Device->SetProperty(DIPROP_RANGE, &diprg.diph);
 
@@ -1174,7 +1180,7 @@ BOOL XBController::EnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi)
 // ******************************************************************
 BOOL CALLBACK WrapEnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi, LPVOID pvRef)
 {
-    XBController *context = (XBController*)pvRef;
+    XBController* context = (XBController*)pvRef;
 
     return context->EnumGameCtrlCallback(lpddi);
 }
@@ -1184,7 +1190,7 @@ BOOL CALLBACK WrapEnumGameCtrlCallback(XTL::LPCDIDEVICEINSTANCE lpddi, LPVOID pv
 // ******************************************************************
 BOOL CALLBACK WrapEnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi, LPVOID pvRef)
 {
-    XBController *context = (XBController*)pvRef;
+    XBController* context = (XBController*)pvRef;
 
     return context->EnumObjectsCallback(lpddoi);
 }
@@ -1192,22 +1198,40 @@ BOOL CALLBACK WrapEnumObjectsCallback(XTL::LPCDIDEVICEOBJECTINSTANCE lpddoi, LPV
 // ******************************************************************
 // * Input Device Name Lookup Table
 // ******************************************************************
-const char *XBController::m_DeviceNameLookup[XBCTRL_OBJECT_COUNT] = 
-{
+const char* XBController::m_DeviceNameLookup[XBCTRL_OBJECT_COUNT] = {
     // ******************************************************************
     // * Analog Axis
     // ******************************************************************
-    "LThumbPosX", "LThumbNegX", "LThumbPosY", "LThumbNegY",
-    "RThumbPosX", "RThumbNegX", "RThumbPosY", "RThumbNegY",
+    "LThumbPosX",
+    "LThumbNegX",
+    "LThumbPosY",
+    "LThumbNegY",
+    "RThumbPosX",
+    "RThumbNegX",
+    "RThumbPosY",
+    "RThumbNegY",
 
     // ******************************************************************
     // * Analog Buttons
     // ******************************************************************
-    "X", "Y", "A", "B", "White", "Black", "LTrigger", "RTrigger",
+    "X",
+    "Y",
+    "A",
+    "B",
+    "White",
+    "Black",
+    "LTrigger",
+    "RTrigger",
 
     // ******************************************************************
     // * Digital Buttons
     // ******************************************************************
-    "DPadUp", "DPadDown", "DPadLeft", "DPadRight",
-    "Back", "Start", "LThumb", "RThumb",
+    "DPadUp",
+    "DPadDown",
+    "DPadLeft",
+    "DPadRight",
+    "Back",
+    "Start",
+    "LThumb",
+    "RThumb",
 };

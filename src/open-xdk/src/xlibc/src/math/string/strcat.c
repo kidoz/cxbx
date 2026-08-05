@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -10,31 +10,31 @@
 // *
 // ******************************************************************
 
-#include	<xlibc/ansidecl.h>
+#include <xlibc/ansidecl.h>
 
 //
 // Return the length of a string
 //
 
-#define	ALTERNATE
-char* strcat( char *dest, const char *src )
+#define ALTERNATE
+char* strcat(char* dest, const char* src)
 
 {
-	char*	pDest	= (char*) dest;
-	char*	pSrc	= (char*) src;
-	char	a;
+    char* pDest = (char*)dest;
+    char* pSrc = (char*)src;
+    char a;
 
+    // Move to end of Dest string
+    while(true)
+    {
+        if(*pDest++ == 0x00) break;
+    }
 
-	// Move to end of Dest string
-	while(true){
-		if( *pDest++ == 0x00 ) break;
-	}
-
-	// Append source
-	while(true){
-		a = *pSrc++;
-		*pDest++=a;
-		if( a == 0x00 ) return dest;
-	}
-
+    // Append source
+    while(true)
+    {
+        a = *pSrc++;
+        *pDest++ = a;
+        if(a == 0x00) return dest;
+    }
 }

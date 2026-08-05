@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -12,8 +12,9 @@
 
 // Abort is supposed to return to the OS with an error... we'll just crash...
 // We could PRINT an error to the screen however....
-void abort( void )
+void abort(void)
 {
-	while(1){
-	};
+    while(1)
+    {
+    };
 }

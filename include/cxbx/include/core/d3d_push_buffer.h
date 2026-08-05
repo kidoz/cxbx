@@ -139,7 +139,7 @@ struct IndexedBatch
 };
 
 inline constexpr IndexedBatch ClassifyIndexedBatch(std::uint32_t beginEndOperation,
-                                                    std::uint32_t indexCount) noexcept
+                                                   std::uint32_t indexCount) noexcept
 {
     switch(beginEndOperation)
     {

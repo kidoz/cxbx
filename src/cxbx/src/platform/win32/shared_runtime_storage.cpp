@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->platform->win32->shared_runtime_storage.cpp
@@ -37,15 +37,15 @@
 #include "emulation_runtime.h"
 #include "shared_runtime_storage.h"
 
-#undef FIELD_OFFSET     // prevent macro redefinition warnings
+#undef FIELD_OFFSET // prevent macro redefinition warnings
 #include <windows.h>
 #include <cstdio>
 
 // ******************************************************************
 // * exported globals
 // ******************************************************************
-CXBXKRNL_API EmuShared *g_EmuShared = NULL;
-CXBXKRNL_API int        g_EmuSharedRefCount = 0;
+CXBXKRNL_API EmuShared* g_EmuShared = NULL;
+CXBXKRNL_API int g_EmuSharedRefCount = 0;
 
 // ******************************************************************
 // * static/global
@@ -76,18 +76,17 @@ CXBXKRNL_API void EmuShared::Init()
     // * Create the shared memory "file"
     // ******************************************************************
     {
-        hMapObject = CreateFileMapping
-        ( 
-            INVALID_HANDLE_VALUE,   // Paging file
-            NULL,                   // default security attributes
-            PAGE_READWRITE,         // read/write access
-            0,                      // size: high 32 bits
-            sizeof(EmuShared),      // size: low 32 bits
-            "Local\\EmuShared"      // name of map object
+        hMapObject = CreateFileMapping(
+            INVALID_HANDLE_VALUE, // Paging file
+            NULL,                 // default security attributes
+            PAGE_READWRITE,       // read/write access
+            0,                    // size: high 32 bits
+            sizeof(EmuShared),    // size: low 32 bits
+            "Local\\EmuShared"    // name of map object
         );
 
         if(hMapObject == NULL)
-			EmuCleanup("Could not map shared memory!");
+            EmuCleanup("Could not map shared memory!");
 
         if(GetLastError() == ERROR_ALREADY_EXISTS)
             init = false;
@@ -97,8 +96,7 @@ CXBXKRNL_API void EmuShared::Init()
     // * Memory map this file
     // ******************************************************************
     {
-        g_EmuShared = (EmuShared*)MapViewOfFile
-        (
+        g_EmuShared = (EmuShared*)MapViewOfFile(
             hMapObject,     // object to map view of
             FILE_MAP_WRITE, // read/write access
             0,              // high offset:  map from
@@ -106,8 +104,8 @@ CXBXKRNL_API void EmuShared::Init()
             0               // default: map entire file
         );
 
-        if(g_EmuShared == NULL) 
-			EmuCleanup("Could not map view of shared memory!");
+        if(g_EmuShared == NULL)
+            EmuCleanup("Could not map view of shared memory!");
     }
 
     // ******************************************************************

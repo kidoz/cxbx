@@ -19,21 +19,20 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-char *
-DEFUN(strsep, (stringp, delim),
-      char **stringp AND CONST char *delim)
+char* DEFUN(strsep, (stringp, delim),
+            char** stringp AND CONST char* delim)
 {
-  char *begin, *end;
+    char *begin, *end;
 
-  begin = *stringp + strspn (*stringp, delim);
-  end = *stringp + strcspn (*stringp, delim);
+    begin = *stringp + strspn(*stringp, delim);
+    end = *stringp + strcspn(*stringp, delim);
 
-  if (end == *stringp)
-    return NULL;
+    if(end == *stringp)
+        return NULL;
 
-  if (*end != '\0')
-    *end++ = '\0';
-  *stringp = end;
+    if(*end != '\0')
+        *end++ = '\0';
+    *stringp = end;
 
-  return begin;
+    return begin;
 }

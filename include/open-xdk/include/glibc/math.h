@@ -20,203 +20,197 @@ Cambridge, MA 02139, USA.  */
  *	ANSI Standard: 4.5 MATHEMATICS	<math.h>
  */
 
-#ifndef	_MATH_H
-#define	_MATH_H	1
+#ifndef _MATH_H
+#define _MATH_H 1
 
-# ifdef __cplusplus
-extern "C" {
-# endif
-
+#ifdef __cplusplus
+extern "C"
+{
+#endif
 
 #include "defs.h"
 #include "features.h"
 
-#define	__need_Emath
+#define __need_Emath
 #include "errno.h"
 
 /* Get machine-dependent HUGE_VAL value (returned on overflow).  */
 #include "huge_val.h"
 
 /* Get machine-dependent NAN value (returned for some domain errors).  */
-#ifdef	 __USE_GNU
+#ifdef __USE_GNU
 #include <nan.h>
 #endif
 
+    /* Trigonometric functions.  */
 
-/* Trigonometric functions.  */
+    /* Arc cosine of X.  */
+    extern __CONSTVALUE double acos __P((double __x));
+    /* Arc sine of X.  */
+    extern __CONSTVALUE double asin __P((double __x));
+    /* Arc tangent of X.  */
+    extern __CONSTVALUE double atan __P((double __x));
+    /* Arc tangent of Y/X.  */
+    extern __CONSTVALUE double atan2 __P((double __y, double __x));
 
-/* Arc cosine of X.  */
-extern __CONSTVALUE double acos __P ((double __x));
-/* Arc sine of X.  */
-extern __CONSTVALUE double asin __P ((double __x));
-/* Arc tangent of X.  */
-extern __CONSTVALUE double atan __P ((double __x));
-/* Arc tangent of Y/X.  */
-extern __CONSTVALUE double atan2 __P ((double __y, double __x));
+    /* Cosine of X.  */
+    extern __CONSTVALUE double cos __P((double __x));
+    /* Sine of X.  */
+    extern __CONSTVALUE double sin __P((double __x));
+    extern __CONSTVALUE double _sin __P((double __x));
+    /* Tangent of X.  */
+    extern __CONSTVALUE double tan __P((double __x));
 
-/* Cosine of X.  */
-extern __CONSTVALUE double cos __P ((double __x));
-/* Sine of X.  */
-extern __CONSTVALUE double sin __P ((double __x));
-extern __CONSTVALUE double _sin __P ((double __x));
-/* Tangent of X.  */
-extern __CONSTVALUE double tan __P ((double __x));
+    /* Hyperbolic functions.  */
 
+    /* Hyperbolic cosine of X.  */
+    extern __CONSTVALUE double cosh __P((double __x));
+    /* Hyperbolic sine of X.  */
+    extern __CONSTVALUE double sinh __P((double __x));
+    /* Hyperbolic tangent of X.  */
+    extern __CONSTVALUE double tanh __P((double __x));
 
-/* Hyperbolic functions.  */
-
-/* Hyperbolic cosine of X.  */
-extern __CONSTVALUE double cosh __P ((double __x));
-/* Hyperbolic sine of X.  */
-extern __CONSTVALUE double sinh __P ((double __x));
-/* Hyperbolic tangent of X.  */
-extern __CONSTVALUE double tanh __P ((double __x));
-
-#ifdef	__USE_MISC
-/* Hyperbolic arc cosine of X.  */
-extern __CONSTVALUE double acosh __P ((double __x));
-/* Hyperbolic arc sine of X.  */
-extern __CONSTVALUE double asinh __P ((double __x));
-/* Hyperbolic arc tangent of X.  */
-extern __CONSTVALUE double atanh __P ((double __x));
+#ifdef __USE_MISC
+    /* Hyperbolic arc cosine of X.  */
+    extern __CONSTVALUE double acosh __P((double __x));
+    /* Hyperbolic arc sine of X.  */
+    extern __CONSTVALUE double asinh __P((double __x));
+    /* Hyperbolic arc tangent of X.  */
+    extern __CONSTVALUE double atanh __P((double __x));
 #endif
 
-/* Exponential and logarithmic functions.  */
+    /* Exponential and logarithmic functions.  */
 
-/* Exponentional function of X.  */
-extern __CONSTVALUE double exp __P ((double __x));
+    /* Exponentional function of X.  */
+    extern __CONSTVALUE double exp __P((double __x));
 
-/* Break VALUE into a normalized fraction and an integral power of 2.  */
-extern double frexp __P ((double __value, int *__exp));
+    /* Break VALUE into a normalized fraction and an integral power of 2.  */
+    extern double frexp __P((double __value, int* __exp));
 
-/* X times (two to the EXP power).  */
-extern __CONSTVALUE double ldexp __P ((double __x, int __exp));
+    /* X times (two to the EXP power).  */
+    extern __CONSTVALUE double ldexp __P((double __x, int __exp));
 
-/* Natural logarithm of X.  */
-extern __CONSTVALUE double log __P ((double __x));
+    /* Natural logarithm of X.  */
+    extern __CONSTVALUE double log __P((double __x));
 
-/* Base-ten logarithm of X.  */
-extern __CONSTVALUE double log10 __P ((double __x));
+    /* Base-ten logarithm of X.  */
+    extern __CONSTVALUE double log10 __P((double __x));
 
-#ifdef	__USE_MISC
-/* Return exp(X) - 1.  */
-extern __CONSTVALUE double __expm1 __P ((double __x));
-extern __CONSTVALUE double expm1 __P ((double __x));
+#ifdef __USE_MISC
+    /* Return exp(X) - 1.  */
+    extern __CONSTVALUE double __expm1 __P((double __x));
+    extern __CONSTVALUE double expm1 __P((double __x));
 
-/* Return log(1 + X).  */
-extern __CONSTVALUE double log1p __P ((double __x));
+    /* Return log(1 + X).  */
+    extern __CONSTVALUE double log1p __P((double __x));
 #endif
 
-/* Break VALUE into integral and fractional parts.  */
-extern double modf __P ((double __value, double *__iptr));
+    /* Break VALUE into integral and fractional parts.  */
+    extern double modf __P((double __value, double* __iptr));
 
+    /* Power functions.  */
 
-/* Power functions.  */
+    /* Return X to the Y power.  */
+    extern __CONSTVALUE double pow __P((double __x, double __y));
 
-/* Return X to the Y power.  */
-extern __CONSTVALUE double pow __P ((double __x, double __y));
+    /* Return the square root of X.  */
+    extern __CONSTVALUE double sqrt __P((double __x));
 
-/* Return the square root of X.  */
-extern __CONSTVALUE double sqrt __P ((double __x));
-
-#ifdef	__USE_MISC
-/* Return the cube root of X.  */
-extern __CONSTVALUE double cbrt __P ((double __x));
+#ifdef __USE_MISC
+    /* Return the cube root of X.  */
+    extern __CONSTVALUE double cbrt __P((double __x));
 #endif
 
+    /* Nearest integer, absolute value, and remainder functions.  */
 
-/* Nearest integer, absolute value, and remainder functions.  */
+    /* Smallest integral value not less than X.  */
+    extern __CONSTVALUE double ceil __P((double __x));
 
-/* Smallest integral value not less than X.  */
-extern __CONSTVALUE double ceil __P ((double __x));
+    /* Absolute value of X.  */
+    extern __CONSTVALUE double fabs __P((double __x));
 
-/* Absolute value of X.  */
-extern __CONSTVALUE double fabs __P ((double __x));
+    /* Largest integer not greater than X.  */
+    extern __CONSTVALUE double floor __P((double __x));
 
-/* Largest integer not greater than X.  */
-extern __CONSTVALUE double floor __P ((double __x));
+    /* Floating-point modulo remainder of X/Y.  */
+    extern __CONSTVALUE double fmod __P((double __x, double __y));
 
-/* Floating-point modulo remainder of X/Y.  */
-extern __CONSTVALUE double fmod __P ((double __x, double __y));
+    /* Return 0 if VALUE is finite or NaN, +1 if it
+       is +Infinity, -1 if it is -Infinity.  */
+    extern __CONSTVALUE int __isinf __P((double __value));
 
+    /* Return nonzero if VALUE is not a number.  */
+    extern __CONSTVALUE int __isnan __P((double __value));
 
-/* Return 0 if VALUE is finite or NaN, +1 if it
-   is +Infinity, -1 if it is -Infinity.  */
-extern __CONSTVALUE int __isinf __P ((double __value));
-
-/* Return nonzero if VALUE is not a number.  */
-extern __CONSTVALUE int __isnan __P ((double __value));
-
-/* Return nonzero if VALUE is finite and not NaN.  */
-extern __CONSTVALUE int __finite __P ((double __value));
-#ifdef	__OPTIMIZE__
-#define	__finite(value)	(!__isinf(value))
+    /* Return nonzero if VALUE is finite and not NaN.  */
+    extern __CONSTVALUE int __finite __P((double __value));
+#ifdef __OPTIMIZE__
+#define __finite(value) (!__isinf(value))
 #endif
 
-/* Deal with an infinite or NaN result.
-   If ERROR is ERANGE, result is +Inf;
-   if ERROR is - ERANGE, result is -Inf;
-   otherwise result is NaN.
-   This will set `errno' to either ERANGE or EDOM,
-   and may return an infinity or NaN, or may do something else.  */
-extern double __infnan __P ((int __error));
+    /* Deal with an infinite or NaN result.
+       If ERROR is ERANGE, result is +Inf;
+       if ERROR is - ERANGE, result is -Inf;
+       otherwise result is NaN.
+       This will set `errno' to either ERANGE or EDOM,
+       and may return an infinity or NaN, or may do something else.  */
+    extern double __infnan __P((int __error));
 
-/* Return X with its signed changed to Y's.  */
-extern __CONSTVALUE double __copysign __P ((double __x, double __y));
+    /* Return X with its signed changed to Y's.  */
+    extern __CONSTVALUE double __copysign __P((double __x, double __y));
 
-/* Return X times (2 to the Nth power).  */
-extern __CONSTVALUE double __scalb __P ((double __x, int __n));
+    /* Return X times (2 to the Nth power).  */
+    extern __CONSTVALUE double __scalb __P((double __x, int __n));
 
-#ifdef	__OPTIMIZE__
-#define	__scalb(x, n)	ldexp ((x), (n))
+#ifdef __OPTIMIZE__
+#define __scalb(x, n) ldexp((x), (n))
 #endif
 
-/* Return the remainder of X/Y.  */
-extern __CONSTVALUE double __drem __P ((double __x, double __y));
+    /* Return the remainder of X/Y.  */
+    extern __CONSTVALUE double __drem __P((double __x, double __y));
 
-/* Return the base 2 signed integral exponent of X.  */
-extern __CONSTVALUE double __logb __P ((double __x));
+    /* Return the base 2 signed integral exponent of X.  */
+    extern __CONSTVALUE double __logb __P((double __x));
 
-#ifdef	__USE_MISC
+#ifdef __USE_MISC
 
-/* Return the integer nearest X in the direction of the
-   prevailing rounding mode.  */
-extern __CONSTVALUE double __rint __P ((double __x));
-extern __CONSTVALUE double rint __P ((double __x));
+    /* Return the integer nearest X in the direction of the
+       prevailing rounding mode.  */
+    extern __CONSTVALUE double __rint __P((double __x));
+    extern __CONSTVALUE double rint __P((double __x));
 
-/* Return `sqrt(X*X + Y*Y)'.  */
-extern __CONSTVALUE double hypot __P ((double __x, double __y));
+    /* Return `sqrt(X*X + Y*Y)'.  */
+    extern __CONSTVALUE double hypot __P((double __x, double __y));
 
-struct __cabs_complex
-{
-  double __x, __y;
-};
+    struct __cabs_complex
+    {
+        double __x, __y;
+    };
 
-/* Return `sqrt(X*X + Y*Y)'.  */
-extern __CONSTVALUE double cabs __P ((struct __cabs_complex));
+    /* Return `sqrt(X*X + Y*Y)'.  */
+    extern __CONSTVALUE double cabs __P((struct __cabs_complex));
 
-extern __CONSTVALUE int isinf __P ((double __value));
-extern __CONSTVALUE int isnan __P ((double __value));
-extern __CONSTVALUE int finite __P ((double __value));
-extern __CONSTVALUE double infnan __P ((int __error));
-extern __CONSTVALUE double copysign __P ((double __x, double __y));
-extern __CONSTVALUE double scalb __P ((double __x, int __n));
-extern __CONSTVALUE double drem __P ((double __x, double __y));
-extern __CONSTVALUE double logb __P ((double __x));
+    extern __CONSTVALUE int isinf __P((double __value));
+    extern __CONSTVALUE int isnan __P((double __value));
+    extern __CONSTVALUE int finite __P((double __value));
+    extern __CONSTVALUE double infnan __P((int __error));
+    extern __CONSTVALUE double copysign __P((double __x, double __y));
+    extern __CONSTVALUE double scalb __P((double __x, int __n));
+    extern __CONSTVALUE double drem __P((double __x, double __y));
+    extern __CONSTVALUE double logb __P((double __x));
 
-#ifdef	__OPTIMIZE__
-#define	isinf(value)	__isinf(value)
-#define	isnan(value)	__isnan(value)
-#define	infnan(error)	__infnan(error)
-#define	finite(value)	__finite(value)
-#define	copysign(x, y)	__copysign((x), (y))
-#define	scalb(x, n)	__scalb((x), (n))
-#define	drem(x, y)	__drem((x), (y))
-#define	logb(x)		__logb(x)
+#ifdef __OPTIMIZE__
+#define isinf(value)   __isinf(value)
+#define isnan(value)   __isnan(value)
+#define infnan(error)  __infnan(error)
+#define finite(value)  __finite(value)
+#define copysign(x, y) __copysign((x), (y))
+#define scalb(x, n)    __scalb((x), (n))
+#define drem(x, y)     __drem((x), (y))
+#define logb(x)        __logb(x)
 #endif /* Optimizing.  */
 
 #endif /* Use misc.  */
-
 
 #if 0
 /* The "Future Library Directions" section of the
@@ -270,16 +264,13 @@ extern __CONSTVALUE __long_double_t floorl __P ((__long_double_t __x));
 extern __CONSTVALUE __long_double_t fmodl __P ((__long_double_t __x, __long_double_t __y));
 #endif /* 0 */
 
-/* Get machine-dependent inline versions (if there are any).  */
-/*
-#include <__math.h>
-*/
+    /* Get machine-dependent inline versions (if there are any).  */
+    /*
+    #include <__math.h>
+    */
 
-
-
-# ifdef __cplusplus
+#ifdef __cplusplus
 }
-# endif
-
+#endif
 
 #endif /* math.h  */

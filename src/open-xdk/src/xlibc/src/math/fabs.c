@@ -1,5 +1,5 @@
 // ******************************************************************
-// * 
+// *
 // * proj : openLIBC
 // *
 // * desc : Totally Free LIC replacement
@@ -14,28 +14,32 @@
 
 #ifdef _MSC_VER
 
-double fabs(double f) {
-	__asm {
+double fabs(double f)
+{
+    __asm {
 		fld f
 		fabs
-	}
+    }
 }
 
-float fabsf(float f) {
-	__asm {
+float fabsf(float f)
+{
+    __asm {
 		fld f
 		fabs
-	}
+    }
 }
 
 #else
 
-double fabs(double f) {
-	return f>=0.0f ? f : -f;
+double fabs(double f)
+{
+    return f >= 0.0f ? f : -f;
 }
 
-float fabsf(float f) {
-	return f>=0.0f ? f : -f;
+float fabsf(float f)
+{
+    return f >= 0.0f ? f : -f;
 }
 
 #endif //__GNUC__

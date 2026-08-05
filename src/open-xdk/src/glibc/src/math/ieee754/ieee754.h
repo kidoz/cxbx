@@ -19,25 +19,25 @@ Cambridge, MA 02139, USA.  */
 #include <endian.h>
 
 union ieee754_double
-  {
+{
     double d;
-    
+
     /* This is the IEEE 754 double-precision format.  */
     struct
-      {
-#if	__BYTE_ORDER == __BIG_ENDIAN
-	unsigned int negative:1;
-	unsigned int exponent:11;
-	/* Together these comprise the mantissa.  */
-	unsigned int mantissa0:20;
-	unsigned int mantissa1:32;
-#endif				/* Big endian.  */
-#if	__BYTE_ORDER == __LITTLE_ENDIAN
-	/* Together these comprise the mantissa.  */
-	unsigned int mantissa1:32;
-	unsigned int mantissa0:20;
-	unsigned int exponent:11;
-	unsigned int negative:1;
-#endif				/* Little endian.  */
-      } ieee;
-  };
+    {
+#if __BYTE_ORDER == __BIG_ENDIAN
+        unsigned int negative : 1;
+        unsigned int exponent : 11;
+        /* Together these comprise the mantissa.  */
+        unsigned int mantissa0 : 20;
+        unsigned int mantissa1 : 32;
+#endif /* Big endian.  */
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+        /* Together these comprise the mantissa.  */
+        unsigned int mantissa1 : 32;
+        unsigned int mantissa0 : 20;
+        unsigned int exponent : 11;
+        unsigned int negative : 1;
+#endif /* Little endian.  */
+    } ieee;
+};

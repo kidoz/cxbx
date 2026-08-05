@@ -28,34 +28,43 @@
 #define FBW 640
 #define FBH 480
 
-typedef struct { float x, y, z; uint32_t color; } Vertex;
+typedef struct
+{
+    float x, y, z;
+    uint32_t color;
+} Vertex;
 
-static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static uint32_t f2u(float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    return u;
+}
 
-static uint32_t *push_common(uint32_t *p, uint32_t *bb, uint32_t *zbuf)
+static uint32_t* push_common(uint32_t* p, uint32_t* bb, uint32_t* zbuf)
 {
     p = pb_push1(p, NV097_SET_SURFACE_CLIP_HORIZONTAL, ((uint32_t)FBW << 16));
-    p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL,   ((uint32_t)FBH << 16));
+    p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL, ((uint32_t)FBH << 16));
     p = pb_push1(p, NV097_SET_SURFACE_FORMAT, (uint32_t)NV097_SET_SURFACE_FORMAT_ZETA_Z24S8 << 4);
     p = pb_push1(p, NV097_SET_SURFACE_PITCH,
                  ((uint32_t)(FBW * 4) << 16) | (pb_back_buffer_pitch() & 0xFFFF));
     p = pb_push1(p, NV097_SET_SURFACE_COLOR_OFFSET, (uint32_t)(uintptr_t)bb);
-    p = pb_push1(p, NV097_SET_SURFACE_ZETA_OFFSET,  (uint32_t)(uintptr_t)zbuf);
-    p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0,  f2u(0.0f));
-    p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4,  f2u(0.0f));
-    p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8,  f2u(0.0f));
+    p = pb_push1(p, NV097_SET_SURFACE_ZETA_OFFSET, (uint32_t)(uintptr_t)zbuf);
+    p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0, f2u(0.0f));
+    p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4, f2u(0.0f));
+    p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8, f2u(0.0f));
     p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 12, f2u(0.0f));
-    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0,   f2u(1.0f));
-    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4,   f2u(1.0f));
-    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8,   f2u(1.0f));
-    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12,  f2u(1.0f));
+    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0, f2u(1.0f));
+    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4, f2u(1.0f));
+    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8, f2u(1.0f));
+    p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12, f2u(1.0f));
     p = pb_push1(p, NV097_SET_STENCIL_TEST_ENABLE, 1);
     p = pb_push1(p, NV097_SET_STENCIL_FUNC_MASK, 0xFF);
     p = pb_push1(p, NV097_SET_STENCIL_MASK, 0xFF);
     return p;
 }
 
-static uint32_t *push_quad(uint32_t *p, uint32_t addr)
+static uint32_t* push_quad(uint32_t* p, uint32_t addr)
 {
     p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + ATTR_POSITION * 4, addr);
     p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_FORMAT + ATTR_POSITION * 4,
@@ -79,67 +88,84 @@ int main(void)
     XVideoSetMode(FBW, FBH, 32, REFRESH_DEFAULT);
     int status = pb_init();
     xt_check_bool("nv2a_stencil.pb_init", 1, status == 0);
-    if (status != 0) return xt_end();
+    if(status != 0) return xt_end();
 
-    uint32_t *bb = (uint32_t *)pb_back_buffer();
+    uint32_t* bb = (uint32_t*)pb_back_buffer();
     uint32_t pitch_px = pb_back_buffer_pitch() / 4;
     xt_check_bool("nv2a_stencil.back_buffer", 1, bb != NULL && pitch_px != 0);
-    if (bb == NULL || pitch_px == 0) { pb_kill(); return xt_end(); }
+    if(bb == NULL || pitch_px == 0)
+    {
+        pb_kill();
+        return xt_end();
+    }
 
-    uint32_t *zbuf = (uint32_t *)MmAllocateContiguousMemoryEx(
+    uint32_t* zbuf = (uint32_t*)MmAllocateContiguousMemoryEx(
         FBW * FBH * 4, 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_stencil.zbuf_alloc", 1, zbuf != NULL);
-    if (zbuf == NULL) { pb_kill(); return xt_end(); }
+    if(zbuf == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
 
     // Centre quad (pass 1, stamps stencil) and full-screen quad (pass 2, masked).
-    Vertex *center = (Vertex *)MmAllocateContiguousMemoryEx(
+    Vertex* center = (Vertex*)MmAllocateContiguousMemoryEx(
         4 * sizeof(Vertex), 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
-    Vertex *full = (Vertex *)MmAllocateContiguousMemoryEx(
+    Vertex* full = (Vertex*)MmAllocateContiguousMemoryEx(
         4 * sizeof(Vertex), 0, 0x3ffb000, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
     xt_check_bool("nv2a_stencil.vbuf_alloc", 1, center != NULL && full != NULL);
-    if (center == NULL || full == NULL) { pb_kill(); return xt_end(); }
+    if(center == NULL || full == NULL)
+    {
+        pb_kill();
+        return xt_end();
+    }
     const uint32_t RED = 0xFFFF0000u, BLUE = 0xFF0000FFu;
     center[0] = (Vertex){ 240.0f, 180.0f, 0.0f, RED };
     center[1] = (Vertex){ 400.0f, 180.0f, 0.0f, RED };
     center[2] = (Vertex){ 400.0f, 300.0f, 0.0f, RED };
     center[3] = (Vertex){ 240.0f, 300.0f, 0.0f, RED };
-    full[0] = (Vertex){   0.0f,   0.0f, 0.0f, BLUE };
-    full[1] = (Vertex){ 640.0f,   0.0f, 0.0f, BLUE };
+    full[0] = (Vertex){ 0.0f, 0.0f, 0.0f, BLUE };
+    full[1] = (Vertex){ 640.0f, 0.0f, 0.0f, BLUE };
     full[2] = (Vertex){ 640.0f, 480.0f, 0.0f, BLUE };
-    full[3] = (Vertex){   0.0f, 480.0f, 0.0f, BLUE };
+    full[3] = (Vertex){ 0.0f, 480.0f, 0.0f, BLUE };
 
-    for (int rep = 0; rep < 4; rep++) {
-        for (uint32_t i = 0; i < pitch_px * FBH; i++) bb[i] = 0xFF000000u; // black
-        for (int i = 0; i < FBW * FBH; i++) zbuf[i] = 0;                    // stencil 0
+    for(int rep = 0; rep < 4; rep++)
+    {
+        for(uint32_t i = 0; i < pitch_px * FBH; i++)
+            bb[i] = 0xFF000000u; // black
+        for(int i = 0; i < FBW * FBH; i++)
+            zbuf[i] = 0; // stencil 0
 
         // Pass 1: stencil ALWAYS, ZPASS=REPLACE(ref=1) -> stamp 1 in the centre.
-        uint32_t *p = pb_begin();
+        uint32_t* p = pb_begin();
         p = push_common(p, bb, zbuf);
         p = pb_push1(p, NV097_SET_STENCIL_FUNC, NV097_SET_DEPTH_FUNC_V_ALWAYS);
         p = pb_push1(p, NV097_SET_STENCIL_FUNC_REF, 1);
-        p = pb_push1(p, NV097_SET_STENCIL_OP_FAIL,  NV097_SET_STENCIL_OP_V_KEEP);
+        p = pb_push1(p, NV097_SET_STENCIL_OP_FAIL, NV097_SET_STENCIL_OP_V_KEEP);
         p = pb_push1(p, NV097_SET_STENCIL_OP_ZFAIL, NV097_SET_STENCIL_OP_V_KEEP);
         p = pb_push1(p, NV097_SET_STENCIL_OP_ZPASS, NV097_SET_STENCIL_OP_V_REPLACE);
         p = push_quad(p, (uint32_t)(uintptr_t)center);
         pb_end(p);
-        while (pb_busy()) ;
+        while(pb_busy())
+            ;
 
         // Pass 2: stencil EQUAL(ref=1), keep -> full-screen blue only where set.
         p = pb_begin();
         p = push_common(p, bb, zbuf);
         p = pb_push1(p, NV097_SET_STENCIL_FUNC, NV097_SET_DEPTH_FUNC_V_EQUAL);
         p = pb_push1(p, NV097_SET_STENCIL_FUNC_REF, 1);
-        p = pb_push1(p, NV097_SET_STENCIL_OP_FAIL,  NV097_SET_STENCIL_OP_V_KEEP);
+        p = pb_push1(p, NV097_SET_STENCIL_OP_FAIL, NV097_SET_STENCIL_OP_V_KEEP);
         p = pb_push1(p, NV097_SET_STENCIL_OP_ZFAIL, NV097_SET_STENCIL_OP_V_KEEP);
         p = pb_push1(p, NV097_SET_STENCIL_OP_ZPASS, NV097_SET_STENCIL_OP_V_KEEP);
         p = push_quad(p, (uint32_t)(uintptr_t)full);
         pb_end(p);
-        while (pb_busy()) ;
+        while(pb_busy())
+            ;
     }
 
 #define PX(x, y) (bb[(uint32_t)(y) * pitch_px + (uint32_t)(x)] | 0xFF000000u)
-    uint32_t inside  = PX(320, 240);   // stencil==1 -> pass 2 blue survives
-    uint32_t outside = PX(560, 240);   // stencil==0 -> pass 2 masked, stays black
+    uint32_t inside = PX(320, 240);  // stencil==1 -> pass 2 blue survives
+    uint32_t outside = PX(560, 240); // stencil==0 -> pass 2 masked, stays black
     xt_ev("nv2a_stencil.inside=0x%08lX outside=0x%08lX",
           (unsigned long)inside, (unsigned long)outside);
 

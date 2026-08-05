@@ -19,17 +19,15 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstring>
 
-
 /* Copy SRC to DEST, returning the address of the terminating '\0' in DEST.  */
-char *
-DEFUN(stpcpy, (dest, src), char *dest AND CONST char *src)
+char* DEFUN(stpcpy, (dest, src), char* dest AND CONST char* src)
 {
-  register char *d = dest;
-  register CONST char *s = src;
+    register char* d = dest;
+    register CONST char* s = src;
 
-  do
-    *d++ = *s;
-  while (*s++ != '\0');
-  
-  return d - 1;
+    do
+        *d++ = *s;
+    while(*s++ != '\0');
+
+    return d - 1;
 }

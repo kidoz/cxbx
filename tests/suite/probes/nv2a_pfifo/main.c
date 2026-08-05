@@ -11,17 +11,17 @@
 #include "xtest.h"
 #include <stdint.h>
 
-#define NV2A_BASE   0xFD000000u
-#define REG32(off)  (*(volatile uint32_t *)(NV2A_BASE + (uint32_t)(off)))
-#define PHYS_BASE   0x80000000u
+#define NV2A_BASE  0xFD000000u
+#define REG32(off) (*(volatile uint32_t*)(NV2A_BASE + (uint32_t)(off)))
+#define PHYS_BASE  0x80000000u
 
-#define PFIFO_CACHE1_PUSH0         0x003200u
-#define PFIFO_CACHE1_DMA_PUSH      0x003220u
-#define PFIFO_CACHE1_DMA_INSTANCE  0x00322Cu
-#define PFIFO_CACHE1_DMA_PUT       0x003240u
-#define PFIFO_CACHE1_DMA_GET       0x003244u
-#define PRAMIN                     0x700000u
-#define PGRAPH                     0x400000u
+#define PFIFO_CACHE1_PUSH0        0x003200u
+#define PFIFO_CACHE1_DMA_PUSH     0x003220u
+#define PFIFO_CACHE1_DMA_INSTANCE 0x00322Cu
+#define PFIFO_CACHE1_DMA_PUT      0x003240u
+#define PFIFO_CACHE1_DMA_GET      0x003244u
+#define PRAMIN                    0x700000u
+#define PGRAPH                    0x400000u
 
 int main(void)
 {
@@ -32,7 +32,7 @@ int main(void)
     // One increasing method: method=0x200, subch=0, count=1, data=0xABCD1234.
     // (0x200 avoids the 0x180..0x1FF RAMHT-relocate range and PGRAPH specials.)
     const uint32_t pbPhys = 0x00010000u;
-    volatile uint32_t *pb = (volatile uint32_t *)(PHYS_BASE + pbPhys);
+    volatile uint32_t* pb = (volatile uint32_t*)(PHYS_BASE + pbPhys);
     volatile uint32_t w0 = 0x00040200u;
     volatile uint32_t w1 = 0xABCD1234u;
     pb[0] = w0;
@@ -40,10 +40,10 @@ int main(void)
 
     // DMA object in RAMIN at instance handle 0x1000 -> RAMIN offset 0x10000.
     // Layout [Flags, Limit, Frame]; Address = (Frame & 0x07FFFFFF)|(Flags&0xFFF).
-    volatile uint32_t *dma = (volatile uint32_t *)(NV2A_BASE + PRAMIN + 0x10000u);
-    volatile uint32_t f0 = 0x00000000u;   // Flags
-    volatile uint32_t f1 = 0x00FFFFFFu;   // Limit
-    volatile uint32_t f2 = pbPhys;        // Frame -> base 0x00010000
+    volatile uint32_t* dma = (volatile uint32_t*)(NV2A_BASE + PRAMIN + 0x10000u);
+    volatile uint32_t f0 = 0x00000000u; // Flags
+    volatile uint32_t f1 = 0x00FFFFFFu; // Limit
+    volatile uint32_t f2 = pbPhys;      // Frame -> base 0x00010000
     dma[0] = f0;
     dma[1] = f1;
     dma[2] = f2;

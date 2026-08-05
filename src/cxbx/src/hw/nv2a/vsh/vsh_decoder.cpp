@@ -40,82 +40,176 @@ constexpr DWORD FALSE = 0;
 
 enum VshField
 {
-    FLD_ILU = 0, FLD_MAC, FLD_CONST, FLD_V,
-    FLD_A_NEG, FLD_A_SWZ_X, FLD_A_SWZ_Y, FLD_A_SWZ_Z, FLD_A_SWZ_W, FLD_A_R, FLD_A_MUX,
-    FLD_B_NEG, FLD_B_SWZ_X, FLD_B_SWZ_Y, FLD_B_SWZ_Z, FLD_B_SWZ_W, FLD_B_R, FLD_B_MUX,
-    FLD_C_NEG, FLD_C_SWZ_X, FLD_C_SWZ_Y, FLD_C_SWZ_Z, FLD_C_SWZ_W, FLD_C_R_HIGH, FLD_C_R_LOW, FLD_C_MUX,
-    FLD_OUT_MAC_MASK, FLD_OUT_R, FLD_OUT_ILU_MASK, FLD_OUT_O_MASK, FLD_OUT_ORB, FLD_OUT_ADDRESS, FLD_OUT_MUX,
-    FLD_A0X, FLD_FINAL,
+    FLD_ILU = 0,
+    FLD_MAC,
+    FLD_CONST,
+    FLD_V,
+    FLD_A_NEG,
+    FLD_A_SWZ_X,
+    FLD_A_SWZ_Y,
+    FLD_A_SWZ_Z,
+    FLD_A_SWZ_W,
+    FLD_A_R,
+    FLD_A_MUX,
+    FLD_B_NEG,
+    FLD_B_SWZ_X,
+    FLD_B_SWZ_Y,
+    FLD_B_SWZ_Z,
+    FLD_B_SWZ_W,
+    FLD_B_R,
+    FLD_B_MUX,
+    FLD_C_NEG,
+    FLD_C_SWZ_X,
+    FLD_C_SWZ_Y,
+    FLD_C_SWZ_Z,
+    FLD_C_SWZ_W,
+    FLD_C_R_HIGH,
+    FLD_C_R_LOW,
+    FLD_C_MUX,
+    FLD_OUT_MAC_MASK,
+    FLD_OUT_R,
+    FLD_OUT_ILU_MASK,
+    FLD_OUT_O_MASK,
+    FLD_OUT_ORB,
+    FLD_OUT_ADDRESS,
+    FLD_OUT_MUX,
+    FLD_A0X,
+    FLD_FINAL,
     FLD__COUNT
 };
 
-struct VshFieldMapping { unsigned char SubToken, StartBit, BitLength; };
-
-static const VshFieldMapping g_VshFields[FLD__COUNT] =
+struct VshFieldMapping
 {
-    { 1, 25, 3 },   // FLD_ILU
-    { 1, 21, 4 },   // FLD_MAC
-    { 1, 13, 8 },   // FLD_CONST
-    { 1,  9, 4 },   // FLD_V
-    { 1,  8, 1 },   // FLD_A_NEG
-    { 1,  6, 2 },   // FLD_A_SWZ_X
-    { 1,  4, 2 },   // FLD_A_SWZ_Y
-    { 1,  2, 2 },   // FLD_A_SWZ_Z
-    { 1,  0, 2 },   // FLD_A_SWZ_W
-    { 2, 28, 4 },   // FLD_A_R
-    { 2, 26, 2 },   // FLD_A_MUX
-    { 2, 25, 1 },   // FLD_B_NEG
-    { 2, 23, 2 },   // FLD_B_SWZ_X
-    { 2, 21, 2 },   // FLD_B_SWZ_Y
-    { 2, 19, 2 },   // FLD_B_SWZ_Z
-    { 2, 17, 2 },   // FLD_B_SWZ_W
-    { 2, 13, 4 },   // FLD_B_R
-    { 2, 11, 2 },   // FLD_B_MUX
-    { 2, 10, 1 },   // FLD_C_NEG
-    { 2,  8, 2 },   // FLD_C_SWZ_X
-    { 2,  6, 2 },   // FLD_C_SWZ_Y
-    { 2,  4, 2 },   // FLD_C_SWZ_Z
-    { 2,  2, 2 },   // FLD_C_SWZ_W
-    { 2,  0, 2 },   // FLD_C_R_HIGH
-    { 3, 30, 2 },   // FLD_C_R_LOW
-    { 3, 28, 2 },   // FLD_C_MUX
-    { 3, 24, 4 },   // FLD_OUT_MAC_MASK
-    { 3, 20, 4 },   // FLD_OUT_R
-    { 3, 16, 4 },   // FLD_OUT_ILU_MASK
-    { 3, 12, 4 },   // FLD_OUT_O_MASK
-    { 3, 11, 1 },   // FLD_OUT_ORB
-    { 3,  3, 8 },   // FLD_OUT_ADDRESS
-    { 3,  2, 1 },   // FLD_OUT_MUX
-    { 3,  1, 1 },   // FLD_A0X
-    { 3,  0, 1 }    // FLD_FINAL
+    unsigned char SubToken, StartBit, BitLength;
 };
 
-static DWORD VshGetField(const DWORD *Instr, VshField Field)
+static const VshFieldMapping g_VshFields[FLD__COUNT] = {
+    { 1, 25, 3 }, // FLD_ILU
+    { 1, 21, 4 }, // FLD_MAC
+    { 1, 13, 8 }, // FLD_CONST
+    { 1, 9, 4 },  // FLD_V
+    { 1, 8, 1 },  // FLD_A_NEG
+    { 1, 6, 2 },  // FLD_A_SWZ_X
+    { 1, 4, 2 },  // FLD_A_SWZ_Y
+    { 1, 2, 2 },  // FLD_A_SWZ_Z
+    { 1, 0, 2 },  // FLD_A_SWZ_W
+    { 2, 28, 4 }, // FLD_A_R
+    { 2, 26, 2 }, // FLD_A_MUX
+    { 2, 25, 1 }, // FLD_B_NEG
+    { 2, 23, 2 }, // FLD_B_SWZ_X
+    { 2, 21, 2 }, // FLD_B_SWZ_Y
+    { 2, 19, 2 }, // FLD_B_SWZ_Z
+    { 2, 17, 2 }, // FLD_B_SWZ_W
+    { 2, 13, 4 }, // FLD_B_R
+    { 2, 11, 2 }, // FLD_B_MUX
+    { 2, 10, 1 }, // FLD_C_NEG
+    { 2, 8, 2 },  // FLD_C_SWZ_X
+    { 2, 6, 2 },  // FLD_C_SWZ_Y
+    { 2, 4, 2 },  // FLD_C_SWZ_Z
+    { 2, 2, 2 },  // FLD_C_SWZ_W
+    { 2, 0, 2 },  // FLD_C_R_HIGH
+    { 3, 30, 2 }, // FLD_C_R_LOW
+    { 3, 28, 2 }, // FLD_C_MUX
+    { 3, 24, 4 }, // FLD_OUT_MAC_MASK
+    { 3, 20, 4 }, // FLD_OUT_R
+    { 3, 16, 4 }, // FLD_OUT_ILU_MASK
+    { 3, 12, 4 }, // FLD_OUT_O_MASK
+    { 3, 11, 1 }, // FLD_OUT_ORB
+    { 3, 3, 8 },  // FLD_OUT_ADDRESS
+    { 3, 2, 1 },  // FLD_OUT_MUX
+    { 3, 1, 1 },  // FLD_A0X
+    { 3, 0, 1 }   // FLD_FINAL
+};
+
+static DWORD VshGetField(const DWORD* Instr, VshField Field)
 {
-    const VshFieldMapping &f = g_VshFields[Field];
+    const VshFieldMapping& f = g_VshFields[Field];
     return (Instr[f.SubToken] >> f.StartBit) & ((1u << f.BitLength) - 1);
 }
 
 // MAC / ILU opcodes (vp20compiler enums)
-enum { MAC_NOP = 0, MAC_MOV, MAC_MUL, MAC_ADD, MAC_MAD, MAC_DP3, MAC_DPH, MAC_DP4,
-       MAC_DST, MAC_MIN, MAC_MAX, MAC_SLT, MAC_SGE, MAC_ARL };
-enum { ILU_NOP = 0, ILU_MOV, ILU_RCP, ILU_RCC, ILU_RSQ, ILU_EXP, ILU_LOG, ILU_LIT };
-enum { PARAM_R = 1, PARAM_V = 2, PARAM_C = 3 };
-enum { OUTPUT_C = 0, OUTPUT_O = 1 };
-enum { OMUX_MAC = 0, OMUX_ILU = 1 };
+enum
+{
+    MAC_NOP = 0,
+    MAC_MOV,
+    MAC_MUL,
+    MAC_ADD,
+    MAC_MAD,
+    MAC_DP3,
+    MAC_DPH,
+    MAC_DP4,
+    MAC_DST,
+    MAC_MIN,
+    MAC_MAX,
+    MAC_SLT,
+    MAC_SGE,
+    MAC_ARL
+};
+enum
+{
+    ILU_NOP = 0,
+    ILU_MOV,
+    ILU_RCP,
+    ILU_RCC,
+    ILU_RSQ,
+    ILU_EXP,
+    ILU_LOG,
+    ILU_LIT
+};
+enum
+{
+    PARAM_R = 1,
+    PARAM_V = 2,
+    PARAM_C = 3
+};
+enum
+{
+    OUTPUT_C = 0,
+    OUTPUT_O = 1
+};
+enum
+{
+    OMUX_MAC = 0,
+    OMUX_ILU = 1
+};
 
 // ******************************************************************
 // * vs.1.1 token emission
 // ******************************************************************
 
 // D3DSIO opcodes (d3d8types.h)
-enum { SIO_NOP = 0, SIO_MOV = 1, SIO_ADD = 2, SIO_MAD = 4, SIO_MUL = 5, SIO_RCP = 6,
-       SIO_RSQ = 7, SIO_DP3 = 8, SIO_DP4 = 9, SIO_MIN = 10, SIO_MAX = 11, SIO_SLT = 12,
-       SIO_SGE = 13, SIO_EXP = 14, SIO_LOG = 15, SIO_LIT = 16, SIO_DST = 17 };
+enum
+{
+    SIO_NOP = 0,
+    SIO_MOV = 1,
+    SIO_ADD = 2,
+    SIO_MAD = 4,
+    SIO_MUL = 5,
+    SIO_RCP = 6,
+    SIO_RSQ = 7,
+    SIO_DP3 = 8,
+    SIO_DP4 = 9,
+    SIO_MIN = 10,
+    SIO_MAX = 11,
+    SIO_SLT = 12,
+    SIO_SGE = 13,
+    SIO_EXP = 14,
+    SIO_LOG = 15,
+    SIO_LIT = 16,
+    SIO_DST = 17
+};
 
 // D3DSPR register types (shifted into bits 28-30 of parameter tokens)
-enum { SPR_TEMP = 0, SPR_INPUT = 1, SPR_CONST = 2, SPR_ADDR = 3,
-       SPR_RASTOUT = 4, SPR_ATTROUT = 5, SPR_TEXCRDOUT = 6 };
+enum
+{
+    SPR_TEMP = 0,
+    SPR_INPUT = 1,
+    SPR_CONST = 2,
+    SPR_ADDR = 3,
+    SPR_RASTOUT = 4,
+    SPR_ATTROUT = 5,
+    SPR_TEXCRDOUT = 6
+};
 
 static DWORD VshDstToken(DWORD RegType, DWORD RegNum, DWORD PcMask)
 {
@@ -127,9 +221,9 @@ static DWORD VshSrcToken(DWORD RegType, DWORD RegNum, const DWORD Swz[4], DWORD 
     DWORD Token = 0x80000000 | (RegType << 28) | (RegNum & 0x7FF);
     Token |= (Swz[0] << 16) | (Swz[1] << 18) | (Swz[2] << 20) | (Swz[3] << 22);
     if(Negate)
-        Token |= (1u << 24);        // D3DSPSM_NEG
+        Token |= (1u << 24); // D3DSPSM_NEG
     if(Relative)
-        Token |= (1u << 13);        // D3DVS_ADDRMODE_RELATIVE
+        Token |= (1u << 13); // D3DVS_ADDRMODE_RELATIVE
     return Token;
 }
 
@@ -147,28 +241,36 @@ struct VshSrc
 
 constexpr DWORD VSH_HOST_TEMP_COUNT = 12;
 
-static void VshDecodeSrc(const DWORD *I, int Which, VshSrc *Src)
+static void VshDecodeSrc(const DWORD* I, int Which, VshSrc* Src)
 {
     switch(Which)
     {
         case 0:
-            Src->Mux = VshGetField(I, FLD_A_MUX);   Src->R = VshGetField(I, FLD_A_R);
+            Src->Mux = VshGetField(I, FLD_A_MUX);
+            Src->R = VshGetField(I, FLD_A_R);
             Src->Neg = VshGetField(I, FLD_A_NEG);
-            Src->Swz[0] = VshGetField(I, FLD_A_SWZ_X); Src->Swz[1] = VshGetField(I, FLD_A_SWZ_Y);
-            Src->Swz[2] = VshGetField(I, FLD_A_SWZ_Z); Src->Swz[3] = VshGetField(I, FLD_A_SWZ_W);
+            Src->Swz[0] = VshGetField(I, FLD_A_SWZ_X);
+            Src->Swz[1] = VshGetField(I, FLD_A_SWZ_Y);
+            Src->Swz[2] = VshGetField(I, FLD_A_SWZ_Z);
+            Src->Swz[3] = VshGetField(I, FLD_A_SWZ_W);
             break;
         case 1:
-            Src->Mux = VshGetField(I, FLD_B_MUX);   Src->R = VshGetField(I, FLD_B_R);
+            Src->Mux = VshGetField(I, FLD_B_MUX);
+            Src->R = VshGetField(I, FLD_B_R);
             Src->Neg = VshGetField(I, FLD_B_NEG);
-            Src->Swz[0] = VshGetField(I, FLD_B_SWZ_X); Src->Swz[1] = VshGetField(I, FLD_B_SWZ_Y);
-            Src->Swz[2] = VshGetField(I, FLD_B_SWZ_Z); Src->Swz[3] = VshGetField(I, FLD_B_SWZ_W);
+            Src->Swz[0] = VshGetField(I, FLD_B_SWZ_X);
+            Src->Swz[1] = VshGetField(I, FLD_B_SWZ_Y);
+            Src->Swz[2] = VshGetField(I, FLD_B_SWZ_Z);
+            Src->Swz[3] = VshGetField(I, FLD_B_SWZ_W);
             break;
         default:
             Src->Mux = VshGetField(I, FLD_C_MUX);
-            Src->R   = (VshGetField(I, FLD_C_R_HIGH) << 2) | VshGetField(I, FLD_C_R_LOW);
+            Src->R = (VshGetField(I, FLD_C_R_HIGH) << 2) | VshGetField(I, FLD_C_R_LOW);
             Src->Neg = VshGetField(I, FLD_C_NEG);
-            Src->Swz[0] = VshGetField(I, FLD_C_SWZ_X); Src->Swz[1] = VshGetField(I, FLD_C_SWZ_Y);
-            Src->Swz[2] = VshGetField(I, FLD_C_SWZ_Z); Src->Swz[3] = VshGetField(I, FLD_C_SWZ_W);
+            Src->Swz[0] = VshGetField(I, FLD_C_SWZ_X);
+            Src->Swz[1] = VshGetField(I, FLD_C_SWZ_Y);
+            Src->Swz[2] = VshGetField(I, FLD_C_SWZ_Z);
+            Src->Swz[3] = VshGetField(I, FLD_C_SWZ_W);
             break;
     }
 }
@@ -814,14 +916,26 @@ static DWORD VshEmitSrc(XTL::VshDiagnostics::DiagnosticSink diagnosticSink, cons
 // Map an NV2A hardware output-register index (FLD_OUT_ADDRESS with ORB=O) to a
 // PC vs.1.1 destination. Order per nxdk nvvertparse.c HardwareOutputRegisters:
 // 0=HPOS 3=COL0 4=COL1 5=FOGC 6=PSIZ 7=BFC0 8=BFC1 9..12=TEX0..3.
-static bool VshMapOutput(DWORD Address, DWORD *RegType, DWORD *RegNum)
+static bool VshMapOutput(DWORD Address, DWORD* RegType, DWORD* RegNum)
 {
     switch(Address)
     {
-        case 0:  *RegType = SPR_RASTOUT;   *RegNum = 0; return true;   // oPos
-        case 3:  *RegType = SPR_ATTROUT;   *RegNum = 0; return true;   // oD0
-        case 4:  *RegType = SPR_ATTROUT;   *RegNum = 1; return true;   // oD1
-        case 5:  *RegType = SPR_RASTOUT;   *RegNum = 1; return true;   // oFog
+        case 0:
+            *RegType = SPR_RASTOUT;
+            *RegNum = 0;
+            return true; // oPos
+        case 3:
+            *RegType = SPR_ATTROUT;
+            *RegNum = 0;
+            return true; // oD0
+        case 4:
+            *RegType = SPR_ATTROUT;
+            *RegNum = 1;
+            return true; // oD1
+        case 5:
+            *RegType = SPR_RASTOUT;
+            *RegNum = 1;
+            return true; // oFog
         case 6:
             *RegType = SPR_RASTOUT;
             *RegNum = 2;
@@ -2075,7 +2189,7 @@ XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXbo
     Out.reserve(16 + InstrCount * VSH_MAX_D3D8_TOKENS_PER_XBOX_INSTRUCTION);
     int n = 0;
     bool NeedsPosEpilogue = false;
-    VshEmit(Out, &n, 0xFFFE0101);   // vs.1.1
+    VshEmit(Out, &n, 0xFFFE0101); // vs.1.1
 
     // Seed the position scratch (the R12/oPos alias) from the position input v0.
     // 2D / UI shaders often write only oPos.xy and leave z,w to the vertex; the
@@ -2104,18 +2218,18 @@ XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXbo
             break;
         }
 
-        const DWORD *I = &pXboxFunction[1 + i * 4];
+        const DWORD* I = &pXboxFunction[1 + i * 4];
 
         DWORD Mac = VshGetField(I, FLD_MAC);
         DWORD Ilu = VshGetField(I, FLD_ILU);
         DWORD MacMask = VshGetField(I, FLD_OUT_MAC_MASK);
         DWORD IluMask = VshGetField(I, FLD_OUT_ILU_MASK);
-        DWORD OMask   = VshGetField(I, FLD_OUT_O_MASK);
-        DWORD OutR    = VshGetField(I, FLD_OUT_R);
-        DWORD Orb     = VshGetField(I, FLD_OUT_ORB);
+        DWORD OMask = VshGetField(I, FLD_OUT_O_MASK);
+        DWORD OutR = VshGetField(I, FLD_OUT_R);
+        DWORD Orb = VshGetField(I, FLD_OUT_ORB);
         DWORD OutAddr = VshGetField(I, FLD_OUT_ADDRESS);
-        DWORD OutMux  = VshGetField(I, FLD_OUT_MUX);
-        bool  A0x     = VshGetField(I, FLD_A0X) != 0;
+        DWORD OutMux = VshGetField(I, FLD_OUT_MUX);
+        bool A0x = VshGetField(I, FLD_A0X) != 0;
         if(i == ViewportPair.scale)
         {
             OMask = 0;
@@ -2150,18 +2264,48 @@ XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXbo
         if(Mac != MAC_NOP)
         {
             DWORD Opcode = 0;
-            const VshSrc *Srcs[3] = { NULL, NULL, NULL };
+            const VshSrc* Srcs[3] = { NULL, NULL, NULL };
             int SrcCount = 0;
             VshSrc DphResult{};
 
             switch(Mac)
             {
-                case MAC_MOV: Opcode = SIO_MOV; Srcs[0] = &SrcA; SrcCount = 1; break;
-                case MAC_MUL: Opcode = SIO_MUL; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
-                case MAC_ADD: Opcode = SIO_ADD; Srcs[0] = &SrcA; Srcs[1] = &SrcC; SrcCount = 2; break;
-                case MAC_MAD: Opcode = SIO_MAD; Srcs[0] = &SrcA; Srcs[1] = &SrcB; Srcs[2] = &SrcC; SrcCount = 3; break;
-                case MAC_DP3: Opcode = SIO_DP3; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
-                case MAC_DP4: Opcode = SIO_DP4; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
+                case MAC_MOV:
+                    Opcode = SIO_MOV;
+                    Srcs[0] = &SrcA;
+                    SrcCount = 1;
+                    break;
+                case MAC_MUL:
+                    Opcode = SIO_MUL;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
+                case MAC_ADD:
+                    Opcode = SIO_ADD;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcC;
+                    SrcCount = 2;
+                    break;
+                case MAC_MAD:
+                    Opcode = SIO_MAD;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    Srcs[2] = &SrcC;
+                    SrcCount = 3;
+                    break;
+                case MAC_DP3:
+                    Opcode = SIO_DP3;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
+                case MAC_DP4:
+                    Opcode = SIO_DP4;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
                 case MAC_DPH:
                 {
                     // vs.1.1 has no DPH. Compute dot(a.xyz, b.xyz) + b.w in a
@@ -2194,11 +2338,36 @@ XTL::VshDiagnostics::FunctionTranslationResult XTL::VshDiagnostics::TranslateXbo
                     SrcCount = 1;
                     break;
                 }
-                case MAC_DST: Opcode = SIO_DST; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
-                case MAC_MIN: Opcode = SIO_MIN; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
-                case MAC_MAX: Opcode = SIO_MAX; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
-                case MAC_SLT: Opcode = SIO_SLT; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
-                case MAC_SGE: Opcode = SIO_SGE; Srcs[0] = &SrcA; Srcs[1] = &SrcB; SrcCount = 2; break;
+                case MAC_DST:
+                    Opcode = SIO_DST;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
+                case MAC_MIN:
+                    Opcode = SIO_MIN;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
+                case MAC_MAX:
+                    Opcode = SIO_MAX;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
+                case MAC_SLT:
+                    Opcode = SIO_SLT;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
+                case MAC_SGE:
+                    Opcode = SIO_SGE;
+                    Srcs[0] = &SrcA;
+                    Srcs[1] = &SrcB;
+                    SrcCount = 2;
+                    break;
                 case MAC_ARL:
                     // mov a0.x, srcA
                     VshEmit(Out, &n, SIO_MOV);
@@ -3025,9 +3194,9 @@ bool XTL::VshDiagnostics::DecodeXboxVertex(ShaderWordView xboxDeclaration,
 // ******************************************************************
 
 // Read a source operand: select register bank by mux, apply swizzle + negate.
-static void VshExecReadSrc(const DWORD *I, const VshSrc *S, DWORD Vfield, bool Relative,
-                           int A0, const float Reg[13][4], const float *Const,
-                           const float *Input, float Out[4])
+static void VshExecReadSrc(const DWORD* I, const VshSrc* S, DWORD Vfield, bool Relative,
+                           int A0, const float Reg[13][4], const float* Const,
+                           const float* Input, float Out[4])
 {
     float Tmp[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     switch(S->Mux)
@@ -3035,14 +3204,20 @@ static void VshExecReadSrc(const DWORD *I, const VshSrc *S, DWORD Vfield, bool R
         case PARAM_R:
         {
             DWORD r = S->R > 12 ? 12 : S->R;
-            Tmp[0] = Reg[r][0]; Tmp[1] = Reg[r][1]; Tmp[2] = Reg[r][2]; Tmp[3] = Reg[r][3];
+            Tmp[0] = Reg[r][0];
+            Tmp[1] = Reg[r][1];
+            Tmp[2] = Reg[r][2];
+            Tmp[3] = Reg[r][3];
             break;
         }
         case PARAM_V:
         {
             DWORD v = Vfield & 15;
-            const float *in = &Input[v * 4];
-            Tmp[0] = in[0]; Tmp[1] = in[1]; Tmp[2] = in[2]; Tmp[3] = in[3];
+            const float* in = &Input[v * 4];
+            Tmp[0] = in[0];
+            Tmp[1] = in[1];
+            Tmp[2] = in[2];
+            Tmp[3] = in[3];
             break;
         }
         case PARAM_C:
@@ -3051,8 +3226,11 @@ static void VshExecReadSrc(const DWORD *I, const VshSrc *S, DWORD Vfield, bool R
             if(Relative) idx += A0;
             if(idx < 0) idx = 0;
             if(idx > 191) idx = 191;
-            const float *c = &Const[idx * 4];
-            Tmp[0] = c[0]; Tmp[1] = c[1]; Tmp[2] = c[2]; Tmp[3] = c[3];
+            const float* c = &Const[idx * 4];
+            Tmp[0] = c[0];
+            Tmp[1] = c[1];
+            Tmp[2] = c[2];
+            Tmp[3] = c[3];
             break;
         }
         default:
@@ -3079,19 +3257,65 @@ static void VshExecMac(DWORD Op, const float A[4], const float B[4], const float
 {
     switch(Op)
     {
-        case MAC_MOV: R[0]=A[0]; R[1]=A[1]; R[2]=A[2]; R[3]=A[3]; break;
-        case MAC_MUL: for(int i=0;i<4;i++) R[i]=A[i]*B[i]; break;
-        case MAC_ADD: for(int i=0;i<4;i++) R[i]=A[i]+C[i]; break;
-        case MAC_MAD: for(int i=0;i<4;i++) R[i]=A[i]*B[i]+C[i]; break;
-        case MAC_DP3: { float d=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]; R[0]=R[1]=R[2]=R[3]=d; } break;
-        case MAC_DP4: { float d=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]+A[3]*B[3]; R[0]=R[1]=R[2]=R[3]=d; } break;
-        case MAC_DPH: { float d=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]+B[3]; R[0]=R[1]=R[2]=R[3]=d; } break;
-        case MAC_DST: R[0]=1.0f; R[1]=A[1]*B[1]; R[2]=A[2]; R[3]=B[3]; break;
-        case MAC_MIN: for(int i=0;i<4;i++) R[i]=A[i]<B[i]?A[i]:B[i]; break;
-        case MAC_MAX: for(int i=0;i<4;i++) R[i]=A[i]>B[i]?A[i]:B[i]; break;
-        case MAC_SLT: for(int i=0;i<4;i++) R[i]=A[i]<B[i]?1.0f:0.0f; break;
-        case MAC_SGE: for(int i=0;i<4;i++) R[i]=A[i]>=B[i]?1.0f:0.0f; break;
-        default: R[0]=R[1]=R[2]=R[3]=0.0f; break;
+        case MAC_MOV:
+            R[0] = A[0];
+            R[1] = A[1];
+            R[2] = A[2];
+            R[3] = A[3];
+            break;
+        case MAC_MUL:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] * B[i];
+            break;
+        case MAC_ADD:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] + C[i];
+            break;
+        case MAC_MAD:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] * B[i] + C[i];
+            break;
+        case MAC_DP3:
+        {
+            float d = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
+            R[0] = R[1] = R[2] = R[3] = d;
+        }
+        break;
+        case MAC_DP4:
+        {
+            float d = A[0] * B[0] + A[1] * B[1] + A[2] * B[2] + A[3] * B[3];
+            R[0] = R[1] = R[2] = R[3] = d;
+        }
+        break;
+        case MAC_DPH:
+        {
+            float d = A[0] * B[0] + A[1] * B[1] + A[2] * B[2] + B[3];
+            R[0] = R[1] = R[2] = R[3] = d;
+        }
+        break;
+        case MAC_DST:
+            R[0] = 1.0f;
+            R[1] = A[1] * B[1];
+            R[2] = A[2];
+            R[3] = B[3];
+            break;
+        case MAC_MIN:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] < B[i] ? A[i] : B[i];
+            break;
+        case MAC_MAX:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] > B[i] ? A[i] : B[i];
+            break;
+        case MAC_SLT:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] < B[i] ? 1.0f : 0.0f;
+            break;
+        case MAC_SGE:
+            for(int i = 0; i < 4; i++)
+                R[i] = A[i] >= B[i] ? 1.0f : 0.0f;
+            break;
+        default: R[0] = R[1] = R[2] = R[3] = 0.0f; break;
     }
 }
 
@@ -3110,10 +3334,12 @@ static float VshInvSqrt(float x)
 {
     if(x <= 0.0f) return 0.0f;
     float xhalf = 0.5f * x;
-    int i; memcpy(&i, &x, 4);
-    i = 0x5f3759df - (i >> 1);           // fast inverse-sqrt seed
-    float y; memcpy(&y, &i, 4);
-    y = y * (1.5f - xhalf * y * y);      // Newton refine x3 -> ~1e-6 rel error
+    int i;
+    memcpy(&i, &x, 4);
+    i = 0x5f3759df - (i >> 1); // fast inverse-sqrt seed
+    float y;
+    memcpy(&y, &i, 4);
+    y = y * (1.5f - xhalf * y * y); // Newton refine x3 -> ~1e-6 rel error
     y = y * (1.5f - xhalf * y * y);
     y = y * (1.5f - xhalf * y * y);
     return y;
@@ -3180,7 +3406,12 @@ static void VshExecIlu(DWORD Op, const float C[4], float R[4])
     float r = 0.0f;
     switch(Op)
     {
-        case ILU_MOV: R[0]=C[0]; R[1]=C[1]; R[2]=C[2]; R[3]=C[3]; return;
+        case ILU_MOV:
+            R[0] = C[0];
+            R[1] = C[1];
+            R[2] = C[2];
+            R[3] = C[3];
+            return;
         case ILU_RCP: r = (s != 0.0f) ? 1.0f / s : 0.0f; break;
         case ILU_RCC:
         {
@@ -3199,14 +3430,19 @@ static void VshExecIlu(DWORD Op, const float C[4], float R[4])
             r = 1.0f / a;
             break;
         }
-        case ILU_RSQ: { float a = s < 0.0f ? -s : s; r = VshInvSqrt(a); } break;
+        case ILU_RSQ:
+        {
+            float a = s < 0.0f ? -s : s;
+            r = VshInvSqrt(a);
+        }
+        break;
         case ILU_EXP: r = VshExp2(s); break;
         case ILU_LOG: r = VshLog2(s); break;
         case ILU_LIT:
         {
             float diffuse = C[0], specular = C[1], power = C[3];
             if(power < -127.9961f) power = -127.9961f;
-            if(power >  127.9961f) power =  127.9961f;
+            if(power > 127.9961f) power = 127.9961f;
             R[0] = 1.0f;
             R[1] = diffuse > 0.0f ? diffuse : 0.0f;
             R[2] = (diffuse > 0.0f && specular > 0.0f) ? VshExp2(power * VshLog2(specular)) : 0.0f;
@@ -3220,16 +3456,16 @@ static void VshExecIlu(DWORD Op, const float C[4], float R[4])
 
 // Destination vector for an output-register address (NV2A HardwareOutputRegisters
 // order). oPos is the R12 alias so later instructions can read it back.
-static float *VshExecOutputDst(DWORD Addr, float Reg[13][4], float Col[2][4],
+static float* VshExecOutputDst(DWORD Addr, float Reg[13][4], float Col[2][4],
                                float Tex[4][4], float Fog[4], float Pts[4])
 {
     switch(Addr)
     {
-        case 0:  return Reg[12];      // oPos (R12 alias)
-        case 3:  return Col[0];       // oD0
-        case 4: return Col[1];        // oD1
-        case 5: return Fog;           // oFog
-        case 6: return Pts;           // oPts
+        case 0: return Reg[12]; // oPos (R12 alias)
+        case 3: return Col[0];  // oD0
+        case 4: return Col[1];  // oD1
+        case 5: return Fog;     // oFog
+        case 6: return Pts;     // oPts
         case 9:
         case 10:
         case 11:
@@ -3433,9 +3669,9 @@ extern "C" bool EmuVshExecuteProgram(const DWORD* Program, int InstrCount, int S
 }
 
 extern "C" bool EmuVshExecuteProgramRaster(const DWORD* Program, int InstrCount, int Start,
-                                            const float* Const, const float* Input,
-                                            float* OutPos, float* OutColors,
-                                            float* OutTexCoords)
+                                           const float* Const, const float* Input,
+                                           float* OutPos, float* OutColors,
+                                           float* OutTexCoords)
 {
     return VshExecuteProgramInternal(Program, InstrCount, Start, Const, Input, OutPos,
                                      OutColors, OutColors == nullptr ? 0 : 8,
@@ -3474,7 +3710,7 @@ bool XTL::VshDiagnostics::ExecuteXboxVertexShader(ShaderWordView xboxFunction,
         bool rejected;
         std::size_t instructionCount;
     };
-    static thread_local ClassifyMemo memo{nullptr, 0, 0, 0, false, 0};
+    static thread_local ClassifyMemo memo{ nullptr, 0, 0, 0, false, 0 };
 
     const DWORD* const memoKey = xboxFunction.data();
     const std::size_t memoSize = xboxFunction.size();

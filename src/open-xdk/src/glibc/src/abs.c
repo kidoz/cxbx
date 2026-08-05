@@ -19,15 +19,13 @@ Cambridge, MA 02139, USA.  */
 #include <ansidecl.h>
 #include <cstdlib>
 
-#undef	abs
+#undef abs
 
 // Windows defines this as an intrinsic
 
 /* Return the absolute value of I.  */
 __CONSTVALUE
-int
-DEFUN(_abs, (i), int i)
+int DEFUN(_abs, (i), int i)
 {
-  return(i < 0 ? -i : i);
+    return (i < 0 ? -i : i);
 }
-

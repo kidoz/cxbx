@@ -20,6 +20,6 @@ Cambridge, MA 02139, USA.  */
 #include <gnu-stabs.h>
 #include <math.h>
 
-#undef	finite
+#undef finite
 function_alias(finite, __finite, __CONSTVALUE int, (value),
-	       DEFUN(finite, (value), double value))
+               DEFUN(finite, (value), double value))

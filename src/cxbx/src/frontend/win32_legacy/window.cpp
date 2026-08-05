@@ -1,10 +1,10 @@
 // ******************************************************************
 // *
 // *    .,-:::::    .,::      .::::::::.    .,::      .:
-// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;; 
-// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['  
-// *  $$$              Y$$$P     $$""""Y$$     Y$$$P    
-// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,  
+// *  ,;;;'````'    `;;;,  .,;;  ;;;'';;'   `;;;,  .,;;
+// *  [[[             '[[,,[['   [[[__[[\.    '[[,,[['
+// *  $$$              Y$$$P     $$""""Y$$     Y$$$P
+// *  `88bo,__,o,    oP"``"Yo,  _88o,,od8P   oP"``"Yo,
 // *    "YUMMMMMP",m"       "Mm,""YUMMMP" ,m"       "Mm,
 // *
 // *   cxbx->win32->cxbx->window.cpp
@@ -39,16 +39,16 @@
 // ******************************************************************
 Wnd::Wnd(HINSTANCE x_hInstance) : m_hInstance(x_hInstance)
 {
-    m_classname   = "CxbxWnd";
-    m_wndname     = "cxbx Generic Window";
-    m_x           = 150;
-    m_y           = 150;
-    m_w           = 320;
-    m_h           = 240;
-    m_parent      = NULL;
-    m_clsstyle    = CS_HREDRAW | CS_VREDRAW;
-    m_wndstyle    = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE;
-    m_background  = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    m_classname = "CxbxWnd";
+    m_wndname = "cxbx Generic Window";
+    m_x = 150;
+    m_y = 150;
+    m_w = 320;
+    m_h = 240;
+    m_parent = NULL;
+    m_clsstyle = CS_HREDRAW | CS_VREDRAW;
+    m_wndstyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE;
+    m_background = (HBRUSH)GetStockObject(BLACK_BRUSH);
     m_initialized = false;
 
     return;
@@ -78,21 +78,20 @@ bool Wnd::ProcessMessages()
 
         WNDCLASS wnd_class;
 
-        wnd_class.hInstance     = m_hInstance;
+        wnd_class.hInstance = m_hInstance;
         wnd_class.lpszClassName = m_classname;
-        wnd_class.lpfnWndProc   = WndProcForward;
-        wnd_class.style         = m_clsstyle;
-        wnd_class.hIcon         = LoadIcon(hCxbxDll, MAKEINTRESOURCE(IDI_CXBX));
-        wnd_class.hCursor       = LoadCursor(NULL, IDC_ARROW);
-        wnd_class.lpszMenuName  = NULL;
-        wnd_class.cbClsExtra    = 0;
-        wnd_class.cbWndExtra    = 0;
+        wnd_class.lpfnWndProc = WndProcForward;
+        wnd_class.style = m_clsstyle;
+        wnd_class.hIcon = LoadIcon(hCxbxDll, MAKEINTRESOURCE(IDI_CXBX));
+        wnd_class.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wnd_class.lpszMenuName = NULL;
+        wnd_class.cbClsExtra = 0;
+        wnd_class.cbWndExtra = 0;
         wnd_class.hbrBackground = m_background;
 
         m_class = RegisterClass(&wnd_class);
-        
-        m_hwnd = CreateWindowEx
-        (
+
+        m_hwnd = CreateWindowEx(
             NULL,
             m_classname,
             m_wndname,
@@ -104,8 +103,7 @@ bool Wnd::ProcessMessages()
             m_parent,
             NULL,
             m_hInstance,
-            this
-        );
+            this);
 
         if(m_hwnd == 0)
         {
@@ -116,11 +114,10 @@ bool Wnd::ProcessMessages()
 
         SetWindowLongPtr(m_hwnd, GWL_USERDATA, (LONG)this);
 
-cleanup:;
-
+    cleanup:;
     }
 
-	MSG msg;
+    MSG msg;
 
     if(PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))
     {
@@ -142,7 +139,7 @@ cleanup:;
 // ******************************************************************
 LRESULT CALLBACK Wnd::WndProcForward(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    Wnd *forward_to = (Wnd*)GetWindowLongPtr(hwnd, GWL_USERDATA);
+    Wnd* forward_to = (Wnd*)GetWindowLongPtr(hwnd, GWL_USERDATA);
 
     if(forward_to == 0)
     {
@@ -151,11 +148,13 @@ LRESULT CALLBACK Wnd::WndProcForward(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             LPCREATESTRUCT cs = (LPCREATESTRUCT)lParam;
 
             forward_to = (Wnd*)cs->lpCreateParams;
-        }else{
+        }
+        else
+        {
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
     }
- 
+
     return forward_to->WndProc(hwnd, uMsg, wParam, lParam);
 }
 
@@ -165,16 +164,16 @@ LRESULT CALLBACK Wnd::WndProcForward(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
 LRESULT CALLBACK Wnd::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch(uMsg)
-	{
+    {
         case WM_CLOSE:
             DestroyWindow(hwnd);
             break;
         case WM_DESTROY:
             PostQuitMessage(0);
-			break;
-		default:
-			return DefWindowProc(hwnd, uMsg, wParam, lParam);
-	}
+            break;
+        default:
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
 
     return 0;
 }
