@@ -8154,18 +8154,24 @@ XBSYSAPI EXPORTNUM(149) xboxkrnl::BOOLEAN NTAPI xboxkrnl::KeSetTimer(
     Timer->Header.SignalState = 0;
     Timer->Header.Inserted = 1;
 
-    // Re-fire the DPC when the due time actually arrives (see the timer DPC
-    // thread); a future-scheduled consumer (DSOUND deferred commands) no-ops
-    // the immediate fire below and relies on the timed one. Schedule even
-    // without a DPC: a dpc-less timer is a pure WAITABLE timer, and expiry
-    // must still raise SignalState or a WaitAny(work-event, tick-timer) pump
-    // never wakes (NFS Underground's loader parks exactly like that).
+    // Fire the DPC when the due time actually arrives (see the timer DPC
+    // thread). Schedule even without a DPC: a dpc-less timer is a pure
+    // WAITABLE timer, and expiry must still raise SignalState or a
+    // WaitAny(work-event, tick-timer) pump never wakes (NFS Underground's
+    // loader parks exactly like that).
+    //
+    // Never run the DPC synchronously here: real hardware queues it for the
+    // due time, and the old unconditional immediate fire made every TIMEOUT
+    // timer expire at arm time. EvolutionX's USB stack arms a reset-timeout
+    // timer per port-reset attempt, and the synchronous fire ran the give-up
+    // path inside KeSetTimer itself -- the port was disabled and retried
+    // back-to-back, the reset-complete callback was cleared before the PRSC
+    // interrupt could deliver, and device enumeration never started. (The
+    // known past consumer of the immediate fire, DSOUND's deferred-command
+    // timer, explicitly no-ops an early fire and relies on the timed one.)
     EmuScheduleTimerDpc(Timer, Dpc, DueTime.QuadPart);
 
     EmuSwapFS(); // Xbox FS
-
-    if(Dpc != NULL)
-        EmuKeInsertQueueDpc(Dpc, NULL, NULL);
 
     return WasInserted;
 }
