@@ -11614,6 +11614,41 @@ static LONG WINAPI EmuVectoredExceptionHandler(LPEXCEPTION_POINTERS e)
            GetCurrentThreadId(), e->ContextRecord->Eax, e->ContextRecord->Ebx,
            e->ContextRecord->Ecx, e->ContextRecord->Edx,
            e->ContextRecord->Esi, e->ContextRecord->Edi);
+    // Crash-scene dump (opt-in via CXBX_CRASH_DUMP=<file>): write the low guest
+    // window at the FIRST reported exception, so dynamically unpacked code (an
+    // EvolutionX-style self-inflating image) can be disassembled at the exact
+    // faulting state. External debuggers cannot capture this here -- the host
+    // environment blocks cross-process ReadProcessMemory.
+    {
+        static volatile LONG s_CrashDumpDone = 0;
+        char DumpPath[MAX_PATH] = { 0 };
+        if(GetEnvironmentVariableA("CXBX_CRASH_DUMP", DumpPath, sizeof(DumpPath)) != 0 &&
+           InterlockedExchange(&s_CrashDumpDone, 1) == 0)
+        {
+            FILE* Dump = fopen(DumpPath, "wb");
+            if(Dump != NULL)
+            {
+                for(ULONG Cursor = 0x00010000; Cursor < 0x00600000; Cursor += 0x1000)
+                {
+                    BYTE Page[0x1000];
+                    if(IsBadReadPtr((void*)Cursor, 0x1000))
+                    {
+                        memset(Page, 0, sizeof(Page));
+                    }
+                    else
+                    {
+                        memcpy(Page, (void*)Cursor, sizeof(Page));
+                    }
+                    fwrite(Page, 1, sizeof(Page), Dump);
+                }
+                fclose(Dump);
+                printf("Emu (0x%lX): crash dump written to \"%s\" (0x10000..0x600000).\n",
+                       GetCurrentThreadId(), DumpPath);
+                fflush(stdout);
+            }
+        }
+    }
+
     cxbx::trace::RecordFlight(cxbx::trace::Event::Exception,
                               static_cast<std::uint32_t>(e->ExceptionRecord->ExceptionCode));
     cxbx::trace::DumpFlightEmergency();
