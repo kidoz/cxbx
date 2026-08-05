@@ -6969,62 +6969,83 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget* T,
     float Ac = (float)((Cc >> 24) & 0xFF), Rc = (float)((Cc >> 16) & 0xFF);
     float Gc = (float)((Cc >> 8) & 0xFF), Bvc = (float)(Cc & 0xFF);
 
+    // Incremental edge-function rasterization. Each barycentric weight is linear
+    // in (px,py), so it is evaluated once per row seed and advanced with a single
+    // add per pixel (3 adds) instead of recomputing the 9-mul closed form. The
+    // X-gradients step every pixel; the Y-gradients step every row.
+    const float laStepX = (by - cy) * InvArea;
+    const float lbStepX = (cy - ay) * InvArea;
+    const float lcStepX = (ay - by) * InvArea;
+    const float laStepY = (cx - bx) * InvArea;
+    const float lbStepY = (ax - cx) * InvArea;
+    const float lcStepY = (bx - ax) * InvArea;
+    const float px0 = (float)MinX + 0.5f;
+    const float py0 = (float)MinY + 0.5f;
+    float laRow = ((cx - bx) * (py0 - by) - (cy - by) * (px0 - bx)) * InvArea;
+    float lbRow = ((ax - cx) * (py0 - cy) - (ay - cy) * (px0 - cx)) * InvArea;
+    float lcRow = ((bx - ax) * (py0 - ay) - (by - ay) * (px0 - ax)) * InvArea;
+
     for(int Y = MinY; Y < MaxY; Y++)
     {
+        float la = laRow;
+        float lb = lbRow;
+        float lc = lcRow;
         for(int X = MinX; X < MaxX; X++)
         {
-            float px = (float)X + 0.5f, py = (float)Y + 0.5f;
             // Barycentric weights of a, b, c (sum to 1 inside the triangle).
-            float la = ((cx - bx) * (py - by) - (cy - by) * (px - bx)) * InvArea;
-            float lb = ((ax - cx) * (py - cy) - (ay - cy) * (px - cx)) * InvArea;
-            float lc = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * InvArea;
-            if(la < -1e-4f || lb < -1e-4f || lc < -1e-4f)
+            // Inverted inside test keeps the original continue semantics while
+            // guaranteeing the incremental step runs for every pixel.
+            if(!(la < -1e-4f || lb < -1e-4f || lc < -1e-4f))
             {
-                continue;
-            }
-
-            ULONG Color;
-            if(Uniform)
-            {
-                Color = Ca;
-            }
-            else
-            {
-                ULONG A = EmuNv2aClampByte(la * Aa + lb * Ab + lc * Ac);
-                ULONG R = EmuNv2aClampByte(la * Ra + lb * Rb + lc * Rc);
-                ULONG G = EmuNv2aClampByte(la * Ga + lb * Gb + lc * Gc);
-                ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
-                Color = (A << 24) | (R << 16) | (G << 8) | B;
-            }
-
-            float U[EmuNv2aTextureStageCount] = {};
-            float V[EmuNv2aTextureStageCount] = {};
-            for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
-            {
-                if(T->Sampler[Stage] == nullptr)
+                ULONG Color;
+                if(Uniform)
                 {
-                    continue;
+                    Color = Ca;
                 }
-                const float aiw = TexCoords->InverseW[Stage][i0];
-                const float biw = TexCoords->InverseW[Stage][i1];
-                const float ciw = TexCoords->InverseW[Stage][i2];
-                // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
-                float iw = la * aiw + lb * biw + lc * ciw;
-                float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
-                U[Stage] =
-                    (la * TexCoords->U[Stage][i0] * aiw +
-                     lb * TexCoords->U[Stage][i1] * biw +
-                     lc * TexCoords->U[Stage][i2] * ciw) *
-                    inv;
-                V[Stage] =
-                    (la * TexCoords->V[Stage][i0] * aiw +
-                     lb * TexCoords->V[Stage][i1] * biw +
-                     lc * TexCoords->V[Stage][i2] * ciw) *
-                    inv;
+                else
+                {
+                    ULONG A = EmuNv2aClampByte(la * Aa + lb * Ab + lc * Ac);
+                    ULONG R = EmuNv2aClampByte(la * Ra + lb * Rb + lc * Rc);
+                    ULONG G = EmuNv2aClampByte(la * Ga + lb * Gb + lc * Gc);
+                    ULONG B = EmuNv2aClampByte(la * Bva + lb * Bvb + lc * Bvc);
+                    Color = (A << 24) | (R << 16) | (G << 8) | B;
+                }
+
+                float U[EmuNv2aTextureStageCount] = {};
+                float V[EmuNv2aTextureStageCount] = {};
+                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+                {
+                    if(T->Sampler[Stage] == nullptr)
+                    {
+                        continue;
+                    }
+                    const float aiw = TexCoords->InverseW[Stage][i0];
+                    const float biw = TexCoords->InverseW[Stage][i1];
+                    const float ciw = TexCoords->InverseW[Stage][i2];
+                    // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
+                    float iw = la * aiw + lb * biw + lc * ciw;
+                    float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
+                    U[Stage] =
+                        (la * TexCoords->U[Stage][i0] * aiw +
+                         lb * TexCoords->U[Stage][i1] * biw +
+                         lc * TexCoords->U[Stage][i2] * ciw) *
+                        inv;
+                    V[Stage] =
+                        (la * TexCoords->V[Stage][i0] * aiw +
+                         lb * TexCoords->V[Stage][i1] * biw +
+                         lc * TexCoords->V[Stage][i2] * ciw) *
+                        inv;
+                }
+                const float z = la * az + lb * bz + lc * cz;
+                EmuNv2aShadePixel(T, X, Y, z, Color, U, V);
             }
-            const float z = la * az + lb * bz + lc * cz;
-            EmuNv2aShadePixel(T, X, Y, z, Color, U, V);
+            la += laStepX;
+            lb += lbStepX;
+            lc += lcStepX;
         }
+        laRow += laStepY;
+        lbRow += lbStepY;
+        lcRow += lcStepY;
     }
 }
 
