@@ -14,15 +14,29 @@ namespace cxbx::trace
 
 inline std::atomic<std::uint32_t> g_TraceMask{ 0 };
 
+// Flight recording is the load-bearing crash-recovery ring: it is intentionally
+// decoupled from g_TraceMask (whose channels default off) so the last-N-event
+// buffer stays populated for DumpFlightEmergency even with no trace channel
+// enabled. Defaults to on; perf-sensitive runs can opt out via CXBX_FLIGHT=0
+// or SetFlightEnabled(false), trading crash-dump fidelity for a cheaper hot path.
+inline std::atomic<bool> g_FlightEnabled{ true };
+
 [[nodiscard]] inline bool IsEnabled(Channel channel) noexcept
 {
     return (g_TraceMask.load(std::memory_order_relaxed) & ChannelBit(channel)) != 0;
+}
+
+[[nodiscard]] inline bool IsFlightEnabled() noexcept
+{
+    return g_FlightEnabled.load(std::memory_order_relaxed);
 }
 
 void Initialize(std::FILE* output) noexcept;
 void Shutdown() noexcept;
 void Flush() noexcept;
 void SetEnabled(Channel channel, bool enabled) noexcept;
+void SetFlightEnabled(bool enabled) noexcept;
+void ConfigureFlight() noexcept;
 [[nodiscard]] bool IsAvailable(Channel channel) noexcept;
 
 using FlightVisitor = void (*)(const TraceRecord& record, void* context) noexcept;

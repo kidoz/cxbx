@@ -8,5 +8,8 @@ optimization = "3"
 [targets_ns]
 optional_gate = 5.0
 flight = 40.0
+# Cost of RecordFlight when flight recording is opted out (CXBX_FLIGHT=0):
+# one relaxed atomic load plus an early return, so it sits at the gate budget.
+flight_gated = 5.0
 binary_one = 75.0
 binary_four = 175.0

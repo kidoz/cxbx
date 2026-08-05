@@ -415,9 +415,12 @@ void WriteEmergencyRecord(const TraceRecord& record, void*) noexcept
 
     if(g_ThreadState.flight == nullptr)
     {
-        for(std::size_t index = 0; index < argumentCount; ++index)
+        if(IsFlightEnabled())
         {
-            g_FlightFallback.Record(records[index]);
+            for(std::size_t index = 0; index < argumentCount; ++index)
+            {
+                g_FlightFallback.Record(records[index]);
+            }
         }
         if(IsBinaryEventEnabled(event) &&
            g_BinaryState.accepting.load(std::memory_order_acquire))
@@ -427,9 +430,12 @@ void WriteEmergencyRecord(const TraceRecord& record, void*) noexcept
         return static_cast<std::uint32_t>(localSequence);
     }
 
-    for(std::size_t index = 0; index < argumentCount; ++index)
+    if(IsFlightEnabled())
     {
-        g_ThreadState.flight->flight.Record(records[index]);
+        for(std::size_t index = 0; index < argumentCount; ++index)
+        {
+            g_ThreadState.flight->flight.Record(records[index]);
+        }
     }
     if(IsBinaryEventEnabled(event) &&
        g_BinaryState.accepting.load(std::memory_order_acquire))
@@ -610,6 +616,7 @@ void Initialize(std::FILE* output) noexcept
     g_State.linesSinceFlush.store(0, std::memory_order_relaxed);
     StartBinarySink();
     EnableConfiguredChannels();
+    ConfigureFlight();
     g_State.initialized.store(true, std::memory_order_release);
 
     char banner[128]{};
@@ -681,6 +688,24 @@ void SetEnabled(Channel channel, bool enabled) noexcept
     }
 }
 
+void SetFlightEnabled(bool enabled) noexcept
+{
+    g_FlightEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+void ConfigureFlight() noexcept
+{
+    char configured[16]{};
+    if(TraceOsReadEnvironment("CXBX_FLIGHT", configured, sizeof(configured)) &&
+       (KeyEquals(configured, std::strlen(configured), "0") ||
+        KeyEquals(configured, std::strlen(configured), "off") ||
+        KeyEquals(configured, std::strlen(configured), "false") ||
+        KeyEquals(configured, std::strlen(configured), "disabled")))
+    {
+        SetFlightEnabled(false);
+    }
+}
+
 bool IsAvailable(Channel channel) noexcept
 {
     const auto index = static_cast<std::size_t>(channel);
@@ -690,6 +715,10 @@ bool IsAvailable(Channel channel) noexcept
 
 void RecordFlight(Event event, std::uint32_t argument) noexcept
 {
+    if(!IsFlightEnabled())
+    {
+        return;
+    }
     AttachFlightThread();
     const TraceRecord record = MakeThreadRecord(event, argument);
     if(g_ThreadState.flight != nullptr)

@@ -151,6 +151,14 @@ int main()
                                   { cxbx::trace::RecordFlight(
                                         cxbx::trace::Event::D3dBoundary,
                                         static_cast<std::uint32_t>(index)); });
+    // Cost of RecordFlight when flight recording is opted out (CXBX_FLIGHT=0
+    // path): a single relaxed atomic load and an early return.
+    cxbx::trace::SetFlightEnabled(false);
+    const double flightGated = Measure(iterations, [](std::uint64_t index)
+                                       { cxbx::trace::RecordFlight(
+                                             cxbx::trace::Event::D3dBoundary,
+                                             static_cast<std::uint32_t>(index)); });
+    cxbx::trace::SetFlightEnabled(true);
     const double binaryOne = MeasureBinaryRing<1>(iterations);
     const double binaryFour = MeasureBinaryRing<4>(iterations);
     const double flushedText = MeasureFlushedText(iterations);
@@ -158,11 +166,11 @@ int main()
     std::printf(
         "{\"iterations\":%llu,\"compiler\":\"clang-%d.%d.%d\","
         "\"optimization\":\"%s\","
-        "\"optional_gate_ns\":%.3f,\"flight_ns\":%.3f,"
+        "\"optional_gate_ns\":%.3f,\"flight_ns\":%.3f,\"flight_gated_ns\":%.3f,"
         "\"binary_one_ns\":%.3f,\"binary_four_ns\":%.3f,"
         "\"flushed_text_ns\":%.3f}\n",
         static_cast<unsigned long long>(iterations), __clang_major__, __clang_minor__,
         __clang_patchlevel__, CXBX_TRACE_BENCH_OPTIMIZATION, optionalGate, flight,
-        binaryOne, binaryFour, flushedText);
+        flightGated, binaryOne, binaryFour, flushedText);
     return binaryOne < flushedText && binaryFour < flushedText ? 0 : 1;
 }
