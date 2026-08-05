@@ -104,9 +104,9 @@ def temp_dir() -> Path:
     return Path(os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp")
 
 
-def clear_temp_exe(seconds: float = 3.0) -> None:
-    """Delete the leftover %TEMP%\\default.exe (retry through the lock)."""
-    p = temp_dir() / GUEST_IMAGE
+def clear_temp_exe(guest_image: str = GUEST_IMAGE, seconds: float = 3.0) -> None:
+    """Delete the leftover %TEMP%\\<guest exe> (retry through the lock)."""
+    p = temp_dir() / guest_image
     deadline = time.time() + seconds
     while p.exists() and time.time() < deadline:
         try:
@@ -128,11 +128,13 @@ def clear_dumps() -> None:
                 pass
 
 
-def child_guest_pid(parent_pid: int) -> int | None:
-    """The guest default.exe spawned by our launcher, by PARENT PID (never by
-    name -- so a concurrent unrelated Cxbx session is never touched)."""
+def child_guest_pid(parent_pid: int, guest_image: str = GUEST_IMAGE) -> int | None:
+    """The guest exe spawned by our launcher, by PARENT PID (never by name
+    alone -- so a concurrent unrelated Cxbx session is never touched). The
+    launcher names the temp exe after the XBE stem (default.xbe -> default.exe,
+    evoxdash.xbe -> evoxdash.exe)."""
     ps = (f"(Get-CimInstance Win32_Process -Filter \"ParentProcessId={parent_pid}\" "
-          f"| Where-Object {{ $_.Name -eq '{GUEST_IMAGE}' }} "
+          f"| Where-Object {{ $_.Name -eq '{guest_image}' }} "
           f"| Select-Object -First 1 -ExpandProperty ProcessId)")
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
@@ -374,8 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         env["CXBX_NV2A_CAPTURE"] = str(capture_path.resolve())
         env["CXBX_NV2A_CAPTURE_FRAME"] = str(args.capture_pushbuffer)
 
+    guest_image = xbe.stem + ".exe"
     if not args.keep_temp:
-        clear_temp_exe()
+        clear_temp_exe(guest_image)
     if args.dump_frames:
         clear_dumps()
 
@@ -396,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     for _ in range(20):                       # guest spawns after XBE->exe convert (~1-2s)
         if p.poll() is not None:
             break
-        guest = child_guest_pid(p.pid)
+        guest = child_guest_pid(p.pid, guest_image)
         if guest:
             break
         time.sleep(0.5)
@@ -447,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     if p.poll() is None:
         print(f"  [{alive:4.0f}s] stopping (killing pid tree {p.pid})...")
     kill_tree(p.pid, guest)
-    clear_temp_exe()
+    clear_temp_exe(guest_image)
 
     n_frames = collect_dumps(frames_dir) if args.dump_frames else 0
     log_summary = summarize_log(logpath)
