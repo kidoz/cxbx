@@ -3614,7 +3614,15 @@ static const ULONG EmuSystemMemoryBase = 0xD0000000;
 static const ULONG EmuSystemMemoryLimit = 0xF0000000;
 static ULONG g_EmuNextSystemMemoryAddress = EmuSystemMemoryBase;
 static volatile LONG g_EmuSystemMemoryArenaState = 0;
-static ULONG g_EmuNextContiguousPhysicalAddress = 0x00100000;
+// Fake physical addresses handed to titles for contiguous allocations. Keep
+// the arena ABOVE every identity-mapped guest address (XBE image, 16 MiB
+// guest low window) but below the 64 MiB Xbox RAM ceiling: a fake range that
+// overlaps real guest addresses makes the reverse map hijack them -- EvoX's
+// OHCI driver DMA-targeted its descriptor buffer at identity physical
+// 0x594F1C and the old 0x00100000-based arena redirected the device's write
+// into an unrelated allocation (and NFS Underground's GPU-idle poll of
+// "physical" 0x00100410 was the same collision from the other side).
+static ULONG g_EmuNextContiguousPhysicalAddress = 0x02000000;
 static const ULONG EmuPageSize = 0x1000;
 static const ULONG EmuXboxPhysicalMemoryBytes = 64 * 1024 * 1024;
 static const ULONG EmuMmioPassthroughBase = 0xF0000000;
