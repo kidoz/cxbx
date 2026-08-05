@@ -9435,6 +9435,8 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel(
         EmuRememberOwnedGuestResource(*ppSurfaceLevel);
 
         hRet = pTexture8->GetSurfaceLevel(Level, &((*ppSurfaceLevel)->EmuSurface8));
+        if(SUCCEEDED(hRet))
+            EmuRememberHostResource((*ppSurfaceLevel)->EmuSurface8);
 
         // Surface writes to a swizzled texture level must trigger the same
         // Morton-order commit as texture locks; remember the association.

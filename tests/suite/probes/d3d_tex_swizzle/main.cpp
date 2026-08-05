@@ -100,6 +100,28 @@ void __cdecl main()
             memcpy((BYTE*)tlr.pBits + row * tlr.Pitch, &g_upload[row * 8], 8 * 4);
     }
 
+    // Guest D3DX queries the surface returned from a texture before uploading.
+    // The HLE must retain that child surface in its live host-resource set.
+    D3DTexture* pSurfaceTex = D3DDevice_CreateTexture2(
+        8, 8, 1, 1, 0, D3DFMT_A8R8G8B8, D3DRTYPE_TEXTURE);
+    xt_chk("d3d.surface_tex_create_ok", 1, pSurfaceTex != NULL);
+
+    D3DSurface* pSurface = NULL;
+    if(pSurfaceTex != NULL)
+    {
+        pSurface = D3DTexture_GetSurfaceLevel2(pSurfaceTex, 0);
+    }
+    xt_chk("d3d.surface_level_ok", 1, pSurface != NULL);
+
+    D3DSURFACE_DESC surfaceDesc;
+    memset(&surfaceDesc, 0, sizeof(surfaceDesc));
+    if(pSurface != NULL)
+    {
+        D3DSurface_GetDesc(pSurface, &surfaceDesc);
+    }
+    xt_chk_u32("d3d.surface_desc_width", 8, surfaceDesc.Width);
+    xt_chk_u32("d3d.surface_desc_height", 8, surfaceDesc.Height);
+
     D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET, COL_CLEAR, 1.0f, 0);
     D3DDevice_SetRenderState_CullMode(D3DCULL_NONE);
     D3DDevice_SetTexture(0, pTex);
