@@ -7725,6 +7725,34 @@ XBSYSAPI EXPORTNUM(49) VOID DECLSPEC_NORETURN xboxkrnl::HalReturnToFirmware(
         fflush(stdout);
     }
 
+    // Reboot-scene dump (opt-in via CXBX_REBOOT_DUMP=<file>): write the low guest
+    // window to a file so the code that decided to reboot -- often dynamically
+    // unpacked, invisible in the XBE (EvolutionX inflates its real image at run
+    // time) -- can be disassembled at the exact deciding state.
+    {
+        char DumpPath[MAX_PATH] = { 0 };
+        if(GetEnvironmentVariableA("CXBX_REBOOT_DUMP", DumpPath, sizeof(DumpPath)) != 0)
+        {
+            FILE* Dump = fopen(DumpPath, "wb");
+            if(Dump != NULL)
+            {
+                for(ULONG Cursor = 0x00010000; Cursor < 0x00600000; Cursor += 0x1000)
+                {
+                    BYTE Page[0x1000];
+                    if(IsBadReadPtr((void*)Cursor, 0x1000))
+                        memset(Page, 0, sizeof(Page));
+                    else
+                        memcpy(Page, (void*)Cursor, sizeof(Page));
+                    fwrite(Page, 1, sizeof(Page), Dump);
+                }
+                fclose(Dump);
+                printf("EmuKrnl (0x%X): reboot dump written to \"%s\" (0x10000..0x600000).\n",
+                       GetCurrentThreadId(), DumpPath);
+                fflush(stdout);
+            }
+        }
+    }
+
     // Soft-mod bypass (opt-in): the launcher framework shared by the XDK samples /
     // z26x reboots (QuickReboot=2) to apply a kernel patch and re-run the app. A
     // user-mode HLE can't persist that patch, so the reboot just loops/exits. When
