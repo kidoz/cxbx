@@ -675,6 +675,8 @@ static const ULONG EmuUsbPortPRSC = 1u << 20; // PortResetStatusChange
 static const ULONG EmuUsbPortChangeMask =
     EmuUsbPortCSC | EmuUsbPortPESC | EmuUsbPortPSSC | EmuUsbPortOCIC | EmuUsbPortPRSC;
 static ULONG g_EmuUsb0PortStatus[EmuUsbPortCount] = { 0, 0, 0, 0 };
+// Ticks/polls remaining before an in-progress port reset (PRS high) completes.
+static ULONG g_EmuUsb0PortResetTicks[EmuUsbPortCount] = { 0, 0, 0, 0 };
 // HcInterruptStatus (write-1-to-clear) + the frame counter, so a synthesized SOF
 // interrupt can be raised for the guest USB ISR and acknowledged by it.
 static const ULONG EmuUsbHcInterruptStatus = 0x0000000C;
@@ -687,6 +689,25 @@ static const ULONG EmuUsbIntMIE = 1u << 31;       // MasterInterruptEnable
 static ULONG g_EmuUsb0IntStatus = 0;
 static ULONG g_EmuUsb0IntEnable = 0;
 static ULONG g_EmuUsb0FmNumber = 0;
+// Registers and bits the transfer-descriptor engine reacts to. HcControl gates
+// list processing (functional state + per-list enables); HcCommandStatus's
+// list-filled bits are consumed when the engine services the lists; the HCCA
+// receives the per-frame number and the retired-TD done head.
+static const ULONG EmuUsbHcControl = 0x00000004;
+static const ULONG EmuUsbHcControlCle = 1u << 4;
+static const ULONG EmuUsbHcControlBle = 1u << 5;
+static const ULONG EmuUsbHcControlHcfsMask = 3u << 6;
+static const ULONG EmuUsbHcControlHcfsOperational = 2u << 6;
+static const ULONG EmuUsbHcCommandStatusClf = 1u << 1;
+static const ULONG EmuUsbHcCommandStatusBlf = 1u << 2;
+static const ULONG EmuUsbHcHcca = 0x00000018;
+static const ULONG EmuUsbHcControlHeadEd = 0x00000020;
+static const ULONG EmuUsbHcBulkHeadEd = 0x00000028;
+static const ULONG EmuUsbIntStatusWDH = 1u << 1; // WritebackDoneHead
+static const ULONG EmuUsbHccaFrameNumberOffset = 0x80;
+static const ULONG EmuUsbHccaDoneHeadOffset = 0x84;
+
+static void EmuUsb0RunTransferEngine(void);
 
 // An OHCI interrupt is asserted only for sources the driver has UNMASKED (and
 // only while the master enable is set). Raising a masked source livelocks the
@@ -711,7 +732,7 @@ extern "C" bool EmuUsb0InterruptPending()
 // existing HcRhPortStatus write semantics. There is no transfer-descriptor
 // engine behind the port yet, so enumeration's control transfers are the next
 // wall; this stage only completes the hotplug wait.
-static void EmuUsb0MaybeSyntheticConnect(void)
+static LONG EmuUsb0ConfiguredConnectPorts(void)
 {
     static LONG s_ConfiguredPorts = -1;
     if(s_ConfiguredPorts < 0)
@@ -728,8 +749,14 @@ static void EmuUsb0MaybeSyntheticConnect(void)
         }
         s_ConfiguredPorts = (LONG)Ports;
     }
+    return s_ConfiguredPorts;
+}
 
-    for(LONG Port = 0; Port < s_ConfiguredPorts; ++Port)
+static void EmuUsb0MaybeSyntheticConnect(void)
+{
+    const LONG ConfiguredPorts = EmuUsb0ConfiguredConnectPorts();
+
+    for(LONG Port = 0; Port < ConfiguredPorts; ++Port)
     {
         if((g_EmuUsb0PortStatus[Port] & EmuUsbPortCCS) == 0)
         {
@@ -758,6 +785,36 @@ static void EmuUsb0UpdateRhscSource(void)
     }
 }
 
+// A bus reset takes ~10 ms on real hardware, during which the port reads as
+// disabled with PRS high; the completion then ENABLES the port and raises
+// PRSC. Model that as PRS held for a couple of ticks/polls before completing.
+// Completing instantly inside the SetPortReset write broke EvolutionX: its
+// init wiggles reset+disable write pairs (no reads in between), so an instant
+// completion let the trailing ClearPortEnable land after the reset and its ISR
+// then found PRSC on a DISABLED port -- a dead port to its hub logic. On
+// hardware the disable write is a no-op while the reset is still running.
+static void EmuUsb0AdvancePortResets(void)
+{
+    for(ULONG Port = 0; Port < EmuUsbPortCount; ++Port)
+    {
+        if((g_EmuUsb0PortStatus[Port] & EmuUsbPortPRS) == 0)
+        {
+            continue;
+        }
+        if(g_EmuUsb0PortResetTicks[Port] > 0)
+        {
+            --g_EmuUsb0PortResetTicks[Port];
+            continue;
+        }
+        g_EmuUsb0PortStatus[Port] =
+            (g_EmuUsb0PortStatus[Port] | EmuUsbPortPES | EmuUsbPortPRSC) &
+            ~EmuUsbPortPRS;
+        printf("Emu (0x%lX): USB0 port %lu reset complete (PES+PRSC).\n",
+               GetCurrentThreadId(), Port);
+        fflush(stdout);
+    }
+}
+
 // Raise a USB start-of-frame interrupt source (called from the USB delivery
 // thread just before it invokes the connected level-1 ISR). The frame counter
 // advances regardless -- it is a free-running counter on hardware, readable
@@ -770,7 +827,9 @@ extern "C" void EmuUsb0SignalInterrupt()
         g_EmuUsb0IntStatus |= EmuUsbIntStatusSF;
 
     EmuUsb0MaybeSyntheticConnect();
+    EmuUsb0AdvancePortResets();
     EmuUsb0UpdateRhscSource();
+    EmuUsb0RunTransferEngine();
 }
 static const ULONG EmuApuMmioBase = 0xFE800000;
 static const ULONG EmuApuMmioEnd = EmuApuMmioBase + 0x0007FFFF;
@@ -971,6 +1030,685 @@ static bool EmuMmioTraceEnabled()
     return Enabled;
 }
 
+// ---------------------------------------------------------------------------
+// Minimal OHCI transfer-descriptor engine. Active only when CXBX_USB_CONNECT
+// reports a synthetic device, so the default path is untouched. It walks the
+// control/bulk ED lists in guest RAM, answers endpoint-0 requests as a stub
+// Xbox (XID) gamepad, retires TDs with condition codes onto the done queue and
+// writes HccaDoneHead + the WDH interrupt -- enough for a driver's enumeration
+// path (GET_DESCRIPTOR / SET_ADDRESS / SET_CONFIGURATION) to complete.
+// Non-control endpoints are left pending (a permanent NAK: the gamepad simply
+// never produces an input report yet), isochronous EDs are skipped, and a TD
+// data buffer is assumed linear (the two-physical-page split real OHCI allows
+// is not modeled; guest allocations here are contiguous).
+// ---------------------------------------------------------------------------
+
+// Defined in kernel_emulation.cpp (also declared later for the NV2A model).
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG* BlockSize);
+extern "C" ULONG EmuContiguousHostFromPhysical(ULONG PhysicalAddress);
+
+static const ULONG EmuUsbEdSkip = 1u << 14;
+static const ULONG EmuUsbEdIsochronous = 1u << 15;
+static const ULONG EmuUsbEdHeadHalted = 1u << 0;
+static const ULONG EmuUsbEdHeadToggleCarry = 1u << 1;
+static const ULONG EmuUsbTdCcNoError = 0;
+static const ULONG EmuUsbTdCcStall = 4;
+
+// The driver programs the controller with physical addresses. A fake physical
+// handed out by MmGetPhysicalAddress reverse-maps to its contiguous host
+// block; anything else (guest low-window RAM, an untranslated host pointer) is
+// directly addressable in this process and the SEH-guarded accessors below
+// validate it. The 0x80000000 kernel window is a cached alias of physical
+// memory, so strip it first.
+static ULONG EmuUsb0HostFromPhysical(ULONG Physical)
+{
+    ULONG Address = Physical;
+    if((Address & 0xF8000000) == 0x80000000)
+    {
+        Address &= 0x07FFFFFF;
+    }
+
+    if(Address == 0)
+    {
+        return 0;
+    }
+
+    ULONG Host = EmuContiguousHostFromPhysical(Address);
+    if(Host != 0)
+    {
+        return Host;
+    }
+
+    return Address;
+}
+
+static bool EmuUsb0ReadGuest(ULONG Physical, void* Dst, ULONG Size)
+{
+    ULONG Host = EmuUsb0HostFromPhysical(Physical);
+    if(Host == 0 || Dst == NULL || Size == 0)
+    {
+        return false;
+    }
+
+    __try
+    {
+        memcpy(Dst, (const void*)Host, Size);
+        return true;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool EmuUsb0WriteGuest(ULONG Physical, const void* Src, ULONG Size)
+{
+    ULONG Host = EmuUsb0HostFromPhysical(Physical);
+    if(Host == 0 || Src == NULL || Size == 0)
+    {
+        return false;
+    }
+
+    __try
+    {
+        memcpy((void*)Host, Src, Size);
+        return true;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool EmuUsb0ReadGuestDword(ULONG Physical, ULONG* Value)
+{
+    return EmuUsb0ReadGuest(Physical, Value, sizeof(*Value));
+}
+
+static bool EmuUsb0WriteGuestDword(ULONG Physical, ULONG Value)
+{
+    return EmuUsb0WriteGuest(Physical, &Value, sizeof(Value));
+}
+
+// The stub device: an original Xbox "Duke" gamepad. XID gamepads are
+// vendor-specific (interface class 0x58, subclass 0x42), full-speed, with an
+// interrupt IN (0x81) and interrupt OUT (0x02) endpoint of 32 bytes each.
+static const UCHAR g_EmuUsb0DeviceDescriptor[18] = {
+    0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x08, // USB 1.10, MPS0 = 8
+    0x5E, 0x04, 0x02, 0x02, 0x00, 0x01, 0x00, 0x00, // 045E:0202 (Duke)
+    0x00, 0x01
+};
+static const UCHAR g_EmuUsb0ConfigDescriptor[32] = {
+    0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32, // config, 32 bytes total
+    0x09, 0x04, 0x00, 0x00, 0x02, 0x58, 0x42, 0x00, 0x00, // interface: XID gamepad
+    0x07, 0x05, 0x81, 0x03, 0x20, 0x00, 0x04,             // interrupt IN, 32 bytes
+    0x07, 0x05, 0x02, 0x03, 0x20, 0x00, 0x04              // interrupt OUT, 32 bytes
+};
+// XID descriptor (vendor GET_DESCRIPTOR 0xC1/0x06, wValue 0x4200): bcdXid 1.00,
+// bType 1 (game controller), bSubType 1 (Duke), 20-byte input / 6-byte output
+// reports, no alternate product ids.
+static const UCHAR g_EmuUsb0XidDescriptor[16] = {
+    0x10, 0x42, 0x00, 0x01, 0x01, 0x01, 0x14, 0x06,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+};
+
+struct EmuUsb0StubDeviceState
+{
+    UCHAR Address;
+    UCHAR Configuration;
+};
+static EmuUsb0StubDeviceState g_EmuUsb0StubDevices[EmuUsbPortCount];
+
+// In-flight control-transfer state, one slot per endpoint descriptor. A SETUP
+// stage parks the request and its precomputed response here; the following
+// data/status TDs on the same ED consume it.
+struct EmuUsb0ControlSlot
+{
+    ULONG EdPhys;
+    bool Active;
+    bool Stalled;
+    UCHAR Setup[8];
+    UCHAR Response[64];
+    ULONG ResponseLength;
+    ULONG ResponseOffset;
+};
+static EmuUsb0ControlSlot g_EmuUsb0ControlSlots[8];
+
+static EmuUsb0ControlSlot* EmuUsb0SlotForEd(ULONG EdPhys)
+{
+    for(ULONG i = 0; i < sizeof(g_EmuUsb0ControlSlots) / sizeof(g_EmuUsb0ControlSlots[0]); ++i)
+    {
+        if(g_EmuUsb0ControlSlots[i].Active && g_EmuUsb0ControlSlots[i].EdPhys == EdPhys)
+        {
+            return &g_EmuUsb0ControlSlots[i];
+        }
+    }
+    for(ULONG i = 0; i < sizeof(g_EmuUsb0ControlSlots) / sizeof(g_EmuUsb0ControlSlots[0]); ++i)
+    {
+        if(!g_EmuUsb0ControlSlots[i].Active)
+        {
+            memset(&g_EmuUsb0ControlSlots[i], 0, sizeof(g_EmuUsb0ControlSlots[i]));
+            g_EmuUsb0ControlSlots[i].EdPhys = EdPhys;
+            return &g_EmuUsb0ControlSlots[i];
+        }
+    }
+
+    // All slots busy (should not happen with one device): recycle the first.
+    memset(&g_EmuUsb0ControlSlots[0], 0, sizeof(g_EmuUsb0ControlSlots[0]));
+    g_EmuUsb0ControlSlots[0].EdPhys = EdPhys;
+    return &g_EmuUsb0ControlSlots[0];
+}
+
+// Match an ED's function address to a stub device. Address 0 (the default
+// address, used before SET_ADDRESS completes) routes to the first device still
+// unaddressed, falling back to the first device.
+static EmuUsb0StubDeviceState* EmuUsb0StubDeviceForFunction(ULONG FunctionAddress)
+{
+    const LONG Ports = EmuUsb0ConfiguredConnectPorts();
+
+    if(FunctionAddress != 0)
+    {
+        for(LONG Port = 0; Port < Ports; ++Port)
+        {
+            if(g_EmuUsb0StubDevices[Port].Address == FunctionAddress)
+            {
+                return &g_EmuUsb0StubDevices[Port];
+            }
+        }
+        return NULL;
+    }
+
+    for(LONG Port = 0; Port < Ports; ++Port)
+    {
+        if(g_EmuUsb0StubDevices[Port].Address == 0)
+        {
+            return &g_EmuUsb0StubDevices[Port];
+        }
+    }
+    return Ports > 0 ? &g_EmuUsb0StubDevices[0] : NULL;
+}
+
+static void EmuUsb0SlotSetResponse(EmuUsb0ControlSlot* Slot, const UCHAR* Data,
+                                   ULONG Length, ULONG RequestedLength)
+{
+    if(Length > RequestedLength)
+    {
+        Length = RequestedLength;
+    }
+    if(Length > sizeof(Slot->Response))
+    {
+        Length = sizeof(Slot->Response);
+    }
+    if(Data != NULL && Length != 0)
+    {
+        memcpy(Slot->Response, Data, Length);
+    }
+    Slot->ResponseLength = Length;
+    Slot->ResponseOffset = 0;
+}
+
+// Service a SETUP packet against the stub gamepad. Returns false to stall the
+// transfer's remaining stages (the reply real hardware gives to a request it
+// does not implement).
+static bool EmuUsb0StubHandleSetup(EmuUsb0ControlSlot* Slot, ULONG FunctionAddress)
+{
+    const UCHAR RequestType = Slot->Setup[0];
+    const UCHAR Request = Slot->Setup[1];
+    const ULONG ValueW = Slot->Setup[2] | ((ULONG)Slot->Setup[3] << 8);
+    const ULONG LengthW = Slot->Setup[6] | ((ULONG)Slot->Setup[7] << 8);
+
+    Slot->ResponseLength = 0;
+    Slot->ResponseOffset = 0;
+
+    EmuUsb0StubDeviceState* Device = EmuUsb0StubDeviceForFunction(FunctionAddress);
+    if(Device == NULL)
+    {
+        return false;
+    }
+
+    if(RequestType == 0x80 && Request == 6) // GET_DESCRIPTOR
+    {
+        const ULONG DescriptorType = ValueW >> 8;
+        if(DescriptorType == 1)
+        {
+            EmuUsb0SlotSetResponse(Slot, g_EmuUsb0DeviceDescriptor,
+                                   sizeof(g_EmuUsb0DeviceDescriptor), LengthW);
+            return true;
+        }
+        if(DescriptorType == 2)
+        {
+            EmuUsb0SlotSetResponse(Slot, g_EmuUsb0ConfigDescriptor,
+                                   sizeof(g_EmuUsb0ConfigDescriptor), LengthW);
+            return true;
+        }
+        return false; // strings etc. -- none advertised
+    }
+
+    if(RequestType == 0x00 && Request == 5) // SET_ADDRESS
+    {
+        Device->Address = (UCHAR)(ValueW & 0x7F);
+        return true;
+    }
+
+    if(RequestType == 0x00 && Request == 9) // SET_CONFIGURATION
+    {
+        Device->Configuration = (UCHAR)(ValueW & 0xFF);
+        return true;
+    }
+
+    if(RequestType == 0x80 && Request == 8) // GET_CONFIGURATION
+    {
+        EmuUsb0SlotSetResponse(Slot, &Device->Configuration, 1, LengthW);
+        return true;
+    }
+
+    if((RequestType == 0x80 || RequestType == 0x81 || RequestType == 0x82) &&
+       Request == 0) // GET_STATUS (device/interface/endpoint)
+    {
+        static const UCHAR Status[2] = { 0x00, 0x00 };
+        EmuUsb0SlotSetResponse(Slot, Status, sizeof(Status), LengthW);
+        return true;
+    }
+
+    if((RequestType == 0x00 || RequestType == 0x01 || RequestType == 0x02) &&
+       (Request == 1 || Request == 3)) // CLEAR_FEATURE / SET_FEATURE
+    {
+        return true;
+    }
+
+    if(RequestType == 0x01 && Request == 11) // SET_INTERFACE
+    {
+        return true;
+    }
+
+    if(RequestType == 0x81 && Request == 10) // GET_INTERFACE
+    {
+        static const UCHAR AltSetting = 0x00;
+        EmuUsb0SlotSetResponse(Slot, &AltSetting, 1, LengthW);
+        return true;
+    }
+
+    if(RequestType == 0xC1 && Request == 6 && ValueW == 0x4200) // XID descriptor
+    {
+        EmuUsb0SlotSetResponse(Slot, g_EmuUsb0XidDescriptor,
+                               sizeof(g_EmuUsb0XidDescriptor), LengthW);
+        return true;
+    }
+
+    if(RequestType == 0xC1 && Request == 1) // XID GET_CAPABILITIES
+    {
+        UCHAR Capabilities[20];
+        memset(Capabilities, 0xFF, sizeof(Capabilities));
+        Capabilities[0] = 0x00;
+        if((ValueW >> 8) == 1) // input capabilities: 20-byte report
+        {
+            Capabilities[1] = 0x14;
+            EmuUsb0SlotSetResponse(Slot, Capabilities, 20, LengthW);
+            return true;
+        }
+        if((ValueW >> 8) == 2) // output capabilities: 6-byte report
+        {
+            Capabilities[1] = 0x06;
+            EmuUsb0SlotSetResponse(Slot, Capabilities, 6, LengthW);
+            return true;
+        }
+        return false;
+    }
+
+    if(RequestType == 0xA1 && Request == 1 && (ValueW >> 8) == 1) // XID GET_REPORT
+    {
+        UCHAR Report[20] = { 0 }; // neutral pad: nothing pressed, sticks centered
+        Report[1] = 0x14;
+        EmuUsb0SlotSetResponse(Slot, Report, sizeof(Report), LengthW);
+        return true;
+    }
+
+    if(RequestType == 0x21 && Request == 9) // XID SET_REPORT (rumble) -- accept
+    {
+        return true;
+    }
+
+    return false;
+}
+
+static ULONG g_EmuUsb0DoneQueueHead = 0;
+static volatile LONG g_EmuUsb0EngineBusy = 0;
+
+// Opt-in engine trace (CXBX_USB_TD_TRACE=1): reports what the list walk
+// actually sees -- list heads, each ED's raw dwords and the resolved host
+// address -- so a driver whose transfers never retire can be triaged from the
+// run log. State-change gated, so the 125 Hz idle walk stays quiet.
+static bool EmuUsb0TdTraceEnabled(void)
+{
+    static LONG s_Enabled = -1;
+    if(s_Enabled < 0)
+    {
+        char Value[8] = { 0 };
+        s_Enabled =
+            GetEnvironmentVariableA("CXBX_USB_TD_TRACE", Value, sizeof(Value)) != 0 ? 1 : 0;
+    }
+    return s_Enabled != 0;
+}
+
+// Retire one TD: write back its condition code and buffer pointer, push it on
+// the done queue (NextTD becomes the done-queue link, as on hardware), and
+// advance the ED's head past it -- halting the endpoint on error.
+static void EmuUsb0RetireTd(ULONG EdPhys, ULONG TdPhys, ULONG TdControl,
+                            ULONG NewBufferPointer, ULONG ConditionCode,
+                            bool HaltEndpoint)
+{
+    ULONG NextTd = 0;
+    static_cast<void>(EmuUsb0ReadGuestDword(TdPhys + 8, &NextTd));
+
+    ULONG HeadP = 0;
+    static_cast<void>(EmuUsb0ReadGuestDword(EdPhys + 8, &HeadP));
+
+    // Preserve the transfer fields, clear the error count, set the condition.
+    const ULONG UpdatedControl = (TdControl & 0x03FFFFFF) | (ConditionCode << 28);
+    static_cast<void>(EmuUsb0WriteGuestDword(TdPhys + 0, UpdatedControl));
+    static_cast<void>(EmuUsb0WriteGuestDword(TdPhys + 4, NewBufferPointer));
+    static_cast<void>(EmuUsb0WriteGuestDword(TdPhys + 8, g_EmuUsb0DoneQueueHead));
+    g_EmuUsb0DoneQueueHead = TdPhys;
+
+    ULONG NewHead = (NextTd & ~0xFu) | (HeadP & EmuUsbEdHeadToggleCarry);
+    if(HaltEndpoint)
+    {
+        NewHead |= EmuUsbEdHeadHalted;
+    }
+    static_cast<void>(EmuUsb0WriteGuestDword(EdPhys + 8, NewHead));
+
+    printf("Emu (0x%lX): USB0 TD 0x%.08lX retired cc=%lu%s.\n",
+           GetCurrentThreadId(), TdPhys, ConditionCode,
+           HaltEndpoint ? " (endpoint halted)" : "");
+    fflush(stdout);
+}
+
+// Service every ready TD queued on one endpoint descriptor.
+static void EmuUsb0ProcessEndpoint(ULONG EdPhys)
+{
+    ULONG EdControl = 0;
+    ULONG TailP = 0;
+    if(!EmuUsb0ReadGuestDword(EdPhys + 0, &EdControl) ||
+       !EmuUsb0ReadGuestDword(EdPhys + 4, &TailP))
+    {
+        if(EmuUsb0TdTraceEnabled())
+        {
+            printf("Emu (0x%lX): USB0 TDT ED 0x%.08lX unreadable (host 0x%.08lX).\n",
+                   GetCurrentThreadId(), EdPhys, EmuUsb0HostFromPhysical(EdPhys));
+            fflush(stdout);
+        }
+        return;
+    }
+
+    if(EmuUsb0TdTraceEnabled())
+    {
+        ULONG HeadNow = 0;
+        static_cast<void>(EmuUsb0ReadGuestDword(EdPhys + 8, &HeadNow));
+        static ULONG s_LastReported[8][4];
+        const ULONG Slot = (EdPhys >> 4) & 7;
+        if(s_LastReported[Slot][0] != EdPhys || s_LastReported[Slot][1] != EdControl ||
+           s_LastReported[Slot][2] != TailP || s_LastReported[Slot][3] != HeadNow)
+        {
+            s_LastReported[Slot][0] = EdPhys;
+            s_LastReported[Slot][1] = EdControl;
+            s_LastReported[Slot][2] = TailP;
+            s_LastReported[Slot][3] = HeadNow;
+            printf("Emu (0x%lX): USB0 TDT ED 0x%.08lX (host 0x%.08lX) ctrl=0x%.08lX "
+                   "tail=0x%.08lX head=0x%.08lX.\n",
+                   GetCurrentThreadId(), EdPhys, EmuUsb0HostFromPhysical(EdPhys),
+                   EdControl, TailP, HeadNow);
+            fflush(stdout);
+        }
+    }
+
+    if((EdControl & (EmuUsbEdSkip | EmuUsbEdIsochronous)) != 0)
+    {
+        return;
+    }
+
+    const ULONG FunctionAddress = EdControl & 0x7F;
+    const ULONG EndpointNumber = (EdControl >> 7) & 0xF;
+    if(EndpointNumber != 0)
+    {
+        // Interrupt/bulk endpoints of the stub gamepad: no data yet, so TDs
+        // stay pending -- the hardware equivalent of a device NAKing forever.
+        return;
+    }
+
+    for(ULONG Processed = 0; Processed < 32; ++Processed)
+    {
+        ULONG HeadP = 0;
+        if(!EmuUsb0ReadGuestDword(EdPhys + 8, &HeadP))
+        {
+            return;
+        }
+        if((HeadP & EmuUsbEdHeadHalted) != 0)
+        {
+            return;
+        }
+
+        const ULONG TdPhys = HeadP & ~0xFu;
+        if(TdPhys == 0 || TdPhys == (TailP & ~0xFu))
+        {
+            return; // queue empty
+        }
+
+        ULONG Td[4];
+        if(!EmuUsb0ReadGuest(TdPhys, Td, sizeof(Td)))
+        {
+            return;
+        }
+
+        const ULONG Direction = (Td[0] >> 19) & 3; // 0=SETUP, 1=OUT, 2=IN
+        const ULONG Cbp = Td[1];
+        const ULONG BufferEnd = Td[3];
+        const ULONG BufferLength =
+            (Cbp != 0 && BufferEnd >= Cbp) ? BufferEnd - Cbp + 1 : 0;
+
+        EmuUsb0ControlSlot* Slot = EmuUsb0SlotForEd(EdPhys);
+
+        if(Direction == 0) // SETUP stage
+        {
+            if(BufferLength < 8 || !EmuUsb0ReadGuest(Cbp, Slot->Setup, 8))
+            {
+                EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
+                continue;
+            }
+
+            Slot->Active = true;
+            Slot->Stalled = !EmuUsb0StubHandleSetup(Slot, FunctionAddress);
+
+            printf("Emu (0x%lX): USB0 SETUP fa=%lu bmReq=0x%.02X bReq=0x%.02X "
+                   "wValue=0x%.04lX wLength=%lu -> %s.\n",
+                   GetCurrentThreadId(), FunctionAddress, Slot->Setup[0],
+                   Slot->Setup[1],
+                   (ULONG)(Slot->Setup[2] | ((ULONG)Slot->Setup[3] << 8)),
+                   (ULONG)(Slot->Setup[6] | ((ULONG)Slot->Setup[7] << 8)),
+                   Slot->Stalled ? "STALL" : "ok");
+            fflush(stdout);
+
+            EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], 0, EmuUsbTdCcNoError, false);
+        }
+        else if(Direction == 2) // IN: data stage or status of an OUT/no-data request
+        {
+            if(Slot->Stalled)
+            {
+                EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
+                continue;
+            }
+
+            ULONG Remaining = 0;
+            if(Slot->Active && Slot->ResponseLength > Slot->ResponseOffset)
+            {
+                Remaining = Slot->ResponseLength - Slot->ResponseOffset;
+            }
+            ULONG Copy = Remaining < BufferLength ? Remaining : BufferLength;
+            if(EmuUsb0TdTraceEnabled() && Copy != 0)
+            {
+                printf("Emu (0x%lX): USB0 TDT IN data phys 0x%.08lX -> host 0x%.08lX "
+                       "copy=%lu first=%.02X%.02X.\n",
+                       GetCurrentThreadId(), Cbp, EmuUsb0HostFromPhysical(Cbp), Copy,
+                       Slot->Response[Slot->ResponseOffset],
+                       Copy > 1 ? Slot->Response[Slot->ResponseOffset + 1] : 0);
+                fflush(stdout);
+            }
+            if(Copy != 0 &&
+               !EmuUsb0WriteGuest(Cbp, Slot->Response + Slot->ResponseOffset, Copy))
+            {
+                EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
+                continue;
+            }
+            Slot->ResponseOffset += Copy;
+
+            if(BufferLength == 0)
+            {
+                Slot->Active = false; // zero-length status stage completes the transfer
+            }
+
+            // Fully-filled buffer reads back CBP=0; a short packet leaves CBP
+            // just past the last byte written (lenient: short IN completes
+            // NoError regardless of the TD's bufferRounding bit).
+            const ULONG NewCbp = (Copy == BufferLength) ? 0 : Cbp + Copy;
+            EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], NewCbp, EmuUsbTdCcNoError, false);
+        }
+        else if(Direction == 1) // OUT: data stage or status of an IN request
+        {
+            if(Slot->Stalled)
+            {
+                EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
+                continue;
+            }
+
+            if(BufferLength == 0)
+            {
+                Slot->Active = false; // status stage completes the transfer
+            }
+            EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], 0, EmuUsbTdCcNoError, false);
+        }
+        else // reserved direction encoding
+        {
+            EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
+        }
+    }
+}
+
+static void EmuUsb0ProcessEndpointList(ULONG HeadRegisterOffset)
+{
+    ULONG EdPhys =
+        EmuUsb0CachedRegister(EmuUsb0MmioBase + HeadRegisterOffset, 0) & ~0xFu;
+
+    if(EmuUsb0TdTraceEnabled())
+    {
+        static ULONG s_LastHead[2] = { 0xFFFFFFFF, 0xFFFFFFFF };
+        const ULONG Index = HeadRegisterOffset == EmuUsbHcControlHeadEd ? 0 : 1;
+        if(s_LastHead[Index] != EdPhys)
+        {
+            s_LastHead[Index] = EdPhys;
+            printf("Emu (0x%lX): USB0 TDT %s list head now 0x%.08lX.\n",
+                   GetCurrentThreadId(),
+                   Index == 0 ? "control" : "bulk", EdPhys);
+            fflush(stdout);
+        }
+    }
+
+    for(ULONG Count = 0; Count < 32 && EdPhys != 0; ++Count)
+    {
+        EmuUsb0ProcessEndpoint(EdPhys);
+
+        ULONG NextEd = 0;
+        if(!EmuUsb0ReadGuestDword(EdPhys + 12, &NextEd))
+        {
+            return;
+        }
+        EdPhys = NextEd & ~0xFu;
+    }
+}
+
+// Publish accumulated retired TDs: hardware only writes a new HccaDoneHead
+// once the driver has acknowledged the previous one by clearing WDH.
+static void EmuUsb0FlushDoneQueue(void)
+{
+    if(g_EmuUsb0DoneQueueHead == 0 ||
+       (g_EmuUsb0IntStatus & EmuUsbIntStatusWDH) != 0)
+    {
+        return;
+    }
+
+    const ULONG Hcca =
+        EmuUsb0CachedRegister(EmuUsb0MmioBase + EmuUsbHcHcca, 0) & ~0xFFu;
+    if(Hcca == 0)
+    {
+        return;
+    }
+
+    if(!EmuUsb0WriteGuestDword(Hcca + EmuUsbHccaDoneHeadOffset,
+                               g_EmuUsb0DoneQueueHead))
+    {
+        return;
+    }
+
+    printf("Emu (0x%lX): USB0 done head 0x%.08lX -> HCCA, WDH raised.\n",
+           GetCurrentThreadId(), g_EmuUsb0DoneQueueHead);
+    fflush(stdout);
+
+    g_EmuUsb0DoneQueueHead = 0;
+    g_EmuUsb0IntStatus |= EmuUsbIntStatusWDH;
+}
+
+static void EmuUsb0RunTransferEngine(void)
+{
+    if(EmuUsb0ConfiguredConnectPorts() <= 0)
+    {
+        return;
+    }
+
+    const ULONG Control =
+        EmuUsb0CachedRegister(EmuUsb0MmioBase + EmuUsbHcControl, 0);
+    if((Control & EmuUsbHcControlHcfsMask) != EmuUsbHcControlHcfsOperational)
+    {
+        return;
+    }
+
+    // Guest threads and the USB delivery thread can both land here; a single
+    // pass at a time keeps a TD from being retired twice.
+    if(InterlockedCompareExchange(&g_EmuUsb0EngineBusy, 1, 0) != 0)
+    {
+        return;
+    }
+
+    // Mirror the frame number into the HCCA like the hardware's per-frame write.
+    const ULONG Hcca =
+        EmuUsb0CachedRegister(EmuUsb0MmioBase + EmuUsbHcHcca, 0) & ~0xFFu;
+    if(Hcca != 0)
+    {
+        static_cast<void>(EmuUsb0WriteGuestDword(
+            Hcca + EmuUsbHccaFrameNumberOffset, g_EmuUsb0FmNumber & 0xFFFF));
+    }
+
+    if((Control & EmuUsbHcControlCle) != 0)
+    {
+        EmuUsb0ProcessEndpointList(EmuUsbHcControlHeadEd);
+    }
+    if((Control & EmuUsbHcControlBle) != 0)
+    {
+        EmuUsb0ProcessEndpointList(EmuUsbHcBulkHeadEd);
+    }
+
+    // The lists were serviced; consume the list-filled bits like hardware does.
+    const ULONG CommandStatus =
+        EmuUsb0CachedRegister(EmuUsb0MmioBase + EmuUsbHcCommandStatus, 0);
+    if((CommandStatus & (EmuUsbHcCommandStatusClf | EmuUsbHcCommandStatusBlf)) != 0)
+    {
+        EmuStoreMmioRegister(
+            EmuUsb0MmioBase + EmuUsbHcCommandStatus,
+            CommandStatus & ~(EmuUsbHcCommandStatusClf | EmuUsbHcCommandStatusBlf));
+    }
+
+    EmuUsb0FlushDoneQueue();
+
+    InterlockedExchange(&g_EmuUsb0EngineBusy, 0);
+}
+
 static ULONG EmuUsb0ReadRegister32(ULONG Address)
 {
     ULONG Offset = EmuUsb0Offset(Address);
@@ -978,9 +1716,12 @@ static ULONG EmuUsb0ReadRegister32(ULONG Address)
     ULONG Value;
 
     // A polling driver must see the synthetic connect too, not only one that
-    // enables the interrupt delivery thread.
+    // enables the interrupt delivery thread. Likewise its port resets and
+    // queued transfers must make progress even without the delivery thread.
     EmuUsb0MaybeSyntheticConnect();
+    EmuUsb0AdvancePortResets();
     EmuUsb0UpdateRhscSource();
+    EmuUsb0RunTransferEngine();
 
     if(Offset == 0)
     {
@@ -1039,8 +1780,16 @@ static void EmuUsb0WritePortStatus(ULONG PortIndex, ULONG Value)
         Status &= ~EmuUsbPortPES;
     if((Value & (1u << 1)) && (Status & EmuUsbPortCCS)) // SetPortEnable
         Status |= EmuUsbPortPES;
-    if((Value & (1u << 4)) && (Status & EmuUsbPortCCS)) // SetPortReset -> completes
-        Status = (Status | EmuUsbPortPES | EmuUsbPortPRSC) & ~EmuUsbPortPRS;
+    if((Value & (1u << 4)) && (Status & EmuUsbPortCCS)) // SetPortReset -> in progress
+    {
+        // Port disabled while the reset runs; EmuUsb0AdvancePortResets
+        // completes it (PES + PRSC) a couple of ticks later.
+        Status = (Status | EmuUsbPortPRS) & ~EmuUsbPortPES;
+        g_EmuUsb0PortResetTicks[PortIndex] = 2;
+        // A bus reset returns the attached device to its default state.
+        g_EmuUsb0StubDevices[PortIndex].Address = 0;
+        g_EmuUsb0StubDevices[PortIndex].Configuration = 0;
+    }
     if(Value & (1u << 8)) // SetPortPower
         Status |= EmuUsbPortPPS;
     if(Value & (1u << 9)) // ClearPortPower
@@ -1065,6 +1814,14 @@ static void EmuUsb0WriteRegister32(ULONG Address, ULONG Value)
         g_EmuUsb0IntEnable &= ~Value; // paired clear-bits register
     else
         EmuStoreMmioRegister(Address, Value);
+
+    // The driver announcing freshly queued work (ControlListFilled /
+    // BulkListFilled) is the natural moment to service the lists.
+    if(Offset == EmuUsbHcCommandStatus &&
+       (Value & (EmuUsbHcCommandStatusClf | EmuUsbHcCommandStatusBlf)) != 0)
+    {
+        EmuUsb0RunTransferEngine();
+    }
 
     printf("Emu (0x%lX): USB0 MMIO write 0x%.08lX = 0x%.08lX.\n",
            GetCurrentThreadId(), Address, Value);
