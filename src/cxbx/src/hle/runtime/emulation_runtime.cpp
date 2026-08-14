@@ -14820,27 +14820,69 @@ static void EmuInstallCdxLaunchBootstrap(Xbe::Header* pXbeHeader)
     // while the patched API surface (Clear/Swap/...) renders through the host
     // device.
     // The device-field offset in the prologue differs per XDK: 5849 reads
-    // [esi+8D4h], 5558 reads [esi+8D0h] -- accept either.
+    // [esi+8D4h], 5558 reads [esi+0D0h] -- accept either. LTCG titles compile
+    // the same prologue with a different head (an extra `push ebx` before
+    // `push esi`, and the register argument moved to ebx), so accept both the
+    // stock head (56 8B 35) and the LTCG head (53 56 8B 35); the embedded
+    // D3D__pDevice global and the [esi+8D4h] tail are byte-identical either
+    // way (verified against Samurai Shodown V's Swap at 0x003031B0: its
+    // embedded global matches XbSymbolDatabase's D3D_g_pDevice).
     const uint08 SwapPrologueHead[] = { 0x56, 0x8B, 0x35 };
+    const uint08 SwapPrologueHeadLtcg[] = { 0x53, 0x56, 0x8B, 0x35 };
     const uint08 SwapPrologueTail5849[] = { 0x8B, 0x86, 0xD4, 0x08, 0x00, 0x00, 0x85, 0xC0 };
     const uint08 SwapPrologueTail5558[] = { 0x8B, 0x86, 0xD0, 0x08, 0x00, 0x00, 0x85, 0xC0 };
 
     uint32 Base = pXbeHeader->dwBaseAddr;
     uint32 End = Base + pXbeHeader->dwSizeofImage;
     bool DeviceGlobalFound = false;
-    for(uint32 Address = Base; Address + 15 <= End; Address++)
+    for(uint32 Address = Base; Address + 16 <= End; Address++)
     {
-        if(IsBadReadPtr((void*)Address, 15))
+        if(IsBadReadPtr((void*)Address, 16))
         {
             Address += 0xFFF;
             continue;
         }
 
-        if(memcmp((void*)Address, SwapPrologueHead, sizeof(SwapPrologueHead)) == 0 &&
-           (memcmp((void*)(Address + 7), SwapPrologueTail5849, sizeof(SwapPrologueTail5849)) == 0 ||
-            memcmp((void*)(Address + 7), SwapPrologueTail5558, sizeof(SwapPrologueTail5558)) == 0))
+        // For each accepted head, the tail follows the embedded 4-byte global
+        // address, optionally after a couple of bytes of LTCG register-arg
+        // shuffling (Samurai Shodown V's Swap moves the register argument to
+        // ebx with `mov ebx,eax` between the two).
+        const uint08* MatchingHead = NULL;
+        uint32 GlobalOffset = 0;
+        if(memcmp((void*)Address, SwapPrologueHead, sizeof(SwapPrologueHead)) == 0)
         {
-            uint32 DeviceGlobal = *(uint32*)(Address + 3);
+            MatchingHead = SwapPrologueHead;
+            GlobalOffset = sizeof(SwapPrologueHead);
+        }
+        else if(memcmp((void*)Address, SwapPrologueHeadLtcg, sizeof(SwapPrologueHeadLtcg)) == 0)
+        {
+            MatchingHead = SwapPrologueHeadLtcg;
+            GlobalOffset = sizeof(SwapPrologueHeadLtcg);
+        }
+
+        static const uint32 SwapTailGaps[] = { 0, 2 };
+        bool TailMatched = false;
+        if(MatchingHead != NULL)
+        {
+            for(uint32 Gap : SwapTailGaps)
+            {
+                const uint32 TailOffset = GlobalOffset + 4 + Gap;
+                if(Address + TailOffset + sizeof(SwapPrologueTail5849) > End)
+                {
+                    continue;
+                }
+                if(memcmp((void*)(Address + TailOffset), SwapPrologueTail5849, sizeof(SwapPrologueTail5849)) == 0 ||
+                   memcmp((void*)(Address + TailOffset), SwapPrologueTail5558, sizeof(SwapPrologueTail5558)) == 0)
+                {
+                    TailMatched = true;
+                    break;
+                }
+            }
+        }
+
+        if(TailMatched)
+        {
+            uint32 DeviceGlobal = *(uint32*)(Address + GlobalOffset);
             if(DeviceGlobal >= Base && DeviceGlobal < End)
             {
                 static uint08 s_CdxFakeD3DDevice[0x4000];
