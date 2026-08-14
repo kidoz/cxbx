@@ -5341,11 +5341,28 @@ static ULONG EmuNv2aSampleTexel(const EmuNv2aSampler* S, float u, float v)
 }
 
 // Decode a bound KELVIN texture from guest memory and write it to a BMP. This is
+// Texture dump budget (CXBX_NV2A_TEXTURE_LOG=<n>): stage-0 source dumps cap
+// at the first <n> draw-begins (default 16). A title whose interesting
+// textures bind later needs the budget raised.
+static ULONG EmuNv2aTextureDumpBudget()
+{
+    static LONG s_Budget = -1;
+    if(s_Budget < 0)
+    {
+        char Value[16] = { 0 };
+        s_Budget = GetEnvironmentVariableA("CXBX_NV2A_TEXTURE_LOG", Value, sizeof(Value)) != 0
+                       ? (LONG)strtoul(Value, NULL, 0)
+                       : 0;
+    }
+    return s_Budget > 0 ? (ULONG)s_Budget : 16;
+}
+
 // the payload of path 1: it reproduces the source image the title uploaded,
 // independent of any rasterization.
 static void EmuNv2aDumpSourceTexture(ULONG Stage)
 {
-    if(Stage >= EmuNv2aTextureStageCount || g_EmuNv2aTextureDumpIndex >= 16)
+    if(Stage >= EmuNv2aTextureStageCount ||
+       g_EmuNv2aTextureDumpIndex >= EmuNv2aTextureDumpBudget())
         return;
 
     const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
@@ -5395,6 +5412,26 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
     ULONG SourceSize = Width * Height * Bpp;
     BYTE* Source = new BYTE[SourceSize];
     const char* SourceKind = NULL;
+
+    // Palettized (P8) sources index a 256-entry A8R8G8B8 palette; decode
+    // through the same loader the sampler uses so the dump shows the colors
+    // the rasterizer will actually sample (a palette-less decode renders
+    // every texel of a CI8 texture as opaque black).
+    ULONG Palette[256] = {};
+    bool PaletteLoaded = false;
+    if(Kind == 5)
+    {
+        EmuNv2aSampler PaletteProbe = {};
+        PaletteLoaded = EmuNv2aLoadSamplerPalette(Stage, &PaletteProbe);
+        memcpy(Palette, PaletteProbe.Palette, sizeof(Palette));
+        printf("Emu (0x%lX): KELVIN texture[%lu] palette %s: "
+               "[0]=0x%.08lX [1]=0x%.08lX [2]=0x%.08lX [3]=0x%.08lX "
+               "[255]=0x%.08lX.\n",
+               GetCurrentThreadId(), Stage,
+               PaletteLoaded ? "loaded" : "UNREADABLE",
+               Palette[0], Palette[1], Palette[2], Palette[3], Palette[255]);
+        fflush(stdout);
+    }
 
     // The texture is normally a raw host pointer into a contiguous block (or a
     // fake-physical that reverse-maps to one); read it straight from host memory.
@@ -5449,7 +5486,9 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
             for(ULONG b = 0; b < Bpp && ByteOffset + b < SourceSize; b++)
                 Raw |= (ULONG)Source[ByteOffset + b] << (b * 8);
 
-            ULONG Argb = EmuNv2aUnpackTexel(Raw, Kind);
+            ULONG Argb = Kind == 5
+                             ? Palette[Raw & 0xFF]
+                             : EmuNv2aUnpackTexel(Raw, Kind);
 
             // Format-true alpha: A8R8G8B8 kinds carry it in Argb already;
             // A4R4G4B4 too; A1R5G5B5 (colors 0x02/0x10) encodes it in bit 15,
@@ -8359,6 +8398,24 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
 // z-buffer, or texturing.
 static ULONG g_EmuNv2aRasterLogCount = 0;
 
+// Raster trace budget (CXBX_NV2A_RASTER_LOG=<n>): the per-draw "NV2A raster"
+// lines print for the first <n> rasterized draws of the run. A title whose
+// broken draws come later in the frame (Samurai Shodown V's palettized tiles
+// start ~draw 2 of late frames but after the early boot draws) needs the
+// budget raised to be visible.
+static ULONG EmuNv2aRasterLogBudget(ULONG Default)
+{
+    static LONG s_Budget = -1;
+    if(s_Budget < 0)
+    {
+        char Value[16] = { 0 };
+        s_Budget = GetEnvironmentVariableA("CXBX_NV2A_RASTER_LOG", Value, sizeof(Value)) != 0
+                       ? (LONG)strtoul(Value, NULL, 0)
+                       : 0;
+    }
+    return s_Budget > 0 ? (ULONG)s_Budget : Default;
+}
+
 static void EmuNv2aRasterizeInlineArray(
     const cxbx::nv2a::PgraphVertexBatchAction& Batch, ULONG BeginOp)
 {
@@ -8367,7 +8424,7 @@ static void EmuNv2aRasterizeInlineArray(
        !cxbx::nv2a::BuildPgraphInlineVertexLayout(
            g_EmuNv2aVertexState, Layout))
     {
-        if(g_EmuNv2aRasterLogCount < 16)
+        if(g_EmuNv2aRasterLogCount < EmuNv2aRasterLogBudget(16))
         {
             printf("Emu (0x%lX): NV2A raster: invalid inline batch words=%lu overflow=%u.\n",
                    GetCurrentThreadId(), static_cast<ULONG>(Batch.wordCount),
@@ -8387,7 +8444,7 @@ static void EmuNv2aRasterizeInlineArray(
         return;
     }
 
-    if(g_EmuNv2aRasterLogCount < 16)
+    if(g_EmuNv2aRasterLogCount < EmuNv2aRasterLogBudget(16))
     {
         printf("Emu (0x%lX): NV2A raster: inline words=%lu stride=%lu verts=%lu formats=0x%.08lX/0x%.08lX/0x%.08lX.\n",
                GetCurrentThreadId(), static_cast<ULONG>(Batch.wordCount),
@@ -8499,7 +8556,7 @@ static void EmuNv2aRasterizeDrawArrays(
     }
     if(SurfaceHost == 0)
     {
-        if(g_EmuNv2aRasterLogCount < 16)
+        if(g_EmuNv2aRasterLogCount < EmuNv2aRasterLogBudget(16))
         {
             printf("Emu (0x%lX): NV2A raster: surface unresolved (dma=0x%.08lX off=0x%.08lX).\n",
                    GetCurrentThreadId(),
@@ -8682,7 +8739,7 @@ static void EmuNv2aRasterizeDrawArrays(
         TransformState.programInstructionCount > 0;
     if(!VpActive && (PosStride == 0 || PosType != 2 /* TYPE_F */))
     {
-        if(g_EmuNv2aRasterLogCount < 16)
+        if(g_EmuNv2aRasterLogCount < EmuNv2aRasterLogBudget(16))
         {
             printf("Emu (0x%lX): NV2A raster: position array not float (fmt=0x%.08lX); skipping.\n",
                    GetCurrentThreadId(),
@@ -9143,7 +9200,7 @@ static void EmuNv2aRasterizeDrawArrays(
         fflush(stdout);
     }
 
-    if(g_EmuNv2aRasterLogCount < 32)
+    if(g_EmuNv2aRasterLogCount < EmuNv2aRasterLogBudget(32))
     {
         int SampleX = Count >= 3 ? (int)((VX[0] + VX[1] + VX[2]) / 3.0f) : 0;
         int SampleY = Count >= 3 ? (int)((VY[0] + VY[1] + VY[2]) / 3.0f) : 0;
