@@ -9202,6 +9202,44 @@ extern "C" PHYSICAL_ADDRESS NTAPI EmuMmGetPhysicalAddress(
     return PhysicalAddress;
 }
 
+// Locked-DMA-buffer registry. MmGetPhysicalAddress's mask fallback is LOSSY
+// for guest addresses above the 128MB physical size (VA 0x097700C2 reports
+// physical 0x017700C2), so a device model handed that physical cannot get
+// back to the real buffer -- the USB stub pad wrote one title's GET_REPORT
+// response into unmapped memory this way. Drivers bracket every DMA buffer
+// with MmLockUnlockBufferPages, which gives us the (virtual, physical, size)
+// association for exactly the windows DMA will touch.
+struct EmuLockedBufferWindow
+{
+    ULONG VirtualBase;
+    ULONG Physical;
+    ULONG Size;
+};
+static EmuLockedBufferWindow g_EmuLockedBuffers[32];
+static SRWLOCK g_EmuLockedBufferLock = SRWLOCK_INIT;
+
+// Reverse-map a physical address into a currently locked buffer window.
+// Returns the host-addressable guest virtual address, or 0 when the physical
+// is not inside any locked window. Callable from any thread (device models,
+// the MMIO exception path).
+extern "C" ULONG EmuLockedBufferHostFromPhysical(ULONG Physical)
+{
+    ULONG Host = 0;
+    AcquireSRWLockShared(&g_EmuLockedBufferLock);
+    for(ULONG i = 0; i < sizeof(g_EmuLockedBuffers) / sizeof(g_EmuLockedBuffers[0]); ++i)
+    {
+        const EmuLockedBufferWindow& Window = g_EmuLockedBuffers[i];
+        if(Window.Size != 0 && Physical >= Window.Physical &&
+           Physical - Window.Physical < Window.Size)
+        {
+            Host = Window.VirtualBase + (Physical - Window.Physical);
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_EmuLockedBufferLock);
+    return Host;
+}
+
 // ******************************************************************
 // * 0x00AF - MmLockUnlockBufferPages
 // ******************************************************************
@@ -9214,6 +9252,48 @@ extern "C" VOID NTAPI EmuMmLockUnlockBufferPages(
 
     printf("EmuKrnl (0x%lX): MmLockUnlockBufferPages base=%p bytes=0x%.08lX unlock=%lu.\n",
            GetCurrentThreadId(), BaseAddress, (ULONG)NumberOfBytes, (ULONG)UnlockPages);
+
+    const ULONG VirtualBase = (ULONG)(::ULONG_PTR)BaseAddress;
+    if(VirtualBase != 0 && NumberOfBytes != 0)
+    {
+        // Record the same physical MmGetPhysicalAddress would report for this
+        // buffer so device models can reverse the lossy mapping.
+        ULONG Physical = EmuQueryContiguousMemoryPhysicalAddress(BaseAddress);
+        if(Physical == 0)
+        {
+            Physical = VirtualBase & (EmuXboxPhysicalMemoryBytes - 1);
+        }
+
+        AcquireSRWLockExclusive(&g_EmuLockedBufferLock);
+        if(UnlockPages)
+        {
+            for(ULONG i = 0;
+                i < sizeof(g_EmuLockedBuffers) / sizeof(g_EmuLockedBuffers[0]); ++i)
+            {
+                if(g_EmuLockedBuffers[i].VirtualBase == VirtualBase &&
+                   g_EmuLockedBuffers[i].Size == (ULONG)NumberOfBytes)
+                {
+                    g_EmuLockedBuffers[i] = EmuLockedBufferWindow{};
+                    break;
+                }
+            }
+        }
+        else
+        {
+            for(ULONG i = 0;
+                i < sizeof(g_EmuLockedBuffers) / sizeof(g_EmuLockedBuffers[0]); ++i)
+            {
+                if(g_EmuLockedBuffers[i].Size == 0)
+                {
+                    g_EmuLockedBuffers[i].VirtualBase = VirtualBase;
+                    g_EmuLockedBuffers[i].Physical = Physical;
+                    g_EmuLockedBuffers[i].Size = (ULONG)NumberOfBytes;
+                    break;
+                }
+            }
+        }
+        ReleaseSRWLockExclusive(&g_EmuLockedBufferLock);
+    }
 
     EmuSwapFS(); // Xbox FS
 }

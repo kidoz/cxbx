@@ -694,6 +694,7 @@ static ULONG g_EmuUsb0FmNumber = 0;
 // list-filled bits are consumed when the engine services the lists; the HCCA
 // receives the per-frame number and the retired-TD done head.
 static const ULONG EmuUsbHcControl = 0x00000004;
+static const ULONG EmuUsbHcControlPle = 1u << 2;
 static const ULONG EmuUsbHcControlCle = 1u << 4;
 static const ULONG EmuUsbHcControlBle = 1u << 5;
 static const ULONG EmuUsbHcControlHcfsMask = 3u << 6;
@@ -708,6 +709,14 @@ static const ULONG EmuUsbHccaFrameNumberOffset = 0x80;
 static const ULONG EmuUsbHccaDoneHeadOffset = 0x84;
 
 static void EmuUsb0RunTransferEngine(void);
+
+// Defined in xid_input_report.cpp: 20-byte XID input reports built from host
+// input (or the CXBX_INPUT_STATE injection variables). Refresh only runs on
+// the USB delivery thread (host FS -- it calls into the XInput DLL); the
+// getter is a locked byte copy, safe from any thread including MMIO handling.
+static const ULONG EmuUsbXidReportSize = 20;
+extern "C" void EmuXidRefreshInputReports(ULONG PortCount);
+extern "C" void EmuXidGetInputReport(ULONG Port, UCHAR Report[20]);
 
 // An OHCI interrupt is asserted only for sources the driver has UNMASKED (and
 // only while the master enable is set). Raising a masked source livelocks the
@@ -825,6 +834,16 @@ extern "C" void EmuUsb0SignalInterrupt()
 
     if((g_EmuUsb0IntEnable & EmuUsbIntStatusSF) != 0)
         g_EmuUsb0IntStatus |= EmuUsbIntStatusSF;
+
+    // This tick is the one host-FS context the transfer engine reliably runs
+    // from, so it is where the stub gamepad's input reports are refreshed
+    // (polling the host XInput backend is not safe from a guest thread's MMIO
+    // exception path).
+    const LONG ConnectedPorts = EmuUsb0ConfiguredConnectPorts();
+    if(ConnectedPorts > 0)
+    {
+        EmuXidRefreshInputReports((ULONG)ConnectedPorts);
+    }
 
     EmuUsb0MaybeSyntheticConnect();
     EmuUsb0AdvancePortResets();
@@ -1054,12 +1073,21 @@ static const ULONG EmuUsbEdHeadToggleCarry = 1u << 1;
 static const ULONG EmuUsbTdCcNoError = 0;
 static const ULONG EmuUsbTdCcStall = 4;
 
+// Defined in kernel_emulation.cpp: reverse-map a physical address into a
+// buffer window the guest pinned with MmLockUnlockBufferPages. This is the
+// only way back to a DMA buffer whose virtual address sits above the 128MB
+// physical size -- MmGetPhysicalAddress masks those (VA 0x097700C2 reports
+// physical 0x017700C2), so identity translation would land in unrelated (or
+// unmapped) memory.
+extern "C" ULONG EmuLockedBufferHostFromPhysical(ULONG Physical);
+
 // The driver programs the controller with physical addresses. A fake physical
 // handed out by MmGetPhysicalAddress reverse-maps to its contiguous host
-// block; anything else (guest low-window RAM, an untranslated host pointer) is
-// directly addressable in this process and the SEH-guarded accessors below
-// validate it. The 0x80000000 kernel window is a cached alias of physical
-// memory, so strip it first.
+// block; a masked physical of a locked DMA buffer reverse-maps through the
+// lock registry; anything else (guest low-window RAM, an untranslated host
+// pointer) is directly addressable in this process and the SEH-guarded
+// accessors below validate it. The 0x80000000 kernel window is a cached alias
+// of physical memory, so strip it first.
 static ULONG EmuUsb0HostFromPhysical(ULONG Physical)
 {
     ULONG Address = Physical;
@@ -1074,6 +1102,12 @@ static ULONG EmuUsb0HostFromPhysical(ULONG Physical)
     }
 
     ULONG Host = EmuContiguousHostFromPhysical(Address);
+    if(Host != 0)
+    {
+        return Host;
+    }
+
+    Host = EmuLockedBufferHostFromPhysical(Address);
     if(Host != 0)
     {
         return Host;
@@ -1357,8 +1391,10 @@ static bool EmuUsb0StubHandleSetup(EmuUsb0ControlSlot* Slot, ULONG FunctionAddre
 
     if(RequestType == 0xA1 && Request == 1 && (ValueW >> 8) == 1) // XID GET_REPORT
     {
-        UCHAR Report[20] = { 0 }; // neutral pad: nothing pressed, sticks centered
-        Report[1] = 0x14;
+        // Live 20-byte report from the host-input cache (neutral until the
+        // delivery thread's first refresh).
+        UCHAR Report[EmuUsbXidReportSize] = { 0 };
+        EmuXidGetInputReport((ULONG)(Device - g_EmuUsb0StubDevices), Report);
         EmuUsb0SlotSetResponse(Slot, Report, sizeof(Report), LengthW);
         return true;
     }
@@ -1392,10 +1428,12 @@ static bool EmuUsb0TdTraceEnabled(void)
 
 // Retire one TD: write back its condition code and buffer pointer, push it on
 // the done queue (NextTD becomes the done-queue link, as on hardware), and
-// advance the ED's head past it -- halting the endpoint on error.
+// advance the ED's head past it -- halting the endpoint on error. Quiet
+// suppresses the per-TD log line: periodic interrupt endpoints retire a TD
+// every few frames forever, unlike the finite enumeration traffic.
 static void EmuUsb0RetireTd(ULONG EdPhys, ULONG TdPhys, ULONG TdControl,
                             ULONG NewBufferPointer, ULONG ConditionCode,
-                            bool HaltEndpoint)
+                            bool HaltEndpoint, bool Quiet = false)
 {
     ULONG NextTd = 0;
     static_cast<void>(EmuUsb0ReadGuestDword(TdPhys + 8, &NextTd));
@@ -1417,10 +1455,102 @@ static void EmuUsb0RetireTd(ULONG EdPhys, ULONG TdPhys, ULONG TdControl,
     }
     static_cast<void>(EmuUsb0WriteGuestDword(EdPhys + 8, NewHead));
 
-    printf("Emu (0x%lX): USB0 TD 0x%.08lX retired cc=%lu%s.\n",
-           GetCurrentThreadId(), TdPhys, ConditionCode,
-           HaltEndpoint ? " (endpoint halted)" : "");
-    fflush(stdout);
+    if(!Quiet)
+    {
+        printf("Emu (0x%lX): USB0 TD 0x%.08lX retired cc=%lu%s.\n",
+               GetCurrentThreadId(), TdPhys, ConditionCode,
+               HaltEndpoint ? " (endpoint halted)" : "");
+        fflush(stdout);
+    }
+}
+
+// Service a non-control endpoint of the stub gamepad. Interrupt IN (0x81)
+// completes ONE queued TD per engine pass with the freshest cached 20-byte XID
+// input report -- one report per frame tick approximates the 4 ms polling
+// cadence the endpoint is enumerated with, and keeps a multi-TD queue from
+// draining in a single pass with identical data. Interrupt OUT (0x02, rumble)
+// TDs are accepted and their data discarded. The direction comes from the
+// ED's D field (01 OUT / 10 IN); the 00/11 "get from TD" encodings fall back
+// to the TD's DP bits. Data toggles are not modeled: nothing in this engine
+// consumes them, and the guest driver only ever sees the carry bit it wrote.
+static void EmuUsb0ProcessInterruptEndpoint(ULONG EdPhys, ULONG EdControl,
+                                            ULONG TailP)
+{
+    const ULONG FunctionAddress = EdControl & 0x7F;
+    EmuUsb0StubDeviceState* Device = EmuUsb0StubDeviceForFunction(FunctionAddress);
+    if(Device == NULL)
+    {
+        return; // no stub device at this address: TDs stay pending (a NAK)
+    }
+
+    ULONG HeadP = 0;
+    if(!EmuUsb0ReadGuestDword(EdPhys + 8, &HeadP) ||
+       (HeadP & EmuUsbEdHeadHalted) != 0)
+    {
+        return;
+    }
+
+    const ULONG TdPhys = HeadP & ~0xFu;
+    if(TdPhys == 0 || TdPhys == (TailP & ~0xFu))
+    {
+        return; // queue empty
+    }
+
+    ULONG Td[4];
+    if(!EmuUsb0ReadGuest(TdPhys, Td, sizeof(Td)))
+    {
+        return;
+    }
+
+    ULONG Direction = (EdControl >> 11) & 3;
+    if(Direction != 1 && Direction != 2)
+    {
+        Direction = (Td[0] >> 19) & 3;
+    }
+
+    const ULONG Cbp = Td[1];
+    const ULONG BufferEnd = Td[3];
+    const ULONG BufferLength =
+        (Cbp != 0 && BufferEnd >= Cbp) ? BufferEnd - Cbp + 1 : 0;
+    const bool Quiet = !EmuUsb0TdTraceEnabled();
+
+    if(Direction == 2) // interrupt IN: deliver an XID input report
+    {
+        UCHAR Report[EmuUsbXidReportSize] = { 0 };
+        EmuXidGetInputReport((ULONG)(Device - g_EmuUsb0StubDevices), Report);
+
+        const ULONG Copy =
+            BufferLength < EmuUsbXidReportSize ? BufferLength : EmuUsbXidReportSize;
+        if(Copy != 0 && !EmuUsb0WriteGuest(Cbp, Report, Copy))
+        {
+            EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
+            return;
+        }
+
+        if(!Quiet)
+        {
+            printf("Emu (0x%lX): USB0 TDT intr-IN ep 0x%lX report "
+                   "btn=%.02X%.02X copy=%lu -> TD 0x%.08lX.\n",
+                   GetCurrentThreadId(), (EdControl >> 7) & 0xF, Report[3],
+                   Report[2], Copy, TdPhys);
+            fflush(stdout);
+        }
+
+        const ULONG NewCbp = (Copy == BufferLength) ? 0 : Cbp + Copy;
+        EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], NewCbp, EmuUsbTdCcNoError, false,
+                        Quiet);
+        return;
+    }
+
+    if(Direction == 1) // interrupt OUT (rumble): accept, discard the data
+    {
+        EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], 0, EmuUsbTdCcNoError, false,
+                        Quiet);
+        return;
+    }
+
+    // A SETUP-encoded TD on a non-control endpoint is not a valid schedule.
+    EmuUsb0RetireTd(EdPhys, TdPhys, Td[0], Cbp, EmuUsbTdCcStall, true);
 }
 
 // Service every ready TD queued on one endpoint descriptor.
@@ -1470,8 +1600,7 @@ static void EmuUsb0ProcessEndpoint(ULONG EdPhys)
     const ULONG EndpointNumber = (EdControl >> 7) & 0xF;
     if(EndpointNumber != 0)
     {
-        // Interrupt/bulk endpoints of the stub gamepad: no data yet, so TDs
-        // stay pending -- the hardware equivalent of a device NAKing forever.
+        EmuUsb0ProcessInterruptEndpoint(EdPhys, EdControl, TailP);
         return;
     }
 
@@ -1624,6 +1753,58 @@ static void EmuUsb0ProcessEndpointList(ULONG HeadRegisterOffset)
     }
 }
 
+// Walk the periodic schedule: the HCCA opens with 32 interrupt-ED list heads,
+// one per frame slot. Drivers build a polling tree where several slots share
+// ED chains (a 4 ms endpoint appears in 8 of the 32), so each pass dedups on
+// the ED address -- otherwise one pass would service the same endpoint many
+// times over and flood it with duplicate reports. Chains converge: once an
+// already-visited ED shows up, the rest of that chain was walked too.
+static void EmuUsb0ProcessPeriodicLists(ULONG Hcca)
+{
+    ULONG Visited[64];
+    ULONG VisitedCount = 0;
+
+    for(ULONG Entry = 0; Entry < 32; ++Entry)
+    {
+        ULONG EdPhys = 0;
+        if(!EmuUsb0ReadGuestDword(Hcca + Entry * 4, &EdPhys))
+        {
+            continue;
+        }
+        EdPhys &= ~0xFu;
+
+        for(ULONG Count = 0; Count < 32 && EdPhys != 0; ++Count)
+        {
+            bool AlreadyVisited = false;
+            for(ULONG i = 0; i < VisitedCount; ++i)
+            {
+                if(Visited[i] == EdPhys)
+                {
+                    AlreadyVisited = true;
+                    break;
+                }
+            }
+            if(AlreadyVisited)
+            {
+                break;
+            }
+            if(VisitedCount < sizeof(Visited) / sizeof(Visited[0]))
+            {
+                Visited[VisitedCount++] = EdPhys;
+            }
+
+            EmuUsb0ProcessEndpoint(EdPhys);
+
+            ULONG NextEd = 0;
+            if(!EmuUsb0ReadGuestDword(EdPhys + 12, &NextEd))
+            {
+                break;
+            }
+            EdPhys = NextEd & ~0xFu;
+        }
+    }
+}
+
 // Publish accumulated retired TDs: hardware only writes a new HccaDoneHead
 // once the driver has acknowledged the previous one by clearing WDH.
 static void EmuUsb0FlushDoneQueue(void)
@@ -1647,9 +1828,17 @@ static void EmuUsb0FlushDoneQueue(void)
         return;
     }
 
-    printf("Emu (0x%lX): USB0 done head 0x%.08lX -> HCCA, WDH raised.\n",
-           GetCurrentThreadId(), g_EmuUsb0DoneQueueHead);
-    fflush(stdout);
+    // Enumeration produces a handful of these; a live interrupt endpoint
+    // produces one per pass forever. Log the first stretch, then go quiet
+    // unless the TD trace is on.
+    static LONG s_LoggedFlushes = 0;
+    if(s_LoggedFlushes < 64 || EmuUsb0TdTraceEnabled())
+    {
+        ++s_LoggedFlushes;
+        printf("Emu (0x%lX): USB0 done head 0x%.08lX -> HCCA, WDH raised.\n",
+               GetCurrentThreadId(), g_EmuUsb0DoneQueueHead);
+        fflush(stdout);
+    }
 
     g_EmuUsb0DoneQueueHead = 0;
     g_EmuUsb0IntStatus |= EmuUsbIntStatusWDH;
@@ -1692,6 +1881,10 @@ static void EmuUsb0RunTransferEngine(void)
     if((Control & EmuUsbHcControlBle) != 0)
     {
         EmuUsb0ProcessEndpointList(EmuUsbHcBulkHeadEd);
+    }
+    if((Control & EmuUsbHcControlPle) != 0 && Hcca != 0)
+    {
+        EmuUsb0ProcessPeriodicLists(Hcca);
     }
 
     // The lists were serviced; consume the list-filled bits like hardware does.

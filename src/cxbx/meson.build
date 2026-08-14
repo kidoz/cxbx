@@ -245,6 +245,7 @@ cxbx_hle_input = static_library(
   'src/platform/win32/emulation_window_access.cpp',
   'src/platform/win32/host_input_lifecycle.cpp',
   'src/hle/input/dinput_emulation.cpp',
+  'src/hle/input/xid_input_report.cpp',
   dependencies : [
     cxbx_host_input_win32_dep,
     cxbx_platform_win32_dep,
