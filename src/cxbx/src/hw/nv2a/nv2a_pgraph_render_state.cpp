@@ -71,6 +71,30 @@ bool ApplyPgraphRenderStateMethod(
         case PgraphRenderStateMethod::SetStencilOpZPass:
             state.stencilOpZPass = data;
             break;
+        case PgraphRenderStateMethod::SetPolyOffsetPointEnable:
+            state.polyOffsetPoint = data != 0;
+            break;
+        case PgraphRenderStateMethod::SetPolyOffsetLineEnable:
+            state.polyOffsetLine = data != 0;
+            break;
+        case PgraphRenderStateMethod::SetPolyOffsetFillEnable:
+            state.polyOffsetFill = data != 0;
+            break;
+        case PgraphRenderStateMethod::SetBlendColor:
+            state.blendColor = data;
+            break;
+        case PgraphRenderStateMethod::SetPolygonOffsetScaleFactor:
+            state.polygonOffsetScaleFactor = data;
+            break;
+        case PgraphRenderStateMethod::SetPolygonOffsetBias:
+            state.polygonOffsetBias = data;
+            break;
+        case PgraphRenderStateMethod::SetZMinMaxControl:
+            state.zMinMaxControl = data;
+            break;
+        case PgraphRenderStateMethod::SetColorClearValue:
+            state.colorClearValue = data;
+            break;
         default:
             return false;
     }

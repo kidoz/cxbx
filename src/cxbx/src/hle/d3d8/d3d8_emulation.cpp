@@ -88,7 +88,7 @@ extern "C" bool EmuNv2aExecutePushBuffer(const DWORD* Buffer, DWORD Size);
 extern "C" bool EmuNv2aExecuteGuestPushBuffer(DWORD GuestAddress, DWORD Size);
 extern "C" void EmuNv2aEnableHleRaster();
 extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Value);
-extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Value);
+extern "C" bool EmuNv2aSetRenderState(ULONG Method, ULONG Value);
 
 // ******************************************************************
 // * Global(s)
@@ -10187,7 +10187,7 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple(
     DWORD Value)
 {
     EmuSwapFS(); // Win2k/XP FS
-    EmuNv2aSetRenderState(Method, Value);
+    const bool Nv2aTracked = EmuNv2aSetRenderState(Method, Value);
 
 // ******************************************************************
 // * debug trace
@@ -10217,15 +10217,23 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple(
 
     if(State == -1)
     {
-        static volatile LONG WarningCount = 0;
-        const LONG Count = InterlockedIncrement(&WarningCount);
-        if(Count <= 16)
+        // The encoded D3DRS lookup binds to the 4627-era Xbox render-state
+        // enumeration; newer XDKs (and the 5849 LTCG deferred ring) stream
+        // methods it never listed. Only warn when the NV2A state model also
+        // does not recognise the method -- tracked-but-unmapped state is
+        // correct emulation, just without a host-D3D translation.
+        if(!Nv2aTracked)
         {
-            printf("*Warning* RenderState_Simple(0x%.08X, 0x%.08X) is unsupported\n", Method, Value);
-        }
-        else if(Count == 17)
-        {
-            printf("*Warning* further unsupported RenderState_Simple calls are suppressed\n");
+            static volatile LONG WarningCount = 0;
+            const LONG Count = InterlockedIncrement(&WarningCount);
+            if(Count <= 16)
+            {
+                printf("*Warning* RenderState_Simple(0x%.08X, 0x%.08X) is unsupported\n", Method, Value);
+            }
+            else if(Count == 17)
+            {
+                printf("*Warning* further unsupported RenderState_Simple calls are suppressed\n");
+            }
         }
     }
     else

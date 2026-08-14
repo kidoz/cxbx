@@ -2703,14 +2703,15 @@ extern "C" void EmuNv2aSetTransformConstant(ULONG HardwareIndex, const float* Va
     }
 }
 
-extern "C" void EmuNv2aSetRenderState(ULONG Method, ULONG Data)
+extern "C" bool EmuNv2aSetRenderState(ULONG Method, ULONG Data)
 {
-    static_cast<void>(cxbx::nv2a::ApplyPgraphRenderStateMethod(
+    const bool RenderTracked = cxbx::nv2a::ApplyPgraphRenderStateMethod(
         g_EmuNv2aRenderState, static_cast<std::uint32_t>(Method),
-        static_cast<std::uint32_t>(Data)));
-    static_cast<void>(cxbx::nv2a::ApplyPgraphCombinerStateMethod(
+        static_cast<std::uint32_t>(Data));
+    const bool CombinerTracked = cxbx::nv2a::ApplyPgraphCombinerStateMethod(
         g_EmuNv2aCombinerState, static_cast<std::uint32_t>(Method),
-        static_cast<std::uint32_t>(Data)));
+        static_cast<std::uint32_t>(Data));
+    return RenderTracked || CombinerTracked;
 }
 
 static void EmuNv2aDumpSourceTexture(ULONG Stage);
@@ -5814,13 +5815,21 @@ static void EmuNv2aWriteDrawStateFile(
             g_EmuNv2aRenderState.alphaTest ? 1u : 0u,
             static_cast<ULONG>(g_EmuNv2aRenderState.alphaFunc),
             static_cast<ULONG>(g_EmuNv2aRenderState.alphaRef));
-    fprintf(f, "blend enable=%u sfactor=0x%lX dfactor=0x%lX equation=0x%lX\n",
+    fprintf(f, "blend enable=%u sfactor=0x%lX dfactor=0x%lX equation=0x%lX color=0x%.08lX\n",
             g_EmuNv2aRenderState.blendEnable ? 1u : 0u,
-            static_cast<ULONG>(
-                g_EmuNv2aRenderState.blendSourceFactor),
-            static_cast<ULONG>(
-                g_EmuNv2aRenderState.blendDestinationFactor),
-            static_cast<ULONG>(g_EmuNv2aRenderState.blendEquation));
+            static_cast<ULONG>(g_EmuNv2aRenderState.blendSourceFactor),
+            static_cast<ULONG>(g_EmuNv2aRenderState.blendDestinationFactor),
+            static_cast<ULONG>(g_EmuNv2aRenderState.blendEquation),
+            static_cast<ULONG>(g_EmuNv2aRenderState.blendColor));
+    fprintf(f, "poly_offset point=%u line=%u fill=%u scale=0x%.08lX bias=0x%.08lX\n",
+            g_EmuNv2aRenderState.polyOffsetPoint ? 1u : 0u,
+            g_EmuNv2aRenderState.polyOffsetLine ? 1u : 0u,
+            g_EmuNv2aRenderState.polyOffsetFill ? 1u : 0u,
+            static_cast<ULONG>(g_EmuNv2aRenderState.polygonOffsetScaleFactor),
+            static_cast<ULONG>(g_EmuNv2aRenderState.polygonOffsetBias));
+    fprintf(f, "misc zmin_max_control=0x%.08lX color_clear=0x%.08lX\n",
+            static_cast<ULONG>(g_EmuNv2aRenderState.zMinMaxControl),
+            static_cast<ULONG>(g_EmuNv2aRenderState.colorClearValue));
     fprintf(f, "stencil test=%u func=0x%lX ref=0x%lX func_mask=0x%lX mask=0x%lX "
                "op_fail=0x%lX op_zfail=0x%lX op_zpass=0x%lX\n",
             g_EmuNv2aRenderState.stencilTest ? 1u : 0u,

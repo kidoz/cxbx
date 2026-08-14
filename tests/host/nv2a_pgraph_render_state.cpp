@@ -169,5 +169,51 @@ int main() noexcept
         return 1;
     }
 
+    if(!cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetPolyOffsetPointEnable, 1) ||
+       !cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetPolyOffsetLineEnable, 0) ||
+       !cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetPolyOffsetFillEnable, 2) ||
+       !Expect(state.polyOffsetPoint && !state.polyOffsetLine &&
+                   state.polyOffsetFill,
+               "polygon-offset enable transitions are invalid"))
+    {
+        return 1;
+    }
+
+    if(!cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetBlendColor, 0xAABBCCDDu) ||
+       !cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetPolygonOffsetScaleFactor,
+           0x3E4CCCCDu) ||
+       !cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetPolygonOffsetBias,
+           0xBE4CCCCDu) ||
+       !cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetZMinMaxControl, 0x00000120u) ||
+       !cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, PgraphRenderStateMethod::SetColorClearValue, 0x11223344u) ||
+       !ExpectEqual(state.blendColor, 0xAABBCCDDu, "blend color") ||
+       !ExpectEqual(state.polygonOffsetScaleFactor, 0x3E4CCCCDu,
+                    "polygon offset scale factor bits") ||
+       !ExpectEqual(state.polygonOffsetBias, 0xBE4CCCCDu,
+                    "polygon offset bias bits") ||
+       !ExpectEqual(state.zMinMaxControl, 0x00000120u, "zmin/zmax control") ||
+       !ExpectEqual(state.colorClearValue, 0x11223344u, "color clear value"))
+    {
+        return 1;
+    }
+
+    // The D3D8 deferred-state ring passes the encoded PGRAPH register form
+    // (0x0004xxxx); the decoder must mask down to the method index.
+    if(!cxbx::nv2a::ApplyPgraphRenderStateMethod(
+           state, 0x0004034Cu, 0x55667788u) ||
+       !ExpectEqual(state.blendColor, 0x55667788u,
+                    "encoded register-form blend color"))
+    {
+        return 1;
+    }
+
     return 0;
 }

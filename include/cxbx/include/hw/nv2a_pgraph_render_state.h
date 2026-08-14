@@ -25,6 +25,14 @@ struct PgraphRenderStateMethod final
     static constexpr std::uint32_t SetStencilOpFail = 0x0370u;
     static constexpr std::uint32_t SetStencilOpZFail = 0x0374u;
     static constexpr std::uint32_t SetStencilOpZPass = 0x0378u;
+    static constexpr std::uint32_t SetPolyOffsetPointEnable = 0x0330u;
+    static constexpr std::uint32_t SetPolyOffsetLineEnable = 0x0334u;
+    static constexpr std::uint32_t SetPolyOffsetFillEnable = 0x0338u;
+    static constexpr std::uint32_t SetBlendColor = 0x034Cu;
+    static constexpr std::uint32_t SetPolygonOffsetScaleFactor = 0x0384u;
+    static constexpr std::uint32_t SetPolygonOffsetBias = 0x0388u;
+    static constexpr std::uint32_t SetZMinMaxControl = 0x1D78u;
+    static constexpr std::uint32_t SetColorClearValue = 0x1D90u;
 };
 
 struct PgraphRenderState
@@ -47,6 +55,14 @@ struct PgraphRenderState
     std::uint32_t stencilOpFail = 0x1E00u;
     std::uint32_t stencilOpZFail = 0x1E00u;
     std::uint32_t stencilOpZPass = 0x1E00u;
+    bool polyOffsetPoint = false;
+    bool polyOffsetLine = false;
+    bool polyOffsetFill = false;
+    std::uint32_t blendColor = 0;
+    std::uint32_t polygonOffsetScaleFactor = 0;
+    std::uint32_t polygonOffsetBias = 0;
+    std::uint32_t zMinMaxControl = 0;
+    std::uint32_t colorClearValue = 0;
 };
 
 [[nodiscard]] bool ApplyPgraphRenderStateMethod(
