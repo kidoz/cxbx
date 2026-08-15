@@ -8515,18 +8515,24 @@ static bool EmuIsNativeD3dWaitCaller(ULONG Caller)
         return false;
     }
 
-    const ULONG HeaderSize = g_pXbeHeader->dwSizeofHeaders;
-    const ULONG SectionOffset = g_pXbeHeader->dwSectionHeadersAddr - g_pXbeHeader->dwBaseAddr;
-    if(SectionOffset >= HeaderSize ||
-       g_pXbeHeader->dwSections >
-           (HeaderSize - SectionOffset) / sizeof(Xbe::SectionHeader))
+    // The section table must come from the repaired header at the image base:
+    // its dwSectionHeadersAddr points at the relocated shadow table whose
+    // name pointers were fixed up to address the strings directly. The
+    // original location inside g_pXbeHeader is overlapped by the generated PE
+    // header (see EmuRepairHostPeHeader), so reading it here returned garbage
+    // -- the "D3D" section-name test then always failed and LTCG titles
+    // (Samurai Shodown V's D3D flip path) blocked forever in the vblank
+    // KeWait the paced-satisfy path exists to release.
+    const Xbe::Header* MemHeader = (const Xbe::Header*)g_pXbeHeader->dwBaseAddr;
+    const Xbe::SectionHeader* Sections =
+        (const Xbe::SectionHeader*)MemHeader->dwSectionHeadersAddr;
+    if(!EmuIsReadableMemoryRange(
+           Sections, MemHeader->dwSections * sizeof(Xbe::SectionHeader)))
     {
         return false;
     }
 
-    Xbe::SectionHeader* Sections =
-        (Xbe::SectionHeader*)((BYTE*)g_pXbeHeader + SectionOffset);
-    for(ULONG Index = 0; Index < g_pXbeHeader->dwSections; Index++)
+    for(ULONG Index = 0; Index < MemHeader->dwSections; Index++)
     {
         const Xbe::SectionHeader& Section = Sections[Index];
         if(!Section.dwFlags.bExecutable || Caller < Section.dwVirtualAddr ||
@@ -8535,15 +8541,9 @@ static bool EmuIsNativeD3dWaitCaller(ULONG Caller)
             continue;
         }
 
-        if(Section.dwSectionNameAddr < g_pXbeHeader->dwBaseAddr)
-            return false;
-
-        const ULONG NameOffset = Section.dwSectionNameAddr - g_pXbeHeader->dwBaseAddr;
-        if(NameOffset > HeaderSize || HeaderSize - NameOffset < 3)
-            return false;
-
-        const char* Name = (const char*)g_pXbeHeader + NameOffset;
-        return _strnicmp(Name, "D3D", 3) == 0;
+        const char* Name = (const char*)Section.dwSectionNameAddr;
+        return Name != NULL && EmuIsReadableMemoryRange(Name, 3) &&
+               _strnicmp(Name, "D3D", 3) == 0;
     }
 
     return false;
@@ -8622,6 +8622,14 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject(
         // single-core title. Pace the wait in the calling guest thread instead.
         if(NativeD3dVblankWait && GetTickCount() - Started >= 16)
         {
+            static volatile LONG PacedSatisfies = 0;
+            if(InterlockedIncrement(&PacedSatisfies) <= 4)
+            {
+                printf("EmuKrnl (0x%lX): paced native-D3D vblank wait satisfied "
+                       "(object=%p caller=0x%.08lX).\n",
+                       GetCurrentThreadId(), Object, Caller);
+                fflush(stdout);
+            }
             EmuTraceDispatcherWait(cxbx::trace::Event::SyncWaitSatisfied, Started);
             EmuSwapFS(); // Xbox FS
             return STATUS_SUCCESS;

@@ -1797,7 +1797,8 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
                 else if(g_EmuD3D8CreateDeviceProxyData.hRet == D3DERR_OUTOFVIDEOMEMORY)
                     EmuCleanup("IDirect3D8::CreateDevice failed (Out of Video Memory)");
 
-                EmuCleanup("IDirect3D8::CreateDevice failed (Unknown)");
+                EmuCleanup("IDirect3D8::CreateDevice failed (Unknown 0x%.08X)",
+                           g_EmuD3D8CreateDeviceProxyData.hRet);
             }
 
             // ******************************************************************
