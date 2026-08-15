@@ -13070,6 +13070,226 @@ extern "C" CXBXKRNL_API void NTAPI EmuCleanThread()
 }
 
 // ******************************************************************
+// * Guest thread stack sampler (CXBX_THREAD_SAMPLE_MS=<n>)
+// ******************************************************************
+// Every <n> milliseconds, suspend each other thread of this process just
+// long enough to copy its context and EBP frame chain, resume everything,
+// and only then print the symbolized stacks. This answers "which guest
+// code is each thread actually running" (the class of question behind
+// Samurai Shodown V's never-called XACTEngineDoWork) without an attached
+// debugger.
+//
+// Lock safety: while any thread is suspended, the sampler performs no
+// operation that can take a lock -- no printf, no allocation, nothing but
+// raw Win32 calls and direct memory reads. Symbolization and printing run
+// after every thread has been resumed; a target parked inside the CRT or
+// loader lock would otherwise deadlock the sampler against its own output.
+struct EmuThreadSample
+{
+    DWORD Tid;
+    ULONG Eip;
+    ULONG Frames[24];
+    ULONG FrameCount;
+};
+
+static EmuThreadSample g_EmuThreadSamples[64];
+static ULONG g_EmuThreadSampleCount = 0;
+static volatile LONG g_EmuThreadSamplerStarted = 0;
+
+// Name an address for the sampler print: guest-image offsets (resolvable to
+// a section or symbol against the run's symbols.txt sidecar) vs host modules.
+static const char* EmuThreadSampleSymbol(ULONG Address, char* Buffer, size_t BufferSize)
+{
+    if(g_pXbeHeader != NULL &&
+       Address >= g_pXbeHeader->dwBaseAddr &&
+       Address < g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage)
+    {
+        snprintf(Buffer, BufferSize, "guest+0x%.08lX",
+                 Address - g_pXbeHeader->dwBaseAddr);
+        return Buffer;
+    }
+
+    if(EmuHostAddressToModuleOffset(Address, Buffer, BufferSize) != NULL)
+        return Buffer;
+
+    snprintf(Buffer, BufferSize, "0x%.08lX", Address);
+    return Buffer;
+}
+
+// Suspend one thread, copy its context and EBP chain, resume it. Plain data
+// only -- the SEH walk forbids unwindable objects in this function.
+static bool EmuThreadSampleCapture(DWORD Tid, EmuThreadSample* Out)
+{
+    HANDLE Thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
+                               FALSE, Tid);
+    if(Thread == NULL)
+        return false;
+
+    if(SuspendThread(Thread) == (DWORD)-1)
+    {
+        CloseHandle(Thread);
+        return false;
+    }
+
+    CONTEXT Context;
+    ZeroMemory(&Context, sizeof(Context));
+    Context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    const bool GotContext = GetThreadContext(Thread, &Context) != FALSE;
+
+    if(GotContext)
+    {
+        Out->Tid = Tid;
+        Out->Eip = (ULONG)Context.Eip;
+        Out->FrameCount = 0;
+
+        ULONG Ebp = (ULONG)Context.Ebp;
+        while(Out->FrameCount < sizeof(Out->Frames) / sizeof(Out->Frames[0]))
+        {
+            ULONG ReturnAddress = 0;
+            ULONG NextEbp = 0;
+            __try
+            {
+                ReturnAddress = *(ULONG*)(Ebp + 4);
+                NextEbp = *(ULONG*)Ebp;
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                break;
+            }
+
+            if(ReturnAddress == 0)
+                break;
+            Out->Frames[Out->FrameCount++] = ReturnAddress;
+
+            if(NextEbp <= Ebp || (NextEbp - Ebp) > 0x00100000 || (NextEbp & 3) != 0)
+                break;
+            Ebp = NextEbp;
+        }
+    }
+
+    ResumeThread(Thread);
+    CloseHandle(Thread);
+    return GotContext;
+}
+
+static void EmuThreadSamplePrint()
+{
+    printf("THREADS| sample threads=%lu\n", g_EmuThreadSampleCount);
+    for(ULONG i = 0; i < g_EmuThreadSampleCount; ++i)
+    {
+        const EmuThreadSample* Sample = &g_EmuThreadSamples[i];
+        char Symbol[96];
+        printf("THREADS| tid=0x%.08lX eip=0x%.08lX (%s) frames=%lu\n",
+               Sample->Tid, Sample->Eip,
+               EmuThreadSampleSymbol(Sample->Eip, Symbol, sizeof(Symbol)),
+               Sample->FrameCount);
+        for(ULONG f = 0; f < Sample->FrameCount; ++f)
+            printf("THREADS|   ret=0x%.08lX (%s)\n", Sample->Frames[f],
+                   EmuThreadSampleSymbol(Sample->Frames[f], Symbol, sizeof(Symbol)));
+    }
+    fflush(stdout);
+}
+
+static void EmuThreadSampleAll()
+{
+    g_EmuThreadSampleCount = 0;
+    const DWORD SelfTid = GetCurrentThreadId();
+    const DWORD Pid = GetCurrentProcessId();
+
+    // Bisection knob (CXBX_THREAD_SAMPLE_MAX=<n>): capture at most the first
+    // <n> threads of the enumeration. A thread whose capture hangs the
+    // sampler (observed on one title's thread set) can then be isolated by
+    // halving <n>; 0 (default) samples everything.
+    static LONG s_MaxThreads = -1;
+    if(s_MaxThreads < 0)
+    {
+        char Value[16] = { 0 };
+        s_MaxThreads = GetEnvironmentVariableA("CXBX_THREAD_SAMPLE_MAX", Value, sizeof(Value)) != 0
+                           ? (LONG)strtoul(Value, NULL, 0)
+                           : 0;
+    }
+
+    HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if(Snapshot == INVALID_HANDLE_VALUE)
+        return;
+
+    THREADENTRY32 Entry;
+    Entry.dwSize = sizeof(Entry);
+    if(Thread32First(Snapshot, &Entry))
+    {
+        do
+        {
+            if(Entry.th32OwnerProcessID != Pid || Entry.th32ThreadID == SelfTid)
+                continue;
+            if(s_MaxThreads > 0 &&
+               g_EmuThreadSampleCount >= (ULONG)s_MaxThreads)
+                break;
+            if(g_EmuThreadSampleCount >=
+               sizeof(g_EmuThreadSamples) / sizeof(g_EmuThreadSamples[0]))
+                break;
+            if(EmuThreadSampleCapture(
+                   Entry.th32ThreadID,
+                   &g_EmuThreadSamples[g_EmuThreadSampleCount]))
+                ++g_EmuThreadSampleCount;
+        } while(Thread32Next(Snapshot, &Entry));
+    }
+    CloseHandle(Snapshot);
+
+    EmuThreadSamplePrint();
+}
+
+static DWORD WINAPI EmuThreadSamplerThread(LPVOID)
+{
+    char Value[16] = { 0 };
+    ULONG IntervalMs = 3000;
+    if(GetEnvironmentVariableA("CXBX_THREAD_SAMPLE_MS", Value, sizeof(Value)) != 0)
+    {
+        const ULONG Parsed = strtoul(Value, NULL, 0);
+        // Floor the interval: suspending ~20 threads perturbs the guest, and
+        // sub-second sampling drowned the log without adding coverage in
+        // testing (the sampler itself went quiet at high rates).
+        if(Parsed >= 500)
+            IntervalMs = Parsed;
+    }
+
+    for(;;)
+    {
+        Sleep(IntervalMs);
+
+        // A fault anywhere in the capture must not take the sampler down
+        // permanently -- log it once and keep sampling.
+        static volatile LONG Failures = 0;
+        __try
+        {
+            EmuThreadSampleAll();
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            if(InterlockedIncrement(&Failures) == 1)
+                printf("THREADS| sampler pass faulted (0x%08lX); continuing.\n",
+                       (ULONG)GetExceptionCode());
+            fflush(stdout);
+        }
+    }
+}
+
+static void EmuStartThreadSampler()
+{
+    // Opt-in (CXBX_THREAD_SAMPLE_MS): suspending threads perturbs timing and
+    // the print volume is high, so the sampler never runs by default.
+    char Value[16] = { 0 };
+    if(GetEnvironmentVariableA("CXBX_THREAD_SAMPLE_MS", Value, sizeof(Value)) == 0)
+        return;
+
+    if(InterlockedExchange(&g_EmuThreadSamplerStarted, 1) == 0)
+    {
+        printf("Emu (0x%lX): guest thread sampler started.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuThreadSamplerThread, NULL, 0, NULL);
+    }
+}
+
+// ******************************************************************
 // * func: EmuInit
 // ******************************************************************
 extern "C" CXBXKRNL_API void NTAPI EmuInit(
@@ -13799,6 +14019,8 @@ extern "C" CXBXKRNL_API void NTAPI EmuInit(
     // ******************************************************************
     // * Entry Point
     // ******************************************************************
+    EmuStartThreadSampler();
+
     __try
     {
         EmuSwapFS(); // XBox FS
@@ -15594,6 +15816,13 @@ void EmuInstallWrappers(OOVPATable* OovpaTable, uint32 OovpaTableSize, void (*En
     uint32 lower = pXbeHeader->dwBaseAddr;
     uint32 upper = pXbeHeader->dwBaseAddr + pXbeHeader->dwSizeofImage;
 
+    // Opt-in install trace (CXBX_HLE_TRACE): one line per patch with the
+    // table entry index, so hook installation can be audited in builds
+    // without _DEBUG_TRACE (which carries the entry names).
+    static int HleTrace = -1;
+    if(HleTrace < 0)
+        HleTrace = (getenv("CXBX_HLE_TRACE") != NULL) ? 1 : 0;
+
     // ******************************************************************
     // * traverse the full OOVPA table
     // ******************************************************************
@@ -15602,6 +15831,7 @@ void EmuInstallWrappers(OOVPATable* OovpaTable, uint32 OovpaTableSize, void (*En
         OOVPA* Oovpa = OovpaTable[a].Oovpa;
 
         uint32 scan = lower;
+        uint32 Matches = 0;
 
         do
         {
@@ -15610,23 +15840,15 @@ void EmuInstallWrappers(OOVPATable* OovpaTable, uint32 OovpaTableSize, void (*En
             if(pFunc == 0)
                 break;
 
+            Matches++;
+
 #ifdef _DEBUG_TRACE
             printf("Emu (0x%X): 0x%.08X -> %s\n", GetCurrentThreadId(), pFunc, OovpaTable[a].szFuncName);
 #endif
 
-            // Opt-in install trace (CXBX_HLE_TRACE): one line per patch with
-            // the table entry index, so hook installation can be audited in
-            // builds without _DEBUG_TRACE (which carries the entry names).
-            {
-                static int HleTrace = -1;
-
-                if(HleTrace < 0)
-                    HleTrace = (getenv("CXBX_HLE_TRACE") != NULL) ? 1 : 0;
-
-                if(HleTrace)
-                    printf("HLE| patch entry=%u addr=0x%.08X redirect=0x%.08X flags=%u\n",
-                           a, (uint32)pFunc, (uint32)OovpaTable[a].lpRedirect, OovpaTable[a].Flags);
-            }
+            if(HleTrace)
+                printf("HLE| patch entry=%u addr=0x%.08X redirect=0x%.08X flags=%u\n",
+                       a, (uint32)pFunc, (uint32)OovpaTable[a].lpRedirect, OovpaTable[a].Flags);
 
             if(OovpaTable[a].lpRedirect == 0)
                 EmuInstallWrapper(pFunc, EmuXRefFailure);
@@ -15637,6 +15859,14 @@ void EmuInstallWrappers(OOVPATable* OovpaTable, uint32 OovpaTableSize, void (*En
             // just written makes re-matching the same address impossible.
             scan = (uint32)pFunc + 1;
         } while(OovpaTable[a].Flags & OOVPA_FLAG_PATCH_ALL);
+
+        // The miss side of the report: an entry whose signature found no body
+        // in this image (XRef consumers can also legitimately miss on pass 0,
+        // before their save slots fill). Without this line the gap between
+        // "table Found" and "what actually hooked" is invisible -- the exact
+        // blind spot behind the unhooked DSOUND Play chain.
+        if(HleTrace && Matches == 0)
+            printf("HLE| miss entry=%u\n", a);
     }
 }
 
