@@ -19,3 +19,10 @@ lint-full:
 
 build:
     meson compile -C {{build_dir}}
+
+# Debug-trace build in its own directory: function-entry/patch traces,
+# EmuWarning bodies, and the szFuncName table entries. Setup is skipped when
+# the directory already exists, so this is safe to re-run.
+build-debug:
+    if (!(Test-Path build-debug)) { meson setup build-debug "-Dcpp_args=['-D_DEBUG_TRACE','-D_DEBUG_WARNINGS']" "-Dc_args=['-D_DEBUG_TRACE','-D_DEBUG_WARNINGS']" }
+    meson compile -C build-debug
