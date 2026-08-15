@@ -53,6 +53,17 @@ PROFILES = {
     "trace": {"CXBX_FS_SWAP": "1", "CXBX_SURVIVE_BUGCHECK": "1",
               "CXBX_EXC_TRACE": "1"},
 }
+
+# Bring-up environments keyed by XBE title id (8 hex digits, lowercase).
+# Applied automatically on top of the selected --profile, so the per-title
+# flag archaeology does not have to be re-derived every session; --env still
+# overrides, and --no-title-profile disables the layer entirely.
+TITLE_PROFILES: dict[str, dict[str, str]] = {
+    # Samurai Shodown V (SN-004): the patched XONLINES wrappers corrupt an
+    # XNET object and kill the title ~15 s in, so the library runs raw; the
+    # thread-fault guard rides out the XACT worker's stray touches.
+    "534e0004": {"CXBX_HLE_SKIP": "XONLINES", "CXBX_SURVIVE_THREAD_FAULT": "1"},
+}
 # Backbuffer/scanout dumps the emulator writes to %TEMP% (ground truth for
 # "what did it render", unlike PrintWindow which can come back black).
 DUMP_GLOBS = [
@@ -98,6 +109,106 @@ def resolve_xbe(repo: Path, target: str) -> Path:
 
 def slugify(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name).strip("-").lower() or "title"
+
+
+def read_xbe_info(path: Path) -> dict[str, Any]:
+    """Minimal XBE header read: base, image size, title id, section map.
+
+    Sections are (name, vaddr, vsize) with VAs rebased to the image base; the
+    section names live in the file's header block, so VA-to-file translation
+    inside [0, header size) resolves them without loading the image.
+    """
+    data = path.read_bytes()
+    if data[:4] != b"XBEH":
+        die(f"{path.name}: not an XBE")
+    (base,) = struct.unpack_from("<I", data, 0x104)
+    (image_size,) = struct.unpack_from("<I", data, 0x10C)
+    (header_size,) = struct.unpack_from("<I", data, 0x108)
+    (cert_addr,) = struct.unpack_from("<I", data, 0x118)
+    (nsec,) = struct.unpack_from("<I", data, 0x11C)
+    (sectbl_addr,) = struct.unpack_from("<I", data, 0x120)
+    title_id = 0
+    cert_off = cert_addr - base
+    if 0 <= cert_off <= len(data) - 0x10:
+        (title_id,) = struct.unpack_from("<I", data, cert_off + 0x08)
+
+    def va_to_header_file(va: int) -> int | None:
+        off = va - base
+        return off if 0 <= off < min(header_size, len(data)) else None
+
+    sections: list[dict[str, Any]] = []
+    table_off = sectbl_addr - base
+    for i in range(nsec):
+        o = table_off + 0x38 * i
+        if o < 0 or o + 0x38 > len(data):
+            break
+        vaddr, vsize = struct.unpack_from("<II", data, o + 4)
+        (name_addr,) = struct.unpack_from("<I", data, o + 20)
+        name = "?"
+        name_off = va_to_header_file(name_addr)
+        if name_off is not None:
+            end = data.find(b"\0", name_off, min(header_size, len(data)))
+            name = data[name_off:end if end >= 0 else min(header_size, len(data))].decode("latin1")
+        sections.append({"name": name, "vaddr": vaddr, "vsize": vsize})
+    return {"base": base, "image_size": image_size, "title_id": title_id,
+            "sections": sections}
+
+
+def write_symbol_sidecar(outdir: Path, xbe: Path, logpath: Path, repo: Path) -> Path:
+    """One per-run symbol map: sections, oracle symbols, HLE patch list.
+
+    Every later EIP -- from a trace line, a crash dump, or the thread sampler
+    -- becomes nameable offline from this file, including on LTCG titles whose
+    code carries no archived x86.
+    """
+    info = read_xbe_info(xbe)
+    lines: list[str] = [f"# CXBX symbol sidecar for {xbe}"]
+    lines.append(f"title_id {info['title_id']:#010x} base {info['base']:#x} "
+                 f"image_size {info['image_size']:#x}")
+    for s in info["sections"]:
+        lines.append(f"section {s['name']:10s} {s['vaddr']:#010x}..{s['vaddr'] + s['vsize']:#010x}")
+
+    # HLE patches with their owning library (the install trace interleaves the
+    # "Locating HLE Information for <LIB>" lines around the patch lines).
+    library = "?"
+    patches = 0
+    if logpath.is_file():
+        for line in logpath.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = re.search(r"Locating HLE Information for (\w+)", line)
+            if m:
+                library = m.group(1)
+                continue
+            m = re.match(r"HLE\| (patch|miss) entry=(\d+) addr=0x([0-9A-Fa-f]+)"
+                         r"(?: redirect=0x([0-9A-Fa-f]+))?", line)
+            if m:
+                patches += 1
+                kind, entry, addr, redirect = m.groups()
+                if kind == "miss":
+                    lines.append(f"hle-miss  {library:10s} entry={entry}")
+                elif redirect == "00000000":
+                    lines.append(f"hle-xref  {library:10s} entry={entry} addr=0x{addr}")
+                else:
+                    lines.append(f"hle-hook  {library:10s} entry={entry} addr=0x{addr}")
+
+    # XbSymbolDatabase oracle symbols (independent OOVPA database).
+    oracle = repo / "build-xsdb" / "projects" / "cli" / "Release" / "XbSymbolDatabaseCLI.exe"
+    symbols = 0
+    if oracle.is_file():
+        try:
+            out = subprocess.run([str(oracle), str(xbe)], capture_output=True,
+                                 text=True, timeout=120, check=True).stdout
+            for line in out.splitlines():
+                m = re.match(r"(\S+) = (0x[0-9A-Fa-f]+)", line)
+                if m:
+                    symbols += 1
+                    lines.append(f"symbol {m.group(1)} {m.group(2)}")
+        except (OSError, subprocess.SubprocessError) as error:
+            lines.append(f"# oracle failed: {error}")
+
+    sidecar = outdir / "symbols.txt"
+    sidecar.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"  symbols : {sidecar}  ({patches} hle entries, {symbols} oracle symbols)")
+    return sidecar
 
 
 def temp_dir() -> Path:
@@ -316,6 +427,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--visible-colors", type=int, default=32, metavar="N",
                     help="sampled client colors required by --until-visible (default 32)")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="default", help="env recipe")
+    ap.add_argument("--no-title-profile", action="store_true",
+                    help="skip the automatic per-title env layer (TITLE_PROFILES)")
+    ap.add_argument("--no-symbols", action="store_true",
+                    help="skip writing the symbols.txt sidecar after the run")
     ap.add_argument("--env", action="append", default=[], metavar="K=V",
                     help="extra env var (repeatable)")
     ap.add_argument("--dump-frames", action="store_true",
@@ -358,6 +473,12 @@ def main(argv: list[str] | None = None) -> int:
 
     env = dict(os.environ)
     env.update(PROFILES[args.profile])
+    xbe_info = read_xbe_info(xbe)
+    title_profile: dict[str, str] | None = None
+    title_key = f"{xbe_info['title_id']:08x}"
+    if not args.no_title_profile and title_key in TITLE_PROFILES:
+        title_profile = dict(TITLE_PROFILES[title_key])
+        env.update(title_profile)
     env_overrides: dict[str, str] = {}
     for kv in args.env:
         if "=" not in kv:
@@ -387,6 +508,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  exe      : {exe}")
     print(f"  profile  : {args.profile}  {PROFILES[args.profile] or '(none)'}"
           + ("  +dump-frames" if args.dump_frames else ""))
+    if title_profile is not None:
+        print(f"  title env: {title_profile}  (title id {title_key}; --no-title-profile disables)")
     print(f"  out dir  : {outdir}")
     print(f"  duration : {args.seconds:g}s, {args.shots} shot(s)\n")
 
@@ -454,6 +577,9 @@ def main(argv: list[str] | None = None) -> int:
 
     n_frames = collect_dumps(frames_dir) if args.dump_frames else 0
     log_summary = summarize_log(logpath)
+    symbols_path: Path | None = None
+    if not args.no_symbols:
+        symbols_path = write_symbol_sidecar(outdir, xbe, logpath, repo)
     representative = select_representative_shot(shots)
     capture_summary: dict[str, Any] | None = None
     if capture_path is not None:
@@ -490,10 +616,12 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         "schema_version": 1,
         "title": xbe.parent.name,
+        "title_id": f"{xbe_info['title_id']:08X}",
         "xbe": str(xbe),
         "emulator": str(exe),
         "profile": args.profile,
         "profile_environment": PROFILES[args.profile],
+        "title_profile": title_profile,
         "environment_overrides": env_overrides,
         "started_at": started_at,
         "elapsed_seconds": round(alive, 3),
@@ -504,6 +632,7 @@ def main(argv: list[str] | None = None) -> int:
         "shots": shots,
         "representative_shot": representative["path"] if representative else None,
         "log": log_summary,
+        "symbols": str(symbols_path) if symbols_path is not None else None,
         "collected_frames": n_frames,
         "pushbuffer_capture": capture_summary,
     }
