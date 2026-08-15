@@ -13090,11 +13090,73 @@ struct EmuThreadSample
     ULONG Eip;
     ULONG Frames[24];
     ULONG FrameCount;
+    // Guest-image code addresses found by scanning the stack. The EBP chain
+    // usually dies in host wait stubs (this build omits frame pointers), so
+    // the chain alone cannot see where a parked guest thread came from; the
+    // scan recovers its guest call sites.
+    ULONG GuestHits[16];
+    ULONG GuestHitCount;
 };
 
 static EmuThreadSample g_EmuThreadSamples[64];
 static ULONG g_EmuThreadSampleCount = 0;
 static volatile LONG g_EmuThreadSamplerStarted = 0;
+
+// True when Address lands inside a guest section flagged executable. Xbox
+// sections are largely RWX, so memory protection cannot distinguish code from
+// data here -- the .data noise on every stack (packed RGB dwords are valid
+// image-range values) made the scan useless with a range-only check.
+static bool EmuThreadSampleGuestCodeAddress(ULONG Address)
+{
+    if(g_pXbeHeader == NULL ||
+       Address < g_pXbeHeader->dwBaseAddr ||
+       Address >= g_pXbeHeader->dwBaseAddr + g_pXbeHeader->dwSizeofImage)
+        return false;
+
+    // Cached executable ranges, built once from the shadow section table
+    // (see EmuRepairHostPeHeader for why the base-header copy is the live
+    // one). The .data/.data1 sections are skipped by NAME: Xbox sections are
+    // largely RWX, so their executable flag is set even for pure data, and
+    // .data is enormous -- packed RGB and size dwords on every stack drowned
+    // the real code pointers until it was excluded.
+    struct GuestRange
+    {
+        ULONG Start;
+        ULONG End;
+    };
+    static GuestRange Ranges[32];
+    static ULONG RangeCount = 0;
+
+    if(RangeCount == 0)
+    {
+        const Xbe::Header* MemHeader = (const Xbe::Header*)g_pXbeHeader->dwBaseAddr;
+        const Xbe::SectionHeader* Sections =
+            (const Xbe::SectionHeader*)MemHeader->dwSectionHeadersAddr;
+        const ULONG Count =
+            MemHeader->dwSections < 32 ? MemHeader->dwSections : 32;
+        for(ULONG i = 0; i < Count; ++i)
+        {
+            if(!Sections[i].dwFlags.bExecutable)
+                continue;
+            const char* Name = (const char*)Sections[i].dwSectionNameAddr;
+            if(Name[0] == '.' && Name[1] == 'd' && Name[2] == 'a' &&
+               Name[3] == 't' && Name[4] == 'a')
+                continue; // .data / .data1
+
+            Ranges[RangeCount].Start = Sections[i].dwVirtualAddr;
+            Ranges[RangeCount].End =
+                Sections[i].dwVirtualAddr + Sections[i].dwVirtualSize;
+            ++RangeCount;
+        }
+    }
+
+    for(ULONG i = 0; i < RangeCount; ++i)
+    {
+        if(Address >= Ranges[i].Start && Address < Ranges[i].End)
+            return true;
+    }
+    return false;
+}
 
 // Name an address for the sampler print: guest-image offsets (resolvable to
 // a section or symbol against the run's symbols.txt sidecar) vs host modules.
@@ -13118,6 +13180,33 @@ static const char* EmuThreadSampleSymbol(ULONG Address, char* Buffer, size_t Buf
 
 // Suspend one thread, copy its context and EBP chain, resume it. Plain data
 // only -- the SEH walk forbids unwindable objects in this function.
+//
+// The current capture's victim handle is published before each suspension so
+// the watchdog (EmuThreadSamplerWatchdog) can thaw the victim if a Win32
+// call inside this capture blocks forever -- observed on one title, where
+// suspending or context-reading a thread caught mid-transition wedged the
+// sampler thread permanently.
+static HANDLE g_EmuThreadSampleVictim = NULL;
+static volatile LONG g_EmuThreadSampleCaptureSeq = 0;
+static volatile LONG g_EmuThreadSamplerDisabled = 0;
+static DWORD g_EmuThreadSampleVictimTid = 0;
+static DWORD g_EmuThreadSampleSkip[16];
+static volatile LONG g_EmuThreadSampleSkipCount = 0;
+static volatile LONG g_EmuThreadSamplerGeneration = 0;
+
+static bool EmuThreadSampleSkipped(DWORD Tid)
+{
+    const LONG Count = g_EmuThreadSampleSkipCount;
+    for(LONG i = 0; i < Count && i < (LONG)(sizeof(g_EmuThreadSampleSkip) /
+                                            sizeof(g_EmuThreadSampleSkip[0]));
+        ++i)
+    {
+        if(g_EmuThreadSampleSkip[i] == Tid)
+            return true;
+    }
+    return false;
+}
+
 static bool EmuThreadSampleCapture(DWORD Tid, EmuThreadSample* Out)
 {
     HANDLE Thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
@@ -13125,8 +13214,14 @@ static bool EmuThreadSampleCapture(DWORD Tid, EmuThreadSample* Out)
     if(Thread == NULL)
         return false;
 
+    InterlockedIncrement(&g_EmuThreadSampleCaptureSeq);
+    g_EmuThreadSampleVictimTid = Tid;
+    g_EmuThreadSampleVictim = Thread;
+    MemoryBarrier();
+
     if(SuspendThread(Thread) == (DWORD)-1)
     {
+        g_EmuThreadSampleVictim = NULL;
         CloseHandle(Thread);
         return false;
     }
@@ -13141,6 +13236,7 @@ static bool EmuThreadSampleCapture(DWORD Tid, EmuThreadSample* Out)
         Out->Tid = Tid;
         Out->Eip = (ULONG)Context.Eip;
         Out->FrameCount = 0;
+        Out->GuestHitCount = 0;
 
         ULONG Ebp = (ULONG)Context.Ebp;
         while(Out->FrameCount < sizeof(Out->Frames) / sizeof(Out->Frames[0]))
@@ -13165,9 +13261,62 @@ static bool EmuThreadSampleCapture(DWORD Tid, EmuThreadSample* Out)
                 break;
             Ebp = NextEbp;
         }
+
+        // Stack scan for guest call sites: walk the dwords from ESP upward
+        // and keep verified return addresses. A candidate must point into
+        // executable guest sections AND be preceded by an E8 rel32 CALL
+        // whose target is also guest code -- data dwords that merely fall in
+        // the image range (packed RGB, sizes, ASCII) cannot fake a resolved
+        // call site. Pure memory reads inside the __try, so still lock-safe
+        // with the thread parked; the guard page (or the scan cap) ends the
+        // walk. The LAST distinct hits are kept: scanning upward, the
+        // highest addresses hold the oldest frames -- the guest-side code
+        // this sampler exists to see, above the host wait stubs.
+        __try
+        {
+            ULONG Found[48];
+            ULONG FoundCount = 0;
+            ULONG* Scan = (ULONG*)Context.Esp;
+            ULONG* ScanEnd = Scan + 0x2000; // 32 KB above ESP
+            while(Scan < ScanEnd)
+            {
+                const ULONG Value = *Scan++;
+                if(!EmuThreadSampleGuestCodeAddress(Value) ||
+                   Value < g_pXbeHeader->dwBaseAddr + 5)
+                    continue;
+                if(*(UCHAR*)(Value - 5) != 0xE8)
+                    continue;
+                const ULONG CallTarget =
+                    Value + (ULONG) * (const LONG*)(Value - 4);
+                if(!EmuThreadSampleGuestCodeAddress(CallTarget))
+                    continue;
+
+                bool Duplicate = false;
+                for(ULONG i = 0; i < FoundCount; ++i)
+                {
+                    if(Found[i] == Value)
+                    {
+                        Duplicate = true;
+                        break;
+                    }
+                }
+                if(Duplicate)
+                    continue;
+                if(FoundCount < sizeof(Found) / sizeof(Found[0]))
+                    Found[FoundCount++] = Value;
+            }
+
+            const ULONG Keep = FoundCount > 16 ? FoundCount - 16 : 0;
+            for(ULONG i = Keep; i < FoundCount; ++i)
+                Out->GuestHits[Out->GuestHitCount++] = Found[i];
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
     }
 
     ResumeThread(Thread);
+    g_EmuThreadSampleVictim = NULL;
     CloseHandle(Thread);
     return GotContext;
 }
@@ -13179,10 +13328,13 @@ static void EmuThreadSamplePrint()
     {
         const EmuThreadSample* Sample = &g_EmuThreadSamples[i];
         char Symbol[96];
-        printf("THREADS| tid=0x%.08lX eip=0x%.08lX (%s) frames=%lu\n",
+        printf("THREADS| tid=0x%.08lX eip=0x%.08lX (%s) frames=%lu guest-hits=%lu\n",
                Sample->Tid, Sample->Eip,
                EmuThreadSampleSymbol(Sample->Eip, Symbol, sizeof(Symbol)),
-               Sample->FrameCount);
+               Sample->FrameCount, Sample->GuestHitCount);
+        for(ULONG g = 0; g < Sample->GuestHitCount; ++g)
+            printf("THREADS|   guest=0x%.08lX (%s)\n", Sample->GuestHits[g],
+                   EmuThreadSampleSymbol(Sample->GuestHits[g], Symbol, sizeof(Symbol)));
         for(ULONG f = 0; f < Sample->FrameCount; ++f)
             printf("THREADS|   ret=0x%.08lX (%s)\n", Sample->Frames[f],
                    EmuThreadSampleSymbol(Sample->Frames[f], Symbol, sizeof(Symbol)));
@@ -13213,6 +13365,20 @@ static void EmuThreadSampleAll()
     if(Snapshot == INVALID_HANDLE_VALUE)
         return;
 
+    // Diagnostic boundary: this line prints AFTER the snapshot and BEFORE the
+    // first suspension. A log whose last sampler line is this one means the
+    // hang is inside the capture loop (the next tid names the victim); a log
+    // that simply stops between complete blocks means the snapshot itself
+    // blocked.
+    static LONG s_DebugThreads = -1;
+    if(s_DebugThreads < 0)
+    {
+        char Value[8] = { 0 };
+        s_DebugThreads = GetEnvironmentVariableA("CXBX_THREAD_SAMPLE_DEBUG", Value, sizeof(Value)) != 0 ? 1 : 0;
+    }
+    printf("THREADS| pass begin%s\n", s_DebugThreads ? " (per-thread)" : "");
+    fflush(stdout);
+
     THREADENTRY32 Entry;
     Entry.dwSize = sizeof(Entry);
     if(Thread32First(Snapshot, &Entry))
@@ -13227,6 +13393,16 @@ static void EmuThreadSampleAll()
             if(g_EmuThreadSampleCount >=
                sizeof(g_EmuThreadSamples) / sizeof(g_EmuThreadSamples[0]))
                 break;
+            if(EmuThreadSampleSkipped(Entry.th32ThreadID))
+                continue;
+            // Safe to print here: the previous capture has resumed its thread
+            // and this one has not suspended yet.
+            if(s_DebugThreads)
+            {
+                printf("THREADS| capture tid=0x%.08lX\n",
+                       (ULONG)Entry.th32ThreadID);
+                fflush(stdout);
+            }
             if(EmuThreadSampleCapture(
                    Entry.th32ThreadID,
                    &g_EmuThreadSamples[g_EmuThreadSampleCount]))
@@ -13252,9 +13428,21 @@ static DWORD WINAPI EmuThreadSamplerThread(LPVOID)
             IntervalMs = Parsed;
     }
 
+    const LONG MyGeneration = g_EmuThreadSamplerGeneration;
     for(;;)
     {
         Sleep(IntervalMs);
+
+        // Each loop thread belongs to a generation; the watchdog bumps the
+        // generation when a capture wedges, so this (or any stale) loop exits
+        // and a fresh one takes over with the wedging thread skip-listed.
+        if(g_EmuThreadSamplerGeneration != MyGeneration ||
+           g_EmuThreadSamplerDisabled != 0)
+        {
+            printf("THREADS| sampler loop exiting (generation superseded).\n");
+            fflush(stdout);
+            return 0;
+        }
 
         // A fault anywhere in the capture must not take the sampler down
         // permanently -- log it once and keep sampling.
@@ -13273,6 +13461,72 @@ static DWORD WINAPI EmuThreadSamplerThread(LPVOID)
     }
 }
 
+// The capture watchdog: a Win32 suspension/context call inside a capture can
+// block forever when it catches a thread mid-transition (observed wedging the
+// sampler on one title's thread set). The sampler loop itself cannot be
+// interrupted, but the VICTIM it holds suspended can: the capture publishes
+// the handle, the tid, and a per-capture sequence number; if the same capture
+// is still in flight ~1.5 s later, the watchdog resumes the victim, adds the
+// wedging tid to the skip list, supersedes the wedged loop with a fresh one
+// (the wedged thread stays parked harmlessly in its syscall), and keeps
+// watching. A resume of a not-yet-suspended thread is a no-op, so this is
+// safe whichever call blocked. Sampling gives up after the skip list fills.
+static DWORD WINAPI EmuThreadSamplerWatchdog(LPVOID)
+{
+    HANDLE LastVictim = NULL;
+    LONG LastSeq = 0;
+    ULONG StuckChecks = 0;
+
+    for(;;)
+    {
+        Sleep(250);
+
+        const HANDLE Victim = g_EmuThreadSampleVictim;
+        const LONG Seq = g_EmuThreadSampleCaptureSeq;
+        if(Victim == NULL || Victim != LastVictim || Seq != LastSeq)
+        {
+            LastVictim = Victim;
+            LastSeq = Seq;
+            StuckChecks = 0;
+            continue;
+        }
+
+        if(++StuckChecks < 6)
+            continue;
+
+        const DWORD WedgedTid = g_EmuThreadSampleVictimTid;
+        ResumeThread(Victim);
+
+        const LONG Count = g_EmuThreadSampleSkipCount;
+        if(Count < (LONG)(sizeof(g_EmuThreadSampleSkip) /
+                          sizeof(g_EmuThreadSampleSkip[0])))
+        {
+            g_EmuThreadSampleSkip[Count] = WedgedTid;
+            InterlockedIncrement(&g_EmuThreadSampleSkipCount);
+            printf("THREADS| sampler wedged on tid 0x%.08lX; victim resumed, "
+                   "thread skip-listed, restarting sampler loop.\n",
+                   (ULONG)WedgedTid);
+            fflush(stdout);
+
+            InterlockedIncrement(&g_EmuThreadSamplerGeneration);
+            CreateThread(NULL, 0, EmuThreadSamplerThread, NULL, 0, NULL);
+        }
+        else
+        {
+            InterlockedExchange(&g_EmuThreadSamplerDisabled, 1);
+            InterlockedIncrement(&g_EmuThreadSamplerGeneration);
+            printf("THREADS| skip list full; sampler giving up.\n");
+            fflush(stdout);
+            return 0;
+        }
+
+        // Keep watching the replacement loop.
+        LastVictim = NULL;
+        LastSeq = 0;
+        StuckChecks = 0;
+    }
+}
+
 static void EmuStartThreadSampler()
 {
     // Opt-in (CXBX_THREAD_SAMPLE_MS): suspending threads perturbs timing and
@@ -13286,6 +13540,7 @@ static void EmuStartThreadSampler()
         printf("Emu (0x%lX): guest thread sampler started.\n", GetCurrentThreadId());
         fflush(stdout);
         CreateThread(NULL, 0, EmuThreadSamplerThread, NULL, 0, NULL);
+        CreateThread(NULL, 0, EmuThreadSamplerWatchdog, NULL, 0, NULL);
     }
 }
 
