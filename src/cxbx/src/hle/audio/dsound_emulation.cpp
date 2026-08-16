@@ -3268,6 +3268,82 @@ HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_Play(
 }
 
 // ******************************************************************
+// * CMcpxBuffer thiscall shims (the 5849 LTCG Play/Stop chain)
+// ******************************************************************
+// The LTCG build flattened the public IDirectSoundBuffer Play/Stop chain:
+// XACT and the title reach the low-level CMcpxBuffer methods directly
+// through vtables, and the XRef-consuming signatures for the public
+// entries do not match the LTCG bodies (cxbxdbg xrefgaps flags both Play
+// bodies unhooked). The CMcpxBuffer object overlays X_CDirectSoundBuffer --
+// the same pointer identity the HLE SetBufferData path already sees -- so
+// these shims only translate thiscall to the stdcall Emu wrappers; without
+// them a working pump walks the raw chain into the XRef-failure stub.
+// clang-format off
+extern "C" HRESULT WINAPI EmuMcpxBuffer_PlayTarget(XTL::X_CDirectSoundBuffer* pThis,
+                                                   DWORD dwReserved1, DWORD dwReserved2,
+                                                   DWORD dwFlags)
+{
+    return XTL::EmuIDirectSoundBuffer8_Play(pThis, dwReserved1, dwReserved2, dwFlags);
+}
+
+// ?Play@CMcpxBuffer@@QAEJK@Z -- thiscall, one stack argument (flags).
+extern "C" __declspec(naked) VOID WINAPI EmuMcpxBuffer_Play()
+{
+    __asm
+    {
+        push dword ptr [esp + 4]  // guest flags argument
+        push 0                    // dwReserved2
+        push 0                    // dwReserved1
+        push ecx                  // pThis
+        call EmuMcpxBuffer_PlayTarget
+        ret 4                     // thiscall: callee cleans the one guest argument
+    }
+}
+
+// The state-gated variant: plays only when the buffer state byte (offset
+// 0x12) reads 3, with the looping flag taken from bit 9 of the state word,
+// replicating the computation the raw body performed before its leaf call.
+extern "C" __declspec(naked) VOID WINAPI EmuMcpxBuffer_PlayStateGated()
+{
+    __asm
+    {
+        mov dl, byte ptr [ecx + 0x12]
+        and dl, 3
+        cmp dl, 3
+        jne play_done
+        movzx eax, word ptr [ecx + 0x12]
+        shr eax, 9
+        and eax, 1
+        push eax                  // computed looping flag
+        push 0
+        push 0
+        push ecx
+        call EmuMcpxBuffer_PlayTarget
+    play_done:
+        xor eax, eax
+        ret
+    }
+}
+
+extern "C" HRESULT WINAPI EmuMcpxBuffer_StopTarget(XTL::X_CDirectSoundBuffer* pThis)
+{
+    return XTL::EmuIDirectSoundBuffer8_Stop(pThis);
+}
+
+// ?Stop@CMcpxBuffer@@QAEJK@Z -- thiscall, one stack argument (flags,
+// ignored by the HLE Stop).
+extern "C" __declspec(naked) VOID WINAPI EmuMcpxBuffer_Stop()
+{
+    __asm
+    {
+        push ecx
+        call EmuMcpxBuffer_StopTarget
+        ret 4
+    }
+}
+// clang-format on
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_PlayEx
 // ******************************************************************
 HRESULT WINAPI XTL::EmuIDirectSoundBuffer8_PlayEx(

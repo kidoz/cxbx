@@ -565,6 +565,61 @@ SOOVPA<8> CDirectSoundBuffer_Stop_1_0_5849 =
     }
 };
 
+// Image-derived from Samurai Shodown V @ 0x00280C33 (?Play@CMcpxBuffer@@QAEJK@Z).
+// The 5849 LTCG build flattened the public Play chain: callers reach this
+// thiscall body through vtables while the XRef-consuming public-entry
+// signatures miss the LTCG bodies. Hooked via the EmuMcpxBuffer_Play shim.
+SOOVPA<8> CMcpxBuffer_Play_LTCG_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x56 },
+        { 0x20, 0xE8 },
+        { 0x48, 0x5F },
+        { 0x6D, 0x8A },
+        { 0x91, 0x66 },
+        { 0xB4, 0x08 },
+        { 0xDC, 0x00 },
+        { 0xFF, 0x83 }
+    }
+};
+
+// Image-derived from Samurai Shodown V @ 0x00280C7E (the state-gated Play
+// variant; plays only when the buffer state byte reads 3). Hooked via the
+// EmuMcpxBuffer_PlayStateGated shim.
+SOOVPA<8> CMcpxBuffer_PlayStateGated_LTCG_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x8A },
+        { 0x24, 0x12 },
+        { 0x48, 0x03 },
+        { 0x69, 0x08 },
+        { 0x91, 0x00 },
+        { 0xB6, 0xFC },
+        { 0xD6, 0x0D },
+        { 0xFF, 0x88 }
+    }
+};
+
+// Image-derived from Samurai Shodown V @ 0x00280C9C (?Stop@CMcpxBuffer@@QAEJK@Z),
+// same flattened-chain rationale as the Play pair. Hooked via the
+// EmuMcpxBuffer_Stop shim.
+SOOVPA<8> CMcpxBuffer_Stop_LTCG_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x53 },
+        { 0x24, 0x66 },
+        { 0x48, 0x00 },
+        { 0x73, 0x00 },
+        { 0x91, 0x8B },
+        { 0xB6, 0x0A },
+        { 0xDA, 0x8B },
+        { 0xFF, 0x7C }
+    }
+};
+
 // _IDirectSoundBuffer_Stop@4 (dsound.lib, 24 bytes; call@0x11 -> XREF_DS5849_BUF_STOP)
 SOOVPA<9> IDirectSoundBuffer8_Stop_1_0_5849 =
 {
@@ -1933,6 +1988,30 @@ OOVPATable DSound_1_0_5849[] =
         XTL::EmuIDirectSoundBuffer8_Stop,
         #ifdef _DEBUG_TRACE
         "EmuIDirectSoundBuffer8_Stop"
+        #endif
+    },
+    // CMcpxBuffer::Play (5849 LTCG image-derived; thiscall shim)
+    {
+        (OOVPA*)&CMcpxBuffer_Play_LTCG_1_0_5849,
+        XTL::EmuMcpxBuffer_Play,
+        #ifdef _DEBUG_TRACE
+        "EmuMcpxBuffer_Play"
+        #endif
+    },
+    // CMcpxBuffer::Play state-gated (5849 LTCG image-derived; thiscall shim)
+    {
+        (OOVPA*)&CMcpxBuffer_PlayStateGated_LTCG_1_0_5849,
+        XTL::EmuMcpxBuffer_PlayStateGated,
+        #ifdef _DEBUG_TRACE
+        "EmuMcpxBuffer_PlayStateGated"
+        #endif
+    },
+    // CMcpxBuffer::Stop (5849 LTCG image-derived; thiscall shim)
+    {
+        (OOVPA*)&CMcpxBuffer_Stop_LTCG_1_0_5849,
+        XTL::EmuMcpxBuffer_Stop,
+        #ifdef _DEBUG_TRACE
+        "EmuMcpxBuffer_Stop"
         #endif
     },
     // CDirectSoundBuffer::SetPlayRegion (XREF save)

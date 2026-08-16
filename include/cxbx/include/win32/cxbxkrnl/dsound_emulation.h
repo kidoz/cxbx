@@ -606,6 +606,16 @@ HRESULT WINAPI EmuIDirectSoundBuffer8_Stop(
     X_CDirectSoundBuffer* pThis);
 
 // ******************************************************************
+// * func: CMcpxBuffer thiscall shims (5849 LTCG flattened Play/Stop chain)
+// ******************************************************************
+// The LTCG build routes vtable callers straight to the low-level CMcpxBuffer
+// methods; these shims translate thiscall to the stdcall Emu wrappers (the
+// CMcpxBuffer object overlays X_CDirectSoundBuffer).
+extern "C" VOID WINAPI EmuMcpxBuffer_Play();
+extern "C" VOID WINAPI EmuMcpxBuffer_PlayStateGated();
+extern "C" VOID WINAPI EmuMcpxBuffer_Stop();
+
+// ******************************************************************
 // * func: EmuIDirectSoundBuffer8_StopEx
 // ******************************************************************
 HRESULT WINAPI EmuIDirectSoundBuffer8_StopEx(
