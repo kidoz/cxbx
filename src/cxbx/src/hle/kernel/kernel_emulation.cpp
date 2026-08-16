@@ -6307,6 +6307,62 @@ static DWORD WINAPI EmuUsbInterruptThread(LPVOID)
     return 0;
 }
 
+// The NIC interrupt (bus level 4). XDK titles connect an NVNET ISR whose
+// stack processes transmit/receive completions; a blocking Winsock operation
+// parks in KeWaitForSingleObject on the overlapped event until that
+// processing completes it. This HLE's NVNET model answers MMIO but never
+// raises the interrupt, so Samurai Shodown V's network-init worker blocked
+// forever and the main thread (waiting on the worker) never reached its
+// scene/XACT loop. Synthesize the interrupt like the USB/vblank/audio ones:
+// fire the connected level-4 ISR on a timer, opt-in via CXBX_NVNET_IRQ=1.
+static const ULONG EmuNvnetInterruptLevel = 4;
+static volatile LONG g_EmuNvnetThreadStarted = 0;
+
+static DWORD WINAPI EmuNvnetIrqThread(LPVOID)
+{
+    EmuGenerateFS(g_pTLS, g_pTLSData);
+
+    printf("EmuKrnl (0x%lX): NVNET-interrupt thread started.\n", GetCurrentThreadId());
+    fflush(stdout);
+
+    for(;;)
+    {
+        Sleep(16); // a modest cadence: enough for completions, gentle on the ISR
+
+        EmuKInterrupt* Interrupt = (EmuKInterrupt*)g_EmuInterruptList[EmuNvnetInterruptLevel];
+        if(Interrupt == NULL || !Interrupt->Connected || Interrupt->ServiceRoutine == NULL)
+            continue;
+
+        EmuSwapFS(); // Xbox FS
+        __try
+        {
+            Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        EmuSwapFS(); // Win2k/XP FS
+    }
+
+    return 0;
+}
+
+static void EmuStartNvnetIrqThread()
+{
+    // Opt-in (CXBX_NVNET_IRQ=1): an async ISR can destabilize a title whose
+    // driver expects real NIC state, so keep it off by default.
+    char enabled[8] = { 0 };
+    if(GetEnvironmentVariableA("CXBX_NVNET_IRQ", enabled, sizeof(enabled)) == 0)
+        return;
+
+    if(InterlockedExchange(&g_EmuNvnetThreadStarted, 1) == 0)
+    {
+        printf("EmuKrnl (0x%lX): starting NVNET-interrupt delivery thread.\n", GetCurrentThreadId());
+        fflush(stdout);
+        CreateThread(NULL, 0, EmuNvnetIrqThread, NULL, 0, NULL);
+    }
+}
+
 static void EmuStartUsbInterruptThread()
 {
     // Opt-in (CXBX_USB_IRQ=1): firing an ISR asynchronously can destabilize a
@@ -6356,6 +6412,9 @@ extern "C" BOOLEAN NTAPI EmuKeConnectInterrupt(PVOID InterruptObject)
 
     if(Connected && Interrupt->BusInterruptLevel == EmuDisplayInterruptLevel)
         EmuStartVblankThread();
+
+    if(Connected && Level == EmuNvnetInterruptLevel)
+        EmuStartNvnetIrqThread();
 
     if(Connected && (Level == EmuAudioInterruptLevels[0] || Level == EmuAudioInterruptLevels[1]))
         EmuStartAudioInterruptThread();
