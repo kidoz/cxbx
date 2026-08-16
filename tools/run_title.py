@@ -61,8 +61,12 @@ PROFILES = {
 TITLE_PROFILES: dict[str, dict[str, str]] = {
     # Samurai Shodown V (SN-004): the patched XONLINES wrappers corrupt an
     # XNET object and kill the title ~15 s in, so the library runs raw; the
-    # thread-fault guard rides out the XACT worker's stray touches.
-    "534e0004": {"CXBX_HLE_SKIP": "XONLINES", "CXBX_SURVIVE_THREAD_FAULT": "1"},
+    # thread-fault guard rides out the XACT worker's stray touches; and the
+    # network-init worker needs synthesized NIC interrupts or its blocking
+    # Winsock call parks forever and the boot never completes.
+    "534e0004": {"CXBX_HLE_SKIP": "XONLINES",
+                 "CXBX_SURVIVE_THREAD_FAULT": "1",
+                 "CXBX_NVNET_IRQ": "1"},
 }
 # Backbuffer/scanout dumps the emulator writes to %TEMP% (ground truth for
 # "what did it render", unlike PrintWindow which can come back black).
