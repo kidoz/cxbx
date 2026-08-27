@@ -569,24 +569,74 @@ struct EmuMmioRegister
 
 static EmuMmioRegister g_EmuMmioRegisters[EmuMmioRegisterSlotCount] = {};
 
-static bool EmuLookupMmioRegister(ULONG Address, ULONG* Value)
-{
-    ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
+// Direct-mapped memo of recently touched register slots. The pusher stores and
+// reads a handful of PFIFO registers once per command word; a full probe of
+// the (increasingly dense) 64k-slot table per access dominated the pusher's
+// time. A memo hit is VERIFIED against the slot's live address, so a torn or
+// stale entry from another thread falls back to the probe -- worst case is
+// the old cost, never a wrong register.
+static const ULONG EmuMmioMemoCount = 8;
+static volatile ULONG g_EmuMmioMemoAddress[EmuMmioMemoCount] = {};
+static volatile ULONG g_EmuMmioMemoSlot[EmuMmioMemoCount] = {};
 
+static void EmuMmioMemoInsert(ULONG Address, ULONG Slot);
+
+static ULONG EmuMmioMemoFind(ULONG Address, ULONG HashSlot)
+{
+    for(ULONG i = 0; i < EmuMmioMemoCount; i++)
+    {
+        if(g_EmuMmioMemoAddress[i] == Address)
+        {
+            const ULONG MemoSlot = g_EmuMmioMemoSlot[i];
+            if(MemoSlot < EmuMmioRegisterSlotCount &&
+               g_EmuMmioRegisters[MemoSlot].Used &&
+               g_EmuMmioRegisters[MemoSlot].Address == Address)
+            {
+                return MemoSlot;
+            }
+        }
+    }
+
+    ULONG Index = HashSlot;
     for(ULONG i = 0; i < EmuMmioRegisterSlotCount; i++)
     {
-        ULONG Index = (Slot + i) & (EmuMmioRegisterSlotCount - 1);
-
+        // The probe stops at the first empty slot, like the original walk:
+        // entries are only ever appended, so an empty slot proves the address
+        // is absent.
         if(!g_EmuMmioRegisters[Index].Used)
-            return false;
-
+        {
+            break;
+        }
         if(g_EmuMmioRegisters[Index].Address == Address)
         {
-            if(Value != NULL)
-                *Value = g_EmuMmioRegisters[Index].Value;
-
-            return true;
+            EmuMmioMemoInsert(Address, Index);
+            break;
         }
+        Index = (Index + 1) & (EmuMmioRegisterSlotCount - 1);
+    }
+    return Index;
+}
+
+static void EmuMmioMemoInsert(ULONG Address, ULONG Slot)
+{
+    static volatile ULONG s_Rotation = 0;
+    const ULONG i = InterlockedIncrement(reinterpret_cast<volatile LONG*>(&s_Rotation)) &
+                    (EmuMmioMemoCount - 1);
+    g_EmuMmioMemoSlot[i] = Slot;
+    g_EmuMmioMemoAddress[i] = Address;
+}
+
+static bool EmuLookupMmioRegister(ULONG Address, ULONG* Value)
+{
+    const ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
+    const ULONG Index = EmuMmioMemoFind(Address, Slot);
+
+    if(g_EmuMmioRegisters[Index].Used && g_EmuMmioRegisters[Index].Address == Address)
+    {
+        if(Value != NULL)
+            *Value = g_EmuMmioRegisters[Index].Value;
+
+        return true;
     }
 
     return false;
@@ -594,25 +644,22 @@ static bool EmuLookupMmioRegister(ULONG Address, ULONG* Value)
 
 static void EmuStoreMmioRegister(ULONG Address, ULONG Value)
 {
-    ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
+    const ULONG Slot = (Address >> 2) & (EmuMmioRegisterSlotCount - 1);
+    const ULONG Index = EmuMmioMemoFind(Address, Slot);
 
-    for(ULONG i = 0; i < EmuMmioRegisterSlotCount; i++)
+    if(g_EmuMmioRegisters[Index].Used && g_EmuMmioRegisters[Index].Address == Address)
     {
-        ULONG Index = (Slot + i) & (EmuMmioRegisterSlotCount - 1);
+        g_EmuMmioRegisters[Index].Value = Value;
+        return;
+    }
 
-        if(g_EmuMmioRegisters[Index].Used && g_EmuMmioRegisters[Index].Address == Address)
-        {
-            g_EmuMmioRegisters[Index].Value = Value;
-            return;
-        }
-
-        if(!g_EmuMmioRegisters[Index].Used)
-        {
-            g_EmuMmioRegisters[Index].Address = Address;
-            g_EmuMmioRegisters[Index].Value = Value;
-            g_EmuMmioRegisters[Index].Used = true;
-            return;
-        }
+    if(!g_EmuMmioRegisters[Index].Used)
+    {
+        g_EmuMmioRegisters[Index].Address = Address;
+        g_EmuMmioRegisters[Index].Value = Value;
+        g_EmuMmioRegisters[Index].Used = true;
+        EmuMmioMemoInsert(Address, Index);
+        return;
     }
 
     printf("Emu (0x%lX): MMIO register cache exhausted at 0x%.08lX.\n",
@@ -6760,6 +6807,66 @@ static bool EmuNv2aRasterEnabled()
     return g_bEmuNv2aRaster;
 }
 
+// Total shaded pixels since the last NVPERF window (see the RasterPerfScope in
+// EmuNv2aRasterizeDrawArrays). Incremented unconditionally: one add per shaded
+// pixel is noise next to the shading itself.
+static volatile ULONG g_EmuNv2aShadedPixelCount = 0;
+
+// Shared NVPERF accumulators. Raster and pusher work serialize on the pusher
+// thread; MMIO faults arrive on guest threads, so their counters interlock.
+static volatile LONGLONG g_EmuPerfRasterNs = 0;
+static volatile LONGLONG g_EmuPerfPusherNs = 0;
+static volatile ULONG g_EmuPerfPusherRuns = 0;
+static volatile ULONG g_EmuPerfWords = 0;
+static volatile ULONG g_EmuPerfFaults = 0;
+
+static bool EmuNv2aPerfEnabled()
+{
+    static int Enabled = -1;
+    if(Enabled < 0)
+    {
+        char Buffer[8] = { 0 };
+        DWORD Length = GetEnvironmentVariableA("CXBX_NV2A_PERF", Buffer, sizeof(Buffer));
+        Enabled = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
+    }
+    return Enabled == 1;
+}
+
+// Print and reset the shared 5 s window. Called from the pusher scope, which
+// serializes with the raster scope on the pusher thread.
+static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
+{
+    static LONGLONG s_WindowStart = 0;
+    if(s_WindowStart == 0)
+    {
+        s_WindowStart = Now.QuadPart;
+        return;
+    }
+    const LONGLONG Window = Now.QuadPart - s_WindowStart;
+    if(Window < Freq.QuadPart * 5)
+    {
+        return;
+    }
+    const double WallSeconds =
+        static_cast<double>(Window) / static_cast<double>(Freq.QuadPart);
+    const double RasterSeconds =
+        static_cast<double>(g_EmuPerfRasterNs) / 1000000000.0;
+    const double PusherSeconds =
+        static_cast<double>(g_EmuPerfPusherNs) / 1000000000.0;
+    printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs faults=%lu "
+           "pusher_runs=%lu pusher_words=%lu pixels=%lu\n",
+           WallSeconds, RasterSeconds, PusherSeconds, g_EmuPerfFaults,
+           g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount);
+    fflush(stdout);
+    s_WindowStart = Now.QuadPart;
+    g_EmuPerfRasterNs = 0;
+    g_EmuPerfPusherNs = 0;
+    g_EmuPerfPusherRuns = 0;
+    g_EmuPerfWords = 0;
+    g_EmuPerfFaults = 0;
+    g_EmuNv2aShadedPixelCount = 0;
+}
+
 static void EmuNv2aClearSurface(ULONG Flags)
 {
     if(!EmuNv2aRasterEnabled())
@@ -7993,6 +8100,7 @@ static void EmuNv2aShadePixel(const EmuNv2aRasterTarget* Target, int X, int Y,
         Color = EmuNv2aBlend(Color, *Destination, Target->BlendSFactor,
                              Target->BlendDFactor, Target->BlendEquation);
     }
+    g_EmuNv2aShadedPixelCount++;
     if(Stats)
     {
         if(g_EmuNv2aPixelStats.Written == 0)
@@ -8536,9 +8644,41 @@ static ULONG EmuNv2aRasterLogBudget(ULONG Default)
     return s_Budget > 0 ? (ULONG)s_Budget : Default;
 }
 
+// Self-profiling scope (CXBX_NV2A_PERF=1): accumulate rasterization time per
+// raster entry into the shared window reported by the pusher scope. All three
+// raster entries need it: Samurai Shodown V's background strips rasterize via
+// the inline path, whose cost previously hid inside the pusher's number.
+struct EmuNv2aRasterPerfScope
+{
+    bool Active;
+    LARGE_INTEGER Start;
+    explicit EmuNv2aRasterPerfScope(bool Enabled) : Active(Enabled)
+    {
+        if(Active)
+        {
+            QueryPerformanceCounter(&Start);
+        }
+    }
+    ~EmuNv2aRasterPerfScope()
+    {
+        if(!Active)
+        {
+            return;
+        }
+        LARGE_INTEGER End, Freq;
+        QueryPerformanceCounter(&End);
+        QueryPerformanceFrequency(&Freq);
+        InterlockedExchangeAdd64(
+            &g_EmuPerfRasterNs,
+            static_cast<LONG>((End.QuadPart - Start.QuadPart) * 1000000000 /
+                              Freq.QuadPart));
+    }
+};
+
 static void EmuNv2aRasterizeInlineArray(
     const cxbx::nv2a::PgraphVertexBatchAction& Batch, ULONG BeginOp)
 {
+    EmuNv2aRasterPerfScope PerfScope(EmuNv2aPerfEnabled());
     cxbx::nv2a::PgraphVertexLayout Layout{};
     if(Batch.overflow ||
        !cxbx::nv2a::BuildPgraphInlineVertexLayout(
@@ -8610,6 +8750,7 @@ static void EmuNv2aRasterizeInlineArray(
 static void EmuNv2aRasterizeImmediateVertices(
     const cxbx::nv2a::PgraphVertexBatchAction& Batch, ULONG BeginOp)
 {
+    EmuNv2aRasterPerfScope PerfScope(EmuNv2aPerfEnabled());
     const ULONG WordsPerVertex =
         static_cast<ULONG>(cxbx::nv2a::PgraphImmediateWordsPerVertex);
     if(Batch.overflow || Batch.wordCount % WordsPerVertex != 0)
@@ -8650,6 +8791,10 @@ static void EmuNv2aRasterizeDrawArrays(
     {
         return;
     }
+
+    // Self-profiling scope (CXBX_NV2A_PERF=1): accumulate rasterization time
+    // into the shared window reported by the pusher scope.
+    EmuNv2aRasterPerfScope PerfScope(EmuNv2aPerfEnabled());
 
     const char* DrawKind = g_EmuNv2aRasterizingImmediate ? "immediate"
                                                          : (InlineData != nullptr ? "inline"
@@ -9464,6 +9609,38 @@ static void EmuNv2aRunPusher()
         return;
     }
 
+    // Pusher perf scope: report the shared NVPERF window (raster + pusher +
+    // fault counters) at most once per 5 s, from here where pusher and raster
+    // work serialize on this thread.
+    struct PusherPerfScope
+    {
+        bool Active;
+        LARGE_INTEGER Start;
+        explicit PusherPerfScope(bool Enabled) : Active(Enabled)
+        {
+            if(Active)
+            {
+                QueryPerformanceCounter(&Start);
+            }
+        }
+        ~PusherPerfScope()
+        {
+            if(!Active)
+            {
+                return;
+            }
+            LARGE_INTEGER End, Freq;
+            QueryPerformanceCounter(&End);
+            QueryPerformanceFrequency(&Freq);
+            InterlockedExchangeAdd64(
+                &g_EmuPerfPusherNs,
+                static_cast<LONG>((End.QuadPart - Start.QuadPart) * 1000000000 /
+                                  Freq.QuadPart));
+            InterlockedIncrement(&g_EmuPerfPusherRuns);
+            EmuPerfReportWindow(End, Freq);
+        }
+    } PerfScope(EmuNv2aPerfEnabled());
+
     // If PUT points into a host contiguous block, the guest built the pushbuffer
     // in host memory and programmed the NV2A with raw host pointers. Read it
     // straight from host memory, anchoring GET at the block base (channel init is
@@ -9498,6 +9675,32 @@ static void EmuNv2aRunPusher()
     g_EmuNv2aPusherRunCount++;
 
     ULONG GuardLimit = HostMode ? 0x100000 : 4096;
+    // Per-word EmuTryReadHost VirtualQuery's the address every 4-byte fetch --
+    // ~4M times per second at frame rate, which dominated the pusher. Resolve
+    // the host region once for this run and read words directly; words outside
+    // the region fall back to the general path.
+    BYTE* RunHostBase = nullptr;
+    ULONG RunHostEnd = 0;
+    if(HostMode)
+    {
+        MEMORY_BASIC_INFORMATION Info;
+        if(VirtualQuery((LPCVOID)Get, &Info, sizeof(Info)) == sizeof(Info) &&
+           Info.State == MEM_COMMIT &&
+           (Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0)
+        {
+            RunHostBase = static_cast<BYTE*>(Info.BaseAddress);
+            RunHostEnd = static_cast<ULONG>(Info.BaseAddress) +
+                         static_cast<ULONG>(Info.RegionSize);
+        }
+    }
+    // The per-word flight record attaches a thread, reads the tick, and stores
+    // into the crash ring -- hundreds of thousands of times per second at frame
+    // rate. Unless the nv2a channel is actually tracing, skip it: the ring
+    // fills with raw push words either way, evicting the context it exists to
+    // keep.
+    const bool TracePush =
+        cxbx::trace::IsEnabled(cxbx::trace::EventChannel(
+            cxbx::trace::Event::Nv2aPush));
     cxbx::nv2a::PfifoPusherState PusherState{
         static_cast<std::uint32_t>(Get),
         static_cast<std::uint32_t>(
@@ -9521,13 +9724,24 @@ static void EmuNv2aRunPusher()
     for(ULONG Guard = 0; Guard < GuardLimit && PusherState.get != Put;
         Guard++)
     {
+        InterlockedIncrement(&g_EmuPerfWords);
         ULONG Word = 0;
         const ULONG FetchAddress = static_cast<ULONG>(PusherState.get);
 
-        if(!cxbx::nv2a::IsPfifoDmaWordInRange(
-               PusherState.get, static_cast<std::uint32_t>(Limit)) ||
-           !EmuNv2aFetchPushWord(
-               HostMode, BaseAddress, FetchAddress, &Word))
+        bool Fetched = false;
+        if(RunHostBase != nullptr &&
+           FetchAddress >= reinterpret_cast<ULONG>(RunHostBase) &&
+           FetchAddress + 4 <= RunHostEnd)
+        {
+            Word = *reinterpret_cast<const ULONG*>(
+                RunHostBase + (FetchAddress - reinterpret_cast<ULONG>(RunHostBase)));
+            Fetched = true;
+        }
+        if(!Fetched &&
+           (!cxbx::nv2a::IsPfifoDmaWordInRange(
+                PusherState.get, static_cast<std::uint32_t>(Limit)) ||
+            !EmuNv2aFetchPushWord(
+                HostMode, BaseAddress, FetchAddress, &Word)))
         {
             EmuNv2aSetPusherError(
                 cxbx::nv2a::PfifoPusherError::Protection);
@@ -9539,7 +9753,10 @@ static void EmuNv2aRunPusher()
             Capture->RecordPushWord(g_EmuNv2aDebugFrame, FetchAddress, Word);
         }
         NV2A_TRACE_PB(Word);
-        cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
+        if(TracePush)
+        {
+            cxbx::trace::RecordNv2aPush(static_cast<std::uint32_t>(Word));
+        }
 
         const cxbx::nv2a::PfifoPusherStep Step =
             cxbx::nv2a::StepPfifoPusher(
@@ -10723,6 +10940,11 @@ static bool EmuTryEmulateMmioAccess(LPEXCEPTION_POINTERS e)
     ULONG FaultAddress = (ULONG)e->ExceptionRecord->ExceptionInformation[1];
     if(!EmuIsMmioAddress(FaultAddress) && !EmuIsStubMmioAddress(FaultAddress))
         return false;
+
+    if(EmuNv2aPerfEnabled())
+    {
+        InterlockedIncrement(&g_EmuPerfFaults);
+    }
 
     __try
     {
