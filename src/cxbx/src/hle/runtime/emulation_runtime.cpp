@@ -5427,6 +5427,12 @@ static ULONG EmuNv2aTextureDumpBudget()
 
 // the payload of path 1: it reproduces the source image the title uploaded,
 // independent of any rasterization.
+//
+// Dedup by (offset, format): a title re-binds the same texture on most draws,
+// which would spend the whole dump budget on repeats of one image before a
+// later screen's textures ever get a turn. A re-upload to the SAME address is
+// not re-dumped -- raise the budget and note that when hunting content that
+// streams into a reused surface.
 static void EmuNv2aDumpSourceTexture(ULONG Stage)
 {
     if(Stage >= EmuNv2aTextureStageCount ||
@@ -5435,6 +5441,28 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
 
     const auto& Texture = g_EmuNv2aTextureState.stages[Stage];
     ULONG Format = static_cast<ULONG>(Texture.format);
+    static ULONG s_DumpedOffsets[128] = {};
+    static ULONG s_DumpedFormats[128] = {};
+    static ULONG s_DumpedCount = 0;
+    bool AlreadyDumped = false;
+    for(ULONG i = 0; i < s_DumpedCount; ++i)
+    {
+        if(s_DumpedOffsets[i] == Texture.offset && s_DumpedFormats[i] == Format)
+        {
+            AlreadyDumped = true;
+            break;
+        }
+    }
+    if(AlreadyDumped)
+    {
+        return;
+    }
+    if(s_DumpedCount < 128)
+    {
+        s_DumpedOffsets[s_DumpedCount] = Texture.offset;
+        s_DumpedFormats[s_DumpedCount] = Format;
+        s_DumpedCount++;
+    }
     ULONG Color = (Format >> 8) & 0xFF;
     ULONG SizeU = (Format >> 20) & 0xF;
     ULONG SizeV = (Format >> 24) & 0xF;
