@@ -6828,6 +6828,9 @@ extern "C" volatile ULONG g_EmuPerfP8Spans = 0;
 extern "C" volatile ULONG g_EmuPerfTriangles = 0;
 extern "C" volatile ULONG g_EmuPerfFlatSpans = 0;
 extern "C" volatile ULONG g_EmuPerfSpanPixels = 0;
+extern "C" volatile ULONG g_EmuPerfVertices = 0;
+extern "C" volatile ULONG g_EmuPerfQuadWRejects = 0;
+extern "C" volatile ULONG g_EmuPerfBigDrawLogs = 0;
 
 static bool EmuNv2aPerfEnabled()
 {
@@ -6871,13 +6874,13 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
         static_cast<double>(g_EmuPerfWaitNs) / 1000000000.0;
     printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs wait=%.1fs "
            "wait_calls=%lu paced=%lu faults=%lu "
-           "pusher_runs=%lu pusher_words=%lu pixels=%lu "
-           "quads=%lu p8spans=%lu flats=%lu tris=%lu\n",
+           "pusher_runs=%lu pusher_words=%lu pixels=%lu spanpx=%lu "
+           "quads=%lu p8spans=%lu flats=%lu tris=%lu verts=%lu wrej=%lu\n",
            WallSeconds, RasterSeconds, PusherSeconds, WaitSeconds,
            g_EmuPerfWaitCalls, g_EmuPerfPacedSatisfies, g_EmuPerfFaults,
            g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount,
            g_EmuPerfSpanPixels, g_EmuPerfQuads, g_EmuPerfP8Spans, g_EmuPerfFlatSpans,
-           g_EmuPerfTriangles);
+           g_EmuPerfTriangles, g_EmuPerfVertices, g_EmuPerfQuadWRejects);
     fflush(stdout);
     s_WindowStart = Now.QuadPart;
     g_EmuPerfRasterNs = 0;
@@ -6894,6 +6897,9 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     g_EmuPerfP8Spans = 0;
     g_EmuPerfFlatSpans = 0;
     g_EmuPerfTriangles = 0;
+    g_EmuPerfVertices = 0;
+    g_EmuPerfQuadWRejects = 0;
+    g_EmuPerfBigDrawLogs = 0;
 }
 
 static void EmuNv2aClearSurface(ULONG Flags)
@@ -8220,6 +8226,14 @@ static void EmuNv2aFillP8LinearQuadSpans(
     const float FirstTx =
         (static_cast<float>(MinX) + 0.5f - Left) * InverseWidth;
     const int DepthPitchElements = Target->DepthPitchB / 4;
+    // Sampler fields hoisted to locals: the per-pixel stores through
+    // Target->Color could alias the sampler members, which would force the
+    // compiler to reload them on every pixel.
+    const ULONG TexWidth = S->Width;
+    const ULONG TexHeight = S->Height;
+    const ULONG TexPitch = S->SourcePitch;
+    const ULONG* TexPalette = S->Palette;
+    const BYTE* TexSource = S->Source;
 
     for(int Y = MinY; Y < MaxY; ++Y)
     {
@@ -8285,26 +8299,26 @@ static void EmuNv2aFillP8LinearQuadSpans(
                         }
                         v -= static_cast<float>(Whole);
                     }
-                    int IX = static_cast<int>(u * static_cast<float>(S->Width));
-                    int IY = static_cast<int>(v * static_cast<float>(S->Height));
+                    int IX = static_cast<int>(u * static_cast<float>(TexWidth));
+                    int IY = static_cast<int>(v * static_cast<float>(TexHeight));
                     if(IX < 0)
                     {
                         IX = 0;
                     }
-                    if(IX >= static_cast<int>(S->Width))
+                    if(IX >= static_cast<int>(TexWidth))
                     {
-                        IX = static_cast<int>(S->Width) - 1;
+                        IX = static_cast<int>(TexWidth) - 1;
                     }
                     if(IY < 0)
                     {
                         IY = 0;
                     }
-                    if(IY >= static_cast<int>(S->Height))
+                    if(IY >= static_cast<int>(TexHeight))
                     {
-                        IY = static_cast<int>(S->Height) - 1;
+                        IY = static_cast<int>(TexHeight) - 1;
                     }
                     const ULONG Source =
-                        S->Palette[S->Source[IY * S->SourcePitch + IX]];
+                        TexPalette[TexSource[IY * TexPitch + IX]];
                     g_EmuPerfSpanPixels++;
                     ULONG* Destination = ColorRow + X;
                     *Destination =
@@ -9366,6 +9380,7 @@ static void EmuNv2aRasterizeDrawArrays(
 
     for(ULONG i = 0; i < Count; i++)
     {
+        InterlockedIncrement(&g_EmuPerfVertices);
         ULONG Index = Indices == nullptr ? Start + i : Indices[i];
         EmuNv2aRasterVertex Vertex{};
         cxbx::nv2a::PgraphVertexComponents RawPosition{};
@@ -9681,6 +9696,47 @@ static void EmuNv2aRasterizeDrawArrays(
     }
 
     ULONG Triangles = 0;
+    // Big-draw diagnostic (CXBX_NV2A_PERF=1): oversized QUADS batches dominate
+    // the raster profile; report their shape and how much of the batch the
+    // homogeneous-W gate rejects, a few times per window.
+    if(EmuNv2aPerfEnabled() && BeginOp == 8 && Count >= 64 &&
+       g_EmuPerfBigDrawLogs < 24)
+    {
+        {
+            ULONG RejectRuns = 0;
+            ULONG FirstReject = 0;
+            float RejectW0 = 0.0f, RejectW1 = 0.0f, RejectW2 = 0.0f, RejectW3 = 0.0f;
+            ULONG Inspected = Count / 4 < 4096 ? Count / 4 : 4096;
+            for(ULONG Quad = 0; Quad < Inspected; ++Quad)
+            {
+                const ULONG Base = Quad * 4;
+                if(!cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+                       VW[Base], VW[Base + 1], VW[Base + 2]) ||
+                   !cxbx::nv2a::CanRasterizeHomogeneousTriangle(
+                       VW[Base], VW[Base + 2], VW[Base + 3]))
+                {
+                    if(RejectRuns == 0)
+                    {
+                        RejectW0 = VW[Base];
+                        RejectW1 = VW[Base + 1];
+                        RejectW2 = VW[Base + 2];
+                        RejectW3 = VW[Base + 3];
+                    }
+                    RejectRuns++;
+                    if(FirstReject == 0)
+                    {
+                        FirstReject = Quad;
+                    }
+                }
+            }
+            InterlockedIncrement(&g_EmuPerfBigDrawLogs);
+            printf("NVBIGD| kind=%s op=%lu count=%lu start=%lu inspected=%lu "
+                   "wrejects=%lu first_reject_quad=%lu w=(%g,%g,%g,%g)\n",
+                   DrawKind, BeginOp, Count, Start, Inspected, RejectRuns,
+                   FirstReject, RejectW0, RejectW1, RejectW2, RejectW3);
+            fflush(stdout);
+        }
+    }
     if(EmuNv2aPixelStatsEnabled())
     {
         ZeroMemory(&g_EmuNv2aPixelStats, sizeof(g_EmuNv2aPixelStats));
