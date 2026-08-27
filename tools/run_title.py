@@ -497,6 +497,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.dump_frames:
         env.setdefault("CXBX_D3D_DUMP_DRAWS", "0:1")
         env.setdefault("CXBX_D3D_DUMP_FRAMES", "1:100000")
+        # The scanout BMP budget is consumed at present rate unless gated; scale
+        # it with the session so the whole run is sampled, not just its first
+        # second (a title's dark boot fade).
+        env.setdefault("CXBX_NV2A_SCANOUT_LOG", str(int(args.seconds) + 16))
     capture_path: Path | None = None
     if args.capture_pushbuffer is not None:
         if args.capture_pushbuffer < 0:

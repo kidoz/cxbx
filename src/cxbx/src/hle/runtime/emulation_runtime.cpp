@@ -6408,6 +6408,24 @@ static void EmuNv2aDrawPost(
 // surface at that address reproduces the actual on-screen image, independent of
 // any rasterization: whatever the guest drew into that buffer (CPU or GPU) is
 // what we write to %TEMP%\cxbx_fbN.bmp and (with CXBX_NV2A_WINDOW=1) the window.
+// Scanout BMP dump budget (CXBX_NV2A_SCANOUT_LOG=<n>, default 16). Presents
+// run at frame rate, so an ungated cap is spent on the first fraction of a
+// second of the session -- Samurai Shodown V's 16 dumps all captured the dark
+// boot fade and none of the screens after it. A minimum interval of ~1 dump
+// per second makes a raised budget sample the whole session instead.
+static ULONG EmuNv2aScanoutDumpBudget()
+{
+    static LONG s_Budget = -1;
+    if(s_Budget < 0)
+    {
+        char Value[16] = { 0 };
+        s_Budget = GetEnvironmentVariableA("CXBX_NV2A_SCANOUT_LOG", Value, sizeof(Value)) != 0
+                       ? (LONG)strtoul(Value, NULL, 0)
+                       : 0;
+    }
+    return s_Budget > 0 ? (ULONG)s_Budget : 16;
+}
+
 static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 {
     if(PhysicalAddress == 0)
@@ -6417,7 +6435,10 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
 
     bool WantWindow = EmuNv2aWindowEnabled();
     bool WantOverlay = XTL::g_hEmuWindow != NULL;
-    bool WantBmp = (g_EmuNv2aScanoutDumpIndex < 16);
+    static DWORD s_LastDumpTick = 0;
+    const DWORD NowTick = GetTickCount();
+    bool WantBmp = g_EmuNv2aScanoutDumpIndex < EmuNv2aScanoutDumpBudget() &&
+                   (s_LastDumpTick == 0 || NowTick - s_LastDumpTick >= 1000);
     bool WantCrc = EmuNv2aCrcEnabled();
     cxbx::nv2a::PushbufferCaptureWriter* Capture =
         EmuNv2aCaptureForFrame(g_EmuNv2aDebugFrame);
@@ -6581,6 +6602,7 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
                DistinctSample >= 2 ? "yes" : "no", path);
         fflush(stdout);
         g_EmuNv2aScanoutDumpIndex++;
+        s_LastDumpTick = NowTick;
     }
 
     delete[] Pixels;
