@@ -6813,12 +6813,16 @@ static bool EmuNv2aRasterEnabled()
 static volatile ULONG g_EmuNv2aShadedPixelCount = 0;
 
 // Shared NVPERF accumulators. Raster and pusher work serialize on the pusher
-// thread; MMIO faults arrive on guest threads, so their counters interlock.
-static volatile LONGLONG g_EmuPerfRasterNs = 0;
-static volatile LONGLONG g_EmuPerfPusherNs = 0;
-static volatile ULONG g_EmuPerfPusherRuns = 0;
-static volatile ULONG g_EmuPerfWords = 0;
-static volatile ULONG g_EmuPerfFaults = 0;
+// thread; MMIO faults and guest dispatcher waits arrive on guest threads, so
+// their counters interlock.
+extern "C" volatile LONGLONG g_EmuPerfRasterNs = 0;
+extern "C" volatile LONGLONG g_EmuPerfPusherNs = 0;
+extern "C" volatile LONGLONG g_EmuPerfWaitNs = 0;
+extern "C" volatile ULONG g_EmuPerfWaitCalls = 0;
+extern "C" volatile ULONG g_EmuPerfPusherRuns = 0;
+extern "C" volatile ULONG g_EmuPerfWords = 0;
+extern "C" volatile ULONG g_EmuPerfFaults = 0;
+extern "C" volatile ULONG g_EmuPerfPacedSatisfies = 0;
 
 static bool EmuNv2aPerfEnabled()
 {
@@ -6830,6 +6834,11 @@ static bool EmuNv2aPerfEnabled()
         Enabled = (Length > 0 && Buffer[0] == '1') ? 1 : 0;
     }
     return Enabled == 1;
+}
+
+extern "C" bool EmuNv2aPerfEnabledC()
+{
+    return EmuNv2aPerfEnabled();
 }
 
 // Print and reset the shared 5 s window. Called from the pusher scope, which
@@ -6853,14 +6862,21 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
         static_cast<double>(g_EmuPerfRasterNs) / 1000000000.0;
     const double PusherSeconds =
         static_cast<double>(g_EmuPerfPusherNs) / 1000000000.0;
-    printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs faults=%lu "
+    const double WaitSeconds =
+        static_cast<double>(g_EmuPerfWaitNs) / 1000000000.0;
+    printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs wait=%.1fs "
+           "wait_calls=%lu paced=%lu faults=%lu "
            "pusher_runs=%lu pusher_words=%lu pixels=%lu\n",
-           WallSeconds, RasterSeconds, PusherSeconds, g_EmuPerfFaults,
+           WallSeconds, RasterSeconds, PusherSeconds, WaitSeconds,
+           g_EmuPerfWaitCalls, g_EmuPerfPacedSatisfies, g_EmuPerfFaults,
            g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount);
     fflush(stdout);
     s_WindowStart = Now.QuadPart;
     g_EmuPerfRasterNs = 0;
     g_EmuPerfPusherNs = 0;
+    g_EmuPerfWaitNs = 0;
+    g_EmuPerfWaitCalls = 0;
+    g_EmuPerfPacedSatisfies = 0;
     g_EmuPerfPusherRuns = 0;
     g_EmuPerfWords = 0;
     g_EmuPerfFaults = 0;
@@ -9689,7 +9705,7 @@ static void EmuNv2aRunPusher()
            (Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0)
         {
             RunHostBase = static_cast<BYTE*>(Info.BaseAddress);
-            RunHostEnd = static_cast<ULONG>(Info.BaseAddress) +
+            RunHostEnd = static_cast<ULONG>(reinterpret_cast<uintptr_t>(Info.BaseAddress)) +
                          static_cast<ULONG>(Info.RegionSize);
         }
     }
@@ -9730,11 +9746,11 @@ static void EmuNv2aRunPusher()
 
         bool Fetched = false;
         if(RunHostBase != nullptr &&
-           FetchAddress >= reinterpret_cast<ULONG>(RunHostBase) &&
+           FetchAddress >= static_cast<ULONG>(reinterpret_cast<uintptr_t>(RunHostBase)) &&
            FetchAddress + 4 <= RunHostEnd)
         {
             Word = *reinterpret_cast<const ULONG*>(
-                RunHostBase + (FetchAddress - reinterpret_cast<ULONG>(RunHostBase)));
+                RunHostBase + (FetchAddress - static_cast<ULONG>(reinterpret_cast<uintptr_t>(RunHostBase))));
             Fetched = true;
         }
         if(!Fetched &&
@@ -9769,10 +9785,24 @@ static void EmuNv2aRunPusher()
                     g_EmuNv2aDebugFrame, Step.subchannel, Step.method,
                     Step.data);
             }
-            EmuNv2aHandlePgraphMethod(
-                static_cast<ULONG>(Step.subchannel),
-                static_cast<ULONG>(Step.method),
-                static_cast<ULONG>(Step.data));
+            // Temporary bisect knob (CXBX_NV2A_PERF_SKIP_METHODS=1): drop the
+            // dispatch to isolate the bare loop cost. Breaks rendering.
+            static int s_SkipMethods = -1;
+            if(s_SkipMethods < 0)
+            {
+                char Buffer[8] = {};
+                s_SkipMethods =
+                    GetEnvironmentVariableA("CXBX_NV2A_PERF_SKIP_METHODS", Buffer, sizeof(Buffer)) != 0
+                        ? 1
+                        : 0;
+            }
+            if(s_SkipMethods == 0)
+            {
+                EmuNv2aHandlePgraphMethod(
+                    static_cast<ULONG>(Step.subchannel),
+                    static_cast<ULONG>(Step.method),
+                    static_cast<ULONG>(Step.data));
+            }
             EmuNv2aStoreRegister(
                 NV_PFIFO_CACHE1_DMA_STATE,
                 static_cast<ULONG>(PusherState.methodState));

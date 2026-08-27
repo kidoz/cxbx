@@ -8608,6 +8608,12 @@ static bool EmuIsNativeD3dWaitCaller(ULONG Caller)
     return false;
 }
 
+// NVPERF attribution counters (defined in emulation_runtime.cpp).
+extern "C" volatile LONGLONG g_EmuPerfWaitNs;
+extern "C" volatile ULONG g_EmuPerfWaitCalls;
+extern "C" volatile ULONG g_EmuPerfPacedSatisfies;
+extern "C" bool EmuNv2aPerfEnabledC();
+
 extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject(
     IN PVOID Object,
     IN ULONG WaitReason,
@@ -8639,6 +8645,42 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject(
     }
 
     EmuSwapFS(); // Win2k/XP FS
+
+    // NVPERF attribution: how much wall the guest threads spend inside
+    // dispatcher waits. A wait-heavy profile means the quarter-speed is
+    // pacing/blocking, not compute. Instrumentation runs AFTER the FS swap so
+    // its host calls see the Win32 thread state.
+    const bool PerfWait = EmuNv2aPerfEnabledC();
+    struct WaitPerfScope
+    {
+        bool Active;
+        ::LARGE_INTEGER Start;
+        explicit WaitPerfScope(bool Enabled) : Active(Enabled)
+        {
+            if(Active)
+            {
+                QueryPerformanceCounter(&Start);
+            }
+        }
+        ~WaitPerfScope()
+        {
+            if(!Active)
+            {
+                return;
+            }
+            ::LARGE_INTEGER End, Freq;
+            QueryPerformanceCounter(&End);
+            QueryPerformanceFrequency(&Freq);
+            InterlockedExchangeAdd64(
+                &g_EmuPerfWaitNs,
+                static_cast<LONG>((End.QuadPart - Start.QuadPart) * 1000000000 /
+                                  Freq.QuadPart));
+        }
+    } WaitPerf(PerfWait);
+    if(PerfWait)
+    {
+        InterlockedIncrement(reinterpret_cast<volatile LONG*>(&g_EmuPerfWaitCalls));
+    }
 
     xboxkrnl::DISPATCHER_HEADER* Header = (xboxkrnl::DISPATCHER_HEADER*)Object;
     if(Header == NULL || !EmuIsWritableMemoryRange(Header, sizeof(*Header)) ||
@@ -8682,7 +8724,9 @@ extern "C" NTSTATUS NTAPI EmuKeWaitForSingleObject(
         if(NativeD3dVblankWait && GetTickCount() - Started >= 16)
         {
             static volatile LONG PacedSatisfies = 0;
-            if(InterlockedIncrement(&PacedSatisfies) <= 4)
+            const LONG Call = InterlockedIncrement(&PacedSatisfies);
+            InterlockedIncrement(&g_EmuPerfPacedSatisfies);
+            if(Call <= 4)
             {
                 printf("EmuKrnl (0x%lX): paced native-D3D vblank wait satisfied "
                        "(object=%p caller=0x%.08lX).\n",
