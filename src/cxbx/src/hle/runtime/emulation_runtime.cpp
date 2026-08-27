@@ -711,11 +711,14 @@ static const ULONG EmuUsbHccaDoneHeadOffset = 0x84;
 static void EmuUsb0RunTransferEngine(void);
 
 // Defined in xid_input_report.cpp: 20-byte XID input reports built from host
-// input (or the CXBX_INPUT_STATE injection variables). Refresh only runs on
-// the USB delivery thread (host FS -- it calls into the XInput DLL); the
-// getter is a locked byte copy, safe from any thread including MMIO handling.
+// input (or the CXBX_INPUT_STATE injection variables). The full refresh calls
+// into the host XInput backend and only runs on the USB delivery thread (host
+// FS); the injected-state refresh never touches the backend and is safe from
+// guest threads servicing MMIO inside the exception handler; the getter is a
+// locked byte copy, safe from any thread.
 static const ULONG EmuUsbXidReportSize = 20;
 extern "C" void EmuXidRefreshInputReports(ULONG PortCount);
+extern "C" void EmuXidRefreshInjectedReports(ULONG PortCount);
 extern "C" void EmuXidGetInputReport(ULONG Port, UCHAR Report[20]);
 
 // An OHCI interrupt is asserted only for sources the driver has UNMASKED (and
@@ -1886,6 +1889,12 @@ static void EmuUsb0RunTransferEngine(void)
     {
         return;
     }
+
+    // The delivery thread refreshes injected reports at the SOF cadence; when
+    // it is not running (CXBX_USB_IRQ off) the guest's own MMIO polls are the
+    // only tick, so a polling XID driver would read a neutral gamepad forever.
+    // The injected refresh never calls the host backend and is MMIO-safe.
+    EmuXidRefreshInjectedReports(EmuUsb0ConfiguredConnectPorts());
 
     // Mirror the frame number into the HCCA like the hardware's per-frame write.
     const ULONG Hcca =

@@ -161,6 +161,47 @@ extern "C" void EmuXidRefreshInputReports(unsigned long PortCount)
     ReleaseSRWLockExclusive(&g_ReportLock);
 }
 
+extern "C" void EmuXidRefreshInjectedReports(unsigned long PortCount)
+{
+    if(g_InjectionMode == InjectionMode::Unchecked)
+    {
+        DetectInjectionMode();
+    }
+    if(g_InjectionMode != InjectionMode::Sequence &&
+       g_InjectionMode != InjectionMode::Static)
+    {
+        return;
+    }
+    if(PortCount > HostInput::MaxPorts)
+    {
+        PortCount = HostInput::MaxPorts;
+    }
+
+    unsigned char reports[HostInput::MaxPorts][EmuXidInputReportSize];
+    for(std::size_t port = 0; port < HostInput::MaxPorts; ++port)
+    {
+        HostInput::GamepadState state{};
+        if(port < PortCount)
+        {
+            if(g_InjectionMode == InjectionMode::Static)
+            {
+                state = g_InjectedStatic;
+            }
+            else
+            {
+                state = g_InjectedSequence.StateAt(GetTickCount() -
+                                                   g_SequenceStartTick);
+            }
+        }
+        BuildXidReport(state, reports[port]);
+    }
+
+    AcquireSRWLockExclusive(&g_ReportLock);
+    memcpy(g_Reports, reports, sizeof(g_Reports));
+    g_ReportsSeeded = true;
+    ReleaseSRWLockExclusive(&g_ReportLock);
+}
+
 extern "C" void EmuXidGetInputReport(unsigned long Port,
                                      unsigned char Report[EmuXidInputReportSize])
 {

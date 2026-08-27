@@ -20,6 +20,13 @@ extern "C"
     // locks and calls into the host XInput DLL.
     void EmuXidRefreshInputReports(unsigned long PortCount);
 
+    // Rebuild the cached per-port reports from the injected state ONLY. Unlike
+    // EmuXidRefreshInputReports this never touches the host input backend, so it
+    // is safe from guest threads servicing MMIO inside the exception handler.
+    // No-op unless an injection variable is set: without injection the reports
+    // keep their host-backend/neutral state and this must not poll anything.
+    void EmuXidRefreshInjectedReports(unsigned long PortCount);
+
     // Copy the latest cached report for one root-hub port. Safe from any thread,
     // including guest threads servicing MMIO inside the exception handler: it only
     // takes a lightweight lock and copies bytes.
