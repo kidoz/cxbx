@@ -980,14 +980,33 @@ static ULONG EmuAciCachedRegister(ULONG Address, ULONG DefaultValue)
     return Value;
 }
 
+// Per-access NVNET MMIO trace, opt-in (CXBX_NVNET_MMIO_TRACE=1). Default off:
+// once the synthesized NIC ISR fires on its timer, every fire runs the title's
+// handler mask -> status-read -> unmask cycle forever, which is steady state
+// and flooded the run log with hundreds of lines per second.
+static bool EmuNvnetMmioTraceEnabled(void)
+{
+    static LONG s_Enabled = -1;
+    if(s_Enabled < 0)
+    {
+        char Value[8] = { 0 };
+        s_Enabled =
+            GetEnvironmentVariableA("CXBX_NVNET_MMIO_TRACE", Value, sizeof(Value)) != 0 ? 1 : 0;
+    }
+    return s_Enabled != 0;
+}
+
 static ULONG EmuNvnetReadRegister32(ULONG Address)
 {
     ULONG Value = 0;
     EmuLookupMmioRegister(Address, &Value);
 
-    printf("Emu (0x%lX): NVNET MMIO read 0x%.08lX = 0x%.08lX.\n",
-           GetCurrentThreadId(), Address, Value);
-    fflush(stdout);
+    if(EmuNvnetMmioTraceEnabled())
+    {
+        printf("Emu (0x%lX): NVNET MMIO read 0x%.08lX = 0x%.08lX.\n",
+               GetCurrentThreadId(), Address, Value);
+        fflush(stdout);
+    }
     return Value;
 }
 
@@ -997,9 +1016,12 @@ static void EmuNvnetWriteRegister32(ULONG Address, ULONG Value)
     EmuStoreMmioRegister(
         Address, cxbx::nvnet::RegisterValueAfterWrite(Offset, Value));
 
-    printf("Emu (0x%lX): NVNET MMIO write 0x%.08lX = 0x%.08lX.\n",
-           GetCurrentThreadId(), Address, Value);
-    fflush(stdout);
+    if(EmuNvnetMmioTraceEnabled())
+    {
+        printf("Emu (0x%lX): NVNET MMIO write 0x%.08lX = 0x%.08lX.\n",
+               GetCurrentThreadId(), Address, Value);
+        fflush(stdout);
+    }
 }
 
 static bool EmuAciIsBusMasterStatus(ULONG Offset)
