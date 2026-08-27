@@ -22,7 +22,9 @@ build:
 
 # Debug-trace build in its own directory: function-entry/patch traces,
 # EmuWarning bodies, and the szFuncName table entries. Setup is skipped when
-# the directory already exists, so this is safe to re-run.
+# the directory already exists, so this is safe to re-run. The cross file
+# pins the i686 clang toolchain: a bare setup picks a gcc that cannot compile
+# the 32-bit inline-asm sources.
 build-debug:
-    if (!(Test-Path build-debug)) { meson setup build-debug "-Dcpp_args=['-D_DEBUG_TRACE','-D_DEBUG_WARNINGS']" "-Dc_args=['-D_DEBUG_TRACE','-D_DEBUG_WARNINGS']" }
+    if (!(Test-Path build-debug)) { meson setup build-debug --cross-file cross/i686-windows-clang.ini "-Dcpp_args=['-D_DEBUG_TRACE','-D_DEBUG_WARNINGS']" "-Dc_args=['-D_DEBUG_TRACE','-D_DEBUG_WARNINGS']" }
     meson compile -C build-debug
