@@ -6823,6 +6823,10 @@ extern "C" volatile ULONG g_EmuPerfPusherRuns = 0;
 extern "C" volatile ULONG g_EmuPerfWords = 0;
 extern "C" volatile ULONG g_EmuPerfFaults = 0;
 extern "C" volatile ULONG g_EmuPerfPacedSatisfies = 0;
+extern "C" volatile ULONG g_EmuPerfQuads = 0;
+extern "C" volatile ULONG g_EmuPerfP8Spans = 0;
+extern "C" volatile ULONG g_EmuPerfTriangles = 0;
+extern "C" volatile ULONG g_EmuPerfFlatSpans = 0;
 
 static bool EmuNv2aPerfEnabled()
 {
@@ -6866,10 +6870,13 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
         static_cast<double>(g_EmuPerfWaitNs) / 1000000000.0;
     printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs wait=%.1fs "
            "wait_calls=%lu paced=%lu faults=%lu "
-           "pusher_runs=%lu pusher_words=%lu pixels=%lu\n",
+           "pusher_runs=%lu pusher_words=%lu pixels=%lu "
+           "quads=%lu p8spans=%lu flats=%lu tris=%lu\n",
            WallSeconds, RasterSeconds, PusherSeconds, WaitSeconds,
            g_EmuPerfWaitCalls, g_EmuPerfPacedSatisfies, g_EmuPerfFaults,
-           g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount);
+           g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount,
+           g_EmuPerfQuads, g_EmuPerfP8Spans, g_EmuPerfFlatSpans,
+           g_EmuPerfTriangles);
     fflush(stdout);
     s_WindowStart = Now.QuadPart;
     g_EmuPerfRasterNs = 0;
@@ -6881,6 +6888,10 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     g_EmuPerfWords = 0;
     g_EmuPerfFaults = 0;
     g_EmuNv2aShadedPixelCount = 0;
+    g_EmuPerfQuads = 0;
+    g_EmuPerfP8Spans = 0;
+    g_EmuPerfFlatSpans = 0;
+    g_EmuPerfTriangles = 0;
 }
 
 static void EmuNv2aClearSurface(ULONG Flags)
@@ -8183,6 +8194,211 @@ static void EmuNv2aShadeP8TilePixel(
     *Destination = cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
 }
 
+// Span-specialized P8 quad fill (CXBX title backgrounds and sprites). Same
+// pixel semantics as EmuNv2aShadeP8TilePixel, but the whole quad iterates in
+// one function so the address-mode branch, the fetch pipeline, and the blend
+// stay inlined and the row/pixel loop carries no per-pixel call overhead.
+// Restricted to LINEAR (unswizzled) sources with non-mirrored addressing;
+// anything else keeps the generic path. Span advancement replicates the
+// affine branch of EmuNv2aFillAxisAlignedQuad bit-for-bit (same builders, same
+// per-pixel += order), so rendered output is unchanged.
+static void EmuNv2aFillP8LinearQuadSpans(
+    const EmuNv2aRasterTarget* Target,
+    const EmuNv2aTextureCoordinateArrays* TexCoords,
+    ULONG I0, ULONG TopRight, ULONG BottomRight, ULONG BottomLeft,
+    const float* VZ,
+    float Left, float Right, float Top, float Bottom,
+    int MinX, int MaxX, int MinY, int MaxY)
+{
+    const EmuNv2aSampler* S = Target->Sampler[0];
+    const ULONG UMode = S->Address & 7u;
+    const ULONG VMode = (S->Address >> 8) & 7u;
+    const float InverseWidth = 1.0f / (Right - Left);
+    const float InverseHeight = 1.0f / (Bottom - Top);
+    const float FirstTx =
+        (static_cast<float>(MinX) + 0.5f - Left) * InverseWidth;
+
+    for(int Y = MinY; Y < MaxY; ++Y)
+    {
+        const float PixelY = static_cast<float>(Y) + 0.5f;
+        if(PixelY < Top || PixelY > Bottom)
+        {
+            continue;
+        }
+        const float Ty = (PixelY - Top) * InverseHeight;
+        cxbx::nv2a::AffineQuadSpan USpan = cxbx::nv2a::BuildAffineQuadSpan(
+            TexCoords->U[0][I0], TexCoords->U[0][TopRight],
+            TexCoords->U[0][BottomRight], TexCoords->U[0][BottomLeft],
+            Ty, FirstTx, InverseWidth);
+        cxbx::nv2a::AffineQuadSpan VSpan = cxbx::nv2a::BuildAffineQuadSpan(
+            TexCoords->V[0][I0], TexCoords->V[0][TopRight],
+            TexCoords->V[0][BottomRight], TexCoords->V[0][BottomLeft],
+            Ty, FirstTx, InverseWidth);
+        auto ZSpan = cxbx::nv2a::BuildAffineQuadSpan(
+            VZ[I0], VZ[TopRight], VZ[BottomRight], VZ[BottomLeft],
+            Ty, FirstTx, InverseWidth);
+
+        for(int X = MinX; X < MaxX; ++X)
+        {
+            const float PixelX = static_cast<float>(X) + 0.5f;
+            if(PixelX >= Left && PixelX <= Right)
+            {
+                float Z = ZSpan.value;
+                if(Z < 0.0f)
+                {
+                    Z = 0.0f;
+                }
+                if(Z > 16777215.0f)
+                {
+                    Z = 16777215.0f;
+                }
+                const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
+                const int DepthPitchElements = Target->DepthPitchB / 4;
+                ULONG* Depth = static_cast<ULONG*>(Target->Depth) +
+                               Y * DepthPitchElements + X;
+                const ULONG StoredDepth = *Depth;
+                if(SourceDepth >= (StoredDepth >> 8))
+                {
+                    *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
+
+                    float u = USpan.value;
+                    float v = VSpan.value;
+                    if(UMode == 1u)
+                    {
+                        int Whole = static_cast<int>(u);
+                        if(u < static_cast<float>(Whole))
+                        {
+                            --Whole;
+                        }
+                        u -= static_cast<float>(Whole);
+                    }
+                    if(VMode == 1u)
+                    {
+                        int Whole = static_cast<int>(v);
+                        if(v < static_cast<float>(Whole))
+                        {
+                            --Whole;
+                        }
+                        v -= static_cast<float>(Whole);
+                    }
+                    int IX = static_cast<int>(u * static_cast<float>(S->Width));
+                    int IY = static_cast<int>(v * static_cast<float>(S->Height));
+                    if(IX < 0)
+                    {
+                        IX = 0;
+                    }
+                    if(IX >= static_cast<int>(S->Width))
+                    {
+                        IX = static_cast<int>(S->Width) - 1;
+                    }
+                    if(IY < 0)
+                    {
+                        IY = 0;
+                    }
+                    if(IY >= static_cast<int>(S->Height))
+                    {
+                        IY = static_cast<int>(S->Height) - 1;
+                    }
+                    const ULONG Source =
+                        S->Palette[S->Source[IY * S->SourcePitch + IX]];
+                    ULONG* Destination =
+                        &Target->Color[Y * Target->PitchPx + X];
+                    *Destination =
+                        cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
+                }
+            }
+            USpan.value += USpan.step;
+            VSpan.value += VSpan.step;
+            ZSpan.value += ZSpan.step;
+        }
+    }
+}
+
+// Span-specialized untextured fill (fade backdrops, tint quads). One constant
+// diffuse color, SRC_ALPHA/ONE_MINUS blending, 24-bit depth: the whole pixel
+// pipeline reduces to depth-test + constant write, so the per-pixel cost is a
+// fraction of the generic combiner path. Same depth semantics as the generic
+// pixel (LE against the stored high 24 bits, stencil off, depth write on).
+static void EmuNv2aFillFlatBlendQuadSpans(
+    const EmuNv2aRasterTarget* Target,
+    ULONG I0, ULONG TopRight, ULONG BottomRight, ULONG BottomLeft,
+    const float* VZ,
+    float Left, float Right, float Top, float Bottom,
+    int MinX, int MaxX, int MinY, int MaxY, ULONG Color)
+{
+    const float InverseWidth = 1.0f / (Right - Left);
+    const float InverseHeight = 1.0f / (Bottom - Top);
+    const float FirstTx =
+        (static_cast<float>(MinX) + 0.5f - Left) * InverseWidth;
+    const ULONG Alpha = (Color >> 24) & 0xFFu;
+    const ULONG InverseAlpha = 255u - Alpha;
+
+    for(int Y = MinY; Y < MaxY; ++Y)
+    {
+        const float PixelY = static_cast<float>(Y) + 0.5f;
+        if(PixelY < Top || PixelY > Bottom)
+        {
+            continue;
+        }
+        const float Ty = (PixelY - Top) * InverseHeight;
+        auto ZSpan = cxbx::nv2a::BuildAffineQuadSpan(
+            VZ[I0], VZ[TopRight], VZ[BottomRight], VZ[BottomLeft],
+            Ty, FirstTx, InverseWidth);
+
+        for(int X = MinX; X < MaxX; ++X)
+        {
+            const float PixelX = static_cast<float>(X) + 0.5f;
+            if(PixelX >= Left && PixelX <= Right)
+            {
+                float Z = ZSpan.value;
+                if(Z < 0.0f)
+                {
+                    Z = 0.0f;
+                }
+                if(Z > 16777215.0f)
+                {
+                    Z = 16777215.0f;
+                }
+                const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
+                const int DepthPitchElements = Target->DepthPitchB / 4;
+                ULONG* Depth = static_cast<ULONG*>(Target->Depth) +
+                               Y * DepthPitchElements + X;
+                const ULONG StoredDepth = *Depth;
+                if(SourceDepth >= (StoredDepth >> 8))
+                {
+                    *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
+
+                    ULONG* Destination =
+                        &Target->Color[Y * Target->PitchPx + X];
+                    if(Alpha == 0)
+                    {
+                        // Fully transparent: the blend keeps the destination.
+                    }
+                    else if(Alpha == 255)
+                    {
+                        *Destination = Color;
+                    }
+                    else
+                    {
+                        ULONG Out = 0;
+                        for(int Shift = 0; Shift < 32; Shift += 8)
+                        {
+                            const ULONG S1 = (Color >> Shift) & 0xFFu;
+                            const ULONG D1 = (*Destination >> Shift) & 0xFFu;
+                            Out |= (((S1 * Alpha + D1 * InverseAlpha + 127u) /
+                                     255u) &
+                                    0xFFu)
+                                   << Shift;
+                        }
+                        *Destination = Out;
+                    }
+                }
+            }
+            ZSpan.value += ZSpan.step;
+        }
+    }
+}
+
 // Gouraud-fill one screen-space triangle (vertices i0,i1,i2 in the transformed
 // arrays) into a 32bpp surface with the edge-function (half-plane) test.
 // Barycentric weights (normalized by the signed area, so winding is handled
@@ -8447,6 +8663,28 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
     const bool UniformColor = VC[I0] == VC[TopRight] &&
                               VC[I0] == VC[BottomLeft] &&
                               VC[I0] == VC[BottomRight];
+
+    // Span-specialized untextured fill: constant diffuse, plain SRC_ALPHA
+    // blending, 24-bit depth. Fades and tint quads otherwise pay the full
+    // per-pixel combiner path for a constant color.
+    if(Target->Sampler[0] == nullptr && Target->Sampler[1] == nullptr &&
+       Target->Sampler[2] == nullptr && Target->Sampler[3] == nullptr &&
+       Target->CombinerMode == EmuNv2aCombinerDiffuse &&
+       !Target->FinalCombiner && !Target->AlphaTest &&
+       Target->BlendEnable && Target->BlendSFactor == 0x0302 &&
+       Target->BlendDFactor == 0x0303 &&
+       Target->BlendEquation == 0x8006 && Target->Depth != nullptr &&
+       Target->DepthFormat == 2 && Target->DepthTest &&
+       Target->DepthWrite && Target->DepthFunc == 0x0206 &&
+       !Target->StencilTest && UniformColor)
+    {
+        InterlockedIncrement(&g_EmuPerfFlatSpans);
+        EmuNv2aFillFlatBlendQuadSpans(
+            Target, I0, TopRight, BottomRight, BottomLeft, VZ,
+            Left, Right, Top, Bottom, MinX, MaxX, MinY, MaxY, VC[I0]);
+        return true;
+    }
+
     bool Affine = true;
     for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
     {
@@ -8462,8 +8700,24 @@ static bool EmuNv2aFillAxisAlignedQuad(const EmuNv2aRasterTarget* Target,
         }
     }
     const bool P8TileFastPath = EmuNv2aCanUseP8TileFastPath(Target);
+    // Span-specialized variant: same fast-path state plus a linear (unswizzled)
+    // source and non-mirrored addressing, which the dedicated loop handles.
+    const EmuNv2aSampler* P8FastSampler = Target->Sampler[0];
+    const bool P8LinearSpanPath =
+        P8TileFastPath && P8FastSampler != nullptr &&
+        !P8FastSampler->Swizzled &&
+        (P8FastSampler->Address & 7u) != 2u &&
+        ((P8FastSampler->Address >> 8) & 7u) != 2u;
     if(Affine)
     {
+        if(P8LinearSpanPath)
+        {
+            InterlockedIncrement(&g_EmuPerfP8Spans);
+            EmuNv2aFillP8LinearQuadSpans(
+                Target, TexCoords, I0, TopRight, BottomRight, BottomLeft,
+                VZ, Left, Right, Top, Bottom, MinX, MaxX, MinY, MaxY);
+            return true;
+        }
         const float InverseWidth = 1.0f / (Right - Left);
         const float InverseHeight = 1.0f / (Bottom - Top);
         const float FirstTx =
@@ -9430,6 +9684,7 @@ static void EmuNv2aRasterizeDrawArrays(
             case 8: // QUADS
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
+                    InterlockedIncrement(&g_EmuPerfQuads);
                     if(!EmuNv2aFillAxisAlignedQuad(
                            &Target, VX, VY, VZ, VW, &TextureCoordinates, VC, i))
                     {
