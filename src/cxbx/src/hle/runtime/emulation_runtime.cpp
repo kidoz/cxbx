@@ -4826,7 +4826,28 @@ static ULONG EmuNv2aLog2(ULONG Value)
 // (0=A8R8G8B8/X8R8G8B8, 1=R5G6B5, 2=A1R5G5B5, 3=A4R4G4B4, 4=Y8,
 // 5=P8 palette index), and whether it
 // is swizzled (Morton) or linear. Returns false for unsupported codes.
-static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG* Bpp, ULONG* Kind, bool* Swizzled)
+//
+// Opt-in linear override (CXBX_NV2A_TEXTURE_LINEAR=1): on hardware, a guest
+// CPU upload into a PFB-tiled VRAM window is swizzled by the memory
+// controller, so an SZ-format binding holds Morton data. This emulator does
+// not model PFB tiling, so a title whose uploads go straight from guest CPU
+// stores into emulated VRAM keeps linear data while its bindings still claim
+// SZ formats -- deswizzling scrambles the image into coherent 16x16 tiles at
+// permuted positions. Titles in that state opt in per-profile.
+static bool EmuNv2aTextureLinearOverride(void)
+{
+    static LONG s_Enabled = -1;
+    if(s_Enabled < 0)
+    {
+        char Value[8] = { 0 };
+        s_Enabled =
+            GetEnvironmentVariableA("CXBX_NV2A_TEXTURE_LINEAR", Value, sizeof(Value)) != 0 ? 1 : 0;
+    }
+    return s_Enabled != 0;
+}
+
+static bool EmuNv2aTextureFormatCodeInfo(
+    ULONG Color, ULONG* Bpp, ULONG* Kind, bool* Swizzled)
 {
     switch(Color)
     {
@@ -4912,6 +4933,22 @@ static bool EmuNv2aTextureFormatInfo(ULONG Color, ULONG* Bpp, ULONG* Kind, bool*
             return true; // LU_A8B8G8R8 approx
         default: return false;
     }
+}
+
+// Apply the per-title linear override on top of the format-code layout so the
+// sampler and the source dump stay in agreement about the data in memory.
+static bool EmuNv2aTextureFormatInfo(
+    ULONG Color, ULONG* Bpp, ULONG* Kind, bool* Swizzled)
+{
+    if(!EmuNv2aTextureFormatCodeInfo(Color, Bpp, Kind, Swizzled))
+    {
+        return false;
+    }
+    if(EmuNv2aTextureLinearOverride())
+    {
+        *Swizzled = false;
+    }
+    return true;
 }
 
 // Unpack one raw texel (per the format Kind) to 0xAARRGGBB. Alpha is opaque
@@ -5604,9 +5641,11 @@ static void EmuNv2aDumpSourceTexture(ULONG Stage)
             fclose(sf);
         }
 
-        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s format=0x%.08lX dma=0x%.08lX base=0x%.08lX offset=0x%.08lX address=0x%.08lX palette=0x%.08lX first=0x%.08lX firstraw=0x%.08lX alpha0=%lu alphaFF=%lu alphaMid=%lu distinct>=2:%s -> %s\n",
+        printf("Emu (0x%lX): KELVIN texture[%lu] dumped %lux%lu color=0x%.02lX %s src=%s format=0x%.08lX control1=0x%.08lX imageRect=0x%.08lX dma=0x%.08lX base=0x%.08lX offset=0x%.08lX address=0x%.08lX palette=0x%.08lX first=0x%.08lX firstraw=0x%.08lX alpha0=%lu alphaFF=%lu alphaMid=%lu distinct>=2:%s -> %s\n",
                GetCurrentThreadId(), Stage, Width, Height, Color,
                Swizzled ? "swizzled" : "linear", SourceKind, Format,
+               static_cast<ULONG>(Texture.control1),
+               static_cast<ULONG>(Texture.imageRect),
                TextureDmaHandle, Base, static_cast<ULONG>(Texture.offset),
                TextureAddress, static_cast<ULONG>(Texture.palette), FirstColor,
                FirstRaw, AlphaZero, AlphaFull, AlphaMid,

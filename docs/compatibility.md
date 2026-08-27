@@ -19,7 +19,7 @@ playable from beginning to end.
 | Metal Slug 3 | Black screen | Remains running for the full test without visible game output. |
 | Mortal Kombat: Deception Kollector's Edition | Crashes | Exits before the first frame can be captured. |
 | Need For Speed: Underground | Crashes | Becomes unresponsive, shows a black screen, and then exits. |
-| Samurai Showdown V | Crashes | Exits during startup without creating a capturable game window. |
+| Samurai Showdown V | Reaches frontend | Re-verified 2026-08-27 with the per-title bring-up profile: boots, completes network init, renders the intro logos and the interactive PUSH START title screen, and remains running (see the update note below). |
 | Soul Calibur 2 | Black screen | Remains running for the full test without visible game output. |
 | Turok - Evolution | Reaches frontend | Completes the intro sequence, reaches the interactive save prompt, and remains running for the full test. |
 | WhiteOut | Blank output | Remains running after showing a solid-blue frame and then a black screen. |
