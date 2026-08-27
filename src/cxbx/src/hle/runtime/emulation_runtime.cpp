@@ -6827,6 +6827,7 @@ extern "C" volatile ULONG g_EmuPerfQuads = 0;
 extern "C" volatile ULONG g_EmuPerfP8Spans = 0;
 extern "C" volatile ULONG g_EmuPerfTriangles = 0;
 extern "C" volatile ULONG g_EmuPerfFlatSpans = 0;
+extern "C" volatile ULONG g_EmuPerfSpanPixels = 0;
 
 static bool EmuNv2aPerfEnabled()
 {
@@ -6875,7 +6876,7 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
            WallSeconds, RasterSeconds, PusherSeconds, WaitSeconds,
            g_EmuPerfWaitCalls, g_EmuPerfPacedSatisfies, g_EmuPerfFaults,
            g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount,
-           g_EmuPerfQuads, g_EmuPerfP8Spans, g_EmuPerfFlatSpans,
+           g_EmuPerfSpanPixels, g_EmuPerfQuads, g_EmuPerfP8Spans, g_EmuPerfFlatSpans,
            g_EmuPerfTriangles);
     fflush(stdout);
     s_WindowStart = Now.QuadPart;
@@ -6888,6 +6889,7 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     g_EmuPerfWords = 0;
     g_EmuPerfFaults = 0;
     g_EmuNv2aShadedPixelCount = 0;
+    g_EmuPerfSpanPixels = 0;
     g_EmuPerfQuads = 0;
     g_EmuPerfP8Spans = 0;
     g_EmuPerfFlatSpans = 0;
@@ -8217,6 +8219,7 @@ static void EmuNv2aFillP8LinearQuadSpans(
     const float InverseHeight = 1.0f / (Bottom - Top);
     const float FirstTx =
         (static_cast<float>(MinX) + 0.5f - Left) * InverseWidth;
+    const int DepthPitchElements = Target->DepthPitchB / 4;
 
     for(int Y = MinY; Y < MaxY; ++Y)
     {
@@ -8237,6 +8240,9 @@ static void EmuNv2aFillP8LinearQuadSpans(
         auto ZSpan = cxbx::nv2a::BuildAffineQuadSpan(
             VZ[I0], VZ[TopRight], VZ[BottomRight], VZ[BottomLeft],
             Ty, FirstTx, InverseWidth);
+        ULONG* DepthRow =
+            static_cast<ULONG*>(Target->Depth) + Y * DepthPitchElements;
+        ULONG* ColorRow = Target->Color + Y * Target->PitchPx;
 
         for(int X = MinX; X < MaxX; ++X)
         {
@@ -8253,9 +8259,7 @@ static void EmuNv2aFillP8LinearQuadSpans(
                     Z = 16777215.0f;
                 }
                 const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
-                const int DepthPitchElements = Target->DepthPitchB / 4;
-                ULONG* Depth = static_cast<ULONG*>(Target->Depth) +
-                               Y * DepthPitchElements + X;
+                ULONG* Depth = DepthRow + X;
                 const ULONG StoredDepth = *Depth;
                 if(SourceDepth >= (StoredDepth >> 8))
                 {
@@ -8301,8 +8305,8 @@ static void EmuNv2aFillP8LinearQuadSpans(
                     }
                     const ULONG Source =
                         S->Palette[S->Source[IY * S->SourcePitch + IX]];
-                    ULONG* Destination =
-                        &Target->Color[Y * Target->PitchPx + X];
+                    g_EmuPerfSpanPixels++;
+                    ULONG* Destination = ColorRow + X;
                     *Destination =
                         cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
                 }
@@ -8344,6 +8348,9 @@ static void EmuNv2aFillFlatBlendQuadSpans(
         auto ZSpan = cxbx::nv2a::BuildAffineQuadSpan(
             VZ[I0], VZ[TopRight], VZ[BottomRight], VZ[BottomLeft],
             Ty, FirstTx, InverseWidth);
+        ULONG* DepthRow =
+            static_cast<ULONG*>(Target->Depth) + Y * (Target->DepthPitchB / 4);
+        ULONG* ColorRow = Target->Color + Y * Target->PitchPx;
 
         for(int X = MinX; X < MaxX; ++X)
         {
@@ -8360,16 +8367,13 @@ static void EmuNv2aFillFlatBlendQuadSpans(
                     Z = 16777215.0f;
                 }
                 const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
-                const int DepthPitchElements = Target->DepthPitchB / 4;
-                ULONG* Depth = static_cast<ULONG*>(Target->Depth) +
-                               Y * DepthPitchElements + X;
+                ULONG* Depth = DepthRow + X;
                 const ULONG StoredDepth = *Depth;
                 if(SourceDepth >= (StoredDepth >> 8))
                 {
                     *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
 
-                    ULONG* Destination =
-                        &Target->Color[Y * Target->PitchPx + X];
+                    ULONG* Destination = ColorRow + X;
                     if(Alpha == 0)
                     {
                         // Fully transparent: the blend keeps the destination.
@@ -8508,6 +8512,40 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget* T,
     double lbRow = ((double)(ax - cx) * (py0 - cy) - (double)(ay - cy) * (px0 - cx)) * InvArea;
     double lcRow = ((double)(bx - ax) * (py0 - ay) - (double)(by - ay) * (px0 - ax)) * InvArea;
 
+    // Per-triangle texture-vertex constants. The generic loop re-read these
+    // array elements for every pixel; bound stages are compacted once so the
+    // per-pixel loop only touches registers. Values and operation order are
+    // unchanged, so rendered output is identical.
+    ULONG BoundStage[EmuNv2aTextureStageCount] = {};
+    float StageU0[EmuNv2aTextureStageCount] = {};
+    float StageU1[EmuNv2aTextureStageCount] = {};
+    float StageU2[EmuNv2aTextureStageCount] = {};
+    float StageV0[EmuNv2aTextureStageCount] = {};
+    float StageV1[EmuNv2aTextureStageCount] = {};
+    float StageV2[EmuNv2aTextureStageCount] = {};
+    float StageIW0[EmuNv2aTextureStageCount] = {};
+    float StageIW1[EmuNv2aTextureStageCount] = {};
+    float StageIW2[EmuNv2aTextureStageCount] = {};
+    ULONG BoundStageCount = 0;
+    for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+    {
+        if(T->Sampler[Stage] == nullptr)
+        {
+            continue;
+        }
+        BoundStage[BoundStageCount] = Stage;
+        StageU0[BoundStageCount] = TexCoords->U[Stage][i0];
+        StageU1[BoundStageCount] = TexCoords->U[Stage][i1];
+        StageU2[BoundStageCount] = TexCoords->U[Stage][i2];
+        StageV0[BoundStageCount] = TexCoords->V[Stage][i0];
+        StageV1[BoundStageCount] = TexCoords->V[Stage][i1];
+        StageV2[BoundStageCount] = TexCoords->V[Stage][i2];
+        StageIW0[BoundStageCount] = TexCoords->InverseW[Stage][i0];
+        StageIW1[BoundStageCount] = TexCoords->InverseW[Stage][i1];
+        StageIW2[BoundStageCount] = TexCoords->InverseW[Stage][i2];
+        BoundStageCount++;
+    }
+
     for(int Y = MinY; Y < MaxY; Y++)
     {
         float la = (float)laRow;
@@ -8539,27 +8577,22 @@ static void EmuNv2aFillTriangle(const EmuNv2aRasterTarget* T,
 
                 float U[EmuNv2aTextureStageCount] = {};
                 float V[EmuNv2aTextureStageCount] = {};
-                for(ULONG Stage = 0; Stage < EmuNv2aTextureStageCount; ++Stage)
+                for(ULONG Bound = 0; Bound < BoundStageCount; ++Bound)
                 {
-                    if(T->Sampler[Stage] == nullptr)
-                    {
-                        continue;
-                    }
-                    const float aiw = TexCoords->InverseW[Stage][i0];
-                    const float biw = TexCoords->InverseW[Stage][i1];
-                    const float ciw = TexCoords->InverseW[Stage][i2];
+                    const ULONG Stage = BoundStage[Bound];
                     // Perspective-correct texcoords: interpolate u/w, v/w and 1/w.
-                    float iw = la * aiw + lb * biw + lc * ciw;
+                    float iw = la * StageIW0[Bound] + lb * StageIW1[Bound] +
+                               lc * StageIW2[Bound];
                     float inv = (iw > 1e-9f || iw < -1e-9f) ? (1.0f / iw) : 0.0f;
                     U[Stage] =
-                        (la * TexCoords->U[Stage][i0] * aiw +
-                         lb * TexCoords->U[Stage][i1] * biw +
-                         lc * TexCoords->U[Stage][i2] * ciw) *
+                        (la * StageU0[Bound] * StageIW0[Bound] +
+                         lb * StageU1[Bound] * StageIW1[Bound] +
+                         lc * StageU2[Bound] * StageIW2[Bound]) *
                         inv;
                     V[Stage] =
-                        (la * TexCoords->V[Stage][i0] * aiw +
-                         lb * TexCoords->V[Stage][i1] * biw +
-                         lc * TexCoords->V[Stage][i2] * ciw) *
+                        (la * StageV0[Bound] * StageIW0[Bound] +
+                         lb * StageV1[Bound] * StageIW1[Bound] +
+                         lc * StageV2[Bound] * StageIW2[Bound]) *
                         inv;
                 }
                 const float z = la * az + lb * bz + lc * cz;
@@ -9684,6 +9717,35 @@ static void EmuNv2aRasterizeDrawArrays(
             case 8: // QUADS
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
+                    // Cheap per-quad reject: a quad whose screen AABB lies
+                    // fully outside the clip rect can produce no pixels, and
+                    // the quad path (or its triangle fallback) would skip it
+                    // anyway after a much longer preamble. Background draws
+                    // stream thousands of such quads per frame.
+                    float QuadMinX = VX[i], QuadMaxX = VX[i];
+                    float QuadMinY = VY[i], QuadMaxY = VY[i];
+                    for(ULONG Corner = 1; Corner < 4; ++Corner)
+                    {
+                        QuadMinX = VX[i + Corner] < QuadMinX
+                                       ? VX[i + Corner]
+                                       : QuadMinX;
+                        QuadMaxX = VX[i + Corner] > QuadMaxX
+                                       ? VX[i + Corner]
+                                       : QuadMaxX;
+                        QuadMinY = VY[i + Corner] < QuadMinY
+                                       ? VY[i + Corner]
+                                       : QuadMinY;
+                        QuadMaxY = VY[i + Corner] > QuadMaxY
+                                       ? VY[i + Corner]
+                                       : QuadMaxY;
+                    }
+                    if(QuadMaxX < static_cast<float>(Target.ClipMinX) ||
+                       QuadMaxY < static_cast<float>(Target.ClipMinY) ||
+                       QuadMinX >= static_cast<float>(Target.ClipMaxX) ||
+                       QuadMinY >= static_cast<float>(Target.ClipMaxY))
+                    {
+                        continue;
+                    }
                     InterlockedIncrement(&g_EmuPerfQuads);
                     if(!EmuNv2aFillAxisAlignedQuad(
                            &Target, VX, VY, VZ, VW, &TextureCoordinates, VC, i))
