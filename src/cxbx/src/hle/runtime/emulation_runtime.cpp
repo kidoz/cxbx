@@ -6870,6 +6870,10 @@ extern "C" volatile ULONG g_EmuPerfScalarPx = 0;
 extern "C" volatile ULONG g_EmuPerfVertices = 0;
 extern "C" volatile ULONG g_EmuPerfQuadWRejects = 0;
 extern "C" volatile ULONG g_EmuPerfBigDrawLogs = 0;
+extern "C" volatile LONGLONG g_EmuPerfFetchNs = 0;
+extern "C" volatile LONGLONG g_EmuPerfStepNs = 0;
+extern "C" volatile LONGLONG g_EmuPerfMethodNs = 0;
+extern "C" volatile LONGLONG g_EmuPerfPresentNs = 0;
 
 static bool EmuNv2aPerfEnabled()
 {
@@ -6914,13 +6918,17 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs wait=%.1fs "
            "wait_calls=%lu paced=%lu faults=%lu "
            "pusher_runs=%lu pusher_words=%lu pixels=%lu spanpx=%lu "
-           "quads=%lu p8spans=%lu flats=%lu tris=%lu verts=%lu wrej=%lu blockpx=%lu\n",
+           "quads=%lu p8spans=%lu flats=%lu tris=%lu verts=%lu wrej=%lu blockpx=%lu fetch=%.2fs step=%.2fs method=%.2fs present=%.2fs\n",
            WallSeconds, RasterSeconds, PusherSeconds, WaitSeconds,
            g_EmuPerfWaitCalls, g_EmuPerfPacedSatisfies, g_EmuPerfFaults,
            g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount,
            g_EmuPerfSpanPixels, g_EmuPerfQuads, g_EmuPerfP8Spans, g_EmuPerfFlatSpans,
            g_EmuPerfTriangles, g_EmuPerfVertices, g_EmuPerfQuadWRejects,
-           g_EmuPerfBlockPx);
+           g_EmuPerfBlockPx,
+           static_cast<double>(g_EmuPerfFetchNs) / 1000000000.0,
+           static_cast<double>(g_EmuPerfStepNs) / 1000000000.0,
+           static_cast<double>(g_EmuPerfMethodNs) / 1000000000.0,
+           static_cast<double>(g_EmuPerfPresentNs) / 1000000000.0);
     fflush(stdout);
     s_WindowStart = Now.QuadPart;
     g_EmuPerfRasterNs = 0;
@@ -6934,6 +6942,10 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     g_EmuNv2aShadedPixelCount = 0;
     g_EmuPerfSpanPixels = 0;
     g_EmuPerfBlockPx = 0;
+    g_EmuPerfFetchNs = 0;
+    g_EmuPerfStepNs = 0;
+    g_EmuPerfMethodNs = 0;
+    g_EmuPerfPresentNs = 0;
     g_EmuPerfQuads = 0;
     g_EmuPerfP8Spans = 0;
     g_EmuPerfFlatSpans = 0;
@@ -10844,6 +10856,12 @@ static void EmuNv2aRunPusher()
         InterlockedIncrement(&g_EmuPerfWords);
         ULONG Word = 0;
         const ULONG FetchAddress = static_cast<ULONG>(PusherState.get);
+        LARGE_INTEGER WordStart = {}, WordMid = {};
+        const bool PerfWord = EmuNv2aPerfEnabled();
+        if(PerfWord)
+        {
+            QueryPerformanceCounter(&WordStart);
+        }
 
         bool Fetched = false;
         if(RunHostBase != nullptr &&
@@ -10878,6 +10896,18 @@ static void EmuNv2aRunPusher()
         const cxbx::nv2a::PfifoPusherStep Step =
             cxbx::nv2a::StepPfifoPusher(
                 PusherState, static_cast<std::uint32_t>(Word));
+        if(PerfWord)
+        {
+            LARGE_INTEGER F, WFetch, WStep;
+            QueryPerformanceCounter(&WFetch);
+            QueryPerformanceFrequency(&F);
+            InterlockedExchangeAdd64(&g_EmuPerfFetchNs,
+                static_cast<LONG>((WFetch.QuadPart - WordStart.QuadPart) * 1000000000 / F.QuadPart));
+            QueryPerformanceCounter(&WStep);
+            InterlockedExchangeAdd64(&g_EmuPerfStepNs,
+                static_cast<LONG>((WStep.QuadPart - WFetch.QuadPart) * 1000000000 / F.QuadPart));
+            WordMid = WStep;
+        }
         if(Step.kind == cxbx::nv2a::PfifoPusherStepKind::Method)
         {
             if(Capture != nullptr)
@@ -10903,6 +10933,14 @@ static void EmuNv2aRunPusher()
                     static_cast<ULONG>(Step.subchannel),
                     static_cast<ULONG>(Step.method),
                     static_cast<ULONG>(Step.data));
+            }
+            if(PerfWord)
+            {
+                LARGE_INTEGER F, W3;
+                QueryPerformanceCounter(&W3);
+                QueryPerformanceFrequency(&F);
+                InterlockedExchangeAdd64(&g_EmuPerfMethodNs,
+                    static_cast<LONG>((W3.QuadPart - WordMid.QuadPart) * 1000000000 / F.QuadPart));
             }
             EmuNv2aStoreRegister(
                 NV_PFIFO_CACHE1_DMA_STATE,
