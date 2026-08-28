@@ -9295,6 +9295,165 @@ static EmuNv2aQuadChunk g_EmuQuadChunk[1 + EmuNv2aQuadWorkerCount] = {};
 static volatile LONG g_EmuQuadPoolReady = 0;
 static bool g_EmuQuadPoolShutdown = false;
 
+// Vertex-transform work: per-vertex independent, so a draw's [Begin, End)
+// range splits contiguously across the pool with unchanged output. Each chunk
+// carries its own attribute staging scratch: the fetch path stages attribute
+// bytes through it per vertex, and a shared scratch would cross-contaminate
+// parallel workers.
+struct EmuNv2aTransformChunk
+{
+    EmuNv2aVertexAttributeMemoryContext AttributeMemory;
+    EmuNv2aVertexAttributeScratchRow
+        AttributeScratch[cxbx::nv2a::PgraphVertexAttributeCount] = {};
+    const cxbx::nv2a::PgraphVertexFetchPlan* VertexFetchPlan;
+    const cxbx::nv2a::PgraphTransformState* TransformState;
+    const EmuNv2aTextureModes* TextureMode;
+    const char* DrawKind;
+    const std::uint32_t* Indices;
+    ULONG Start;
+    ULONG Begin;
+    ULONG End;
+    bool VpActive;
+    bool Inline;
+    bool AnySamplerReady;
+};
+
+enum EmuNv2aPoolWorkKind
+{
+    EmuNv2aPoolWorkQuads,
+    EmuNv2aPoolWorkTransform,
+};
+
+static volatile LONG g_EmuPoolWorkKind = EmuNv2aPoolWorkQuads;
+static EmuNv2aTransformChunk g_EmuTransformChunk[1 + EmuNv2aQuadWorkerCount] = {};
+
+// Shared per-draw transformed-vertex output storage (per-index writes; draws
+// are serialized on the pusher thread). Formerly a function-local static.
+static EmuNv2aRasterVertexStorage RasterVertices{};
+static int VertexTraceEnabled = -1;
+static int ImmediateVertexTraceEnabled = -1;
+
+// Transform one contiguous vertex range: the body of the former serial
+// transform loop, unchanged. Per-vertex independent, so ranges parallelize
+// with unchanged output.
+static void EmuNv2aTransformVertexRange(const EmuNv2aTransformChunk* Ctx)
+{
+    const EmuNv2aVertexAttributeMemoryContext& AttributeMemory =
+        Ctx->AttributeMemory;
+    const cxbx::nv2a::PgraphVertexFetchPlan& VertexFetchPlan =
+        *Ctx->VertexFetchPlan;
+    const cxbx::nv2a::PgraphTransformState& TransformState =
+        *Ctx->TransformState;
+    const EmuNv2aTextureModes& TextureMode = *Ctx->TextureMode;
+
+    for(ULONG i = Ctx->Begin; i < Ctx->End; i++)
+    {
+        InterlockedIncrement(&g_EmuPerfVertices);
+        ULONG Index = Ctx->Indices == nullptr ? Ctx->Start + i : Ctx->Indices[i];
+        EmuNv2aRasterVertex Vertex{};
+        cxbx::nv2a::PgraphVertexComponents RawPosition{};
+
+        if(Ctx->VpActive)
+        {
+            // Gather all bound attribute arrays into the 16 vertex-program input
+            // registers (x,y,z default 0, w default 1), then transform on the CPU.
+            const auto VertexProgramAttributes =
+                EmuNv2aCollectVertexProgramAttributes(
+                    AttributeMemory, VertexFetchPlan,
+                    static_cast<std::uint32_t>(Index));
+            const auto VertexProgram =
+                EmuNv2aExecuteVertexProgram(
+                    VertexProgramAttributes, TransformState,
+                    Ctx->AnySamplerReady);
+            if(Ctx->Inline && ImmediateVertexTraceEnabled == 1)
+            {
+                printf("NVVERT| frame=%lu kind=%s vertex=%lu "
+                       "v0=(%g,%g,%g,%g) v3=(%g,%g,%g,%g) "
+                       "v9=(%g,%g,%g,%g) opos=(%g,%g,%g,%g) "
+                       "od0=(%g,%g,%g,%g) ot0=(%g,%g,%g,%g)\n",
+                       g_EmuNv2aDebugFrame, Ctx->DrawKind, i,
+                       VertexProgram.Input[0],
+                       VertexProgram.Input[1],
+                       VertexProgram.Input[2],
+                       VertexProgram.Input[3],
+                       VertexProgram.Input[12],
+                       VertexProgram.Input[13],
+                       VertexProgram.Input[14],
+                       VertexProgram.Input[15],
+                       VertexProgram.Input[36],
+                       VertexProgram.Input[37],
+                       VertexProgram.Input[38],
+                       VertexProgram.Input[39],
+                       VertexProgram.Position[0],
+                       VertexProgram.Position[1],
+                       VertexProgram.Position[2],
+                       VertexProgram.Position[3],
+                       VertexProgram.Colors[0],
+                       VertexProgram.Colors[1],
+                       VertexProgram.Colors[2],
+                       VertexProgram.Colors[3],
+                       VertexProgram.TextureCoordinates[0],
+                       VertexProgram.TextureCoordinates[1],
+                       VertexProgram.TextureCoordinates[2],
+                       VertexProgram.TextureCoordinates[3]);
+                fflush(stdout);
+            }
+            Vertex =
+                EmuNv2aBuildVertexProgramRasterVertex(
+                    VertexProgram);
+        }
+        else
+        {
+            const auto FixedAttributes =
+                EmuNv2aCollectFixedFunctionAttributes(
+                    AttributeMemory, VertexFetchPlan,
+                    static_cast<std::uint32_t>(Index));
+            if(!FixedAttributes.PositionValid)
+            {
+                continue;
+            }
+
+            const cxbx::nv2a::PgraphFixedFunctionVertexInput
+                FixedInput =
+                    cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
+                        FixedAttributes.Values, VertexFetchPlan,
+                        FixedAttributes.SuppliedAttributeMask);
+            RawPosition = FixedInput.position;
+            Vertex =
+                EmuNv2aBuildFixedFunctionRasterVertex(
+                    FixedInput, TransformState);
+        }
+
+        const EmuNv2aRasterTextureProjection TextureProjection =
+            EmuNv2aProjectRasterVertexTextures(
+                Vertex, TextureMode);
+        EmuNv2aCommitRasterVertex(
+            RasterVertices, static_cast<std::size_t>(i),
+            Vertex, TextureProjection);
+        if(!Ctx->VpActive)
+        {
+            if(VertexTraceEnabled == 1 && i < 4)
+            {
+                const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
+                                            ? g_EmuNv2aDebugDrawIndex - 1
+                                            : 0;
+                printf("NVVERT| frame=%lu draw=%lu kind=%s vertex=%lu index=%lu "
+                       "in=(%g,%g,%g,%g) hom=(%g,%g,%g,%g) "
+                       "screen=(%g,%g,%g)\n",
+                       g_EmuNv2aDebugFrame, DrawIndex, Ctx->DrawKind, i, Index,
+                       RawPosition[0], RawPosition[1], RawPosition[2], RawPosition[3],
+                       Vertex.HomogeneousPosition[0],
+                       Vertex.HomogeneousPosition[1],
+                       Vertex.HomogeneousPosition[2],
+                       Vertex.HomogeneousPosition[3],
+                       RasterVertices.X[i], RasterVertices.Y[i],
+                       RasterVertices.Z[i]);
+                fflush(stdout);
+            }
+        }
+    }
+}
+
 // Fill one quad (with the off-screen pre-filter and the triangle fallback) --
 // the single primitive body shared by the serial path and the chunk workers.
 static void EmuNv2aRasterizeOneQuad(
@@ -9350,7 +9509,14 @@ static DWORD WINAPI EmuQuadWorkerThread(LPVOID Param)
         {
             break;
         }
-        EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[Slot + 1]);
+        if(g_EmuPoolWorkKind == EmuNv2aPoolWorkTransform)
+        {
+            EmuNv2aTransformVertexRange(&g_EmuTransformChunk[Slot]);
+        }
+        else
+        {
+            EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[Slot + 1]);
+        }
         ReleaseSemaphore(g_EmuQuadWorkDone[Slot], 1, NULL);
     }
     return 0;
@@ -9633,7 +9799,8 @@ static void EmuNv2aRasterizeDrawArrays(
         }
     }
 
-    static EmuNv2aRasterVertexStorage RasterVertices{};
+    // RasterVertices lives at file scope: the parallel transform workers and
+    // this function must commit into and read from the same storage.
     float* const VX = RasterVertices.X.data();
     float* const VY = RasterVertices.Y.data();
     float* const VZ = RasterVertices.Z.data();
@@ -9649,7 +9816,14 @@ static void EmuNv2aRasterizeDrawArrays(
             EmuNv2aRasterVertexCapacity);
     }
 
-    static int VertexTraceEnabled = -1;
+    if(ImmediateVertexTraceEnabled < 0)
+    {
+        char Value[8];
+        ImmediateVertexTraceEnabled = EmuNv2aGetEnv(
+                                          "CXBX_NV2A_IMMEDIATE_TRACE", Value, sizeof(Value))
+                                          ? 1
+                                          : 0;
+    }
     if(VertexTraceEnabled < 0)
     {
         char Value[8];
@@ -9659,122 +9833,72 @@ static void EmuNv2aRasterizeDrawArrays(
                                  : 0;
     }
 
-    for(ULONG i = 0; i < Count; i++)
+    // Transform [0, Count): small draws inline; large draws split contiguously
+    // across the worker pool (per-vertex independent, output unchanged).
+    if(Count >= 512)
     {
-        InterlockedIncrement(&g_EmuPerfVertices);
-        ULONG Index = Indices == nullptr ? Start + i : Indices[i];
-        EmuNv2aRasterVertex Vertex{};
-        cxbx::nv2a::PgraphVertexComponents RawPosition{};
-
-        if(VpActive)
+        EmuNv2aEnsureQuadPool();
+        g_EmuPoolWorkKind = EmuNv2aPoolWorkTransform;
+        const ULONG ChunkVerts =
+            (Count + EmuNv2aQuadWorkerCount) / (EmuNv2aQuadWorkerCount + 1);
+        ULONG Begin = 0;
+        for(ULONG Slot = 0; Slot <= EmuNv2aQuadWorkerCount; ++Slot)
         {
-            // Gather all bound attribute arrays into the 16 vertex-program input
-            // registers (x,y,z default 0, w default 1), then transform on the CPU.
-            const auto VertexProgramAttributes =
-                EmuNv2aCollectVertexProgramAttributes(
-                    AttributeMemory, VertexFetchPlan,
-                    static_cast<std::uint32_t>(Index));
-            const auto VertexProgram =
-                EmuNv2aExecuteVertexProgram(
-                    VertexProgramAttributes, TransformState,
-                    AnySamplerReady);
-            if(Inline)
+            ULONG ChunkEnd = Begin + ChunkVerts;
+            if(ChunkEnd > Count || Slot == EmuNv2aQuadWorkerCount)
             {
-                static int TraceEnabled = -1;
-                if(TraceEnabled < 0)
-                {
-                    char Value[8];
-                    TraceEnabled = EmuNv2aGetEnv(
-                                       "CXBX_NV2A_IMMEDIATE_TRACE", Value, sizeof(Value))
-                                       ? 1
-                                       : 0;
-                }
-                if(TraceEnabled == 1)
-                {
-                    printf("NVVERT| frame=%lu kind=%s vertex=%lu "
-                           "v0=(%g,%g,%g,%g) v3=(%g,%g,%g,%g) "
-                           "v9=(%g,%g,%g,%g) opos=(%g,%g,%g,%g) "
-                           "od0=(%g,%g,%g,%g) ot0=(%g,%g,%g,%g)\n",
-                           g_EmuNv2aDebugFrame, DrawKind, i,
-                           VertexProgram.Input[0],
-                           VertexProgram.Input[1],
-                           VertexProgram.Input[2],
-                           VertexProgram.Input[3],
-                           VertexProgram.Input[12],
-                           VertexProgram.Input[13],
-                           VertexProgram.Input[14],
-                           VertexProgram.Input[15],
-                           VertexProgram.Input[36],
-                           VertexProgram.Input[37],
-                           VertexProgram.Input[38],
-                           VertexProgram.Input[39],
-                           VertexProgram.Position[0],
-                           VertexProgram.Position[1],
-                           VertexProgram.Position[2],
-                           VertexProgram.Position[3],
-                           VertexProgram.Colors[0],
-                           VertexProgram.Colors[1],
-                           VertexProgram.Colors[2],
-                           VertexProgram.Colors[3],
-                           VertexProgram.TextureCoordinates[0],
-                           VertexProgram.TextureCoordinates[1],
-                           VertexProgram.TextureCoordinates[2],
-                           VertexProgram.TextureCoordinates[3]);
-                    fflush(stdout);
-                }
+                ChunkEnd = Count;
             }
-            Vertex =
-                EmuNv2aBuildVertexProgramRasterVertex(
-                    VertexProgram);
+            EmuNv2aTransformChunk& Chunk = g_EmuTransformChunk[Slot];
+            // Each chunk stages attribute bytes through its own scratch: the
+            // fetch path writes it per vertex and parallel workers must not
+            // share it.
+            ZeroMemory(Chunk.AttributeScratch, sizeof(Chunk.AttributeScratch));
+            Chunk.AttributeMemory.InlineData = InlineData;
+            Chunk.AttributeMemory.VertexBase = VertexBase;
+            Chunk.AttributeMemory.AttributeScratch = Chunk.AttributeScratch;
+            Chunk.VertexFetchPlan = &VertexFetchPlan;
+            Chunk.TransformState = &TransformState;
+            Chunk.TextureMode = &TextureMode;
+            Chunk.DrawKind = DrawKind;
+            Chunk.Indices = Indices;
+            Chunk.Start = Start;
+            Chunk.Begin = Begin;
+            Chunk.End = ChunkEnd;
+            Chunk.VpActive = VpActive;
+            Chunk.Inline = Inline;
+            Chunk.AnySamplerReady = AnySamplerReady;
+            if(Slot != 0)
+            {
+                ReleaseSemaphore(g_EmuQuadWorkStart[Slot - 1], 1, NULL);
+            }
+            Begin = ChunkEnd;
         }
-        else
+        // Main thread takes the last chunk (slot order: workers first).
+        EmuNv2aTransformVertexRange(&g_EmuTransformChunk[EmuNv2aQuadWorkerCount]);
+        for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount; ++Slot)
         {
-            const auto FixedAttributes =
-                EmuNv2aCollectFixedFunctionAttributes(
-                    AttributeMemory, VertexFetchPlan,
-                    static_cast<std::uint32_t>(Index));
-            if(!FixedAttributes.PositionValid)
-            {
-                continue;
-            }
-
-            const cxbx::nv2a::PgraphFixedFunctionVertexInput
-                FixedInput =
-                    cxbx::nv2a::BuildPgraphFixedFunctionVertexInput(
-                        FixedAttributes.Values, VertexFetchPlan,
-                        FixedAttributes.SuppliedAttributeMask);
-            RawPosition = FixedInput.position;
-            Vertex =
-                EmuNv2aBuildFixedFunctionRasterVertex(
-                    FixedInput, TransformState);
+            WaitForSingleObject(g_EmuQuadWorkDone[Slot], INFINITE);
         }
-
-        const EmuNv2aRasterTextureProjection TextureProjection =
-            EmuNv2aProjectRasterVertexTextures(
-                Vertex, TextureMode);
-        EmuNv2aCommitRasterVertex(
-            RasterVertices, static_cast<std::size_t>(i),
-            Vertex, TextureProjection);
-        if(!VpActive)
-        {
-            if(VertexTraceEnabled == 1 && i < 4)
-            {
-                const ULONG DrawIndex = g_EmuNv2aDebugDrawIndex != 0
-                                            ? g_EmuNv2aDebugDrawIndex - 1
-                                            : 0;
-                printf("NVVERT| frame=%lu draw=%lu kind=%s vertex=%lu index=%lu "
-                       "in=(%g,%g,%g,%g) hom=(%g,%g,%g,%g) "
-                       "screen=(%g,%g,%g)\n",
-                       g_EmuNv2aDebugFrame, DrawIndex, DrawKind, i, Index,
-                       RawPosition[0], RawPosition[1], RawPosition[2], RawPosition[3],
-                       Vertex.HomogeneousPosition[0],
-                       Vertex.HomogeneousPosition[1],
-                       Vertex.HomogeneousPosition[2],
-                       Vertex.HomogeneousPosition[3],
-                       VX[i], VY[i], VZ[i]);
-                fflush(stdout);
-            }
-        }
+    }
+    else
+    {
+        EmuNv2aTransformChunk Serial{};
+        Serial.AttributeMemory.InlineData = InlineData;
+        Serial.AttributeMemory.VertexBase = VertexBase;
+        Serial.AttributeMemory.AttributeScratch = AttributeScratch;
+        Serial.VertexFetchPlan = &VertexFetchPlan;
+        Serial.TransformState = &TransformState;
+        Serial.TextureMode = &TextureMode;
+        Serial.DrawKind = DrawKind;
+        Serial.Indices = Indices;
+        Serial.Start = Start;
+        Serial.Begin = 0;
+        Serial.End = Count;
+        Serial.VpActive = VpActive;
+        Serial.Inline = Inline;
+        Serial.AnySamplerReady = AnySamplerReady;
+        EmuNv2aTransformVertexRange(&Serial);
     }
 
     // The XDK display-filter pass relies on pixel state restored from its GPU
