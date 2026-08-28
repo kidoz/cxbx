@@ -87,6 +87,9 @@ namespace XTL
 #include <crtdbg.h>
 #endif
 
+#include <emmintrin.h>
+#include <intrin.h>
+
 #include "hle_database.h"
 
 // Forward-declare HostInput::Initialize to avoid pulling STL headers into the
@@ -6862,6 +6865,8 @@ extern "C" volatile ULONG g_EmuPerfP8Spans = 0;
 extern "C" volatile ULONG g_EmuPerfTriangles = 0;
 extern "C" volatile ULONG g_EmuPerfFlatSpans = 0;
 extern "C" volatile ULONG g_EmuPerfSpanPixels = 0;
+extern "C" volatile ULONG g_EmuPerfBlockPx = 0;
+extern "C" volatile ULONG g_EmuPerfScalarPx = 0;
 extern "C" volatile ULONG g_EmuPerfVertices = 0;
 extern "C" volatile ULONG g_EmuPerfQuadWRejects = 0;
 extern "C" volatile ULONG g_EmuPerfBigDrawLogs = 0;
@@ -6909,12 +6914,13 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     printf("NVPERF| wall=%.1fs raster=%.1fs pusher=%.1fs wait=%.1fs "
            "wait_calls=%lu paced=%lu faults=%lu "
            "pusher_runs=%lu pusher_words=%lu pixels=%lu spanpx=%lu "
-           "quads=%lu p8spans=%lu flats=%lu tris=%lu verts=%lu wrej=%lu\n",
+           "quads=%lu p8spans=%lu flats=%lu tris=%lu verts=%lu wrej=%lu blockpx=%lu\n",
            WallSeconds, RasterSeconds, PusherSeconds, WaitSeconds,
            g_EmuPerfWaitCalls, g_EmuPerfPacedSatisfies, g_EmuPerfFaults,
            g_EmuPerfPusherRuns, g_EmuPerfWords, g_EmuNv2aShadedPixelCount,
            g_EmuPerfSpanPixels, g_EmuPerfQuads, g_EmuPerfP8Spans, g_EmuPerfFlatSpans,
-           g_EmuPerfTriangles, g_EmuPerfVertices, g_EmuPerfQuadWRejects);
+           g_EmuPerfTriangles, g_EmuPerfVertices, g_EmuPerfQuadWRejects,
+           g_EmuPerfBlockPx);
     fflush(stdout);
     s_WindowStart = Now.QuadPart;
     g_EmuPerfRasterNs = 0;
@@ -6927,6 +6933,7 @@ static void EmuPerfReportWindow(LARGE_INTEGER Now, LARGE_INTEGER Freq)
     g_EmuPerfFaults = 0;
     g_EmuNv2aShadedPixelCount = 0;
     g_EmuPerfSpanPixels = 0;
+    g_EmuPerfBlockPx = 0;
     g_EmuPerfQuads = 0;
     g_EmuPerfP8Spans = 0;
     g_EmuPerfFlatSpans = 0;
@@ -8236,6 +8243,68 @@ static void EmuNv2aShadeP8TilePixel(
     *Destination = cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
 }
 
+// SSE2 availability (the vector span path below; any host that runs this
+// emulator's 32-bit build at usable speed implements SSE2, but the check is
+// cheap insurance).
+static bool EmuNv2aSse2Available()
+{
+    static int Available = -1;
+    if(Available < 0)
+    {
+        int Registers[4] = {};
+        __cpuid(Registers, 1);
+        Available = (Registers[3] & (1 << 26)) ? 1 : 0; // EDX bit 26 = SSE2
+    }
+    return Available != 0;
+}
+
+// Four-pixel P8 span block, SSE2 (target attribute: the i686 cross build
+// defaults below SSE2). Replicates the scalar pixel exactly: depth clamp +
+// LE test + write and SRC_ALPHA blending with the alpha==0/255 shortcuts.
+// Z and Colors arrive as the same values the scalar loop would produce
+// (successive-add Z; caller-resolved palette colors).
+__attribute__((target("sse2"))) static void EmuNv2aFillP8SpanBlock4(
+    ULONG* DepthRow, ULONG* ColorRow, int X,
+    const float* ZValues, const ULONG* Colors)
+{
+    const __m128 ZRaw = _mm_loadu_ps(ZValues);
+    const __m128 Clamped = _mm_min_ps(
+        _mm_max_ps(ZRaw, _mm_setzero_ps()), _mm_set1_ps(16777215.0f));
+    const __m128i SD = _mm_cvttps_epi32(
+        _mm_add_ps(Clamped, _mm_set1_ps(0.5f)));
+
+    const __m128i D4 =
+        _mm_loadu_si128(reinterpret_cast<const __m128i*>(DepthRow + X));
+    // Pass when SourceDepth >= StoredDepth (signed compares are safe: both
+    // sides are below 2^24).
+    const __m128i Fail = _mm_cmpgt_epi32(_mm_srli_epi32(D4, 8), SD);
+    const __m128i DepthOut = _mm_or_si128(
+        _mm_andnot_si128(Fail, _mm_or_si128(_mm_slli_epi32(SD, 8),
+                                            _mm_and_si128(D4, _mm_set1_epi32(0xFF)))),
+        _mm_and_si128(D4, Fail));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(DepthRow + X), DepthOut);
+    const int FailBits = _mm_movemask_epi8(Fail);
+
+    for(int j = 0; j < 4; ++j)
+    {
+        if((FailBits >> (j * 4)) & 0xF)
+        {
+            continue;
+        }
+        const ULONG Source = Colors[j];
+        const ULONG Alpha = (Source >> 24) & 0xFFu;
+        if(Alpha == 255)
+        {
+            ColorRow[X + j] = Source;
+        }
+        else if(Alpha != 0)
+        {
+            ColorRow[X + j] =
+                cxbx::nv2a::BlendSourceAlpha(Source, ColorRow[X + j]);
+        }
+    }
+}
+
 // Span-specialized P8 quad fill (CXBX title backgrounds and sprites). Same
 // pixel semantics as EmuNv2aShadeP8TilePixel, but the whole quad iterates in
 // one function so the address-mode branch, the fetch pipeline, and the blend
@@ -8290,6 +8359,7 @@ static void EmuNv2aFillP8LinearQuadSpans(
         --X1;
     }
     const ULONG ColCount = X1 > X0 ? (ULONG)(X1 - X0) : 0;
+    const bool Sse2 = EmuNv2aSse2Available();
 
     for(int Y = MinY; Y < MaxY; ++Y)
     {
@@ -8372,51 +8442,109 @@ static void EmuNv2aFillP8LinearQuadSpans(
             }
 
             int X = X0;
-            for(ULONG Col = 0; Col < ColCount; ++Col, ++X)
+            ULONG Col = 0;
+            while(Col < ColCount)
             {
-                float Z = ZSpan.value;
-                if(Z < 0.0f)
+                // Contiguous run: until the row ends, the pixel count ends,
+                // or the texel walk wraps/pins at the texture edge.
+                int Run = static_cast<int>(ColCount) - static_cast<int>(Col);
                 {
-                    Z = 0.0f;
+                    const int TexRemaining =
+                        static_cast<int>(TexWidth) - IX;
+                    if(TexRemaining < Run)
+                    {
+                        Run = TexRemaining;
+                    }
                 }
-                if(Z > 16777215.0f)
-                {
-                    Z = 16777215.0f;
-                }
-                const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
-                ULONG* Depth = DepthRow + X;
-                const ULONG StoredDepth = *Depth;
-                if(SourceDepth >= (StoredDepth >> 8))
-                {
-                    *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
 
-                    const ULONG Source =
-                        TexPalette[TexSource[RowBase + IX]];
-                    ULONG* Destination = ColorRow + X;
-                    const ULONG Alpha = Source >> 24;
-                    if(Alpha == 255)
+                if(Sse2)
+                {
+                    // Four-pixel SSE2 blocks while the run allows.
+                    while(Run >= 4)
                     {
-                        *Destination = Source;
-                    }
-                    else if(Alpha != 0)
-                    {
-                        *Destination =
-                            cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
+                        float ZValues[4];
+                        ZValues[0] = ZSpan.value;
+                        ZSpan.value += ZSpan.step;
+                        ZValues[1] = ZSpan.value;
+                        ZSpan.value += ZSpan.step;
+                        ZValues[2] = ZSpan.value;
+                        ZSpan.value += ZSpan.step;
+                        ZValues[3] = ZSpan.value;
+                        ZSpan.value += ZSpan.step;
+                        ULONG Colors[4];
+                        const ULONG FourBytes = *reinterpret_cast<const ULONG*>(
+                            TexSource + RowBase + IX);
+                        Colors[0] = TexPalette[FourBytes & 0xFFu];
+                        Colors[1] = TexPalette[(FourBytes >> 8) & 0xFFu];
+                        Colors[2] = TexPalette[(FourBytes >> 16) & 0xFFu];
+                        Colors[3] = TexPalette[(FourBytes >> 24) & 0xFFu];
+                        EmuNv2aFillP8SpanBlock4(
+                            DepthRow, ColorRow, X, ZValues, Colors);
+                        g_EmuPerfBlockPx += 4;
+                        USpan.value += USpan.step;
+                        USpan.value += USpan.step;
+                        USpan.value += USpan.step;
+                        USpan.value += USpan.step;
+                        X += 4;
+                        IX += 4;
+                        Col += 4;
+                        Run -= 4;
+                        if(IX >= static_cast<int>(TexWidth))
+                        {
+                            IX = UMode == 1u
+                                     ? 0
+                                     : static_cast<int>(TexWidth) - 1;
+                        }
                     }
                 }
-                USpan.value += USpan.step;
-                ZSpan.value += ZSpan.step;
-                IX++;
-                if(UMode == 1u)
+
+                // Scalar tail (wrap edges, pinned clamps, non-SSE2 hosts).
+                for(; Run > 0; --Run, ++Col, ++X)
                 {
-                    if(IX >= static_cast<int>(TexWidth))
+                    float Z = ZSpan.value;
+                    if(Z < 0.0f)
                     {
-                        IX = 0;
+                        Z = 0.0f;
                     }
-                }
-                else if(IX >= static_cast<int>(TexWidth))
-                {
-                    IX = static_cast<int>(TexWidth) - 1;
+                    if(Z > 16777215.0f)
+                    {
+                        Z = 16777215.0f;
+                    }
+                    const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
+                    ULONG* Depth = DepthRow + X;
+                    const ULONG StoredDepth = *Depth;
+                    if(SourceDepth >= (StoredDepth >> 8))
+                    {
+                        *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
+
+                        const ULONG Source =
+                            TexPalette[TexSource[RowBase + IX]];
+                        ULONG* Destination = ColorRow + X;
+                        const ULONG Alpha = Source >> 24;
+                        if(Alpha == 255)
+                        {
+                            *Destination = Source;
+                        }
+                        else if(Alpha != 0)
+                        {
+                            *Destination = cxbx::nv2a::BlendSourceAlpha(
+                                Source, *Destination);
+                        }
+                    }
+                    USpan.value += USpan.step;
+                    ZSpan.value += ZSpan.step;
+                    IX++;
+                    if(UMode == 1u)
+                    {
+                        if(IX >= static_cast<int>(TexWidth))
+                        {
+                            IX = 0;
+                        }
+                    }
+                    else if(IX >= static_cast<int>(TexWidth))
+                    {
+                        IX = static_cast<int>(TexWidth) - 1;
+                    }
                 }
             }
             continue;
@@ -8452,6 +8580,85 @@ static void EmuNv2aFillP8LinearQuadSpans(
         // fraction reduces to one conditional subtract per pixel.
         const bool UWrapFast =
             UMode == 1u && USpan.step * static_cast<float>(TexWidth) < 1.0f;
+
+        int X = X0;
+        ULONG Col = 0;
+        if(Sse2 && RowVConstant)
+        {
+            // Four-pixel SSE2 blocks: U and Z accumulate with the same
+            // per-pixel operations; only the texel index and palette lookups
+            // stay scalar.
+            while(Col < ColCount)
+            {
+                float ZValues[4];
+                float UValues[4];
+                ULONG Colors[4];
+                int IXs[4];
+                bool BlockValid = true;
+                for(int j = 0; j < 4 && Col + j < ColCount; ++j)
+                {
+                    ZValues[j] = ZSpan.value;
+                    UValues[j] = USpan.value;
+                    float u = UValues[j];
+                    if(UWrapFast && u >= 1.0f)
+                    {
+                        u -= 1.0f;
+                    }
+                    else if(UMode == 1u && u >= 1.0f)
+                    {
+                        int Whole = static_cast<int>(u);
+                        if(u < static_cast<float>(Whole))
+                        {
+                            --Whole;
+                        }
+                        u -= static_cast<float>(Whole);
+                    }
+                    int IX = static_cast<int>(u * static_cast<float>(TexWidth));
+                    if(IX < 0)
+                    {
+                        IX = 0;
+                    }
+                    if(IX >= static_cast<int>(TexWidth))
+                    {
+                        IX = static_cast<int>(TexWidth) - 1;
+                    }
+                    IXs[j] = IX;
+                    Colors[j] =
+                        TexPalette[TexSource[IYRow * TexPitch + IX]];
+                    ZSpan.value += ZSpan.step;
+                    USpan.value += USpan.step;
+                    VSpan.value += VSpan.step;
+                }
+                const int BlockPx =
+                    Col + 4 <= ColCount ? 4 : static_cast<int>(ColCount - Col);
+                if(BlockPx == 4)
+                {
+                    EmuNv2aFillP8SpanBlock4(
+                        DepthRow, ColorRow, X, ZValues, Colors);
+                    g_EmuPerfBlockPx += 4;
+                }
+                else
+                {
+                    for(int j = 0; j < BlockPx; ++j)
+                    {
+                        const ULONG Source = Colors[j];
+                        const ULONG Alpha = (Source >> 24) & 0xFFu;
+                        if(Alpha == 255)
+                        {
+                            ColorRow[X + j] = Source;
+                        }
+                        else if(Alpha != 0)
+                        {
+                            ColorRow[X + j] = cxbx::nv2a::BlendSourceAlpha(
+                                Source, ColorRow[X + j]);
+                        }
+                    }
+                }
+                X += BlockPx;
+                Col += BlockPx;
+            }
+            continue;
+        }
 
         for(int X = X0; X < X1; ++X)
         {
@@ -9320,14 +9527,29 @@ struct EmuNv2aQuadChunk
     ULONG BaseCount;
 };
 
-#define EmuNv2aQuadWorkerCount 3
+// Worker count is tunable (CXBX_NV2A_RASTER_WORKERS, default 3): fill
+// threads stream read-modify-write into the shared surface, and the sweet
+// spot depends on the host's cache hierarchy.
+static ULONG EmuNv2aQuadWorkerCountActive = 3;
+#define EmuNv2aQuadWorkerCount 8
 
-static HANDLE g_EmuQuadWorkerThreads[EmuNv2aQuadWorkerCount] = {};
-static HANDLE g_EmuQuadWorkStart[EmuNv2aQuadWorkerCount] = {};
-static HANDLE g_EmuQuadWorkDone[EmuNv2aQuadWorkerCount] = {};
-static EmuNv2aQuadChunk g_EmuQuadChunk[1 + EmuNv2aQuadWorkerCount] = {};
-static volatile LONG g_EmuQuadPoolReady = 0;
-static bool g_EmuQuadPoolShutdown = false;
+static ULONG EmuNv2aQuadWorkerCountActiveGet()
+{
+    if(EmuNv2aQuadWorkerCountActive != 0xFFFFFFFFu)
+    {
+        return EmuNv2aQuadWorkerCountActive;
+    }
+    char Buffer[8] = { 0 };
+    ULONG Workers = 3;
+    if(GetEnvironmentVariableA("CXBX_NV2A_RASTER_WORKERS", Buffer,
+                               sizeof(Buffer)) != 0)
+    {
+        const ULONG Parsed = static_cast<ULONG>(strtoul(Buffer, NULL, 0));
+        Workers = Parsed > 7 ? 7 : Parsed;
+    }
+    EmuNv2aQuadWorkerCountActive = Workers;
+    return Workers;
+}
 
 // Vertex-transform work: per-vertex independent, so a draw's [Begin, End)
 // range splits contiguously across the pool with unchanged output. Each chunk
@@ -9358,8 +9580,15 @@ enum EmuNv2aPoolWorkKind
     EmuNv2aPoolWorkTransform,
 };
 
-static volatile LONG g_EmuPoolWorkKind = EmuNv2aPoolWorkQuads;
+static HANDLE g_EmuQuadWorkerThreads[EmuNv2aQuadWorkerCount] = {};
+static HANDLE g_EmuQuadWorkStart[EmuNv2aQuadWorkerCount] = {};
+static HANDLE g_EmuQuadWorkDone[EmuNv2aQuadWorkerCount] = {};
+static EmuNv2aQuadChunk g_EmuQuadChunk[1 + EmuNv2aQuadWorkerCount] = {};
 static EmuNv2aTransformChunk g_EmuTransformChunk[1 + EmuNv2aQuadWorkerCount] = {};
+static volatile LONG g_EmuQuadPoolReady = 0;
+static bool g_EmuQuadPoolShutdown = false;
+
+static volatile LONG g_EmuPoolWorkKind = EmuNv2aPoolWorkQuads;
 
 // Shared per-draw transformed-vertex output storage (per-index writes; draws
 // are serialized on the pusher thread). Formerly a function-local static.
@@ -9584,7 +9813,8 @@ static void EmuNv2aEnsureQuadPool()
     {
         return;
     }
-    for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount; ++Slot)
+    const ULONG Workers = EmuNv2aQuadWorkerCountActiveGet();
+    for(ULONG Slot = 0; Slot < Workers; ++Slot)
     {
         g_EmuQuadWorkStart[Slot] = CreateSemaphore(NULL, 0, 1, NULL);
         g_EmuQuadWorkDone[Slot] = CreateSemaphore(NULL, 0, 1, NULL);
@@ -9889,13 +10119,13 @@ static void EmuNv2aRasterizeDrawArrays(
     {
         EmuNv2aEnsureQuadPool();
         g_EmuPoolWorkKind = EmuNv2aPoolWorkTransform;
-        const ULONG ChunkVerts =
-            (Count + EmuNv2aQuadWorkerCount) / (EmuNv2aQuadWorkerCount + 1);
+        const ULONG Workers = EmuNv2aQuadWorkerCountActiveGet();
+        const ULONG ChunkVerts = (Count + Workers) / (Workers + 1);
         ULONG Begin = 0;
-        for(ULONG Slot = 0; Slot <= EmuNv2aQuadWorkerCount; ++Slot)
+        for(ULONG Slot = 0; Slot <= Workers; ++Slot)
         {
             ULONG ChunkEnd = Begin + ChunkVerts;
-            if(ChunkEnd > Count || Slot == EmuNv2aQuadWorkerCount)
+            if(ChunkEnd > Count || Slot == Workers)
             {
                 ChunkEnd = Count;
             }
@@ -9925,8 +10155,8 @@ static void EmuNv2aRasterizeDrawArrays(
             Begin = ChunkEnd;
         }
         // Main thread takes the last chunk (slot order: workers first).
-        EmuNv2aTransformVertexRange(&g_EmuTransformChunk[EmuNv2aQuadWorkerCount]);
-        for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount; ++Slot)
+        EmuNv2aTransformVertexRange(&g_EmuTransformChunk[Workers]);
+        for(ULONG Slot = 0; Slot < Workers; ++Slot)
         {
             WaitForSingleObject(g_EmuQuadWorkDone[Slot], INFINITE);
         }
@@ -10267,17 +10497,15 @@ static void EmuNv2aRasterizeDrawArrays(
                         {
                             s_QuadBases[Written++] = i;
                         }
+                        const ULONG Workers = EmuNv2aQuadWorkerCountActiveGet();
                         const ULONG ChunkStride =
-                            (QuadTotal + EmuNv2aQuadWorkerCount) /
-                            (EmuNv2aQuadWorkerCount + 1);
+                            (QuadTotal + Workers) / (Workers + 1);
                         ULONG Offset = 0;
-                        for(ULONG Slot = 0;
-                            Slot <= EmuNv2aQuadWorkerCount;
-                            ++Slot)
+                        for(ULONG Slot = 0; Slot <= Workers; ++Slot)
                         {
                             ULONG ChunkCount = ChunkStride;
                             if(Offset + ChunkCount > QuadTotal ||
-                               Slot == EmuNv2aQuadWorkerCount)
+                               Slot == Workers)
                             {
                                 ChunkCount = QuadTotal - Offset;
                             }
@@ -10293,14 +10521,12 @@ static void EmuNv2aRasterizeDrawArrays(
                             Chunk.BaseCount = ChunkCount;
                             Offset += ChunkCount;
                         }
-                        for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount;
-                            ++Slot)
+                        for(ULONG Slot = 0; Slot < Workers; ++Slot)
                         {
                             ReleaseSemaphore(g_EmuQuadWorkStart[Slot], 1, NULL);
                         }
                         EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[0]);
-                        for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount;
-                            ++Slot)
+                        for(ULONG Slot = 0; Slot < Workers; ++Slot)
                         {
                             WaitForSingleObject(g_EmuQuadWorkDone[Slot],
                                                 INFINITE);
