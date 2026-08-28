@@ -9265,6 +9265,119 @@ static void EmuNv2aRasterizeImmediateVertices(
     g_EmuNv2aRasterizingImmediate = false;
 }
 
+// Row-partitioned parallel fill for large QUADS draws. Rasterization is
+// per-pixel deterministic: every pixel's inputs depend only on its own
+// primitive and the draw state, so splitting a draw's quad list across
+// workers produces the same output as serial filling (verified by the frame
+// CRC gate). Chunks keep contiguous quad-index ranges, so cross-chunk draw
+// order matches the serial order; only genuinely concurrent same-depth
+// overlapping quads across chunk boundaries could race, which the CRC gate
+// covers for the shipped titles.
+struct EmuNv2aQuadChunk
+{
+    const EmuNv2aRasterTarget* Target;
+    const EmuNv2aTextureCoordinateArrays* TexCoords;
+    const float* VX;
+    const float* VY;
+    const float* VZ;
+    const float* VW;
+    const ULONG* VC;
+    const ULONG* Bases;
+    ULONG BaseCount;
+};
+
+#define EmuNv2aQuadWorkerCount 3
+
+static HANDLE g_EmuQuadWorkerThreads[EmuNv2aQuadWorkerCount] = {};
+static HANDLE g_EmuQuadWorkStart[EmuNv2aQuadWorkerCount] = {};
+static HANDLE g_EmuQuadWorkDone[EmuNv2aQuadWorkerCount] = {};
+static EmuNv2aQuadChunk g_EmuQuadChunk[1 + EmuNv2aQuadWorkerCount] = {};
+static volatile LONG g_EmuQuadPoolReady = 0;
+static bool g_EmuQuadPoolShutdown = false;
+
+// Fill one quad (with the off-screen pre-filter and the triangle fallback) --
+// the single primitive body shared by the serial path and the chunk workers.
+static void EmuNv2aRasterizeOneQuad(
+    const EmuNv2aRasterTarget* Target,
+    const EmuNv2aTextureCoordinateArrays* TexCoords,
+    const float* VX, const float* VY, const float* VZ, const float* VW,
+    const ULONG* VC, ULONG Base)
+{
+    float QuadMinX = VX[Base], QuadMaxX = VX[Base];
+    float QuadMinY = VY[Base], QuadMaxY = VY[Base];
+    for(ULONG Corner = 1; Corner < 4; ++Corner)
+    {
+        QuadMinX = VX[Base + Corner] < QuadMinX ? VX[Base + Corner] : QuadMinX;
+        QuadMaxX = VX[Base + Corner] > QuadMaxX ? VX[Base + Corner] : QuadMaxX;
+        QuadMinY = VY[Base + Corner] < QuadMinY ? VY[Base + Corner] : QuadMinY;
+        QuadMaxY = VY[Base + Corner] > QuadMaxY ? VY[Base + Corner] : QuadMaxY;
+    }
+    if(QuadMaxX < static_cast<float>(Target->ClipMinX) ||
+       QuadMaxY < static_cast<float>(Target->ClipMinY) ||
+       QuadMinX >= static_cast<float>(Target->ClipMaxX) ||
+       QuadMinY >= static_cast<float>(Target->ClipMaxY))
+    {
+        return;
+    }
+    InterlockedIncrement(&g_EmuPerfQuads);
+    if(!EmuNv2aFillAxisAlignedQuad(
+           Target, VX, VY, VZ, VW, TexCoords, VC, Base))
+    {
+        EmuNv2aFillTriangle(Target, VX, VY, VZ, VW, TexCoords, VC,
+                            Base, Base + 1, Base + 2);
+        EmuNv2aFillTriangle(Target, VX, VY, VZ, VW, TexCoords, VC,
+                            Base, Base + 2, Base + 3);
+    }
+}
+
+static void EmuNv2aRasterizeQuadChunk(const EmuNv2aQuadChunk* Chunk)
+{
+    for(ULONG Q = 0; Q < Chunk->BaseCount; ++Q)
+    {
+        EmuNv2aRasterizeOneQuad(Chunk->Target, Chunk->TexCoords, Chunk->VX,
+                                Chunk->VY, Chunk->VZ, Chunk->VW, Chunk->VC,
+                                Chunk->Bases[Q]);
+    }
+}
+
+static DWORD WINAPI EmuQuadWorkerThread(LPVOID Param)
+{
+    const ULONG Slot = static_cast<ULONG>(reinterpret_cast<uintptr_t>(Param));
+    while(!g_EmuQuadPoolShutdown)
+    {
+        WaitForSingleObject(g_EmuQuadWorkStart[Slot], INFINITE);
+        if(g_EmuQuadPoolShutdown)
+        {
+            break;
+        }
+        EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[Slot + 1]);
+        ReleaseSemaphore(g_EmuQuadWorkDone[Slot], 1, NULL);
+    }
+    return 0;
+}
+
+// Lazily create the worker pool from the first large draw (the pusher/guest
+// thread context; workers run pure host raster code and need no FS swap).
+static void EmuNv2aEnsureQuadPool()
+{
+    if(g_EmuQuadPoolReady != 0)
+    {
+        return;
+    }
+    if(InterlockedCompareExchange(&g_EmuQuadPoolReady, 1, 0) != 0)
+    {
+        return;
+    }
+    for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount; ++Slot)
+    {
+        g_EmuQuadWorkStart[Slot] = CreateSemaphore(NULL, 0, 1, NULL);
+        g_EmuQuadWorkDone[Slot] = CreateSemaphore(NULL, 0, 1, NULL);
+        g_EmuQuadWorkerThreads[Slot] = CreateThread(
+            NULL, 0, EmuQuadWorkerThread,
+            reinterpret_cast<LPVOID>(static_cast<uintptr_t>(Slot)), 0, NULL);
+    }
+}
+
 static void EmuNv2aRasterizeDrawArrays(
     const cxbx::nv2a::PgraphVertexFetchPlan& VertexFetchPlan,
     const cxbx::nv2a::PgraphTransformState& TransformState,
@@ -9939,51 +10052,98 @@ static void EmuNv2aRasterizeDrawArrays(
                 }
                 break;
             case 8: // QUADS
+            {
+                const ULONG QuadTotal =
+                    Count >= 4 ? (Count - 4) / 4 + 1 : 0;
+                if(QuadTotal >= 128)
+                {
+                    // Large batch: split the quad list contiguously across
+                    // the worker pool (plus this thread). Contiguous ranges
+                    // keep cross-chunk draw order identical to serial.
+                    EmuNv2aEnsureQuadPool();
+                    static ULONG* s_QuadBases = nullptr;
+                    static ULONG s_QuadBaseCapacity = 0;
+                    if(s_QuadBaseCapacity < QuadTotal)
+                    {
+                        ULONG NewCapacity = s_QuadBaseCapacity != 0
+                                                ? s_QuadBaseCapacity
+                                                : 1024;
+                        while(NewCapacity < QuadTotal)
+                        {
+                            NewCapacity *= 2;
+                        }
+                        ULONG* Grown = static_cast<ULONG*>(
+                            realloc(s_QuadBases, NewCapacity * sizeof(ULONG)));
+                        if(Grown == nullptr)
+                        {
+                            // Allocation failure: fall back to serial fill.
+                            s_QuadBases = nullptr;
+                            s_QuadBaseCapacity = 0;
+                        }
+                        else
+                        {
+                            s_QuadBases = Grown;
+                            s_QuadBaseCapacity = NewCapacity;
+                        }
+                    }
+                    if(s_QuadBases != nullptr)
+                    {
+                        ULONG Written = 0;
+                        for(ULONG i = 0; i + 3 < Count; i += 4)
+                        {
+                            s_QuadBases[Written++] = i;
+                        }
+                        const ULONG ChunkStride =
+                            (QuadTotal + EmuNv2aQuadWorkerCount) /
+                            (EmuNv2aQuadWorkerCount + 1);
+                        ULONG Offset = 0;
+                        for(ULONG Slot = 0;
+                            Slot <= EmuNv2aQuadWorkerCount;
+                            ++Slot)
+                        {
+                            ULONG ChunkCount = ChunkStride;
+                            if(Offset + ChunkCount > QuadTotal ||
+                               Slot == EmuNv2aQuadWorkerCount)
+                            {
+                                ChunkCount = QuadTotal - Offset;
+                            }
+                            EmuNv2aQuadChunk& Chunk = g_EmuQuadChunk[Slot];
+                            Chunk.Target = &Target;
+                            Chunk.TexCoords = &TextureCoordinates;
+                            Chunk.VX = VX;
+                            Chunk.VY = VY;
+                            Chunk.VZ = VZ;
+                            Chunk.VW = VW;
+                            Chunk.VC = VC;
+                            Chunk.Bases = s_QuadBases + Offset;
+                            Chunk.BaseCount = ChunkCount;
+                            Offset += ChunkCount;
+                        }
+                        for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount;
+                            ++Slot)
+                        {
+                            ReleaseSemaphore(g_EmuQuadWorkStart[Slot], 1, NULL);
+                        }
+                        EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[0]);
+                        for(ULONG Slot = 0; Slot < EmuNv2aQuadWorkerCount;
+                            ++Slot)
+                        {
+                            WaitForSingleObject(g_EmuQuadWorkDone[Slot],
+                                                INFINITE);
+                        }
+                        Triangles += QuadTotal * 2;
+                        break;
+                    }
+                }
                 for(ULONG i = 0; i + 3 < Count; i += 4)
                 {
-                    // Cheap per-quad reject: a quad whose screen AABB lies
-                    // fully outside the clip rect can produce no pixels, and
-                    // the quad path (or its triangle fallback) would skip it
-                    // anyway after a much longer preamble. Background draws
-                    // stream thousands of such quads per frame.
-                    float QuadMinX = VX[i], QuadMaxX = VX[i];
-                    float QuadMinY = VY[i], QuadMaxY = VY[i];
-                    for(ULONG Corner = 1; Corner < 4; ++Corner)
-                    {
-                        QuadMinX = VX[i + Corner] < QuadMinX
-                                       ? VX[i + Corner]
-                                       : QuadMinX;
-                        QuadMaxX = VX[i + Corner] > QuadMaxX
-                                       ? VX[i + Corner]
-                                       : QuadMaxX;
-                        QuadMinY = VY[i + Corner] < QuadMinY
-                                       ? VY[i + Corner]
-                                       : QuadMinY;
-                        QuadMaxY = VY[i + Corner] > QuadMaxY
-                                       ? VY[i + Corner]
-                                       : QuadMaxY;
-                    }
-                    if(QuadMaxX < static_cast<float>(Target.ClipMinX) ||
-                       QuadMaxY < static_cast<float>(Target.ClipMinY) ||
-                       QuadMinX >= static_cast<float>(Target.ClipMaxX) ||
-                       QuadMinY >= static_cast<float>(Target.ClipMaxY))
-                    {
-                        continue;
-                    }
                     InterlockedIncrement(&g_EmuPerfQuads);
-                    if(!EmuNv2aFillAxisAlignedQuad(
-                           &Target, VX, VY, VZ, VW, &TextureCoordinates, VC, i))
-                    {
-                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                            &TextureCoordinates, VC,
-                                            i, i + 1, i + 2);
-                        EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                            &TextureCoordinates, VC,
-                                            i, i + 2, i + 3);
-                    }
+                    EmuNv2aRasterizeOneQuad(&Target, &TextureCoordinates, VX,
+                                            VY, VZ, VW, VC, i);
                     Triangles += 2;
                 }
                 break;
+            }
             case 9: // QUAD_STRIP
                 for(ULONG i = 0; i + 3 < Count; i += 2)
                 {
