@@ -8210,6 +8210,10 @@ static void EmuNv2aShadeP8TilePixel(
 // anything else keeps the generic path. Span advancement replicates the
 // affine branch of EmuNv2aFillAxisAlignedQuad bit-for-bit (same builders, same
 // per-pixel += order), so rendered output is unchanged.
+//
+// The hot variant (constant V per row, U advancing exactly one texel per
+// pixel) walks the source bytes with a pointer instead of recomputing the
+// texel index per pixel; everything else takes the per-pixel loop.
 static void EmuNv2aFillP8LinearQuadSpans(
     const EmuNv2aRasterTarget* Target,
     const EmuNv2aTextureCoordinateArrays* TexCoords,
@@ -8235,10 +8239,28 @@ static void EmuNv2aFillP8LinearQuadSpans(
     const ULONG* TexPalette = S->Palette;
     const BYTE* TexSource = S->Source;
 
+    // In-range columns with the exact per-pixel tests (Left/Right are row
+    // independent on an axis-aligned quad, so this holds for every row).
+    int X0 = MinX;
+    while(X0 < MaxX &&
+          !((static_cast<float>(X0) + 0.5f >= Left) &&
+            (static_cast<float>(X0) + 0.5f <= Right)))
+    {
+        ++X0;
+    }
+    int X1 = MaxX;
+    while(X1 > X0 &&
+          !((static_cast<float>(X1 - 1) + 0.5f >= Left) &&
+            (static_cast<float>(X1 - 1) + 0.5f <= Right)))
+    {
+        --X1;
+    }
+    const ULONG ColCount = X1 > X0 ? (ULONG)(X1 - X0) : 0;
+
     for(int Y = MinY; Y < MaxY; ++Y)
     {
         const float PixelY = static_cast<float>(Y) + 0.5f;
-        if(PixelY < Top || PixelY > Bottom)
+        if(PixelY < Top || PixelY > Bottom || ColCount == 0)
         {
             continue;
         }
@@ -8258,10 +8280,65 @@ static void EmuNv2aFillP8LinearQuadSpans(
             static_cast<ULONG*>(Target->Depth) + Y * DepthPitchElements;
         ULONG* ColorRow = Target->Color + Y * Target->PitchPx;
 
-        for(int X = MinX; X < MaxX; ++X)
+        // Pre-roll the spans to the first in-range column (the skipped pixels
+        // advance with the same += operations the per-pixel loop used).
+        for(int X = MinX; X < X0; ++X)
         {
-            const float PixelX = static_cast<float>(X) + 0.5f;
-            if(PixelX >= Left && PixelX <= Right)
+            USpan.value += USpan.step;
+            VSpan.value += VSpan.step;
+            ZSpan.value += ZSpan.step;
+        }
+
+        // Hot variant: V constant across the row and U advancing exactly one
+        // texel per pixel -- the texture byte is a pointer walk.
+        const bool VConstant = VSpan.step == 0.0f;
+        const bool WalkU =
+            UMode != 2u && USpan.step * static_cast<float>(TexWidth) == 1.0f;
+        if(VConstant && WalkU)
+        {
+            float v = VSpan.value;
+            if(VMode == 1u)
+            {
+                int Whole = static_cast<int>(v);
+                if(v < static_cast<float>(Whole))
+                {
+                    --Whole;
+                }
+                v -= static_cast<float>(Whole);
+            }
+            int IY = static_cast<int>(v * static_cast<float>(TexHeight));
+            if(IY < 0)
+            {
+                IY = 0;
+            }
+            if(IY >= static_cast<int>(TexHeight))
+            {
+                IY = static_cast<int>(TexHeight) - 1;
+            }
+            const ULONG RowBase = static_cast<ULONG>(IY) * TexPitch;
+
+            float u = USpan.value;
+            if(UMode == 1u)
+            {
+                int Whole = static_cast<int>(u);
+                if(u < static_cast<float>(Whole))
+                {
+                    --Whole;
+                }
+                u -= static_cast<float>(Whole);
+            }
+            int IX = static_cast<int>(u * static_cast<float>(TexWidth));
+            if(IX < 0)
+            {
+                IX = 0;
+            }
+            if(IX >= static_cast<int>(TexWidth))
+            {
+                IX = static_cast<int>(TexWidth) - 1;
+            }
+
+            int X = X0;
+            for(ULONG Col = 0; Col < ColCount; ++Col, ++X)
             {
                 float Z = ZSpan.value;
                 if(Z < 0.0f)
@@ -8279,9 +8356,98 @@ static void EmuNv2aFillP8LinearQuadSpans(
                 {
                     *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
 
-                    float u = USpan.value;
-                    float v = VSpan.value;
-                    if(UMode == 1u)
+                    const ULONG Source =
+                        TexPalette[TexSource[RowBase + IX]];
+                    ULONG* Destination = ColorRow + X;
+                    const ULONG Alpha = Source >> 24;
+                    if(Alpha == 255)
+                    {
+                        *Destination = Source;
+                    }
+                    else if(Alpha != 0)
+                    {
+                        *Destination =
+                            cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
+                    }
+                }
+                USpan.value += USpan.step;
+                ZSpan.value += ZSpan.step;
+                IX++;
+                if(UMode == 1u)
+                {
+                    if(IX >= static_cast<int>(TexWidth))
+                    {
+                        IX = 0;
+                    }
+                }
+                else if(IX >= static_cast<int>(TexWidth))
+                {
+                    IX = static_cast<int>(TexWidth) - 1;
+                }
+            }
+            continue;
+        }
+
+        // Row-invariant texel row: when V does not step across the row, the
+        // V wrap/convert/clamp work collapses to one computation per row.
+        const bool RowVConstant = VSpan.step == 0.0f;
+        int IYRow = 0;
+        if(RowVConstant)
+        {
+            float v = VSpan.value;
+            if(VMode == 1u)
+            {
+                int Whole = static_cast<int>(v);
+                if(v < static_cast<float>(Whole))
+                {
+                    --Whole;
+                }
+                v -= static_cast<float>(Whole);
+            }
+            IYRow = static_cast<int>(v * static_cast<float>(TexHeight));
+            if(IYRow < 0)
+            {
+                IYRow = 0;
+            }
+            if(IYRow >= static_cast<int>(TexHeight))
+            {
+                IYRow = static_cast<int>(TexHeight) - 1;
+            }
+        }
+        // With sub-texel U stepping the wrapped u stays below 2, so the floor
+        // fraction reduces to one conditional subtract per pixel.
+        const bool UWrapFast =
+            UMode == 1u && USpan.step * static_cast<float>(TexWidth) < 1.0f;
+
+        for(int X = X0; X < X1; ++X)
+        {
+            float Z = ZSpan.value;
+            if(Z < 0.0f)
+            {
+                Z = 0.0f;
+            }
+            if(Z > 16777215.0f)
+            {
+                Z = 16777215.0f;
+            }
+            const ULONG SourceDepth = static_cast<ULONG>(Z + 0.5f);
+            ULONG* Depth = DepthRow + X;
+            const ULONG StoredDepth = *Depth;
+            if(SourceDepth >= (StoredDepth >> 8))
+            {
+                *Depth = (SourceDepth << 8) | (StoredDepth & 0xFFu);
+
+                float u = USpan.value;
+                float v = VSpan.value;
+                int IX = 0;
+                int IY = IYRow;
+                if(UMode == 1u)
+                {
+                    if(UWrapFast && u >= 1.0f)
+                    {
+                        u -= 1.0f;
+                    }
+                    else if(!UWrapFast)
                     {
                         int Whole = static_cast<int>(u);
                         if(u < static_cast<float>(Whole))
@@ -8290,6 +8456,9 @@ static void EmuNv2aFillP8LinearQuadSpans(
                         }
                         u -= static_cast<float>(Whole);
                     }
+                }
+                if(!RowVConstant)
+                {
                     if(VMode == 1u)
                     {
                         int Whole = static_cast<int>(v);
@@ -8299,16 +8468,7 @@ static void EmuNv2aFillP8LinearQuadSpans(
                         }
                         v -= static_cast<float>(Whole);
                     }
-                    int IX = static_cast<int>(u * static_cast<float>(TexWidth));
-                    int IY = static_cast<int>(v * static_cast<float>(TexHeight));
-                    if(IX < 0)
-                    {
-                        IX = 0;
-                    }
-                    if(IX >= static_cast<int>(TexWidth))
-                    {
-                        IX = static_cast<int>(TexWidth) - 1;
-                    }
+                    IY = static_cast<int>(v * static_cast<float>(TexHeight));
                     if(IY < 0)
                     {
                         IY = 0;
@@ -8317,13 +8477,21 @@ static void EmuNv2aFillP8LinearQuadSpans(
                     {
                         IY = static_cast<int>(TexHeight) - 1;
                     }
-                    const ULONG Source =
-                        TexPalette[TexSource[IY * TexPitch + IX]];
-                    g_EmuPerfSpanPixels++;
-                    ULONG* Destination = ColorRow + X;
-                    *Destination =
-                        cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
                 }
+                IX = static_cast<int>(u * static_cast<float>(TexWidth));
+                if(IX < 0)
+                {
+                    IX = 0;
+                }
+                if(IX >= static_cast<int>(TexWidth))
+                {
+                    IX = static_cast<int>(TexWidth) - 1;
+                }
+                const ULONG Source =
+                    TexPalette[TexSource[IY * TexPitch + IX]];
+                ULONG* Destination = ColorRow + X;
+                *Destination =
+                    cxbx::nv2a::BlendSourceAlpha(Source, *Destination);
             }
             USpan.value += USpan.step;
             VSpan.value += VSpan.step;
