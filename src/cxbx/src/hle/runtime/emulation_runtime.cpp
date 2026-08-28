@@ -3384,6 +3384,40 @@ static void EmuNv2aHandlePgraphMethod(ULONG Subchannel, ULONG Method, ULONG Data
                     EmuNv2aClearSurface(
                         static_cast<ULONG>(SurfaceStep.data));
                 }
+                static bool ClipTraceLookedUp = false;
+                static bool ClipTraceOn = false;
+                if(!ClipTraceLookedUp)
+                {
+                    char Buffer[8] = { 0 };
+                    ClipTraceOn =
+                        GetEnvironmentVariableA("CXBX_NV2A_CLIP_TRACE", Buffer,
+                                                sizeof(Buffer)) != 0 &&
+                        Buffer[0] == '1';
+                    ClipTraceLookedUp = true;
+                }
+                if(ClipTraceOn &&
+                   (Method ==
+                        cxbx::nv2a::PgraphSurfaceMethod::
+                            SetSurfaceClipHorizontal ||
+                    Method ==
+                        cxbx::nv2a::PgraphSurfaceMethod::
+                            SetSurfaceClipVertical))
+                {
+                    printf(
+                        "NVCLIP| tid=0x%lX %s = 0x%.08lX -> clip now "
+                        "x=%lu y=%lu w=%lu h=%lu\n",
+                        GetCurrentThreadId(),
+                        Method == cxbx::nv2a::PgraphSurfaceMethod::
+                                      SetSurfaceClipHorizontal
+                            ? "H"
+                            : "V",
+                        static_cast<std::uint32_t>(Data),
+                        g_EmuNv2aSurfaceState.clipX,
+                        g_EmuNv2aSurfaceState.clipY,
+                        g_EmuNv2aSurfaceState.clipWidth,
+                        g_EmuNv2aSurfaceState.clipHeight);
+                    fflush(stdout);
+                }
                 break;
             }
             case cxbx::nv2a::PgraphDrawMethod::SetBeginEnd:
@@ -9479,6 +9513,22 @@ static void EmuNv2aRasterizeOneQuad(
         return;
     }
     InterlockedIncrement(&g_EmuPerfQuads);
+    // Near-fullscreen quad diagnostic: report the vertex positions and UVs of
+    // backdrop-sized quads a few times per window (stage background tracing).
+    if(EmuNv2aPerfEnabled() && (QuadMaxX - QuadMinX) >= 500.0f &&
+       (QuadMaxY - QuadMinY) >= 380.0f && g_EmuPerfBigDrawLogs < 8)
+    {
+        InterlockedIncrement(&g_EmuPerfBigDrawLogs);
+        printf("NVBIGQ| quad base=%lu pos=(%g,%g)(%g,%g)(%g,%g)(%g,%g) "
+               "uv=(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)(%.3f,%.3f)\n",
+               Base, VX[Base], VY[Base], VX[Base + 1], VY[Base + 1],
+               VX[Base + 2], VY[Base + 2], VX[Base + 3], VY[Base + 3],
+               TexCoords->U[0][Base], TexCoords->V[0][Base],
+               TexCoords->U[0][Base + 1], TexCoords->V[0][Base + 1],
+               TexCoords->U[0][Base + 2], TexCoords->V[0][Base + 2],
+               TexCoords->U[0][Base + 3], TexCoords->V[0][Base + 3]);
+        fflush(stdout);
+    }
     if(!EmuNv2aFillAxisAlignedQuad(
            Target, VX, VY, VZ, VW, TexCoords, VC, Base))
     {
