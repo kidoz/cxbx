@@ -1,7 +1,7 @@
 # Copies the host d3d8 override dlls (DXVK, third_party/dxvk/<ver>/x86/) into
 # <build-dir>/host-d3d8/ next to the built cxbx.exe; the launcher stages them
 # from there next to the %TEMP% guest exe before spawn. See
-# third_party/dxvk/2.7.1/README.md. Invoked by src/cxbx/meson.build.
+# third_party/dxvk/3.0.2/README.md. Invoked by src/cxbx/meson.build.
 import shutil
 import sys
 from pathlib import Path

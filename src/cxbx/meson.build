@@ -667,7 +667,7 @@ executable(
   win_subsystem : 'windows',
 )
 
-# Host d3d8 override (DXVK; see third_party/dxvk/2.7.1/README.md). The
+# Host d3d8 override (DXVK; see third_party/dxvk/3.0.2/README.md). The
 # launcher stages these next to the %TEMP% guest exe before spawn, so the
 # emulated Direct3D renders through Vulkan instead of the system d3d8 (the
 # 2026-08-12 Windows update d3d8 rasterizes nothing for the HLE). Kept in a
@@ -676,8 +676,8 @@ python = import('python').find_installation()
 host_d3d8_dlls = custom_target(
   'host_d3d8_stage',
   input : files(
-    '../../third_party/dxvk/2.7.1/x86/d3d8.dll',
-    '../../third_party/dxvk/2.7.1/x86/d3d9.dll',
+    '../../third_party/dxvk/3.0.2/x86/d3d8.dll',
+    '../../third_party/dxvk/3.0.2/x86/d3d9.dll',
   ),
   output : 'host-d3d8.stamp',
   command : [

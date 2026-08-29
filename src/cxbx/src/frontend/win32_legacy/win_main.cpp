@@ -174,7 +174,7 @@ static void CopyRuntimeDllNextToExe(const char* szExePath)
 
 // The guest process resolves d3d8.dll from its own directory first, so the
 // dll set staged here (DXVK, delivered next to cxbx.exe by the build; see
-// third_party/dxvk/2.7.1/README.md) replaces the system d3d8 for the launch.
+// third_party/dxvk/3.0.2/README.md) replaces the system d3d8 for the launch.
 // The system d3d8 shipped by the 2026-08-12 Windows update accepts every
 // call the HLE makes but rasterizes nothing, so the override is what makes
 // titles render. Best-effort: without the directory the launch proceeds

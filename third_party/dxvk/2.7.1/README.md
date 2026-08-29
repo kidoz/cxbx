@@ -1,4 +1,7 @@
-# DXVK 2.7.1 (x86) — host d3d8 override
+# DXVK 2.7.1 (x86) — host d3d8 override (superseded)
+
+Superseded as the staged default by `third_party/dxvk/3.0.2/` (2026-08-29);
+kept as the rollback target (`CXBX_HOST_D3D8_DIR` or a meson repoint).
 
 `x86/d3d8.dll` and `x86/d3d9.dll` are the Windows-native build of DXVK 2.7.1
 (taken from `dxvk-2.7.1.tar.gz`, `x32/` in the archive; d3d8 is implemented
