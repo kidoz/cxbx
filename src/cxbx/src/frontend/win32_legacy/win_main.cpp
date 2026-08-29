@@ -172,6 +172,81 @@ static void CopyRuntimeDllNextToExe(const char* szExePath)
         printf("cxbx: failed to copy runtime DLL from %s to %s (error=%lu).\n", szSourceDll, szTargetDll, GetLastError());
 }
 
+// The guest process resolves d3d8.dll from its own directory first, so the
+// dll set staged here (DXVK, delivered next to cxbx.exe by the build; see
+// third_party/dxvk/2.7.1/README.md) replaces the system d3d8 for the launch.
+// The system d3d8 shipped by the 2026-08-12 Windows update accepts every
+// call the HLE makes but rasterizes nothing, so the override is what makes
+// titles render. Best-effort: without the directory the launch proceeds
+// against the system d3d8.
+static void CopyHostD3D8DllsNextToExe(const char* szExePath)
+{
+    char szTargetDirectory[260];
+    strncpy(szTargetDirectory, szExePath, sizeof(szTargetDirectory) - 1);
+    szTargetDirectory[sizeof(szTargetDirectory) - 1] = '\0';
+
+    char* szSlash = strrchr(szTargetDirectory, '\\');
+    if(szSlash == NULL)
+        szSlash = strrchr(szTargetDirectory, '/');
+    if(szSlash == NULL)
+        return;
+    *szSlash = '\0';
+
+    if(GetEnvironmentVariableA("CXBX_NO_HOST_D3D8", NULL, 0) != 0)
+    {
+        // Remove a previously staged pair so the switch really falls back to
+        // the system d3d8 even when %TEMP% still holds an earlier copy.
+        const char* szStagedNames[] = { "d3d8.dll", "d3d9.dll" };
+        for(unsigned n = 0; n < sizeof(szStagedNames) / sizeof(szStagedNames[0]); n++)
+        {
+            char szStaged[260];
+            snprintf(szStaged, sizeof(szStaged), "%s\\%s", szTargetDirectory, szStagedNames[n]);
+            DeleteFileA(szStaged);
+        }
+        printf("cxbx: host d3d8 staging disabled (CXBX_NO_HOST_D3D8).\n");
+        return;
+    }
+
+    char szModuleDirectory[260];
+    char szSourceDirectory[260];
+    GetModuleDirectory(szModuleDirectory);
+
+    char szEnvDirectory[260];
+    const DWORD dwEnvLength = GetEnvironmentVariableA("CXBX_HOST_D3D8_DIR", szEnvDirectory, sizeof(szEnvDirectory));
+    if(dwEnvLength != 0 && dwEnvLength < sizeof(szEnvDirectory) && strchr(szEnvDirectory, ':') != NULL)
+        snprintf(szSourceDirectory, sizeof(szSourceDirectory), "%s", szEnvDirectory);
+    else if(dwEnvLength != 0 && dwEnvLength < sizeof(szEnvDirectory))
+        snprintf(szSourceDirectory, sizeof(szSourceDirectory), "%s\\%s", szModuleDirectory, szEnvDirectory);
+    else
+        snprintf(szSourceDirectory, sizeof(szSourceDirectory), "%s\\host-d3d8", szModuleDirectory);
+
+    char szPattern[260];
+    snprintf(szPattern, sizeof(szPattern), "%s\\*.dll", szSourceDirectory);
+
+    WIN32_FIND_DATAA findData;
+    HANDLE hFind = FindFirstFileA(szPattern, &findData);
+    if(hFind == INVALID_HANDLE_VALUE)
+    {
+        printf("cxbx: no host d3d8 override in %s (using the system d3d8).\n", szSourceDirectory);
+        return;
+    }
+
+    do
+    {
+        char szSource[260];
+        char szTarget[260];
+        snprintf(szSource, sizeof(szSource), "%s\\%s", szSourceDirectory, findData.cFileName);
+        snprintf(szTarget, sizeof(szTarget), "%s\\%s", szTargetDirectory, findData.cFileName);
+
+        if(CopyFile(szSource, szTarget, FALSE))
+            printf("cxbx: staged host d3d8 override %s.\n", findData.cFileName);
+        else
+            printf("cxbx: failed to stage %s from %s (error=%lu).\n", findData.cFileName, szSourceDirectory, GetLastError());
+    } while(FindNextFileA(hFind, &findData));
+
+    FindClose(hFind);
+}
+
 static int RunXbeBatch(const char* szXbePath, const char* szLogFile)
 {
     char szAbsoluteXbePath[260];
@@ -209,6 +284,7 @@ static int RunXbeBatch(const char* szXbePath, const char* szLogFile)
     }
 
     CopyRuntimeDllNextToExe(szExePath);
+    CopyHostD3D8DllsNextToExe(szExePath);
 
     cxbx::platform::SetSharedXbePath(i_Xbe.m_szPath);
 
