@@ -92,11 +92,11 @@ struct DefBuilder
     {
         if(stage == 2)
         {
-            def[55] |= (source & 0x3u) << 16;
+            def[56] |= (source & 0x3u) << 16;
         }
         else if(stage == 3)
         {
-            def[55] |= (source & 0x3u) << 20;
+            def[56] |= (source & 0x3u) << 20;
         }
         return *this;
     }
@@ -459,6 +459,20 @@ static int RunPixelShaderTranslationTest()
         Check(t.ok(), "stage-2 bumpenvmap translates");
         Check(t.textures == 2, "stage-2 bumpenvmap loads source and env textures");
         Check(CountToken(t, 0x43) == 1, "stage-2 bumpenvmap emits texbem");
+        // The texbem source must be the PSInputTexture-selected stage (t1),
+        // not the PSDotMapping word an earlier off-by-one read: a wrong
+        // source samples an unbound stage and displaces by zero.
+        bool texbemSrcIsT1 = false;
+        for(std::size_t i = 0; i + 1 < t.bytecode.size(); ++i)
+        {
+            if(t.bytecode[i] == 0x43u)
+            {
+                texbemSrcIsT1 = t.bytecode[i + 1] == 0xB00F0002u &&
+                                t.bytecode[i + 2] == 0xB0E40001u;
+                break;
+            }
+        }
+        Check(texbemSrcIsT1, "stage-2 bumpenvmap sources texbem from t1");
     }
 
     // 9c. A=ONE in the final combiner leaves C dead. Omitting that dead r1

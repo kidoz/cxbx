@@ -46,8 +46,9 @@ inline constexpr std::uint32_t PixelShaderTextureMode(
 }
 
 // Bump and dependent texture modes on stages 1-3 consume an earlier texture
-// register. Stage 1 always consumes t0; the Xbox PS_INPUTTEXTURE field selects
-// the source for stages 2 and 3.
+// register. Stage 1 always consumes t0; the Xbox PSInputTexture field selects
+// the source for stages 2 and 3. PSInputTexture is dword 56 of the XDK
+// D3DPIXELSHADERDEF (PSDotMapping occupies 55).
 inline constexpr unsigned int PixelShaderInputTexture(
     const XboxPixelShaderDefinition& definition, unsigned int stage) noexcept
 {
@@ -57,11 +58,11 @@ inline constexpr unsigned int PixelShaderInputTexture(
     }
     if(stage == 2)
     {
-        return static_cast<unsigned int>((definition[55] >> 16) & 0x03u);
+        return static_cast<unsigned int>((definition[56] >> 16) & 0x03u);
     }
     if(stage == 3)
     {
-        return static_cast<unsigned int>((definition[55] >> 20) & 0x03u);
+        return static_cast<unsigned int>((definition[56] >> 20) & 0x03u);
     }
     return 0;
 }
