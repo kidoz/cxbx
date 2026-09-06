@@ -7537,6 +7537,41 @@ static DWORD EmuRegisteredCubemapSurfaceFace(
     return 0;
 }
 
+// SEH body helper (C2712: EmuRegisterCubeTexture holds std::vector staging,
+// and a function containing __try may declare no destructor-bearing object).
+static HRESULT EmuCreateCubeTextureGuarded(
+    XTL::X_D3DResource* pResource, DWORD EdgeLength, DWORD hostMipLevels,
+    XTL::D3DFORMAT Format)
+{
+    HRESULT result = D3DERR_INVALIDCALL;
+    __try
+    {
+        result = g_pD3DDevice8->CreateCubeTexture(
+            EdgeLength, hostMipLevels, 0, Format, XTL::D3DPOOL_MANAGED,
+            &pResource->EmuCubeTexture8);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        result = D3DERR_INVALIDCALL;
+    }
+    return result;
+}
+
+// SEH body helper (C2712: the registration body holds std::vector staging,
+// and a function containing __try may declare no destructor-bearing object).
+static bool EmuMemcpyGuarded(void* destination, const void* source, DWORD size)
+{
+    __try
+    {
+        memcpy(destination, source, size);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    return true;
+}
+
 static HRESULT EmuRegisterCubeTexture(
     XTL::X_D3DResource* pResource,
     const void* pSource,
@@ -7604,18 +7639,8 @@ static HRESULT EmuRegisterCubeTexture(
         cxbx::d3d::HostTextureMipLevelCount(
             EdgeLength, EdgeLength, MipLevels));
 
-    HRESULT result = D3DERR_INVALIDCALL;
-    __try
-    {
-        result = g_pD3DDevice8->CreateCubeTexture(
-            EdgeLength, hostMipLevels, 0, Format, XTL::D3DPOOL_MANAGED,
-            &pResource->EmuCubeTexture8);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-        result = D3DERR_INVALIDCALL;
-    }
-
+    HRESULT result = EmuCreateCubeTextureGuarded(
+        pResource, EdgeLength, hostMipLevels, Format);
     if(FAILED(result) || pResource->EmuCubeTexture8 == NULL)
     {
         EmuWarning("Resource_Register: CreateCubeTexture(%lu, %lu, format=0x%.08lX) "
@@ -7626,16 +7651,8 @@ static HRESULT EmuRegisterCubeTexture(
                    static_cast<unsigned long>(result));
 
         pResource->EmuCubeTexture8 = NULL;
-        __try
-        {
-            result = g_pD3DDevice8->CreateCubeTexture(
-                4, 1, 0, XTL::D3DFMT_A8R8G8B8, XTL::D3DPOOL_MANAGED,
-                &pResource->EmuCubeTexture8);
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER)
-        {
-            result = D3DERR_INVALIDCALL;
-        }
+        result = EmuCreateCubeTextureGuarded(
+            pResource, 4, 1, XTL::D3DFMT_A8R8G8B8);
 
         if(FAILED(result) || pResource->EmuCubeTexture8 == NULL)
         {
@@ -7747,20 +7764,18 @@ static HRESULT EmuRegisterCubeTexture(
     return D3D_OK;
 }
 
-HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
+// The registration body. Guarded by the __try in
+// EmuIDirect3DResource8_Register; kept in its own function because C2712
+// bans destructor-bearing objects (the std::vector staging below) in any
+// function containing __try.
+namespace XTL
+{
+
+static HRESULT EmuResourceRegisterGuardedBody(
     X_D3DResource* pThis,
     PVOID pBase)
 {
-    D3D_TRACE("Resource_Register");
-    EmuSwapFS(); // Win2k/XP FS
-
-    // A partially-HLE title may pass a resource whose fields (Common, Data,
-    // Lock) contain garbage from uninitialized guest memory, causing an
-    // access violation somewhere in the host resource creation/copy below.
-    // Guard the entire body so a bad resource is left unbacked instead of
-    // crashing the process.
     HRESULT hRet = D3D_OK;
-    __try
     {
 
 // ******************************************************************
@@ -7876,11 +7891,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
                     // resource whose Data field points to invalid memory, causing
                     // an access violation in the copy. Catch it locally and leave
                     // the resource unbacked instead of crashing the process.
-                    __try
-                    {
-                        memcpy(pData, vertexData, dwSize);
-                    }
-                    __except(EXCEPTION_EXECUTE_HANDLER)
+                    if(!EmuMemcpyGuarded(pData, vertexData, dwSize))
                     {
                         EmuWarning("EmuIDirect3DResource8_Register: VertexBuffer data copy fault at 0x%.08X -- resource left unbacked", (DWORD)vertexData);
                         pResource->EmuVertexBuffer8->Unlock();
@@ -7915,25 +7926,44 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
                 {
                     DWORD dwSize = EmuCheckAllocationSize(pBase);
 
+                    // A zero / unknown allocation size (hand-built resource
+                    // headers) makes host CreateIndexBuffer fail -- DXVK
+                    // refuses zero-length buffers where the MS runtime
+                    // tolerated them. The registered resource's Data ends up
+                    // pointing at the host lock, so use a realistic buffer
+                    // size: an undersized one is overrun by the title's own
+                    // index reads and writes.
+                    if(dwSize == 0)
+                        dwSize = 0x10000;
+
                     HRESULT hRet = g_pD3DDevice8->CreateIndexBuffer(
                         dwSize, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED,
                         &pIndexBuffer->EmuIndexBuffer8);
 
-                    if(FAILED(hRet))
-                        EmuCleanup("CreateIndexBuffer failed");
+                    // Same policy as the vertex-buffer branch: leave the
+                    // resource unbacked instead of terminating the process.
+                    if(FAILED(hRet) || pResource->EmuIndexBuffer8 == 0)
+                    {
+                        EmuWarning("EmuIDirect3DResource8_Register: CreateIndexBuffer(%u) failed (0x%.08X) -- resource left unbacked",
+                                   dwSize, hRet);
+                        pResource->EmuIndexBuffer8 = 0;
+                        break;
+                    }
 
                     BYTE* pData = 0;
 
                     hRet = pResource->EmuIndexBuffer8->Lock(0, dwSize, &pData, 0);
 
                     if(FAILED(hRet))
-                        EmuCleanup("IndexBuffer Lock failed");
-
-                    __try
                     {
-                        memcpy(pData, (void*)pBase, dwSize);
+                        EmuWarning("EmuIDirect3DResource8_Register: IndexBuffer Lock failed (0x%.08X) -- resource left unbacked",
+                                   hRet);
+                        pResource->EmuIndexBuffer8->Release();
+                        pResource->EmuIndexBuffer8 = 0;
+                        break;
                     }
-                    __except(EXCEPTION_EXECUTE_HANDLER)
+
+                    if(!EmuMemcpyGuarded(pData, (void*)pBase, dwSize))
                     {
                         EmuWarning("EmuIDirect3DResource8_Register: IndexBuffer data copy fault at 0x%.08X -- resource left unbacked", (DWORD)pBase);
                         pResource->EmuIndexBuffer8->Unlock();
@@ -8480,6 +8510,31 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
             default:
                 EmuCleanup("IDirect3DResource8::Register -> Common Type 0x%.08X not yet supported", dwCommonType);
         }
+    }
+    return hRet;
+}
+
+} // namespace XTL
+
+HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
+    X_D3DResource* pThis,
+    PVOID pBase)
+{
+    D3D_TRACE("Resource_Register");
+    EmuSwapFS(); // Win2k/XP FS
+    // A (re-)registration can re-back a guest resource the forward cache
+    // keyed on; expire the cache rather than trusting old identities.
+
+    // A partially-HLE title may pass a resource whose fields (Common, Data,
+    // Lock) contain garbage from uninitialized guest memory, causing an
+    // access violation somewhere in the host resource creation/copy below.
+    // Guard the entire body so a bad resource is left unbacked instead of
+    // crashing the process. The body lives in its own function so its C++
+    // objects (std::vector staging) stay legal alongside the SEH scope.
+    HRESULT hRet = D3D_OK;
+    __try
+    {
+        hRet = EmuResourceRegisterGuardedBody(pThis, pBase);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -12778,7 +12833,10 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     const DWORD savedState = EmuCaptureD3DStateBlock();
     DWORD previousShader = 0;
     HRESULT result = D3DERR_INVALIDCALL;
-    std::vector<EmuVshCpuVertex> projectedVertices;
+    // POD staging (no destructor): this function contains __try scopes, and
+    // C2712 bans destructor-bearing objects in them.
+    EmuVshCpuVertex* projectedVertices = NULL;
+    UINT projectedVerticesCount = 0;
     const EmuVshCpuVertex* drawVertices = vertices;
     __try
     {
@@ -12903,24 +12961,27 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                 EmuRecordedDrawVertexCount(primitiveType, primitiveCount);
             if(definition != nullptr && vertices != nullptr && vertexCount != 0)
             {
-                projectedVertices.assign(vertices, vertices + vertexCount);
+                projectedVertices = new EmuVshCpuVertex[vertexCount];
+                memcpy(projectedVertices, vertices,
+                       sizeof(EmuVshCpuVertex) * vertexCount);
+                projectedVerticesCount = vertexCount;
                 for(unsigned int stage = 0; stage < 4; ++stage)
                 {
                     const unsigned int textureMode =
                         cxbx::d3d::PixelShaderTextureMode(*definition, stage);
                     if(cxbx::d3d::CpuFallbackTextureNeedsProjection(textureMode))
                     {
-                        for(auto& vertex : projectedVertices)
+                        for(unsigned int vertex = 0; vertex < projectedVerticesCount; ++vertex)
                         {
                             cxbx::d3d::ProjectCpuFallbackTextureCoordinates(
-                                vertex.texCoords[stage], textureMode);
+                                projectedVertices[vertex].texCoords[stage], textureMode);
                         }
                     }
                     g_pD3DDevice8->SetTextureStageState(
                         stage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS,
                         XTL::D3DTTFF_DISABLE);
                 }
-                drawVertices = projectedVertices.data();
+                drawVertices = projectedVertices;
             }
         }
         else if(material == cxbx::d3d::CpuFallbackMaterial::TextureModulate)
@@ -13017,6 +13078,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
     }
+    delete[] projectedVertices;
     return result;
 }
 
