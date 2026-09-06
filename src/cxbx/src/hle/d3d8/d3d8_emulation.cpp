@@ -13017,7 +13017,26 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
         }
     }
 
-    const DWORD savedState = EmuCaptureD3DStateBlock();
+    // Targeted save of exactly the fixed-function state this draw mutates
+    // (pixel shader, stage-0/1 blend selection, stage-0..3 projection flags).
+    // A full D3DSBT_ALL capture/apply here cost ~3 full state-block passes
+    // per CPU-fallback draw (Turok Evolution: ~600 draws per frame).
+    DWORD previousPixelShader = 0;
+    DWORD savedTss[16] = {};
+    g_pD3DDevice8->GetPixelShader(&previousPixelShader);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLOROP, &savedTss[0]);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLORARG1, &savedTss[1]);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_COLORARG2, &savedTss[2]);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_ALPHAOP, &savedTss[3]);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_ALPHAARG1, &savedTss[4]);
+    g_pD3DDevice8->GetTextureStageState(0, XTL::D3DTSS_ALPHAARG2, &savedTss[5]);
+    g_pD3DDevice8->GetTextureStageState(1, XTL::D3DTSS_COLOROP, &savedTss[6]);
+    g_pD3DDevice8->GetTextureStageState(1, XTL::D3DTSS_ALPHAOP, &savedTss[7]);
+    g_pD3DDevice8->GetTextureStageState(1, XTL::D3DTSS_COLORARG1, &savedTss[8]);
+    g_pD3DDevice8->GetTextureStageState(1, XTL::D3DTSS_ALPHAARG1, &savedTss[9]);
+    for(DWORD ttfStage = 0; ttfStage < 4; ++ttfStage)
+        g_pD3DDevice8->GetTextureStageState(
+            ttfStage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS, &savedTss[10 + ttfStage]);
     DWORD previousShader = 0;
     HRESULT result = D3DERR_INVALIDCALL;
     // POD staging (no destructor): this function contains __try scopes, and
@@ -13253,15 +13272,21 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     EmuFrameProfileAccumulate(g_FrameProfile.cpuDrawNs, fpStart);
     __try
     {
-        if(savedState != 0)
-        {
-            g_pD3DDevice8->ApplyStateBlock(savedState);
-            EmuDeleteD3DStateBlock(savedState);
-        }
-        else
-        {
-            g_pD3DDevice8->SetVertexShader(previousShader);
-        }
+        g_pD3DDevice8->SetPixelShader(previousPixelShader);
+        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLOROP, savedTss[0]);
+        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG1, savedTss[1]);
+        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG2, savedTss[2]);
+        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAOP, savedTss[3]);
+        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG1, savedTss[4]);
+        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG2, savedTss[5]);
+        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLOROP, savedTss[6]);
+        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAOP, savedTss[7]);
+        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLORARG1, savedTss[8]);
+        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAARG1, savedTss[9]);
+        for(DWORD ttfStage = 0; ttfStage < 4; ++ttfStage)
+            g_pD3DDevice8->SetTextureStageState(
+                ttfStage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS, savedTss[10 + ttfStage]);
+        g_pD3DDevice8->SetVertexShader(previousShader);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
