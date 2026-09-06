@@ -126,6 +126,18 @@ struct RendererState
     VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+
+    // P4 register-combiner config, mirrored into a persistent UBO. The
+    // layout matches the CombinConfig block in shader_spirv.h (std140).
+    VkBuffer combinerBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory combinerMemory = VK_NULL_HANDLE;
+    void* combinerMapped = nullptr;
+    unsigned int combinerWriteSlot = 0;  // next free ring slot
+    unsigned int combinerActiveSlot = 0; // slot bound by the next draw
+    unsigned int ringWraps = 0;
+    std::uint32_t pixelShaderDefs[64][60] = {}; // handle-table slot storage
+    bool useCombiner = false;
+    std::uint32_t lastConfig[104] = {};
 };
 
 RendererState g_R;
@@ -277,14 +289,29 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
     pipelineInfo.renderPass = VK_NULL_HANDLE; // dynamic rendering
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if(vkCreateGraphicsPipelines(g_R.device, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                 nullptr, &pipeline) != VK_SUCCESS)
+    const VkResult created = vkCreateGraphicsPipelines(
+        g_R.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+    if(created != VK_SUCCESS)
     {
-        printf("VULKAN| pipeline creation failed (topology=%u stride=%u)\n",
-               static_cast<unsigned>(topology), stride);
+        printf("VULKAN| pipeline creation failed (topology=%u stride=%u "
+               "result=%d)\n",
+               static_cast<unsigned>(topology), stride,
+               static_cast<int>(created));
         return false;
     }
     g_R.pipelines[key] = pipeline;
+    {
+        static LONG createdLogged = 0;
+        if(createdLogged < 6)
+        {
+            ++createdLogged;
+            printf("VULKAN| pipeline created: topology=%u stride=%u "
+                   "diffuse=%u texcoord=%u\n",
+                   static_cast<unsigned>(topology), stride,
+                   static_cast<unsigned>((key >> 44) & 0xFFFFu),
+                   static_cast<unsigned>((key >> 20) & 0xFFFFu));
+        }
+    }
     return true;
 }
 
@@ -404,6 +431,9 @@ bool SubmitFrame()
     // nothing is in flight after the idle wait, so the pool recycles.
     vkResetDescriptorPool(g_R.device, g_R.descriptorPool, 0);
     g_R.descriptorSet = VK_NULL_HANDLE;
+    g_R.combinerWriteSlot = 0;
+    g_R.combinerActiveSlot = 0;
+    memset(g_R.lastConfig, 0, sizeof(g_R.lastConfig));
     return true;
 }
 
@@ -792,18 +822,22 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     pushRanges[0].size = 16;
     pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRanges[1].offset = 16;
-    pushRanges[1].size = 64;
+    pushRanges[1].size = 80; // stageOp[4] + extra (useCombiner)
 
-    VkDescriptorSetLayoutBinding textureBinding = {};
-    textureBinding.binding = 0;
-    textureBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    textureBinding.descriptorCount = 4;
-    textureBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutBinding bindings[2] = {};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 4;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layoutCreateInfo = {};
     layoutCreateInfo.sType =
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutCreateInfo.bindingCount = 1;
-    layoutCreateInfo.pBindings = &textureBinding;
+    layoutCreateInfo.bindingCount = 2;
+    layoutCreateInfo.pBindings = bindings;
     if(vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr,
                                    &g_R.descriptorLayout) != VK_SUCCESS)
     {
@@ -811,14 +845,16 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         return false;
     }
 
-    VkDescriptorPoolSize poolSize = {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 4 * kMaxDescriptorSets;
+    VkDescriptorPoolSize poolSizes[2] = {};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 4 * kMaxDescriptorSets;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    poolSizes[1].descriptorCount = kMaxDescriptorSets;
     VkDescriptorPoolCreateInfo poolCreateInfo = {};
     poolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolCreateInfo.maxSets = kMaxDescriptorSets;
-    poolCreateInfo.poolSizeCount = 1;
-    poolCreateInfo.pPoolSizes = &poolSize;
+    poolCreateInfo.poolSizeCount = 2;
+    poolCreateInfo.pPoolSizes = poolSizes;
     if(vkCreateDescriptorPool(device, &poolCreateInfo, nullptr,
                               &g_R.descriptorPool) != VK_SUCCESS)
     {
@@ -878,6 +914,47 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         printf("VULKAN| renderer layout barrier submit failed\n");
         RendererShutdown();
         return false;
+    }
+
+    // Persistent combiner-config UBO (binding 1). The descriptor write for
+    // it happens once; contents update through the mapped pointer.
+    {
+        VkBufferCreateInfo bufferInfo = {};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = 8192;
+        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        if(vkCreateBuffer(device, &bufferInfo, nullptr,
+                          &g_R.combinerBuffer) == VK_SUCCESS)
+        {
+            VkMemoryRequirements requirements = {};
+            vkGetBufferMemoryRequirements(device, g_R.combinerBuffer,
+                                          &requirements);
+            if(AllocateDeviceMemory(&g_R.combinerMemory, requirements.size,
+                                    requirements.memoryTypeBits,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) &&
+               vkBindBufferMemory(device, g_R.combinerBuffer,
+                                  g_R.combinerMemory, 0) == VK_SUCCESS &&
+               vkMapMemory(device, g_R.combinerMemory, 0, 8192, 0,
+                           &g_R.combinerMapped) == VK_SUCCESS)
+            {
+                memset(g_R.combinerMapped, 0, 8192);
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[96] = 1;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[32] = 0x08040000;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[33] = 0x18140000;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[34] = 0x00000C00;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[35] = 0x00000C00;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[28] = 0x3F800000;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[29] = 0;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[30] = 0x3F800000;
+                static_cast<std::uint32_t*>(g_R.combinerMapped)[31] = 0x3F800000;
+            }
+            else
+            {
+                printf("VULKAN| combiner UBO unavailable; pixel shaders "
+                       "sample nothing\n");
+            }
+        }
     }
 
     g_R.valid = true;
@@ -1066,6 +1143,21 @@ void RendererShutdown()
         vkDestroyDescriptorSetLayout(g_R.device, g_R.descriptorLayout,
                                      nullptr);
         g_R.descriptorLayout = VK_NULL_HANDLE;
+    }
+    if(g_R.combinerMapped != nullptr)
+    {
+        vkUnmapMemory(g_R.device, g_R.combinerMemory);
+        g_R.combinerMapped = nullptr;
+    }
+    if(g_R.combinerBuffer != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(g_R.device, g_R.combinerBuffer, nullptr);
+        g_R.combinerBuffer = VK_NULL_HANDLE;
+    }
+    if(g_R.combinerMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.combinerMemory, nullptr);
+        g_R.combinerMemory = VK_NULL_HANDLE;
     }
     for(auto& entry : g_R.pipelines)
     {
@@ -1290,22 +1382,22 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, 16, g_R.viewport);
 
-    // Bind the four stage textures (white dummy for unbound stages) through
-    // a fresh descriptor set; the pool resets after every frame submit.
+    // Fresh descriptor set per draw (pool resets after each frame submit):
+    // the four stage textures plus the combiner-config UBO slot.
     VkDescriptorSetAllocateInfo allocateInfo = {};
     allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocateInfo.descriptorPool = g_R.descriptorPool;
     allocateInfo.descriptorSetCount = 1;
     allocateInfo.pSetLayouts = &g_R.descriptorLayout;
     VkDescriptorSet set = VK_NULL_HANDLE;
-    if(vkAllocateDescriptorSets(g_R.device, &allocateInfo, &set) !=
-       VK_SUCCESS)
+    if(vkAllocateDescriptorSets(g_R.device, &allocateInfo, &set) != VK_SUCCESS)
     {
         printf("VULKAN| descriptor set allocation failed\n");
         return false;
     }
     VkDescriptorImageInfo imageInfos[4] = {};
-    VkWriteDescriptorSet writes[4] = {};
+    VkDescriptorBufferInfo bufferInfo = {};
+    VkWriteDescriptorSet writes[5] = {};
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
         RendererTexture* texture = g_R.stageTexture[stage];
@@ -1323,19 +1415,32 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[stage].pImageInfo = &imageInfos[stage];
     }
-    vkUpdateDescriptorSets(g_R.device, 4, writes, 0, nullptr);
+    bufferInfo.buffer = g_R.combinerBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = 512; // one combiner-config slot per dynamic bind
+    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[4].dstSet = set;
+    writes[4].dstBinding = 1;
+    writes[4].descriptorCount = 1;
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    writes[4].pBufferInfo = &bufferInfo;
+    vkUpdateDescriptorSets(g_R.device, 5, writes, 0, nullptr);
+    const uint32_t combinerDynamicOffset =
+        static_cast<uint32_t>(g_R.combinerActiveSlot * 512);
     vkCmdBindDescriptorSets(g_R.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            g_R.pipelineLayout, 0, 1, &set, 0, nullptr);
+                            g_R.pipelineLayout, 0, 1, &set, 1,
+                            &combinerDynamicOffset);
 
-    std::uint32_t stageConstants[16] = {};
+    std::uint32_t stageConstants[20] = {};
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
         stageConstants[stage * 4 + 0] = g_R.stageOp[stage];
         stageConstants[stage * 4 + 1] = g_R.stageArg1[stage];
         stageConstants[stage * 4 + 2] = g_R.stageArg2[stage];
     }
+    stageConstants[16] = g_R.useCombiner ? 1u : 0u;
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, 16, 64, stageConstants);
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 16, 80, stageConstants);
     VkDeviceSize bufferOffset = offset;
     vkCmdBindVertexBuffers(g_R.commandBuffer, 0, 1, &g_R.vertexStaging,
                            &bufferOffset);
@@ -1347,6 +1452,18 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         drawCount = vertexCount; // vertices, not primitives
     }
     vkCmdDraw(g_R.commandBuffer, drawCount, 1, 0, 0);
+    {
+        static LONG drawsRecorded = 0;
+        if(drawsRecorded < 4)
+        {
+            ++drawsRecorded;
+            printf("VULKAN| recorded draw: prim=%u verts=%u stride=%u diff=%u tex=%u comb=%d slot=%u\n",
+                   primitiveType, drawCount, stride,
+                   diffuseOffset == 0xFFFFFFFFu ? 0u : 1u,
+                   texCoordOffset == 0xFFFFFFFFu ? 0u : 1u,
+                   g_R.useCombiner ? 1 : 0, g_R.combinerActiveSlot);
+        }
+    }
     return true;
 }
 
@@ -1600,6 +1717,94 @@ void RendererSetSamplerState(unsigned int stage, unsigned int type,
             break;
         default:
             break;
+    }
+}
+
+// UBO map (std140 offsets into the CombinConfig block):
+//   constants[8] vec4 @ 0, stageA[8] uvec4 @ 128, stageB[8] uvec4 @ 256,
+//   meta uvec4 @ 384.
+// Config words are host-written into 512-byte ring slots (coherent mapping)
+// and each draw binds its slot through a dynamic UBO offset, so every draw
+// samples the config that was active when it was recorded (a single shared
+// UBO would show the LAST config to every draw in the batch).
+void RendererSetPixelShader(const std::uint32_t* def60)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid)
+    {
+        return;
+    }
+    if(def60 == nullptr)
+    {
+        g_R.useCombiner = false;
+        return;
+    }
+    std::uint32_t config[104] = {};
+    for(unsigned int i = 0; i < 8; ++i)
+    {
+        config[32 + i * 4 + 0] = def60[34 + i]; // stageA.x = PSRGBInputs
+        config[32 + i * 4 + 1] = def60[0 + i];  // stageA.y = PSAlphaInputs
+        config[32 + i * 4 + 2] = def60[45 + i]; // stageA.z = PSRGBOutputs
+        config[32 + i * 4 + 3] = def60[26 + i]; // stageA.w = PSAlphaOutputs
+        config[64 + i * 4 + 0] = def60[10 + i]; // stageB.x = PSConstants0[i]
+        config[64 + i * 4 + 1] = def60[18 + i]; // stageB.y = PSConstants1[i]
+        config[64 + i * 4 + 2] = def60[57];     // stageB.z = PSC0Mapping
+        config[64 + i * 4 + 3] = def60[58];     // stageB.w = PSC1Mapping
+    }
+    config[96 + 0] = def60[53]; // meta.x = PSCombinerCount (+ flags)
+    config[96 + 1] = def60[8];  // meta.y = FinalInputsABCD
+    config[96 + 2] = def60[9];  // meta.z = FinalInputsEFG
+    config[96 + 3] = def60[59]; // meta.w = FinalCombinerConstants
+    config[100 + 0] = def60[43];
+    config[100 + 1] = def60[44];
+
+    // Host-written ring slot: coherent mapping makes the config visible to
+    // the next submit, and one slot per SetPixelShader keeps every draw's
+    // recorded dynamic offset pointing at its own config.
+    if(memcmp(g_R.lastConfig, config, sizeof(config)) == 0)
+    {
+        return; // identical to the active revision; draws keep its slot
+    }
+    std::uint32_t* slot = static_cast<std::uint32_t*>(g_R.combinerMapped) +
+                          g_R.combinerWriteSlot * 128;
+    memcpy(slot, config, sizeof(config));
+    memcpy(g_R.lastConfig, config, sizeof(config));
+    g_R.combinerActiveSlot = g_R.combinerWriteSlot;
+    g_R.combinerWriteSlot = (g_R.combinerWriteSlot + 1) % (8192 / 512);
+    if(g_R.combinerWriteSlot == 0)
+    {
+        g_R.ringWraps++;
+    }
+    g_R.useCombiner = true;
+}
+
+void RendererSetPixelShaderConstant(unsigned int registerIndex,
+                                    const float* value)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || registerIndex >= 8)
+    {
+        return;
+    }
+    std::uint32_t updated[4] = {};
+    for(unsigned int c = 0; c < 4; ++c)
+    {
+        memcpy(&updated[c], value + c, 4);
+    }
+    if(memcmp(&g_R.lastConfig[registerIndex * 4], updated, 16) == 0)
+    {
+        return; // identical to the active revision
+    }
+    std::uint32_t* slot = static_cast<std::uint32_t*>(g_R.combinerMapped) +
+                          g_R.combinerWriteSlot * 128;
+    memcpy(slot, g_R.lastConfig, 416);
+    memcpy(&slot[registerIndex * 4], updated, 16);
+    memcpy(g_R.lastConfig, slot, 416);
+    g_R.combinerActiveSlot = g_R.combinerWriteSlot;
+    g_R.combinerWriteSlot = (g_R.combinerWriteSlot + 1) % (8192 / 512);
+    if(g_R.combinerWriteSlot == 0)
+    {
+        g_R.ringWraps++;
     }
 }
 

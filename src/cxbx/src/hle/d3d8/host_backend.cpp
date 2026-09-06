@@ -131,6 +131,23 @@ void HostBackendSetSamplerState(unsigned int stage, unsigned int type,
     }
 }
 
+void HostBackendSetPixelShader(const std::uint32_t* def60)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetPixelShader(def60);
+    }
+}
+
+void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
+                                       const float* value)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetPixelShaderConstant(registerIndex, value);
+    }
+}
+
 bool HostBackendTargetSize(unsigned int* width, unsigned int* height)
 {
     if(!HostBackendRenders())

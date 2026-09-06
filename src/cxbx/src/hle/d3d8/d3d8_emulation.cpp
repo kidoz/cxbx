@@ -487,7 +487,7 @@ static bool EmuVulkanSyncBackbufferShadow()
     if(g_EmuVulkanShadowWidth != width || g_EmuVulkanShadowHeight != height)
     {
         delete[] g_EmuVulkanShadow;
-        g_EmuVulkanShadow = new (std::nothrow) unsigned char[pitch * height];
+        g_EmuVulkanShadow = new(std::nothrow) unsigned char[pitch * height];
         g_EmuVulkanShadowWidth = width;
         g_EmuVulkanShadowHeight = height;
         g_EmuVulkanShadowPitch = pitch;
@@ -2597,7 +2597,8 @@ static HRESULT EmuLockTiledSurface(XTL::X_D3DResource* pResource, XTL::D3DLOCKED
             if(!DepthFormat)
             {
                 printf("*Warning* staged lock: CreateImageSurface %ux%u fmt=%d failed "
-                       "(hr=0x%.08X)\n", (unsigned)Desc.Width, (unsigned)Desc.Height,
+                       "(hr=0x%.08X)\n",
+                       (unsigned)Desc.Width, (unsigned)Desc.Height,
                        HostFormat, static_cast<uint32>(StagingResult));
                 return D3DERR_INVALIDCALL;
             }
@@ -2622,7 +2623,8 @@ static HRESULT EmuLockTiledSurface(XTL::X_D3DResource* pResource, XTL::D3DLOCKED
             pLock->RawStagingSize = RawSize;
 
             printf("*Warning* staged depth lock %ux%u as raw buffer (contents "
-                   "not preserved)\n", (unsigned)Desc.Width, (unsigned)Desc.Height);
+                   "not preserved)\n",
+                   (unsigned)Desc.Width, (unsigned)Desc.Height);
             return D3D_OK;
         }
 
@@ -3773,13 +3775,25 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader(
         {
             switch(opcode & 0xFFFF)
             {
-                case 0: return 1;                                        // nop
-                case 1: case 6: case 7: case 14: case 15: case 16:
-                    return 3;                                            // 1 source
-                case 2: case 5: case 8: case 9: case 10: case 11:
-                case 12: case 13: case 17:
-                    return 4;                                            // 2 sources
-                case 4: return 5;                                        // mad
+                case 0: return 1; // nop
+                case 1:
+                case 6:
+                case 7:
+                case 14:
+                case 15:
+                case 16:
+                    return 3; // 1 source
+                case 2:
+                case 5:
+                case 8:
+                case 9:
+                case 10:
+                case 11:
+                case 12:
+                case 13:
+                case 17:
+                    return 4;     // 2 sources
+                case 4: return 5; // mad
                 default: return -1;
             }
         };
@@ -3831,7 +3845,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader(
                     tokenIndex += static_cast<std::size_t>(tokens);
                 }
                 printf("EmuD3D8 (0x%X): compacted %u texture-coordinate output(s) to "
-                       "oT0..oT%u.\n", GetCurrentThreadId(), texcoordRemapCount,
+                       "oT0..oT%u.\n",
+                       GetCurrentThreadId(), texcoordRemapCount,
                        newReg - 1);
             }
         }
@@ -5117,6 +5132,20 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader(
     // the bound textures are sampled and lit. Record it so the draw path keeps the
     // modulate stages asserted even if the title later touches texture state.
     g_EmuCurrentPixelShaderHandle = Handle;
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        // P4: mirror the active combiner program into the backend (nullptr
+        // for handle 0 and for handles with no stored definition, which
+        // fall back to the fixed cascade).
+        const auto* definition = EmuFindPixelShaderFallback(Handle);
+        if(definition == nullptr)
+        {
+            definition = EmuFindTranslatedPixelShader(Handle);
+        }
+        cxbx::d3d8::HostBackendSetPixelShader(definition != nullptr
+                                                  ? definition->data()
+                                                  : nullptr);
+    }
     const auto* translatedDefinition = EmuFindTranslatedPixelShader(Handle);
     const bool useFixedFunctionBump = translatedDefinition != nullptr &&
                                       EmuTranslatedPixelShaderHasUnconfiguredBump(*translatedDefinition);
@@ -5218,6 +5247,19 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShaderConstant(
         else
             printf(" first=unreadable");
         printf("\n");
+    }
+
+    // P4: combiner constants live in the backend UBO. The Xbox combiner
+    // constant registers are 0..7 (higher registers only matter to the
+    // vs.1.1 path, which the CPU fallback consumes).
+    if(cxbx::d3d8::HostBackendRenders() && pConstantData != nullptr)
+    {
+        const float* constants = static_cast<const float*>(pConstantData);
+        for(DWORD c = 0; c < ConstantCount && Register + c < 8; ++c)
+        {
+            cxbx::d3d8::HostBackendSetPixelShaderConstant(
+                Register + c, constants + static_cast<size_t>(c) * 4);
+        }
     }
 
     HRESULT Result = EmuSetTranslatedPixelShaderConstants(
@@ -5383,6 +5425,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_GetVisibilityTestResult(
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DDevice8_DeletePixelShader(DWORD Handle)
 {
+    if(Handle != 0 && Handle == g_EmuCurrentPixelShaderHandle &&
+       cxbx::d3d8::HostBackendRenders())
+    {
+        // P4: the active combiner program went away; fall back to the fixed
+        // cascade for subsequent draws.
+        cxbx::d3d8::HostBackendSetPixelShader(nullptr);
+        g_EmuCurrentPixelShaderHandle = 0;
+    }
     EmuSwapFS(); // Win2k/XP FS
     D3D_TRACE("DeletePixelShader");
 
@@ -9841,9 +9891,9 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect(
             }
             if(EmuVulkanSyncBackbufferShadow())
             {
-                const RECT fullRect = {0, 0,
-                                       (LONG)g_EmuVulkanShadowWidth,
-                                       (LONG)g_EmuVulkanShadowHeight};
+                const RECT fullRect = { 0, 0,
+                                        (LONG)g_EmuVulkanShadowWidth,
+                                        (LONG)g_EmuVulkanShadowHeight };
                 const RECT& lockRect = pRect != NULL ? *pRect : fullRect;
                 pLockedRect->pBits =
                     g_EmuVulkanShadow +
@@ -11700,13 +11750,13 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform(
         }
     }
     if(forwardTransform)
-    __try
-    {
-        g_pD3DDevice8->SetTransform(State, pMatrix);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-    }
+        __try
+        {
+            g_pD3DDevice8->SetTransform(State, pMatrix);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
 
     EmuSwapFS(); // XBox FS
 
@@ -11942,7 +11992,7 @@ struct
     std::uint8_t from[4] = {};
     std::uint8_t to[4] = {};
 } g_EmuActiveTexcoordRemap;
-}
+} // namespace
 
 static void EmuApplyActiveTexcoordRemap(
     const XTL::VshShaderRegistry::CpuFallbackMetadata* metadata)
@@ -11972,8 +12022,8 @@ static void EmuApplyActiveTexcoordRemap(
         for(std::uint32_t entry = 0; entry < g_EmuActiveTexcoordRemap.count; ++entry)
         {
             changed = changed ||
-                s_LastFrom[entry] != g_EmuActiveTexcoordRemap.from[entry] ||
-                s_LastTo[entry] != g_EmuActiveTexcoordRemap.to[entry];
+                      s_LastFrom[entry] != g_EmuActiveTexcoordRemap.from[entry] ||
+                      s_LastTo[entry] != g_EmuActiveTexcoordRemap.to[entry];
         }
     }
     if(!changed) return;
@@ -13911,7 +13961,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             else
             {
                 result = g_pD3DDevice8->DrawPrimitiveUP(primitiveType, primitiveCount, drawVertices,
-                                                    sizeof(EmuVshCpuVertex));
+                                                        sizeof(EmuVshCpuVertex));
             }
             if(SUCCEEDED(result))
             {
@@ -14598,24 +14648,18 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         // one-time warning.
         static LONG drawPathLogged = 0;
         if(InterlockedIncrement(&drawPathLogged) <= 2)
-        {
-            printf("VULKAN| DrawVerticesUP path: fvf=0x%.08lX prim=%u count=%u stride=%lu\n",
-                   g_EmuCurrentFvf, (unsigned)PCPrimitiveType,
-                   (unsigned)PrimitiveCount,
-                   static_cast<unsigned long>(VertexStreamZeroStride));
-        }
-        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
-        {
-            static LONG fvfWarned = 0;
-            if(InterlockedIncrement(&fvfWarned) <= 5)
+            if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
             {
-                EmuWarning("DrawVerticesUP under the Vulkan render path "
-                           "requires XYZRHW (fvf=0x%.08lX)",
-                           g_EmuCurrentFvf);
+                static LONG fvfWarned = 0;
+                if(InterlockedIncrement(&fvfWarned) <= 5)
+                {
+                    EmuWarning("DrawVerticesUP under the Vulkan render path "
+                               "requires XYZRHW (fvf=0x%.08lX)",
+                               g_EmuCurrentFvf);
+                }
+                EmuSwapFS(); // XBox FS
+                return;
             }
-            EmuSwapFS(); // XBox FS
-            return;
-        }
         const unsigned int DiffuseOffset =
             (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
         unsigned int DrawPrimitiveCount = PrimitiveCount;
@@ -14640,11 +14684,10 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
             unsigned char* dst = s_QuadExpand;
             for(UINT quad = 0; quad < VertexCount / 4; ++quad)
             {
-                static const UINT quadIndices[6] = {0, 1, 2, 0, 2, 3};
+                static const UINT quadIndices[6] = { 0, 1, 2, 0, 2, 3 };
                 for(UINT k = 0; k < 6; ++k)
                 {
-                    memcpy(dst, src + static_cast<size_t>(quad * 4 + quadIndices[k]) *
-                                        VertexStreamZeroStride,
+                    memcpy(dst, src + static_cast<size_t>(quad * 4 + quadIndices[k]) * VertexStreamZeroStride,
                            VertexStreamZeroStride);
                     dst += VertexStreamZeroStride;
                 }

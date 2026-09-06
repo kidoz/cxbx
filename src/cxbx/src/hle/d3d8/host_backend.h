@@ -10,6 +10,7 @@
 #ifndef CXBX_HLE_D3D8_HOST_BACKEND_H
 #define CXBX_HLE_D3D8_HOST_BACKEND_H
 
+#include <cstdint>
 #include <string.h>
 
 namespace cxbx
@@ -115,6 +116,42 @@ void HostBackendSetTextureOp(unsigned int stage, unsigned int type,
                              unsigned int value);
 void HostBackendSetSamplerState(unsigned int stage, unsigned int type,
                                 unsigned int value);
+
+// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
+// register-combiner interpreter. A nullptr also results from an unresolvable
+// handle, falling those draws back to the fixed cascade.
+void HostBackendSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7).
+void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
+                                       const float* value);
+
+// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
+// register-combiner interpreter. A nullptr also results from an unresolvable
+// handle, falling those draws back to the fixed cascade.
+void HostBackendSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7).
+void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
+                                       const float* value);
+
+// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
+// register-combiner interpreter. A nullptr also results from an unresolvable
+// handle, falling those draws back to the fixed cascade.
+void HostBackendSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7).
+void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
+                                       const float* value);
+
+// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
+// register-combiner interpreter. A nullptr also results from an unresolvable
+// handle, falling those draws back to the fixed cascade.
+void HostBackendSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7).
+void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
+                                       const float* value);
 
 // Copies the render target into dst (row pitch in bytes) for backbuffer
 // reads. Returns false when the render path is not active.

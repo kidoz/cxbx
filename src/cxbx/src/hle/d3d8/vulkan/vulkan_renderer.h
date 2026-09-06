@@ -77,6 +77,42 @@ void RendererSetTextureOp(unsigned int stage, unsigned int type,
 void RendererSetSamplerState(unsigned int stage, unsigned int type,
                              unsigned int value);
 
+// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
+// (nullptr) the register-combiner interpreter for subsequent draws. The
+// definition's constants come from RendererSetPixelShaderConstant.
+void RendererSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7) with four floats.
+void RendererSetPixelShaderConstant(unsigned int registerIndex,
+                                    const float* value);
+
+// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
+// (nullptr) the register-combiner interpreter for subsequent draws. The
+// definition's constants come from RendererSetPixelShaderConstant.
+void RendererSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7) with four floats.
+void RendererSetPixelShaderConstant(unsigned int registerIndex,
+                                    const float* value);
+
+// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
+// (nullptr) the register-combiner interpreter for subsequent draws. The
+// definition's constants come from RendererSetPixelShaderConstant.
+void RendererSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7) with four floats.
+void RendererSetPixelShaderConstant(unsigned int registerIndex,
+                                    const float* value);
+
+// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
+// (nullptr) the register-combiner interpreter for subsequent draws. The
+// definition's constants come from RendererSetPixelShaderConstant.
+void RendererSetPixelShader(const std::uint32_t* def60);
+
+// Updates combiner constant register (0..7) with four floats.
+void RendererSetPixelShaderConstant(unsigned int registerIndex,
+                                    const float* value);
+
 // Submits the pending batch, then copies the target into dst (row pitch in
 // bytes). Safe to call with an empty batch.
 bool RendererReadTarget(void* dst, unsigned int pitch);
