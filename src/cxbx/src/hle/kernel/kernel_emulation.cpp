@@ -10430,11 +10430,34 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile(
     NtDll::UNICODE_STRING NtUnicodeString;
     NtDll::OBJECT_ATTRIBUTES NtObjAttr;
 
+    // A trailing separator ("dir\") asserts directory-ness on the Xbox kernel,
+    // but on the host it makes NtCreateFile report OBJECT_NAME_COLLISION for a
+    // name whose final component does not exist, so a FILE_CREATE bootstrap of
+    // a missing cache directory can never succeed. Strip it for the host call
+    // (and force directory semantics, which is what the separator asserted).
+    // Titles bootstrap their cache partitions exactly this way (Arx Fatalis:
+    // FILE_CREATE "Z:\ARXTEMPDATA\").
+    bool TrailingSeparatorStripped = false;
+    size_t NameLength = strlen(szBuffer);
+    if(ReplaceIndex == -1 && NameLength >= 2 && szBuffer[NameLength - 1] == '\\'
+       && (CreateOptions & FILE_NON_DIRECTORY_FILE) == 0)
+    {
+        NameLength--;
+        TrailingSeparatorStripped = true;
+    }
+
+    ULONG HostCreateOptions = CreateOptions;
+    if(TrailingSeparatorStripped && (HostCreateOptions & FILE_DIRECTORY_FILE) == 0)
+        HostCreateOptions |= FILE_DIRECTORY_FILE;
+
     // ******************************************************************
     // * Initialize Object Attributes
     // ******************************************************************
     {
-        mbstowcs(wszObjectName, szBuffer, 160);
+        char szHostName[160];
+        strncpy(szHostName, szBuffer, NameLength);
+        szHostName[NameLength] = '\0';
+        mbstowcs(wszObjectName, szHostName, 160);
 
         NtDll::RtlInitUnicodeString(&NtUnicodeString, wszObjectName);
 
@@ -10450,13 +10473,54 @@ XBSYSAPI EXPORTNUM(190) NTSTATUS NTAPI xboxkrnl::NtCreateFile(
 
     NTSTATUS ret = NtDll::NtCreateFile(
         FileHandle, NtDesiredAccess, &NtObjAttr, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock,
-        (NtDll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess, CreateDisposition, CreateOptions, NULL, NULL);
+        (NtDll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess, CreateDisposition, HostCreateOptions, NULL, NULL);
 
     if(ret == STATUS_SUCCESS && FileHandle != NULL)
     {
         EmuSetUnbufferedFileHandle(
             *FileHandle,
-            (CreateOptions & FILE_NO_INTERMEDIATE_BUFFERING) != 0);
+            (HostCreateOptions & FILE_NO_INTERMEDIATE_BUFFERING) != 0);
+    }
+
+    // A FILE_CREATE of a trailing-separator directory that collides is the
+    // shape of a cache bootstrap on a directory left behind by a previous
+    // session that was killed before it filled the directory in. Hardware
+    // never sees that state (a fresh console has no cache directory), and the
+    // title treats the collision as unrecoverable, then retries its
+    // never-populated data files forever (Arx Fatalis wedges on its intro
+    // wave banks). An empty directory carries no state, so reclaim it and let
+    // the create go through; RemoveDirectoryA fails on anything non-empty, so
+    // only the empty-directory case reaches the retry.
+    if(TrailingSeparatorStripped
+       && ret == STATUS_OBJECT_NAME_COLLISION
+       && CreateDisposition == FILE_CREATE
+       && ObjectAttributes->RootDirectory != NULL)
+    {
+        char szHostPath[512];
+        DWORD HostPathLength = GetFinalPathNameByHandleA(
+            ObjectAttributes->RootDirectory, szHostPath, sizeof(szHostPath) - 2, FILE_NAME_NORMALIZED);
+        if(HostPathLength > 0 && HostPathLength < sizeof(szHostPath) - 2)
+        {
+            if(szHostPath[HostPathLength - 1] != '\\')
+                szHostPath[HostPathLength++] = '\\';
+            strncpy(szHostPath + HostPathLength, szBuffer, NameLength);
+            szHostPath[HostPathLength + NameLength] = '\0';
+
+            if(RemoveDirectoryA(szHostPath))
+            {
+                ret = NtDll::NtCreateFile(
+                    FileHandle, NtDesiredAccess, &NtObjAttr, (NtDll::IO_STATUS_BLOCK*)IoStatusBlock,
+                    (NtDll::LARGE_INTEGER*)AllocationSize, FileAttributes, ShareAccess,
+                    CreateDisposition, HostCreateOptions, NULL, NULL);
+
+                if(ret == STATUS_SUCCESS && FileHandle != NULL)
+                {
+                    EmuSetUnbufferedFileHandle(
+                        *FileHandle,
+                        (HostCreateOptions & FILE_NO_INTERMEDIATE_BUFFERING) != 0);
+                }
+            }
+        }
     }
 
     if(FAILED(ret))
