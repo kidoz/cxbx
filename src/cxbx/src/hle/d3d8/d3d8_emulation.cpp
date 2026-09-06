@@ -6933,6 +6933,48 @@ static void EmuTraceBoundTextureAtDraw()
     }
 }
 
+// Native-Vulkan migration P3: mirror the bound texture into the backend.
+// The HLE has already converted formats and expanded palettes into the host
+// d3d8 texture, so the backend receives host bytes and host formats only.
+// Data is re-pulled on every real bind; redundant binds are suppressed by
+// the host-forward cache upstream.
+static void EmuVulkanStageTextureUpload(DWORD Stage,
+                                        XTL::IDirect3DBaseTexture8* pBaseTexture8)
+{
+    if(!cxbx::d3d8::HostBackendRenders())
+    {
+        return;
+    }
+    if(pBaseTexture8 == NULL ||
+       pBaseTexture8->GetType() != XTL::D3DRTYPE_TEXTURE)
+    {
+        // Cubes and volumes mirror in a later phase; unbound stages sample
+        // the backend's white dummy.
+        cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
+        return;
+    }
+    XTL::IDirect3DTexture8* pTexture8 =
+        static_cast<XTL::IDirect3DTexture8*>(pBaseTexture8);
+    XTL::D3DSURFACE_DESC description = {};
+    if(FAILED(pTexture8->GetLevelDesc(0, &description)) ||
+       description.Width == 0 || description.Height == 0)
+    {
+        cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
+        return;
+    }
+    XTL::D3DLOCKED_RECT locked = {};
+    if(FAILED(pTexture8->LockRect(0, &locked, NULL, D3DLOCK_READONLY)))
+    {
+        cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
+        return;
+    }
+    cxbx::d3d8::HostBackendSetTexture(Stage, pBaseTexture8, locked.pBits,
+                                      static_cast<unsigned>(locked.Pitch),
+                                      description.Width, description.Height,
+                                      static_cast<unsigned>(description.Format));
+    pTexture8->UnlockRect(0);
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetTexture
 // ******************************************************************
@@ -7034,6 +7076,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture(
         g_EmuBoundGuestTextures[Stage] = pTexture;
         g_EmuBoundGuestTextureDescriptors[Stage] =
             EmuCaptureRecordedTextureDescriptor(pTexture);
+        EmuVulkanStageTextureUpload(Stage, pBaseTexture8);
     }
 
     static int traceEnabled = -1;
@@ -8003,7 +8046,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                     {
                         cxbx::d3d8::HostBackendDrawUP(
                             D3DPT_TRIANGLELIST, n / 3, Tris,
-                            sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/);
+                            sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/,
+                            20 /*u,v after diffuse*/);
                     }
                     else
                     {
@@ -8028,7 +8072,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                     {
                         cxbx::d3d8::HostBackendDrawUP(
                             PCPrim, PrimCount, g_EmuImVerts,
-                            sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/);
+                            sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/,
+                            20 /*u,v after diffuse*/);
                     }
                     else
                     {
@@ -12298,6 +12343,7 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSU, pCur[0]);
+                cxbx::d3d8::HostBackendSetSamplerState(v, 0, pCur[0]);
             }
 
             if(pCur[1] != X_D3DTSS_UNK)
@@ -12306,6 +12352,7 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSV, pCur[1]);
+                cxbx::d3d8::HostBackendSetSamplerState(v, 1, pCur[1]);
             }
 
             if(pCur[2] != X_D3DTSS_UNK)
@@ -12322,6 +12369,7 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAGFILTER, pCur[3]);
+                cxbx::d3d8::HostBackendSetSamplerState(v, 2, pCur[3]);
             }
 
             if(pCur[4] != X_D3DTSS_UNK)
@@ -12330,6 +12378,7 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MINFILTER, pCur[4]);
+                cxbx::d3d8::HostBackendSetSamplerState(v, 3, pCur[4]);
             }
 
             if(pCur[5] != X_D3DTSS_UNK)
@@ -12356,16 +12405,23 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("(Temporarily) Unsupported D3DTSS_ALPHAOP Value (%d)", pCur[12]);
 
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLOROP, pCur[12]);
+                cxbx::d3d8::HostBackendSetTextureOp(v, 0, pCur[12]);
             }
 
             if(pCur[13] != X_D3DTSS_UNK)
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
 
             if(pCur[14] != X_D3DTSS_UNK)
+            {
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG1, pCur[14]);
+                cxbx::d3d8::HostBackendSetTextureOp(v, 1, pCur[14]);
+            }
 
             if(pCur[15] != X_D3DTSS_UNK)
+            {
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG2, pCur[15]);
+                cxbx::d3d8::HostBackendSetTextureOp(v, 2, pCur[15]);
+            }
 
             // TODO: Use a lookup table, this is not always a 1:1 map (same as D3DTSS_COLOROP)
             if(pCur[16] != X_D3DTSS_UNK)
@@ -13848,7 +13904,8 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                 // EmuVshCpuVertex); texture stages land with P3.
                 cxbx::d3d8::HostBackendDrawUP(primitiveType, primitiveCount,
                                               drawVertices,
-                                              sizeof(EmuVshCpuVertex), 20);
+                                              sizeof(EmuVshCpuVertex), 20,
+                                              28 /*texCoords[0]*/);
                 result = D3D_OK;
             }
             else
@@ -14596,8 +14653,13 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
             DrawData = s_QuadExpand;
             DrawStride = VertexStreamZeroStride;
         }
+        const unsigned int TexCoordOffset =
+            (g_EmuCurrentFvf & D3DFVF_TEX1) != 0
+                ? (DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u)
+                : 0xFFFFFFFFu;
         cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
-                                      DrawData, DrawStride, DiffuseOffset);
+                                      DrawData, DrawStride, DiffuseOffset,
+                                      TexCoordOffset);
         EmuD3DDrawPost();
         EmuSwapFS(); // XBox FS
         return;

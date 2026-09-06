@@ -86,16 +86,35 @@ void HostBackendSetTargetSize(unsigned int width, unsigned int height);
 void HostBackendClear(unsigned int flags, unsigned int color);
 
 // Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0, optional
-// D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none). primitiveType uses
-// the host D3DPRIMITIVETYPE enumeration and primitiveCount follows
+// D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none), optional float2
+// texcoord at texCoordOffset (0xFFFFFFFF = none). primitiveType uses the
+// host D3DPRIMITIVETYPE enumeration and primitiveCount follows
 // DrawPrimitiveUP semantics. Unsupported layouts are dropped with a
 // one-time warning.
 void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
-                       unsigned int diffuseOffset);
+                       unsigned int diffuseOffset,
+                       unsigned int texCoordOffset);
 
 // Render target dimensions; false when the render path is not active.
 bool HostBackendTargetSize(unsigned int* width, unsigned int* height);
+
+// Binds (or unbinds, hostTexture == nullptr) the stage texture for the
+// render path. The caller resolves the host d3d8 texture to pixels
+// (LockRect) and passes the level-0 bytes with hostFormat = the host
+// D3DFORMAT value; the renderer uploads, caches by hostTexture identity,
+// and maps the format.
+void HostBackendSetTexture(unsigned int stage, void* hostTexture,
+                           const void* pixels, unsigned int pitch,
+                           unsigned int width, unsigned int height,
+                           unsigned int hostFormat);
+
+// d3d8 texture-stage state, one component at a time (types documented in
+// the renderer contract; mirrors the HLE deferred texture-state loop).
+void HostBackendSetTextureOp(unsigned int stage, unsigned int type,
+                             unsigned int value);
+void HostBackendSetSamplerState(unsigned int stage, unsigned int type,
+                                unsigned int value);
 
 // Copies the render target into dst (row pitch in bytes) for backbuffer
 // reads. Returns false when the render path is not active.

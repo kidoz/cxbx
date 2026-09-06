@@ -91,12 +91,43 @@ void HostBackendClear(unsigned int flags, unsigned int color)
 
 void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
-                       unsigned int diffuseOffset)
+                       unsigned int diffuseOffset,
+                       unsigned int texCoordOffset)
 {
     if(HostBackendRenders())
     {
         vulkan::RendererDrawUP(primitiveType, primitiveCount, data, stride,
-                               diffuseOffset);
+                               diffuseOffset, texCoordOffset);
+    }
+}
+
+void HostBackendSetTexture(unsigned int stage, void* hostTexture,
+                           const void* pixels, unsigned int pitch,
+                           unsigned int width, unsigned int height,
+                           unsigned int hostFormat)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetTexture(stage, hostTexture, pixels, pitch, width,
+                                   height, hostFormat);
+    }
+}
+
+void HostBackendSetTextureOp(unsigned int stage, unsigned int type,
+                             unsigned int value)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetTextureOp(stage, type, value);
+    }
+}
+
+void HostBackendSetSamplerState(unsigned int stage, unsigned int type,
+                                unsigned int value)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetSamplerState(stage, type, value);
     }
 }
 

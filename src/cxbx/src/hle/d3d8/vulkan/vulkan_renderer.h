@@ -47,17 +47,35 @@ void RendererSetViewport(float x, float y, float width, float height);
 bool RendererClear(unsigned int flags, unsigned int color);
 
 // Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0,
-// optional D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none).
-// primitiveType uses the host D3DPRIMITIVETYPE enumeration and
-// primitiveCount follows DrawPrimitiveUP semantics (converted to a vertex
-// count internally).
+// optional D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none), optional
+// float2 texcoord at texCoordOffset (0xFFFFFFFF = none). primitiveType uses
+// the host D3DPRIMITIVETYPE enumeration and primitiveCount follows
+// DrawPrimitiveUP semantics (converted to a vertex count internally).
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
-                    unsigned int diffuseOffset);
+                    unsigned int diffuseOffset, unsigned int texCoordOffset);
 
 // Target dimensions for callers that stage readback shadows.
 unsigned int RendererTargetWidth();
 unsigned int RendererTargetHeight();
+
+// Binds (or unbinds, key == nullptr) the stage texture. pixels are the
+// level-0 texels in the host format's byte layout (row pitch in bytes);
+// the renderer uploads and caches by key. hostFormat is the host D3DFORMAT
+// value; unsupported formats bind the white dummy with a one-time warning.
+bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
+                        unsigned int pitch, unsigned int width,
+                        unsigned int height, unsigned int hostFormat);
+
+// d3d8 texture-stage state, one component at a time (mirrors the HLE's
+// deferred texture-state apply loop). TextureOp types: 0 = COLOROP,
+// 1 = COLORARG1, 2 = COLORARG2 (D3DTOP/D3DTA values consumed by the
+// fragment shader). SamplerState types: 0 = ADDRESSU, 1 = ADDRESSV,
+// 2 = MAGFILTER, 3 = MINFILTER (D3DTADDRESS_*/D3DTEXF_* values).
+void RendererSetTextureOp(unsigned int stage, unsigned int type,
+                          unsigned int value);
+void RendererSetSamplerState(unsigned int stage, unsigned int type,
+                             unsigned int value);
 
 // Submits the pending batch, then copies the target into dst (row pitch in
 // bytes). Safe to call with an empty batch.

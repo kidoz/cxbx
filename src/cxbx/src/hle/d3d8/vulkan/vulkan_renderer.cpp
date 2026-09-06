@@ -34,7 +34,28 @@ constexpr unsigned int kTriangleList = 4;
 constexpr unsigned int kTriangleStrip = 5;
 constexpr unsigned int kTriangleFan = 6;
 constexpr unsigned int kNoDiffuse = 0xFFFFFFFFu;
+constexpr unsigned int kNoTexCoord = 0xFFFFFFFFu;
 constexpr unsigned int kVertexStagingInitial = 256 * 1024;
+constexpr unsigned int kMaxTextures = 48;
+constexpr unsigned int kMaxDescriptorSets = 512;
+
+// d3d8 texture-stage defaults (stage 0 MODULATEs, later stages disabled).
+constexpr unsigned int kDefaultColorOp = 4;    // D3DTOP_MODULATE
+constexpr unsigned int kDefaultColorOpOff = 1; // D3DTOP_DISABLE
+constexpr unsigned int kDefaultArg1 = 2;       // D3DTA_TEXTURE
+constexpr unsigned int kDefaultArg2 = 1;       // D3DTA_CURRENT
+
+struct RendererTexture
+{
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int hostFormat = 0;
+    void* key = nullptr;
+    unsigned long long lastUse = 0;
+};
 
 struct RendererState
 {
@@ -42,11 +63,25 @@ struct RendererState
     bool frameOpen = false;
     bool renderingActive = false;
     bool unsupportedLogged = false;
+    bool textureFormatLogged = false;
     unsigned int width = 640;
     unsigned int height = 480;
     float viewport[4] = { 0.0f, 0.0f, 640.0f, 480.0f };
     float pendingClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     bool hasPendingClear = false;
+
+    // Texture-stage state (d3d8 values), stage order 0..3.
+    std::uint32_t stageOp[4] = { kDefaultColorOp, kDefaultColorOpOff,
+                                 kDefaultColorOpOff, kDefaultColorOpOff };
+    std::uint32_t stageArg1[4] = { kDefaultArg1, kDefaultArg1, kDefaultArg1,
+                                   kDefaultArg1 };
+    std::uint32_t stageArg2[4] = { kDefaultArg2, kDefaultArg2, kDefaultArg2,
+                                   kDefaultArg2 };
+    std::uint32_t stageAddressU[4] = {}; // d3d8 D3DTADDRESS_WRAP = 1
+    std::uint32_t stageAddressV[4] = {};
+    std::uint32_t stageMagFilter[4] = {}; // d3d8 D3DTEXF_POINT = 1, LINEAR = 2
+    std::uint32_t stageMinFilter[4] = {};
+    RendererTexture* stageTexture[4] = {};
 
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -75,6 +110,22 @@ struct RendererState
     VkShaderModule fragmentShader = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     std::map<unsigned long long, VkPipeline> pipelines;
+
+    // Texture mirror (P3): guest textures pulled at bind time.
+    RendererTexture textures[kMaxTextures] = {};
+    unsigned int textureCount = 0;
+    unsigned long long textureUseCounter = 0;
+    VkBuffer textureStaging = VK_NULL_HANDLE;
+    VkDeviceMemory textureStagingMemory = VK_NULL_HANDLE;
+    void* textureMapped = nullptr;
+    VkDeviceSize textureStagingSize = 0;
+    VkImageView dummyView = VK_NULL_HANDLE;
+    VkImage dummyImage = VK_NULL_HANDLE;
+    VkDeviceMemory dummyMemory = VK_NULL_HANDLE;
+    std::map<unsigned long long, VkSampler> samplers;
+    VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 };
 
 RendererState g_R;
@@ -122,14 +173,14 @@ bool AllocateDeviceMemory(VkDeviceMemory* memory, VkDeviceSize size,
 
 bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
                     unsigned int stride, bool hasDiffuse,
-                    unsigned int diffuseOffset)
+                    unsigned int diffuseOffset, unsigned int texCoordOffset)
 {
     VkVertexInputBindingDescription binding = {};
     binding.binding = 0;
     binding.stride = stride;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attributes[2] = {};
+    VkVertexInputAttributeDescription attributes[3] = {};
     attributes[0].location = 0;
     attributes[0].binding = 0;
     attributes[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -143,6 +194,15 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
         attributes[1].offset = diffuseOffset;
         attributeCount = 2;
     }
+    // The vertex shader always reads the texcoord; draws without one bind
+    // offset 0, whose values are only consumed when a stage enables a
+    // TEXTURE argument (those draws always supply real texcoords).
+    attributes[attributeCount].location = 2;
+    attributes[attributeCount].binding = 0;
+    attributes[attributeCount].format = VK_FORMAT_R32G32_SFLOAT;
+    attributes[attributeCount].offset =
+        texCoordOffset != kNoTexCoord ? texCoordOffset : 0;
+    ++attributeCount;
 
     VkPipelineVertexInputStateCreateInfo vertexInput = {};
     vertexInput.sType =
@@ -229,7 +289,7 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
 }
 
 VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
-                       unsigned int diffuseOffset)
+                       unsigned int diffuseOffset, unsigned int texCoordOffset)
 {
     VkPrimitiveTopology topology;
     switch(primitiveType)
@@ -258,14 +318,15 @@ VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
         (static_cast<unsigned long long>(stride) << 8) |
         (static_cast<unsigned long long>(diffuseOffset != kNoDiffuse ? 1u : 0u)
          << 40) |
-        (static_cast<unsigned long long>(diffuseOffset) << 44);
+        (static_cast<unsigned long long>(diffuseOffset) << 44) |
+        (static_cast<unsigned long long>(texCoordOffset) << 20);
     auto found = g_R.pipelines.find(key);
     if(found != g_R.pipelines.end())
     {
         return found->second;
     }
     return CreatePipeline(key, topology, stride, diffuseOffset != kNoDiffuse,
-                          diffuseOffset)
+                          diffuseOffset, texCoordOffset)
                ? g_R.pipelines[key]
                : VK_NULL_HANDLE;
 }
@@ -339,7 +400,164 @@ bool SubmitFrame()
     vkQueueWaitIdle(g_R.queue);
     g_R.frameOpen = false;
     g_R.vertexCursor = 0;
+    // Draws recorded this frame referenced descriptor sets from the pool;
+    // nothing is in flight after the idle wait, so the pool recycles.
+    vkResetDescriptorPool(g_R.device, g_R.descriptorPool, 0);
+    g_R.descriptorSet = VK_NULL_HANDLE;
     return true;
+}
+
+// Host-format byte size for the supported mirror formats (0 = unsupported).
+unsigned int TextureFormatBytesPerPixel(unsigned int hostFormat,
+                                        VkFormat* formatOut)
+{
+    switch(hostFormat)
+    {
+        case 21: // D3DFMT_A8R8G8B8
+        case 22: // D3DFMT_X8R8G8B8
+            *formatOut = VK_FORMAT_B8G8R8A8_UNORM;
+            return 4;
+        case 23: // D3DFMT_R5G6B5
+            *formatOut = VK_FORMAT_B5G6R5_UNORM_PACK16;
+            return 2;
+        case 25: // D3DFMT_A1R5G5B5
+            *formatOut = VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+            return 2;
+        case 26: // D3DFMT_A4R4G4B4
+            *formatOut = VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+            return 2;
+        default:
+            *formatOut = VK_FORMAT_UNDEFINED;
+            return 0;
+    }
+}
+
+bool EnsureTextureStaging(VkDeviceSize needed)
+{
+    if(g_R.textureStagingSize >= needed)
+    {
+        return true;
+    }
+    if(g_R.textureMapped != nullptr)
+    {
+        vkUnmapMemory(g_R.device, g_R.textureStagingMemory);
+        g_R.textureMapped = nullptr;
+    }
+    if(g_R.textureStaging != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(g_R.device, g_R.textureStaging, nullptr);
+        g_R.textureStaging = VK_NULL_HANDLE;
+    }
+    if(g_R.textureStagingMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.textureStagingMemory, nullptr);
+        g_R.textureStagingMemory = VK_NULL_HANDLE;
+    }
+    g_R.textureStagingSize = 0;
+
+    VkBufferCreateInfo bufferInfo = {};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = needed;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if(vkCreateBuffer(g_R.device, &bufferInfo, nullptr,
+                      &g_R.textureStaging) != VK_SUCCESS)
+    {
+        return false;
+    }
+    VkMemoryRequirements requirements = {};
+    vkGetBufferMemoryRequirements(g_R.device, g_R.textureStaging,
+                                  &requirements);
+    if(!AllocateDeviceMemory(&g_R.textureStagingMemory, requirements.size,
+                             requirements.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ||
+       vkBindBufferMemory(g_R.device, g_R.textureStaging,
+                          g_R.textureStagingMemory, 0) != VK_SUCCESS ||
+       vkMapMemory(g_R.device, g_R.textureStagingMemory, 0, needed, 0,
+                   &g_R.textureMapped) != VK_SUCCESS)
+    {
+        return false;
+    }
+    g_R.textureStagingSize = needed;
+    return true;
+}
+
+void DestroyTextureEntry(RendererTexture* texture)
+{
+    if(texture->view != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(g_R.device, texture->view, nullptr);
+    }
+    if(texture->image != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(g_R.device, texture->image, nullptr);
+    }
+    if(texture->memory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, texture->memory, nullptr);
+    }
+    *texture = {};
+}
+
+VkSampler SamplerFor(unsigned int stage)
+{
+    // d3d8 values normalize to their defaults when never set.
+    const unsigned int addressU =
+        g_R.stageAddressU[stage] != 0 ? g_R.stageAddressU[stage] : 1;
+    const unsigned int addressV =
+        g_R.stageAddressV[stage] != 0 ? g_R.stageAddressV[stage] : 1;
+    const unsigned int magFilter =
+        g_R.stageMagFilter[stage] != 0 ? g_R.stageMagFilter[stage] : 1;
+    const unsigned int minFilter =
+        g_R.stageMinFilter[stage] != 0 ? g_R.stageMinFilter[stage] : 1;
+
+    const unsigned long long key =
+        addressU | (addressV << 8) | (magFilter << 16) | (minFilter << 24);
+    auto found = g_R.samplers.find(key);
+    if(found != g_R.samplers.end())
+    {
+        return found->second;
+    }
+
+    const auto addressMode = [](unsigned int value)
+    {
+        switch(value)
+        {
+            case 2:
+                return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            case 3:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case 4:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            case 5:
+                return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            default:
+                return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        }
+    };
+    const auto filter = [](unsigned int value)
+    {
+        return value == 2 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    };
+
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = filter(magFilter);
+    samplerInfo.minFilter = filter(minFilter);
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = addressMode(addressU);
+    samplerInfo.addressModeV = addressMode(addressV);
+    samplerInfo.addressModeW = addressMode(addressU);
+    samplerInfo.maxLod = 0.0f; // level 0 only in P3
+    samplerInfo.minLod = 0.0f;
+    VkSampler sampler = VK_NULL_HANDLE;
+    if(vkCreateSampler(g_R.device, &samplerInfo, nullptr, &sampler) !=
+       VK_SUCCESS)
+    {
+        return VK_NULL_HANDLE;
+    }
+    g_R.samplers[key] = sampler;
+    return sampler;
 }
 
 bool EnsureStaging(VkDeviceSize needed)
@@ -566,14 +784,54 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         return false;
     }
 
-    VkPushConstantRange pushRange = {};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pushRange.offset = 0;
-    pushRange.size = 16;
+    // Push constants: vec4 viewport + uvec4 stageOp[4] (80 bytes), shared
+    // by the vertex (viewport) and fragment (stage cascade) stages.
+    VkPushConstantRange pushRanges[2] = {};
+    pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushRanges[0].offset = 0;
+    pushRanges[0].size = 16;
+    pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRanges[1].offset = 16;
+    pushRanges[1].size = 64;
+
+    VkDescriptorSetLayoutBinding textureBinding = {};
+    textureBinding.binding = 0;
+    textureBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    textureBinding.descriptorCount = 4;
+    textureBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo layoutCreateInfo = {};
+    layoutCreateInfo.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutCreateInfo.bindingCount = 1;
+    layoutCreateInfo.pBindings = &textureBinding;
+    if(vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr,
+                                   &g_R.descriptorLayout) != VK_SUCCESS)
+    {
+        RendererShutdown();
+        return false;
+    }
+
+    VkDescriptorPoolSize poolSize = {};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = 4 * kMaxDescriptorSets;
+    VkDescriptorPoolCreateInfo poolCreateInfo = {};
+    poolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCreateInfo.maxSets = kMaxDescriptorSets;
+    poolCreateInfo.poolSizeCount = 1;
+    poolCreateInfo.pPoolSizes = &poolSize;
+    if(vkCreateDescriptorPool(device, &poolCreateInfo, nullptr,
+                              &g_R.descriptorPool) != VK_SUCCESS)
+    {
+        RendererShutdown();
+        return false;
+    }
+
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushRange;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &g_R.descriptorLayout;
+    layoutInfo.pushConstantRangeCount = 2;
+    layoutInfo.pPushConstantRanges = pushRanges;
     if(vkCreatePipelineLayout(device, &layoutInfo, nullptr,
                               &g_R.pipelineLayout) != VK_SUCCESS)
     {
@@ -623,6 +881,123 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     }
 
     g_R.valid = true;
+
+    // White 1x1 dummy for unbound texture stages.
+    {
+        VkImageCreateInfo imageInfo = {};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+        imageInfo.extent = { 1, 1, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImage dummyImage = VK_NULL_HANDLE;
+        VkDeviceMemory dummyMemory = VK_NULL_HANDLE;
+        if(vkCreateImage(device, &imageInfo, nullptr, &dummyImage) ==
+               VK_SUCCESS &&
+           EnsureTextureStaging(4))
+        {
+            VkMemoryRequirements requirements = {};
+            vkGetImageMemoryRequirements(device, dummyImage, &requirements);
+            if(AllocateDeviceMemory(&dummyMemory, requirements.size,
+                                    requirements.memoryTypeBits,
+                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+               vkBindImageMemory(device, dummyImage, dummyMemory, 0) ==
+                   VK_SUCCESS)
+            {
+                memset(g_R.textureMapped, 0xFF, 4);
+                VkCommandBufferBeginInfo beginInfo = {};
+                beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                beginInfo.flags =
+                    VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                vkResetCommandBuffer(g_R.commandBuffer, 0);
+                vkBeginCommandBuffer(g_R.commandBuffer, &beginInfo);
+                VkImageMemoryBarrier toDst = {};
+                toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDst.image = dummyImage;
+                toDst.subresourceRange.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                toDst.subresourceRange.levelCount = 1;
+                toDst.subresourceRange.layerCount = 1;
+                vkCmdPipelineBarrier(g_R.commandBuffer,
+                                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                     nullptr, 0, nullptr, 1, &toDst);
+                VkBufferImageCopy region = {};
+                region.imageSubresource.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent = { 1, 1, 1 };
+                vkCmdCopyBufferToImage(g_R.commandBuffer, g_R.textureStaging,
+                                       dummyImage,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       1, &region);
+                VkImageMemoryBarrier toShader = toDst;
+                toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                vkCmdPipelineBarrier(g_R.commandBuffer,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1,
+                                     &toShader);
+                vkEndCommandBuffer(g_R.commandBuffer);
+                VkSubmitInfo submitInfo = {};
+                submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                submitInfo.commandBufferCount = 1;
+                submitInfo.pCommandBuffers = &g_R.commandBuffer;
+                vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+                vkQueueWaitIdle(queue);
+
+                VkImageViewCreateInfo viewInfo = {};
+                viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                viewInfo.image = dummyImage;
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                viewInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+                viewInfo.subresourceRange.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                viewInfo.subresourceRange.levelCount = 1;
+                viewInfo.subresourceRange.layerCount = 1;
+                if(vkCreateImageView(device, &viewInfo, nullptr,
+                                     &g_R.dummyView) == VK_SUCCESS)
+                {
+                    // Ownership moves to the renderer state.
+                    g_R.textures[kMaxTextures - 1].image = dummyImage;
+                    g_R.textures[kMaxTextures - 1].memory = dummyMemory;
+                    g_R.textures[kMaxTextures - 1].width = 1;
+                    g_R.textures[kMaxTextures - 1].height = 1;
+                    g_R.textureCount = kMaxTextures - 1 < g_R.textureCount
+                                           ? g_R.textureCount
+                                           : g_R.textureCount;
+                }
+            }
+        }
+        if(g_R.dummyView == VK_NULL_HANDLE)
+        {
+            if(dummyImage != VK_NULL_HANDLE)
+            {
+                vkDestroyImage(device, dummyImage, nullptr);
+            }
+            if(dummyMemory != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(device, dummyMemory, nullptr);
+            }
+            printf("VULKAN| white dummy texture unavailable; unbound stages "
+                   "will sample black\n");
+        }
+    }
+
     printf("VULKAN| renderer ready: target %ux%u B8G8R8A8\n", g_R.width,
            g_R.height);
     return true;
@@ -636,6 +1011,62 @@ void RendererShutdown()
         return;
     }
     vkDeviceWaitIdle(g_R.device);
+    for(auto& sampler : g_R.samplers)
+    {
+        vkDestroySampler(g_R.device, sampler.second, nullptr);
+    }
+    g_R.samplers.clear();
+    if(g_R.dummyView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(g_R.device, g_R.dummyView, nullptr);
+        g_R.dummyView = VK_NULL_HANDLE;
+    }
+    if(g_R.dummyImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(g_R.device, g_R.dummyImage, nullptr);
+        g_R.dummyImage = VK_NULL_HANDLE;
+    }
+    if(g_R.dummyMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.dummyMemory, nullptr);
+        g_R.dummyMemory = VK_NULL_HANDLE;
+    }
+    if(g_R.textureMapped != nullptr)
+    {
+        vkUnmapMemory(g_R.device, g_R.textureStagingMemory);
+        g_R.textureMapped = nullptr;
+    }
+    if(g_R.textureStaging != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(g_R.device, g_R.textureStaging, nullptr);
+        g_R.textureStaging = VK_NULL_HANDLE;
+    }
+    if(g_R.textureStagingMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.textureStagingMemory, nullptr);
+        g_R.textureStagingMemory = VK_NULL_HANDLE;
+    }
+    g_R.textureStagingSize = 0;
+    for(unsigned int i = 0; i < kMaxTextures; ++i)
+    {
+        DestroyTextureEntry(&g_R.textures[i]);
+    }
+    g_R.textureCount = 0;
+    for(unsigned int stage = 0; stage < 4; ++stage)
+    {
+        g_R.stageTexture[stage] = nullptr;
+    }
+    if(g_R.descriptorPool != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorPool(g_R.device, g_R.descriptorPool, nullptr);
+        g_R.descriptorPool = VK_NULL_HANDLE;
+    }
+    if(g_R.descriptorLayout != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorSetLayout(g_R.device, g_R.descriptorLayout,
+                                     nullptr);
+        g_R.descriptorLayout = VK_NULL_HANDLE;
+    }
     for(auto& entry : g_R.pipelines)
     {
         vkDestroyPipeline(g_R.device, entry.second, nullptr);
@@ -756,7 +1187,7 @@ bool RendererClear(unsigned int flags, unsigned int color)
 
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
-                    unsigned int diffuseOffset)
+                    unsigned int diffuseOffset, unsigned int texCoordOffset)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid || data == nullptr || primitiveCount == 0 || stride == 0)
@@ -843,8 +1274,8 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         g_R.renderingActive = true;
     }
 
-    VkPipeline pipeline = PipelineFor(primitiveType, stride,
-                                      diffuseOffset);
+    VkPipeline pipeline = PipelineFor(primitiveType, stride, diffuseOffset,
+                                      texCoordOffset);
     if(pipeline == VK_NULL_HANDLE)
     {
         return false;
@@ -858,6 +1289,53 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     vkCmdSetScissor(g_R.commandBuffer, 0, 1, &scissor);
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, 16, g_R.viewport);
+
+    // Bind the four stage textures (white dummy for unbound stages) through
+    // a fresh descriptor set; the pool resets after every frame submit.
+    VkDescriptorSetAllocateInfo allocateInfo = {};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = g_R.descriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &g_R.descriptorLayout;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if(vkAllocateDescriptorSets(g_R.device, &allocateInfo, &set) !=
+       VK_SUCCESS)
+    {
+        printf("VULKAN| descriptor set allocation failed\n");
+        return false;
+    }
+    VkDescriptorImageInfo imageInfos[4] = {};
+    VkWriteDescriptorSet writes[4] = {};
+    for(unsigned int stage = 0; stage < 4; ++stage)
+    {
+        RendererTexture* texture = g_R.stageTexture[stage];
+        imageInfos[stage].sampler = SamplerFor(stage);
+        imageInfos[stage].imageView =
+            texture != nullptr ? texture->view : g_R.dummyView;
+        imageInfos[stage].imageLayout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[stage].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[stage].dstSet = set;
+        writes[stage].dstBinding = 0;
+        writes[stage].dstArrayElement = stage;
+        writes[stage].descriptorCount = 1;
+        writes[stage].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[stage].pImageInfo = &imageInfos[stage];
+    }
+    vkUpdateDescriptorSets(g_R.device, 4, writes, 0, nullptr);
+    vkCmdBindDescriptorSets(g_R.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            g_R.pipelineLayout, 0, 1, &set, 0, nullptr);
+
+    std::uint32_t stageConstants[16] = {};
+    for(unsigned int stage = 0; stage < 4; ++stage)
+    {
+        stageConstants[stage * 4 + 0] = g_R.stageOp[stage];
+        stageConstants[stage * 4 + 1] = g_R.stageArg1[stage];
+        stageConstants[stage * 4 + 2] = g_R.stageArg2[stage];
+    }
+    vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 16, 64, stageConstants);
     VkDeviceSize bufferOffset = offset;
     vkCmdBindVertexBuffers(g_R.commandBuffer, 0, 1, &g_R.vertexStaging,
                            &bufferOffset);
@@ -880,6 +1358,249 @@ unsigned int RendererTargetWidth()
 unsigned int RendererTargetHeight()
 {
     return g_R.height;
+}
+
+bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
+                        unsigned int pitch, unsigned int width,
+                        unsigned int height, unsigned int hostFormat)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || stage >= 4)
+    {
+        return false;
+    }
+    if(key == nullptr || pixels == nullptr || width == 0 || height == 0)
+    {
+        g_R.stageTexture[stage] = nullptr;
+        return true;
+    }
+
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    const unsigned int bytesPerPixel =
+        TextureFormatBytesPerPixel(hostFormat, &format);
+    if(bytesPerPixel == 0)
+    {
+        if(!g_R.textureFormatLogged)
+        {
+            g_R.textureFormatLogged = true;
+            printf("VULKAN| texture host format %u not mirrored yet; stage "
+                   "samples white\n",
+                   hostFormat);
+        }
+        g_R.stageTexture[stage] = nullptr;
+        return false;
+    }
+    if(width > 4096 || height > 4096 ||
+       static_cast<VkDeviceSize>(pitch) * height > 16 * 1024 * 1024)
+    {
+        printf("VULKAN| texture %ux%u exceeds the P3 upload budget\n", width,
+               height);
+        g_R.stageTexture[stage] = nullptr;
+        return false;
+    }
+
+    RendererTexture* entry = nullptr;
+    for(unsigned int i = 0; i < g_R.textureCount; ++i)
+    {
+        if(g_R.textures[i].key == key)
+        {
+            entry = &g_R.textures[i];
+            break;
+        }
+    }
+    if(entry != nullptr &&
+       (entry->width != width || entry->height != height ||
+        entry->hostFormat != hostFormat))
+    {
+        DestroyTextureEntry(entry);
+        entry = nullptr;
+    }
+    if(entry == nullptr)
+    {
+        if(g_R.textureCount == kMaxTextures)
+        {
+            // Evict the least recently used entry (images may be referenced
+            // by the pending batch; the idle wait below keeps it safe).
+            unsigned int oldest = 0;
+            for(unsigned int i = 1; i < g_R.textureCount; ++i)
+            {
+                if(g_R.textures[i].lastUse < g_R.textures[oldest].lastUse)
+                {
+                    oldest = i;
+                }
+            }
+            SubmitFrame();
+            DestroyTextureEntry(&g_R.textures[oldest]);
+            entry = &g_R.textures[oldest];
+        }
+        else
+        {
+            entry = &g_R.textures[g_R.textureCount++];
+        }
+        entry->key = key;
+        entry->width = width;
+        entry->height = height;
+        entry->hostFormat = hostFormat;
+
+        VkImageCreateInfo imageInfo = {};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = format;
+        imageInfo.extent = { width, height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if(vkCreateImage(g_R.device, &imageInfo, nullptr, &entry->image) !=
+           VK_SUCCESS)
+        {
+            DestroyTextureEntry(entry);
+            g_R.textureCount--;
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        VkMemoryRequirements requirements = {};
+        vkGetImageMemoryRequirements(g_R.device, entry->image, &requirements);
+        if(!AllocateDeviceMemory(&entry->memory, requirements.size,
+                                 requirements.memoryTypeBits,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+           vkBindImageMemory(g_R.device, entry->image, entry->memory, 0) !=
+               VK_SUCCESS)
+        {
+            DestroyTextureEntry(entry);
+            g_R.textureCount--;
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        VkImageViewCreateInfo viewInfo = {};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = entry->image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if(vkCreateImageView(g_R.device, &viewInfo, nullptr, &entry->view) !=
+           VK_SUCCESS)
+        {
+            DestroyTextureEntry(entry);
+            g_R.textureCount--;
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        entry->lastUse = ++g_R.textureUseCounter;
+    }
+
+    // Tight row copy into the upload staging, then buffer->image.
+    if(!EnsureTextureStaging(static_cast<VkDeviceSize>(width) * height *
+                             bytesPerPixel))
+    {
+        g_R.stageTexture[stage] = nullptr;
+        return false;
+    }
+    const unsigned tightPitch = width * bytesPerPixel;
+    for(unsigned row = 0; row < height; ++row)
+    {
+        memcpy(static_cast<char*>(g_R.textureMapped) +
+                   static_cast<size_t>(row) * tightPitch,
+               static_cast<const char*>(pixels) +
+                   static_cast<size_t>(row) * pitch,
+               tightPitch);
+    }
+
+    if(!OpenFrame())
+    {
+        g_R.valid = false;
+        g_R.stageTexture[stage] = nullptr;
+        return false;
+    }
+    VkImageMemoryBarrier toDst = {};
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.image = entry->image;
+    toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toDst.subresourceRange.levelCount = 1;
+    toDst.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &toDst);
+    VkBufferImageCopy region = {};
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = { width, height, 1 };
+    vkCmdCopyBufferToImage(g_R.commandBuffer, g_R.textureStaging, entry->image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    VkImageMemoryBarrier toShader = toDst;
+    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &toShader);
+    entry->lastUse = ++g_R.textureUseCounter;
+    g_R.stageTexture[stage] = entry;
+    return true;
+}
+
+void RendererSetTextureOp(unsigned int stage, unsigned int type,
+                          unsigned int value)
+{
+    RendererLockScope rendererLock;
+    if(stage >= 4)
+    {
+        return;
+    }
+    switch(type)
+    {
+        case 0:
+            g_R.stageOp[stage] = value;
+            break;
+        case 1:
+            g_R.stageArg1[stage] = value;
+            break;
+        case 2:
+            g_R.stageArg2[stage] = value;
+            break;
+        default:
+            break;
+    }
+}
+
+void RendererSetSamplerState(unsigned int stage, unsigned int type,
+                             unsigned int value)
+{
+    RendererLockScope rendererLock;
+    if(stage >= 4)
+    {
+        return;
+    }
+    switch(type)
+    {
+        case 0:
+            g_R.stageAddressU[stage] = value;
+            break;
+        case 1:
+            g_R.stageAddressV[stage] = value;
+            break;
+        case 2:
+            g_R.stageMagFilter[stage] = value;
+            break;
+        case 3:
+            g_R.stageMinFilter[stage] = value;
+            break;
+        default:
+            break;
+    }
 }
 
 bool RendererHasPendingFrame()
