@@ -768,6 +768,16 @@ struct EmuTiledSurfaceLock
 {
     XTL::X_D3DResource* pResource;
     XTL::IDirect3DSurface8* pSurface8;
+    // Set when the host surface refused a direct lock (render targets are
+    // not lockable in host d3d8, while every Xbox surface is): the guest
+    // edits a system-memory image instead, and the commit copies it back
+    // with CopyRects.
+    XTL::IDirect3DSurface8* pStagingSurface8;
+    bool StagingWritable;
+    // Depth-stencil host surfaces can be neither locked nor copied: hand the
+    // guest a zero-filled raw buffer and drop the contents at commit.
+    uint08* pRawStaging;
+    DWORD RawStagingSize;
 };
 
 static EmuTiledSurfaceLock g_TiledSurfaceLocks[8] = {};
@@ -2238,6 +2248,77 @@ static EmuTiledSurfaceLock* EmuFindFreeTiledSurfaceLock()
 // ******************************************************************
 static void EmuCommitTiledSurfaceLock(EmuTiledSurfaceLock* pLock)
 {
+    if(pLock->pRawStaging != NULL)
+    {
+        // Depth-stencil host surfaces can be neither locked nor copied back.
+        // A title that fills its depth surface from the CPU (an Xbox idiom:
+        // clear the depth buffer through a tiled lock) has its uniform fill
+        // mirrored into the host depth buffer with Clear; non-uniform edits
+        // are dropped.
+        DWORD dwValue = 0;
+        bool uniform = pLock->RawStagingSize > 0;
+        for(DWORD offset = 0; offset + 4 <= pLock->RawStagingSize; offset += 4)
+        {
+            DWORD word;
+            memcpy(&word, pLock->pRawStaging + offset, 4);
+            if(offset == 0)
+                dwValue = word;
+            else if(word != dwValue)
+            {
+                uniform = false;
+                break;
+            }
+        }
+        if(uniform)
+        {
+            float depth;
+            memcpy(&depth, &dwValue, 4);
+            __try
+            {
+                g_pD3DDevice8->Clear(0, NULL, D3DCLEAR_ZBUFFER, 0, depth, 0);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+        }
+        static int s_RawDepthCommits = 0;
+        if(s_RawDepthCommits++ < 3)
+            printf("*Warning* staged depth commit %ux uniform=0x%.08X (%s)\n",
+                   pLock->RawStagingSize, dwValue, uniform ? "mirrored" : "dropped");
+        free(pLock->pRawStaging);
+        pLock->pRawStaging = NULL;
+        pLock->RawStagingSize = 0;
+        return;
+    }
+
+    if(pLock->pStagingSurface8 != NULL)
+    {
+        // Staged lock: the host surface was never directly locked. Hand the
+        // edited image back with CopyRects (read-only locks skip the copy).
+        pLock->pStagingSurface8->UnlockRect();
+        if(pLock->StagingWritable)
+        {
+            __try
+            {
+                const HRESULT CopyResult = g_pD3DDevice8->CopyRects(
+                    pLock->pStagingSurface8, NULL, 0, pLock->pSurface8, NULL);
+                if(FAILED(CopyResult))
+                {
+                    printf("*Warning* staged surface commit failed (0x%.08X)\n",
+                           static_cast<uint32>(CopyResult));
+                }
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                EmuWarning("staged surface commit caught a host fault");
+            }
+        }
+        pLock->pStagingSurface8->Release();
+        pLock->pStagingSurface8 = NULL;
+        pLock->StagingWritable = false;
+        return;
+    }
+
     // The guest UnlockRect is not HLE-patched in this tree. Commit the host
     // surface before presenting; otherwise D3D8 can display stale/partial data.
     pLock->pSurface8->UnlockRect();
@@ -2299,7 +2380,108 @@ static HRESULT EmuLockTiledSurface(XTL::X_D3DResource* pResource, XTL::D3DLOCKED
 
     HRESULT hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
     if(FAILED(hRet))
-        return hRet;
+    {
+        // Host render targets (and other non-lockable host surfaces) refuse
+        // LockRect, while every Xbox surface is lockable. Stage the lock
+        // through a system-memory image: the guest edits the image, and the
+        // commit copies it back with CopyRects.
+        XTL::D3DSURFACE_DESC Desc = {};
+        __try
+        {
+            hRet = pSurface8->GetDesc(&Desc);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            hRet = D3DERR_INVALIDCALL;
+        }
+        if(FAILED(hRet) || Desc.Width == 0 || Desc.Height == 0)
+        {
+            printf("*Warning* staged lock: GetDesc failed (hr=0x%.08X, %lux%lu)\n",
+                   static_cast<uint32>(hRet),
+                   static_cast<unsigned long>(Desc.Width),
+                   static_cast<unsigned long>(Desc.Height));
+            return D3DERR_INVALIDCALL;
+        }
+
+        XTL::IDirect3DSurface8* pStaging = NULL;
+        HRESULT StagingResult = D3DERR_INVALIDCALL;
+        __try
+        {
+            StagingResult = g_pD3DDevice8->CreateImageSurface(
+                Desc.Width, Desc.Height, Desc.Format, &pStaging);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            StagingResult = D3DERR_INVALIDCALL;
+        }
+        if(FAILED(StagingResult) || pStaging == NULL)
+        {
+            // Image surfaces refuse depth-stencil formats, and host d3d8
+            // offers no depth readback at all. Hand the guest a zero-filled
+            // raw buffer instead of failing the lock (a failed Xbox lock is
+            // followed by a write through the returned pointer).
+            const int HostFormat = (int)Desc.Format;
+            const bool DepthFormat =
+                HostFormat == 75 /*D3DFMT_D24S8*/ || HostFormat == 80 /*D3DFMT_D16*/ ||
+                HostFormat == 71 /*D3DFMT_D32*/ || HostFormat == 73 /*D3DFMT_D15S1*/ ||
+                HostFormat == 74 /*D3DFMT_D24X8*/ || HostFormat == 79 /*D3DFMT_D24X4S4*/;
+            if(!DepthFormat)
+            {
+                printf("*Warning* staged lock: CreateImageSurface %ux%u fmt=%d failed "
+                       "(hr=0x%.08X)\n", (unsigned)Desc.Width, (unsigned)Desc.Height,
+                       HostFormat, static_cast<uint32>(StagingResult));
+                return D3DERR_INVALIDCALL;
+            }
+
+            const DWORD BytesPerPixel = 4;
+            const DWORD RawPitch = Desc.Width * BytesPerPixel;
+            const DWORD RawSize = RawPitch * Desc.Height;
+            uint08* pRaw = (uint08*)malloc(RawSize);
+            if(pRaw == NULL)
+                return E_OUTOFMEMORY;
+            memset(pRaw, 0, RawSize);
+
+            pLockedRect->pBits = pRaw;
+            pLockedRect->Pitch = (LONG)RawPitch;
+
+            pLock->pResource = pResource;
+            pLock->pSurface8 = pSurface8;
+            pLock->pSurface8->AddRef();
+            pLock->pStagingSurface8 = NULL;
+            pLock->StagingWritable = false;
+            pLock->pRawStaging = pRaw;
+            pLock->RawStagingSize = RawSize;
+
+            printf("*Warning* staged depth lock %ux%u as raw buffer (contents "
+                   "not preserved)\n", (unsigned)Desc.Width, (unsigned)Desc.Height);
+            return D3D_OK;
+        }
+
+        __try
+        {
+            // Seed the staging copy so read-modify-write locks see the
+            // current content; a refusal here only means stale image data.
+            g_pD3DDevice8->CopyRects(pSurface8, NULL, 0, pStaging, NULL);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+
+        StagingResult = pStaging->LockRect(pLockedRect, pRect, NewFlags);
+        if(FAILED(StagingResult))
+        {
+            pStaging->Release();
+            return StagingResult;
+        }
+
+        pLock->pResource = pResource;
+        pLock->pSurface8 = pSurface8;
+        pLock->pSurface8->AddRef();
+        pLock->pStagingSurface8 = pStaging;
+        pLock->StagingWritable = (Flags & EMU_D3DLOCK_READONLY) == 0;
+
+        return D3D_OK;
+    }
 
     pLock->pResource = pResource;
     pLock->pSurface8 = pSurface8;
