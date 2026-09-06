@@ -228,6 +228,37 @@ static void EmuD3DTraceEntry(const char* Name)
     }
 }
 
+// Host-forward cache: the HLE re-forwards large volumes of unchanged state on
+// every push-buffer decode (Turok Evolution: ~4,000 Set* calls per frame, most
+// byte-identical). Each mirrored entry holds the last value actually sent to
+// the host device; a wrapper skips its host call when the new value matches.
+// The cache expires wholesale wherever host state changes outside the wrappers
+// (state-block applies, direct helper calls), so a stale skip is impossible.
+static DWORD g_EmuForwardedConstants[96 * 4];
+static bool g_EmuForwardedConstantValid[96];
+static DWORD g_EmuForwardedTransforms[256][16];
+static bool g_EmuForwardedTransformValid[256];
+static const void* g_EmuForwardedStreamResource[16];
+static DWORD g_EmuForwardedStreamStride[16];
+static bool g_EmuForwardedStreamValid[16];
+static bool g_EmuForwardCacheExpired = true;
+
+static void EmuForwardCacheFlush(void)
+{
+    g_EmuForwardCacheExpired = true;
+}
+
+static void EmuForwardCacheExpire(void)
+{
+    if(g_EmuForwardCacheExpired)
+    {
+        ZeroMemory(g_EmuForwardedConstantValid, sizeof(g_EmuForwardedConstantValid));
+        ZeroMemory(g_EmuForwardedTransformValid, sizeof(g_EmuForwardedTransformValid));
+        ZeroMemory(g_EmuForwardedStreamValid, sizeof(g_EmuForwardedStreamValid));
+        g_EmuForwardCacheExpired = false;
+    }
+}
+
 static void EmuD3DDumpCallStats(void)
 {
     printf("D3DSTAT| ---- calls since last dump ----\n");
@@ -402,6 +433,7 @@ static void EmuDrawHostControlTriangles(HRESULT& simpleResult, HRESULT& complexR
                 XTL::D3DPT_TRIANGLELIST, 1, complexVertices,
                 sizeof(ComplexControlVertex));
             g_pD3DDevice8->ApplyStateBlock(savedState);
+            EmuForwardCacheFlush();
             g_pD3DDevice8->DeleteStateBlock(savedState);
             savedState = 0;
         }
@@ -2513,6 +2545,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_ApplyStateBlock(DWORD Token)
 #endif
 
     ULONG ret = g_pD3DDevice8->ApplyStateBlock(Token);
+    EmuForwardCacheFlush();
 
     EmuSwapFS(); // XBox FS
 
@@ -3455,7 +3488,32 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant(
             Count = (DWORD)(HostMaxConstants - Reg);
 
         if(Count > 0)
-            hRet = g_pD3DDevice8->SetVertexShaderConstant(Reg, pData, Count);
+        {
+            EmuForwardCacheExpire();
+            const DWORD* forwarded = (const DWORD*)pData;
+            bool identical = true;
+            for(DWORD constant = 0; constant < Count && identical; ++constant)
+            {
+                const DWORD hostRegister = (DWORD)Reg + constant;
+                identical = g_EmuForwardedConstantValid[hostRegister] &&
+                            memcmp(&g_EmuForwardedConstants[hostRegister * 4],
+                                   forwarded + constant * 4, 16) == 0;
+            }
+            if(!identical)
+            {
+                hRet = g_pD3DDevice8->SetVertexShaderConstant(Reg, pData, Count);
+                if(SUCCEEDED(hRet))
+                {
+                    for(DWORD constant = 0; constant < Count; ++constant)
+                    {
+                        const DWORD hostRegister = (DWORD)Reg + constant;
+                        memcpy(&g_EmuForwardedConstants[hostRegister * 4],
+                               forwarded + constant * 4, 16);
+                        g_EmuForwardedConstantValid[hostRegister] = true;
+                    }
+                }
+            }
+        }
     }
 
     if(FAILED(hRet))
@@ -5134,6 +5192,7 @@ static void EmuConfigureLinearTextureCoordinates(
         linearStages[stage] = false;
     }
 
+    EmuForwardCacheFlush();
     g_pD3DDevice8->SetTransform(
         static_cast<XTL::D3DTRANSFORMSTATETYPE>(16 + stage), &transform);
     g_pD3DDevice8->SetTextureStageState(
@@ -8524,6 +8583,7 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
     EmuSwapFS(); // Win2k/XP FS
     // A (re-)registration can re-back a guest resource the forward cache
     // keyed on; expire the cache rather than trusting old identities.
+    EmuForwardCacheFlush();
 
     // A partially-HLE title may pass a resource whose fields (Common, Data,
     // Lock) contain garbage from uninitialized guest memory, causing an
@@ -10954,6 +11014,23 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform(
 
     State = EmuXB2PC_D3DTS(State);
 
+    bool forwardTransform = true;
+    if(pMatrix != NULL && State < 256)
+    {
+        EmuForwardCacheExpire();
+        if(g_EmuForwardedTransformValid[State] &&
+           memcmp(g_EmuForwardedTransforms[State], pMatrix,
+                  sizeof(D3DMATRIX)) == 0)
+        {
+            forwardTransform = false;
+        }
+        else
+        {
+            memcpy(g_EmuForwardedTransforms[State], pMatrix, sizeof(D3DMATRIX));
+            g_EmuForwardedTransformValid[State] = true;
+        }
+    }
+    if(forwardTransform)
     __try
     {
         g_pD3DDevice8->SetTransform(State, pMatrix);
@@ -11154,7 +11231,22 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetStreamSource(
     HRESULT hRet = D3D_OK;
     __try
     {
-        hRet = g_pD3DDevice8->SetStreamSource(StreamNumber, pVertexBuffer8, Stride);
+        EmuForwardCacheExpire();
+        bool forwardStream = true;
+        if(StreamNumber < 16)
+        {
+            forwardStream = !(g_EmuForwardedStreamValid[StreamNumber] &&
+                              g_EmuForwardedStreamResource[StreamNumber] == pStreamData &&
+                              g_EmuForwardedStreamStride[StreamNumber] == Stride);
+            if(forwardStream)
+            {
+                g_EmuForwardedStreamResource[StreamNumber] = pStreamData;
+                g_EmuForwardedStreamStride[StreamNumber] = Stride;
+                g_EmuForwardedStreamValid[StreamNumber] = true;
+            }
+        }
+        if(forwardStream)
+            hRet = g_pD3DDevice8->SetStreamSource(StreamNumber, pVertexBuffer8, Stride);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -11797,6 +11889,7 @@ uint32 EmuQuadHackA(uint32 PrimitiveCount, XTL::IDirect3DVertexBuffer8*& pOrigVe
         pOrigVertexBuffer8->Unlock();
         pHackVertexBuffer8->Unlock();
 
+        EmuForwardCacheFlush();
         g_pD3DDevice8->SetStreamSource(0, pHackVertexBuffer8, uiStride);
     }
 
