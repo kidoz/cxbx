@@ -19,6 +19,7 @@ namespace d3d8
 namespace
 {
 HostBackendFlavor g_ActiveFlavor = HostBackendFlavor::D3D8;
+bool g_PresenterReady = false;
 
 bool EnvironmentFlagEnabled(const char* name)
 {
@@ -51,19 +52,44 @@ void HostBackendInitialize(const void* nativeWindow)
     }
 
     const bool validate = EnvironmentFlagEnabled("CXBX_VULKAN_VALIDATE");
-    printf("VULKAN| CXBX_HOST_BACKEND=vulkan: smoke bootstrap (validation=%d)\n",
+    printf("VULKAN| CXBX_HOST_BACKEND=vulkan: presenter bring-up "
+           "(validation=%d)\n",
            validate ? 1 : 0);
-    if(!vulkan::SmokeBootstrap(nativeWindow, validate))
+    if(!vulkan::Initialize(nativeWindow, validate))
     {
-        printf("VULKAN| smoke bootstrap failed; d3d8 remains the presenter\n");
+        g_PresenterReady = false;
+        printf("VULKAN| presenter bring-up failed; d3d8 remains the presenter\n");
         return;
     }
-    printf("VULKAN| smoke bootstrap ok; d3d8 remains the presenter (P0)\n");
+    g_PresenterReady = true;
+}
+
+bool HostBackendPresents()
+{
+    return g_ActiveFlavor == HostBackendFlavor::Vulkan && g_PresenterReady;
+}
+
+bool HostBackendPresentFrame(const void* pixels, unsigned int width,
+                             unsigned int height, unsigned int pitch)
+{
+    if(!HostBackendPresents())
+    {
+        return false;
+    }
+    const bool presented = vulkan::PresentFrame(pixels, width, height, pitch);
+    // Follow the backend's latched validity: a hard failure inside the
+    // presenter hands ownership back to the d3d8 host Present.
+    g_PresenterReady = vulkan::PresenterValid();
+    return presented;
 }
 
 void HostBackendShutdown()
 {
-    // The P0 smoke bootstrap owns no cross-call state; nothing to release.
+    if(g_PresenterReady)
+    {
+        vulkan::Shutdown();
+        g_PresenterReady = false;
+    }
 }
 
 HostBackendFlavor HostBackendActive()

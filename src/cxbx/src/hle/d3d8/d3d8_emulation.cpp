@@ -382,9 +382,61 @@ static HRESULT EmuHostEndScene()
     }
 }
 
+// Native-Vulkan migration P1: with the backend presenting, the composed d3d8
+// backbuffer is uploaded to the swapchain and the host device must not flip
+// its own swapchain on the same window. The frame is copied 1:1 (the Xbox
+// Present rect parameters stay d3d8-side until the render path migrates).
+static bool EmuPresentViaVulkan()
+{
+    XTL::IDirect3DSurface8* backBuffer = nullptr;
+    bool presented = false;
+    __try
+    {
+        if(SUCCEEDED(g_pD3DDevice8->GetBackBuffer(
+               0, XTL::D3DBACKBUFFER_TYPE_MONO, &backBuffer)) &&
+           backBuffer != nullptr)
+        {
+            XTL::D3DSURFACE_DESC description = {
+                XTL::D3DFMT_UNKNOWN, XTL::D3DRTYPE_SURFACE, 0, XTL::D3DPOOL_DEFAULT,
+                0, XTL::D3DMULTISAMPLE_NONE, 0, 0
+            };
+            if(SUCCEEDED(backBuffer->GetDesc(&description)) &&
+               ((int)description.Format == 21 /*D3DFMT_A8R8G8B8*/ ||
+                (int)description.Format == 22 /*D3DFMT_X8R8G8B8*/))
+            {
+                XTL::D3DLOCKED_RECT locked{};
+                if(SUCCEEDED(backBuffer->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+                {
+                    presented = cxbx::d3d8::HostBackendPresentFrame(
+                        locked.pBits, description.Width, description.Height,
+                        (unsigned)locked.Pitch);
+                    backBuffer->UnlockRect();
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        presented = false;
+    }
+    if(backBuffer != nullptr)
+    {
+        backBuffer->Release();
+    }
+    return presented;
+}
+
 static HRESULT EmuHostPresent(const RECT* sourceRect, const RECT* destinationRect,
                               HWND destinationWindow, const RGNDATA* dirtyRegion)
 {
+    if(cxbx::d3d8::HostBackendPresents() && !g_XBVideo.GetFullscreen())
+    {
+        if(EmuPresentViaVulkan())
+        {
+            return D3D_OK;
+        }
+        // The presenter cannot take this frame; d3d8 keeps the window alive.
+    }
     __try
     {
         return g_pD3DDevice8->Present(sourceRect, destinationRect, destinationWindow,
@@ -1536,6 +1588,10 @@ VOID XTL::EmuD3DInit(Xbe::Header* XbeHeader, uint32 XbeHeaderSize)
 // ******************************************************************
 VOID XTL::EmuD3DCleanup()
 {
+    // Release the Vulkan presenter (swapchain, device, instance) before the
+    // render window and host input wind down.
+    cxbx::d3d8::HostBackendShutdown();
+
     cxbx::platform::ShutdownHostInput();
 
     return;

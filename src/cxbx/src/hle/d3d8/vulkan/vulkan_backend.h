@@ -1,4 +1,4 @@
-// Vulkan smoke-bootstrap entry point for the D3D8 HLE host backend.
+// Vulkan presenter entry points for the D3D8 HLE host backend.
 //
 // This module is the only place in the tree that may include Vulkan headers
 // or volk. The header itself stays type-clean so host_backend.cpp can
@@ -15,11 +15,29 @@ namespace d3d8
 namespace vulkan
 {
 
-// Creates a Vulkan instance, requires a Vulkan 1.3 physical device, opens a
-// Win32 surface and swapchain on nativeWindow (a borrowed native window
-// handle), logs what it found under the "VULKAN|" prefix, then destroys
-// everything before returning. Returns true only when every step succeeded.
-bool SmokeBootstrap(const void* nativeWindow, bool validationLayers);
+// Creates the persistent presenter: Vulkan instance, Vulkan 1.3 physical
+// device, Win32 surface and swapchain on nativeWindow (a borrowed native
+// window handle), plus the upload staging and per-frame sync objects.
+// Everything is logged under the "VULKAN|" prefix. Returns true when the
+// presenter is ready to take Present frames; on false the caller stays with
+// the d3d8 presenter. Until Shutdown, the presenter owns no guest state.
+bool Initialize(const void* nativeWindow, bool validationLayers);
+
+// Uploads one full BGRA frame (top-left origin, pitch in bytes) into the
+// staging buffer, copies it into the acquired swapchain image, and queues a
+// FIFO present. Handles out-of-date swapchains by recreating it. Returns
+// false when presentation is impossible this frame (the caller then falls
+// back to the d3d8 presenter); a hard failure latches the presenter off.
+bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
+                  unsigned int pitch);
+
+// Whether the presenter is still operational. A hard failure inside
+// PresentFrame latches this off, permanently handing the window back to the
+// d3d8 presenter for the rest of the session.
+bool PresenterValid();
+
+// Destroys every Vulkan object the presenter owns.
+void Shutdown();
 
 } // namespace vulkan
 } // namespace d3d8
