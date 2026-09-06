@@ -1339,6 +1339,68 @@ int ReplayCapture(const ReplayCaptureRecord& record)
     return 1;
 }
 
+// Prints the host-side artifacts the runtime would hand to d3d8's
+// CreateVertexShader for every record, as hex words -- the ground truth for
+// bisecting a host-side D3DERR_INVALIDCALL against the real device.
+void SilentSink(const char*, ...)
+{
+}
+
+int DumpD3dCaptureFile(const char* path)
+{
+    std::ifstream input(path);
+    if(!input)
+    {
+        std::fprintf(stderr, "FAIL cannot open replay capture: %s\n", path);
+        return 1;
+    }
+    std::string line;
+    std::size_t dumpCount = 0;
+    while(std::getline(input, line))
+    {
+        if(line.rfind("VSHREPLAY| ", 0) != 0)
+        {
+            continue;
+        }
+        ReplayCaptureRecord record;
+        std::string error;
+        if(!ParseReplayCaptureLine(line, record, error))
+        {
+            std::fprintf(stderr, "FAIL replay parse: %s\n", error.c_str());
+            return 1;
+        }
+        const XTL::VshDiagnostics::FunctionTranslationResult function =
+            XTL::VshDiagnostics::TranslateXboxFunction(record.function, SilentSink);
+        std::array<std::uint32_t, 128> translatedDeclaration{};
+        std::size_t declarationTokenCount = 0;
+        if(!record.declaration.empty())
+        {
+            const XTL::VshDiagnostics::DeclarationTranslationResult declarationResult =
+                XTL::VshDiagnostics::TranslateXboxDeclaration(record.declaration,
+                                                              translatedDeclaration);
+            declarationTokenCount = declarationResult.tokenCount;
+        }
+        std::printf("D3DFUNC| hash=%08X words=", record.hash);
+        for(std::size_t index = 0; index < function.tokens.size(); ++index)
+        {
+            std::printf("%s%08X", index == 0 ? "" : " ", function.tokens[index]);
+        }
+        std::printf("\nD3DDECL| hash=%08X words=", record.hash);
+        for(std::size_t index = 0; index < declarationTokenCount; ++index)
+        {
+            std::printf("%s%08X", index == 0 ? "" : " ", translatedDeclaration[index]);
+        }
+        std::printf("\n");
+        ++dumpCount;
+    }
+    if(dumpCount == 0)
+    {
+        std::fputs("FAIL replay capture contains no VSHREPLAY records\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
 int ReplayCaptureFile(const char* path)
 {
     std::ifstream input(path);
@@ -3967,9 +4029,13 @@ int main(int argc, char** argv)
         {
             return ReplayCaptureFile(argv[2]);
         }
+        if(argc == 3 && std::strcmp(argv[1], "--dump-d3d") == 0)
+        {
+            return DumpD3dCaptureFile(argv[2]);
+        }
         if(argc != 1)
         {
-            std::fputs("usage: host_vsh_recompiler_test [--replay <capture>]\n", stderr);
+            std::fputs("usage: host_vsh_recompiler_test [--replay <capture>] [--dump-d3d <capture>]\n", stderr);
             return 2;
         }
         return RunTests();
