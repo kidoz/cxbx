@@ -30,6 +30,15 @@ struct CpuFallbackMetadata
     std::size_t declarationTokenCount = 0;
     std::array<std::uint32_t, 1 + maxInstructions * 4> function{};
     std::array<std::uint32_t, maxDeclarationTokens> declaration{};
+
+    // Output texcoord remap: the host vs.1.1 validator requires texture
+    // coordinate outputs to start at oT0 and stay contiguous, while an Xbox
+    // shader may write, say, only oT2 and oT3. Non-contiguous writes are
+    // compacted at creation and this game-stage -> host-stage mapping lets
+    // texture binds follow the compaction.
+    std::uint32_t texcoordRemapCount = 0;
+    std::array<std::uint8_t, 4> texcoordRemapFrom{};
+    std::array<std::uint8_t, 4> texcoordRemapTo{};
 };
 
 [[nodiscard]] CpuFallbackMetadata* Find(X_D3DVertexShader* shader);

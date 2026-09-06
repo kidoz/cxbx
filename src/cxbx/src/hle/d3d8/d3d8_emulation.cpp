@@ -3408,6 +3408,84 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader(
         pDeclaration != nullptr && !cpuFallback ? hostTranslatedDeclaration.data()
                                                 : pDeclaration;
 
+    // The host vs.1.1 validator requires texture coordinate outputs to start
+    // at oT0 and stay contiguous, while an Xbox shader may write only oT2 and
+    // oT3 (Arx Fatalis' intro-video shader). Compact the written oT set and
+    // keep the game-stage -> host-stage mapping so texture binds follow.
+    std::uint8_t texcoordRemapFrom[4] = {};
+    std::uint8_t texcoordRemapTo[4] = {};
+    std::uint32_t texcoordRemapCount = 0;
+    if(!cpuFallback && !hostTranslatedFunction.empty() &&
+       pDeclaration != nullptr && hostTranslatedFunction.back() == 0x0000FFFFu)
+    {
+        auto D3dTokensFor = [](DWORD opcode) -> int
+        {
+            switch(opcode & 0xFFFF)
+            {
+                case 0: return 1;                                        // nop
+                case 1: case 6: case 7: case 14: case 15: case 16:
+                    return 3;                                            // 1 source
+                case 2: case 5: case 8: case 9: case 10: case 11:
+                case 12: case 13: case 17:
+                    return 4;                                            // 2 sources
+                case 4: return 5;                                        // mad
+                default: return -1;
+            }
+        };
+        bool written[4] = {};
+        std::size_t index = 1;
+        bool walkedFully = true;
+        while(index + 1 < hostTranslatedFunction.size())
+        {
+            const int tokens = D3dTokensFor(hostTranslatedFunction[index]);
+            if(tokens < 0)
+            {
+                walkedFully = false;
+                break;
+            }
+            const DWORD dest = hostTranslatedFunction[index + 1];
+            if(((dest >> 28) & 7u) == 6u)
+            {
+                const DWORD reg = dest & 0xFu;
+                if(reg < 4) written[reg] = true;
+            }
+            index += static_cast<std::size_t>(tokens);
+        }
+        if(walkedFully && index + 1 == hostTranslatedFunction.size())
+        {
+            std::uint32_t newReg = 0;
+            for(DWORD reg = 0; reg < 4; ++reg)
+            {
+                if(!written[reg]) continue;
+                if(reg != newReg)
+                {
+                    texcoordRemapFrom[texcoordRemapCount] = (std::uint8_t)reg;
+                    texcoordRemapTo[texcoordRemapCount] = (std::uint8_t)newReg;
+                    ++texcoordRemapCount;
+                }
+                ++newReg;
+            }
+            if(texcoordRemapCount > 0)
+            {
+                DWORD remapped[4] = { 0, 1, 2, 3 };
+                for(std::uint32_t entry = 0; entry < texcoordRemapCount; ++entry)
+                    remapped[texcoordRemapFrom[entry]] = texcoordRemapTo[entry];
+                for(std::size_t tokenIndex = 1;
+                    tokenIndex + 1 < hostTranslatedFunction.size();)
+                {
+                    const int tokens = D3dTokensFor(hostTranslatedFunction[tokenIndex]);
+                    DWORD& dest = hostTranslatedFunction[tokenIndex + 1];
+                    if(((dest >> 28) & 7u) == 6u && (dest & 0xFu) < 4)
+                        dest = (dest & 0xFFFFF800u) | remapped[dest & 0xFu];
+                    tokenIndex += static_cast<std::size_t>(tokens);
+                }
+                printf("EmuD3D8 (0x%X): compacted %u texture-coordinate output(s) to "
+                       "oT0..oT%u.\n", GetCurrentThreadId(), texcoordRemapCount,
+                       newReg - 1);
+            }
+        }
+    }
+
     // ******************************************************************
     // * redirect to windows d3d
     // ******************************************************************
@@ -3445,6 +3523,19 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVertexShader(
         delete pD3DVertexShader;
         EmuSwapFS(); // XBox FS
         return E_OUTOFMEMORY;
+    }
+    if(texcoordRemapCount > 0)
+    {
+        if(XTL::VshShaderRegistry::CpuFallbackMetadata* registeredMetadata =
+               XTL::VshShaderRegistry::Find(pD3DVertexShader))
+        {
+            registeredMetadata->texcoordRemapCount = texcoordRemapCount;
+            for(std::uint32_t entry = 0; entry < texcoordRemapCount; ++entry)
+            {
+                registeredMetadata->texcoordRemapFrom[entry] = texcoordRemapFrom[entry];
+                registeredMetadata->texcoordRemapTo[entry] = texcoordRemapTo[entry];
+            }
+        }
     }
 
     *pHandle = (DWORD)pD3DVertexShader;
@@ -6557,7 +6648,29 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture(
     HRESULT hRet = D3D_OK;
     __try
     {
-        hRet = g_pD3DDevice8->SetTexture(Stage, pBaseTexture8);
+        // Follow the active shader's output-texcoord compaction: the game
+        // binds to the stage its (uncompacted) shader writes, which is now a
+        // different host stage. Clear binds (NULL) pass through untouched:
+        // forwarding them would wipe a compacted host stage that still holds
+        // the texture the game bound on another stage.
+        DWORD HostStage = Stage;
+        if(pBaseTexture8 != NULL)
+        {
+            if(const XTL::VshShaderRegistry::CpuFallbackMetadata* currentMetadata =
+                   XTL::VshShaderRegistry::Current())
+            {
+                for(std::uint32_t entry = 0;
+                    entry < currentMetadata->texcoordRemapCount; ++entry)
+                {
+                    if(Stage == currentMetadata->texcoordRemapFrom[entry])
+                    {
+                        HostStage = currentMetadata->texcoordRemapTo[entry];
+                        break;
+                    }
+                }
+            }
+        }
+        hRet = g_pD3DDevice8->SetTexture(HostStage, pBaseTexture8);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -11340,6 +11453,78 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetStreamSource(
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_SetVertexShader
 // ******************************************************************
+// Texture binds follow the active shader's output-texcoord compaction: the
+// game binds to the stage its (uncompacted) shader writes. Whenever the
+// active shader's compaction changes, re-issue the host binds from the
+// guest shadow state.
+namespace
+{
+struct
+{
+    std::uint32_t count = 0;
+    std::uint8_t from[4] = {};
+    std::uint8_t to[4] = {};
+} g_EmuActiveTexcoordRemap;
+}
+
+static void EmuApplyActiveTexcoordRemap(
+    const XTL::VshShaderRegistry::CpuFallbackMetadata* metadata)
+{
+    const bool remapped = metadata != nullptr && metadata->texcoordRemapCount > 0;
+    if(remapped)
+    {
+        g_EmuActiveTexcoordRemap.count = metadata->texcoordRemapCount;
+        for(std::uint32_t entry = 0; entry < metadata->texcoordRemapCount; ++entry)
+        {
+            g_EmuActiveTexcoordRemap.from[entry] = metadata->texcoordRemapFrom[entry];
+            g_EmuActiveTexcoordRemap.to[entry] = metadata->texcoordRemapTo[entry];
+        }
+    }
+    else
+    {
+        g_EmuActiveTexcoordRemap.count = 0;
+    }
+
+    static bool s_HasPrevious = false;
+    static std::uint32_t s_LastCount = 0;
+    static std::uint8_t s_LastFrom[4] = {};
+    static std::uint8_t s_LastTo[4] = {};
+    bool changed = !s_HasPrevious || s_LastCount != g_EmuActiveTexcoordRemap.count;
+    if(!changed)
+    {
+        for(std::uint32_t entry = 0; entry < g_EmuActiveTexcoordRemap.count; ++entry)
+        {
+            changed = changed ||
+                s_LastFrom[entry] != g_EmuActiveTexcoordRemap.from[entry] ||
+                s_LastTo[entry] != g_EmuActiveTexcoordRemap.to[entry];
+        }
+    }
+    if(!changed) return;
+    s_HasPrevious = true;
+    s_LastCount = g_EmuActiveTexcoordRemap.count;
+    for(std::uint32_t entry = 0; entry < g_EmuActiveTexcoordRemap.count; ++entry)
+    {
+        s_LastFrom[entry] = g_EmuActiveTexcoordRemap.from[entry];
+        s_LastTo[entry] = g_EmuActiveTexcoordRemap.to[entry];
+    }
+
+    for(DWORD stage = 0; stage < EmuXboxTextureStageCount; ++stage)
+    {
+        XTL::IDirect3DBaseTexture8* bound = g_EmuBoundHostTextures[stage];
+        if(bound == NULL) continue;
+        DWORD hostStage = stage;
+        for(std::uint32_t entry = 0; entry < g_EmuActiveTexcoordRemap.count; ++entry)
+        {
+            if(stage == g_EmuActiveTexcoordRemap.from[entry])
+            {
+                hostStage = g_EmuActiveTexcoordRemap.to[entry];
+                break;
+            }
+        }
+        g_pD3DDevice8->SetTexture(hostStage, bound);
+    }
+}
+
 VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader(
     DWORD Handle)
 {
@@ -11387,6 +11572,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader(
             hRet = D3D_OK;
         }
     }
+    EmuApplyActiveTexcoordRemap(metadata);
 
     if(FAILED(hRet))
     {
@@ -11481,6 +11667,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader(
             hRet = D3D_OK;
         }
     }
+    EmuApplyActiveTexcoordRemap(metadata);
 
     if(FAILED(hRet))
     {
