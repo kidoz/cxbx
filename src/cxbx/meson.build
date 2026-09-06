@@ -517,12 +517,46 @@ cxbx_hle_d3d8 = static_library(
   'cxbx_hle_d3d8',
   'src/hle/d3d8/d3d8_emulation.cpp',
   'src/hle/d3d8/d3d8_conversion.cpp',
+  'src/hle/d3d8/host_backend.cpp',
   include_directories : cxbx_d3d8_public_inc + [cxbx_vsh_private_inc, openxdk_inc],
   cpp_args : [
     '-D_CXBXKRNL_INTERNAL',
     '-DXBOXKRNL_NO_EXTERN_C',
     '-Wno-c++11-narrowing',
   ],
+)
+
+# Vulkan loader (vendored volk) and the native Vulkan backend module. The
+# backend sits beside the d3d8 HLE it will replace; only
+# src/hle/d3d8/vulkan/ may consume volk or Vulkan headers, so it stays in its
+# own target and reaches the Cxbx composition only through this dependency.
+cxbx_vulkan_headers_inc = include_directories(
+  '../../third_party/vulkan-headers/1.4.350')
+
+cxbx_volk_inc = include_directories('../../third_party/volk/1.4.350')
+
+cxbx_volk = static_library(
+  'cxbx_volk',
+  files('../../third_party/volk/1.4.350/volk.c'),
+  include_directories : [cxbx_volk_inc, cxbx_vulkan_headers_inc],
+  c_args : ['-DVK_USE_PLATFORM_WIN32_KHR'],
+  cpp_args : ['-DVK_NO_PROTOTYPES', '-DVK_USE_PLATFORM_WIN32_KHR'],
+)
+
+cxbx_volk_dep = declare_dependency(
+  link_with : cxbx_volk,
+  include_directories : [cxbx_volk_inc, cxbx_vulkan_headers_inc],
+  compile_args : ['-DVK_NO_PROTOTYPES'],
+)
+
+cxbx_hle_d3d8_vulkan = static_library(
+  'cxbx_hle_d3d8_vulkan',
+  'src/hle/d3d8/vulkan/vulkan_backend.cpp',
+  dependencies : [cxbx_volk_dep],
+)
+
+cxbx_hle_d3d8_vulkan_dep = declare_dependency(
+  link_whole : cxbx_hle_d3d8_vulkan,
 )
 
 cxbx_hle_d3d8_dep = declare_dependency(
@@ -629,6 +663,7 @@ cxbx_runtime = shared_library(
   dependencies : [
     cxbx_hle_audio_dep,
     cxbx_hle_d3d8_dep,
+    cxbx_hle_d3d8_vulkan_dep,
     cxbx_hle_dispatch_dep,
     cxbx_hle_kernel_dep,
     cxbx_hle_runtime_dep,

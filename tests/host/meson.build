@@ -502,3 +502,16 @@ if not build_host_asan
 
   test('host-fs-content-swap-policy', host_fs_content_swap_policy_test)
 endif
+
+# Host-backend selection contract (native-Vulkan migration P0). The parser
+# lives header-inline in the d3d8 HLE so this test compiles the header
+# directly without linking any backend code.
+host_backend_test = executable(
+  'host_backend_test',
+  'host_backend.cpp',
+  include_directories : [cxbx_public_inc,
+                         include_directories('../../src/cxbx/src/hle/d3d8')],
+  install : false,
+)
+
+test('host-host-backend', host_backend_test)

@@ -53,6 +53,7 @@ namespace xboxkrnl
 #include "xbox_video.h"
 #include "host_input_lifecycle.h"
 #include "shared_video_config.h"
+#include "host_backend.h"
 #include "core/d3d_push_buffer.h"
 #include "core/d3d_pixel_shader.h"
 #include "core/d3d_pixel_shader_translate.h"
@@ -1632,6 +1633,11 @@ static DWORD WINAPI EmuRenderWindow(LPVOID)
 
     ShowWindow(XTL::g_hEmuWindow, SW_SHOWDEFAULT);
     UpdateWindow(XTL::g_hEmuWindow);
+
+    // Native-Vulkan migration P0: honor CXBX_HOST_BACKEND and, when vulkan,
+    // smoke-bootstrap a Vulkan device/swapchain on the render window.
+    // Rendering still goes through the d3d8 backend in this phase.
+    cxbx::d3d8::HostBackendInitialize(XTL::g_hEmuWindow);
 
     // ******************************************************************
     // * initialize direct input
