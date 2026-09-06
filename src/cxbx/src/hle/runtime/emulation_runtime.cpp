@@ -9836,6 +9836,165 @@ static void EmuNv2aEnsureQuadPool()
     }
 }
 
+// SEH body helper (C2712: EmuNv2aRasterizeDrawArrays holds the
+// self-profiling scope, and a function containing __try may declare no
+// destructor-bearing object).
+static void EmuNv2aRasterizeFillGuarded(
+    ULONG BeginOp, ULONG Count, ULONG SurfaceHost, ULONG* TrianglesOut,
+    const EmuNv2aRasterTarget* TargetPtr,
+    const EmuNv2aTextureCoordinateArrays* TextureCoordinatesPtr,
+    const float* VXPtr, const float* VYPtr, const float* VZPtr,
+    const float* VWPtr, const ULONG* VCPtr)
+{
+    const EmuNv2aRasterTarget& Target = *TargetPtr;
+    const EmuNv2aTextureCoordinateArrays& TextureCoordinates = *TextureCoordinatesPtr;
+    const float* VX = VXPtr;
+    const float* VY = VYPtr;
+    const float* VZ = VZPtr;
+    const float* VW = VWPtr;
+    const ULONG* VC = VCPtr;
+    ULONG& Triangles = *TrianglesOut;
+
+    __try
+    {
+        switch(BeginOp)
+        {
+            case 5: // TRIANGLES
+                for(ULONG i = 0; i + 2 < Count; i += 3)
+                {
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
+                                        &TextureCoordinates, VC, i, i + 1, i + 2);
+                    Triangles++;
+                }
+                break;
+            case 6: // TRIANGLE_STRIP
+                for(ULONG i = 0; i + 2 < Count; i++)
+                {
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
+                                        &TextureCoordinates, VC, i, i + 1, i + 2);
+                    Triangles++;
+                }
+                break;
+            case 7:  // TRIANGLE_FAN
+            case 10: // POLYGON
+                for(ULONG i = 1; i + 1 < Count; i++)
+                {
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
+                                        &TextureCoordinates, VC, 0, i, i + 1);
+                    Triangles++;
+                }
+                break;
+            case 8: // QUADS
+            {
+                const ULONG QuadTotal =
+                    Count >= 4 ? (Count - 4) / 4 + 1 : 0;
+                if(QuadTotal >= 128)
+                {
+                    // Large batch: split the quad list contiguously across
+                    // the worker pool (plus this thread). Contiguous ranges
+                    // keep cross-chunk draw order identical to serial.
+                    EmuNv2aEnsureQuadPool();
+                    static ULONG* s_QuadBases = nullptr;
+                    static ULONG s_QuadBaseCapacity = 0;
+                    if(s_QuadBaseCapacity < QuadTotal)
+                    {
+                        ULONG NewCapacity = s_QuadBaseCapacity != 0
+                                                ? s_QuadBaseCapacity
+                                                : 1024;
+                        while(NewCapacity < QuadTotal)
+                        {
+                            NewCapacity *= 2;
+                        }
+                        ULONG* Grown = static_cast<ULONG*>(
+                            realloc(s_QuadBases, NewCapacity * sizeof(ULONG)));
+                        if(Grown == nullptr)
+                        {
+                            // Allocation failure: fall back to serial fill.
+                            s_QuadBases = nullptr;
+                            s_QuadBaseCapacity = 0;
+                        }
+                        else
+                        {
+                            s_QuadBases = Grown;
+                            s_QuadBaseCapacity = NewCapacity;
+                        }
+                    }
+                    if(s_QuadBases != nullptr)
+                    {
+                        ULONG Written = 0;
+                        for(ULONG i = 0; i + 3 < Count; i += 4)
+                        {
+                            s_QuadBases[Written++] = i;
+                        }
+                        const ULONG Workers = EmuNv2aQuadWorkerCountActiveGet();
+                        const ULONG ChunkStride =
+                            (QuadTotal + Workers) / (Workers + 1);
+                        ULONG Offset = 0;
+                        for(ULONG Slot = 0; Slot <= Workers; ++Slot)
+                        {
+                            ULONG ChunkCount = ChunkStride;
+                            if(Offset + ChunkCount > QuadTotal ||
+                               Slot == Workers)
+                            {
+                                ChunkCount = QuadTotal - Offset;
+                            }
+                            EmuNv2aQuadChunk& Chunk = g_EmuQuadChunk[Slot];
+                            Chunk.Target = &Target;
+                            Chunk.TexCoords = &TextureCoordinates;
+                            Chunk.VX = VX;
+                            Chunk.VY = VY;
+                            Chunk.VZ = VZ;
+                            Chunk.VW = VW;
+                            Chunk.VC = VC;
+                            Chunk.Bases = s_QuadBases + Offset;
+                            Chunk.BaseCount = ChunkCount;
+                            Offset += ChunkCount;
+                        }
+                        for(ULONG Slot = 0; Slot < Workers; ++Slot)
+                        {
+                            ReleaseSemaphore(g_EmuQuadWorkStart[Slot], 1, NULL);
+                        }
+                        EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[0]);
+                        for(ULONG Slot = 0; Slot < Workers; ++Slot)
+                        {
+                            WaitForSingleObject(g_EmuQuadWorkDone[Slot],
+                                                INFINITE);
+                        }
+                        Triangles += QuadTotal * 2;
+                        break;
+                    }
+                }
+                for(ULONG i = 0; i + 3 < Count; i += 4)
+                {
+                    InterlockedIncrement(&g_EmuPerfQuads);
+                    EmuNv2aRasterizeOneQuad(&Target, &TextureCoordinates, VX,
+                                            VY, VZ, VW, VC, i);
+                    Triangles += 2;
+                }
+                break;
+            }
+            case 9: // QUAD_STRIP
+                for(ULONG i = 0; i + 3 < Count; i += 2)
+                {
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
+                                        &TextureCoordinates, VC, i, i + 1, i + 3);
+                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
+                                        &TextureCoordinates, VC, i, i + 3, i + 2);
+                    Triangles += 2;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        printf("Emu (0x%lX): NV2A raster: fault while filling (surf=0x%.08lX).\n",
+               GetCurrentThreadId(), SurfaceHost);
+        fflush(stdout);
+    }
+}
+
 static void EmuNv2aRasterizeDrawArrays(
     const cxbx::nv2a::PgraphVertexFetchPlan& VertexFetchPlan,
     const cxbx::nv2a::PgraphTransformState& TransformState,
@@ -10438,144 +10597,9 @@ static void EmuNv2aRasterizeDrawArrays(
     {
         ZeroMemory(&g_EmuNv2aPixelStats, sizeof(g_EmuNv2aPixelStats));
     }
-    __try
-    {
-        switch(BeginOp)
-        {
-            case 5: // TRIANGLES
-                for(ULONG i = 0; i + 2 < Count; i += 3)
-                {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i + 1, i + 2);
-                    Triangles++;
-                }
-                break;
-            case 6: // TRIANGLE_STRIP
-                for(ULONG i = 0; i + 2 < Count; i++)
-                {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i + 1, i + 2);
-                    Triangles++;
-                }
-                break;
-            case 7:  // TRIANGLE_FAN
-            case 10: // POLYGON
-                for(ULONG i = 1; i + 1 < Count; i++)
-                {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, 0, i, i + 1);
-                    Triangles++;
-                }
-                break;
-            case 8: // QUADS
-            {
-                const ULONG QuadTotal =
-                    Count >= 4 ? (Count - 4) / 4 + 1 : 0;
-                if(QuadTotal >= 128)
-                {
-                    // Large batch: split the quad list contiguously across
-                    // the worker pool (plus this thread). Contiguous ranges
-                    // keep cross-chunk draw order identical to serial.
-                    EmuNv2aEnsureQuadPool();
-                    static ULONG* s_QuadBases = nullptr;
-                    static ULONG s_QuadBaseCapacity = 0;
-                    if(s_QuadBaseCapacity < QuadTotal)
-                    {
-                        ULONG NewCapacity = s_QuadBaseCapacity != 0
-                                                ? s_QuadBaseCapacity
-                                                : 1024;
-                        while(NewCapacity < QuadTotal)
-                        {
-                            NewCapacity *= 2;
-                        }
-                        ULONG* Grown = static_cast<ULONG*>(
-                            realloc(s_QuadBases, NewCapacity * sizeof(ULONG)));
-                        if(Grown == nullptr)
-                        {
-                            // Allocation failure: fall back to serial fill.
-                            s_QuadBases = nullptr;
-                            s_QuadBaseCapacity = 0;
-                        }
-                        else
-                        {
-                            s_QuadBases = Grown;
-                            s_QuadBaseCapacity = NewCapacity;
-                        }
-                    }
-                    if(s_QuadBases != nullptr)
-                    {
-                        ULONG Written = 0;
-                        for(ULONG i = 0; i + 3 < Count; i += 4)
-                        {
-                            s_QuadBases[Written++] = i;
-                        }
-                        const ULONG Workers = EmuNv2aQuadWorkerCountActiveGet();
-                        const ULONG ChunkStride =
-                            (QuadTotal + Workers) / (Workers + 1);
-                        ULONG Offset = 0;
-                        for(ULONG Slot = 0; Slot <= Workers; ++Slot)
-                        {
-                            ULONG ChunkCount = ChunkStride;
-                            if(Offset + ChunkCount > QuadTotal ||
-                               Slot == Workers)
-                            {
-                                ChunkCount = QuadTotal - Offset;
-                            }
-                            EmuNv2aQuadChunk& Chunk = g_EmuQuadChunk[Slot];
-                            Chunk.Target = &Target;
-                            Chunk.TexCoords = &TextureCoordinates;
-                            Chunk.VX = VX;
-                            Chunk.VY = VY;
-                            Chunk.VZ = VZ;
-                            Chunk.VW = VW;
-                            Chunk.VC = VC;
-                            Chunk.Bases = s_QuadBases + Offset;
-                            Chunk.BaseCount = ChunkCount;
-                            Offset += ChunkCount;
-                        }
-                        for(ULONG Slot = 0; Slot < Workers; ++Slot)
-                        {
-                            ReleaseSemaphore(g_EmuQuadWorkStart[Slot], 1, NULL);
-                        }
-                        EmuNv2aRasterizeQuadChunk(&g_EmuQuadChunk[0]);
-                        for(ULONG Slot = 0; Slot < Workers; ++Slot)
-                        {
-                            WaitForSingleObject(g_EmuQuadWorkDone[Slot],
-                                                INFINITE);
-                        }
-                        Triangles += QuadTotal * 2;
-                        break;
-                    }
-                }
-                for(ULONG i = 0; i + 3 < Count; i += 4)
-                {
-                    InterlockedIncrement(&g_EmuPerfQuads);
-                    EmuNv2aRasterizeOneQuad(&Target, &TextureCoordinates, VX,
-                                            VY, VZ, VW, VC, i);
-                    Triangles += 2;
-                }
-                break;
-            }
-            case 9: // QUAD_STRIP
-                for(ULONG i = 0; i + 3 < Count; i += 2)
-                {
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i + 1, i + 3);
-                    EmuNv2aFillTriangle(&Target, VX, VY, VZ, VW,
-                                        &TextureCoordinates, VC, i, i + 3, i + 2);
-                    Triangles += 2;
-                }
-                break;
-            default:
-                break;
-        }
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-        printf("Emu (0x%lX): NV2A raster: fault while filling (surf=0x%.08lX).\n",
-               GetCurrentThreadId(), SurfaceHost);
-        fflush(stdout);
-    }
+    EmuNv2aRasterizeFillGuarded(BeginOp, Count, SurfaceHost, &Triangles,
+                                &Target, &TextureCoordinates, VX, VY, VZ, VW,
+                                VC);
 
     if(EmuNv2aPixelStatsEnabled())
     {
