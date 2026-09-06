@@ -228,6 +228,83 @@ static void EmuD3DTraceEntry(const char* Name)
     }
 }
 
+// Frame profile (CXBX_FRAME_PROFILE=1): coarse per-frame host-cost split for
+// the push-buffer path, printed every 128 Swaps. POD-only timing helpers so
+// the call sites stay legal inside __try bodies.
+struct EmuFrameProfile
+{
+    bool enabled;
+    bool checked;
+    LARGE_INTEGER freq;
+    double frameNs;
+    double replayNs;
+    double cpuDrawNs;
+    double applyNs;
+    DWORD frames;
+    LARGE_INTEGER lastSwap;
+};
+static EmuFrameProfile g_FrameProfile = {};
+
+static void EmuFrameProfileStart(LARGE_INTEGER& Start)
+{
+    if(!g_FrameProfile.checked)
+    {
+        g_FrameProfile.checked = true;
+        g_FrameProfile.enabled = EmuD3DEnvironmentEnabled("CXBX_FRAME_PROFILE");
+        QueryPerformanceFrequency(&g_FrameProfile.freq);
+        QueryPerformanceCounter(&g_FrameProfile.lastSwap);
+    }
+    if(g_FrameProfile.enabled)
+        QueryPerformanceCounter(&Start);
+    else
+        Start = g_FrameProfile.lastSwap;
+}
+
+static void EmuFrameProfileAccumulate(double& Total, const LARGE_INTEGER& Start)
+{
+    if(!g_FrameProfile.enabled)
+        return;
+    LARGE_INTEGER end;
+    QueryPerformanceCounter(&end);
+    Total += static_cast<double>(end.QuadPart - Start.QuadPart) * 1000000000.0 /
+             static_cast<double>(g_FrameProfile.freq.QuadPart);
+}
+
+static void EmuFrameProfileFrame(void)
+{
+    if(!g_FrameProfile.checked)
+    {
+        g_FrameProfile.checked = true;
+        g_FrameProfile.enabled = EmuD3DEnvironmentEnabled("CXBX_FRAME_PROFILE");
+        QueryPerformanceFrequency(&g_FrameProfile.freq);
+        QueryPerformanceCounter(&g_FrameProfile.lastSwap);
+    }
+    if(!g_FrameProfile.enabled)
+        return;
+
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    g_FrameProfile.frameNs += static_cast<double>(now.QuadPart - g_FrameProfile.lastSwap.QuadPart) *
+                              1000000000.0 / static_cast<double>(g_FrameProfile.freq.QuadPart);
+    g_FrameProfile.lastSwap = now;
+
+    if(++g_FrameProfile.frames < 128)
+        return;
+
+    const double frameMs = g_FrameProfile.frameNs / 128.0 / 1000000.0;
+    const double replayMs = g_FrameProfile.replayNs / 128.0 / 1000000.0;
+    const double cpuDrawMs = g_FrameProfile.cpuDrawNs / 128.0 / 1000000.0;
+    const double applyMs = g_FrameProfile.applyNs / 128.0 / 1000000.0;
+    printf("FRMPROF| frame=%.2fms replay=%.2fms (cpuDraw=%.2fms apply=%.2fms) other=%.2fms\n",
+           frameMs, replayMs, cpuDrawMs, applyMs, frameMs - replayMs);
+    fflush(stdout);
+    g_FrameProfile.frameNs = 0;
+    g_FrameProfile.replayNs = 0;
+    g_FrameProfile.cpuDrawNs = 0;
+    g_FrameProfile.applyNs = 0;
+    g_FrameProfile.frames = 0;
+}
+
 // Host-forward cache: the HLE re-forwards large volumes of unchanged state on
 // every push-buffer decode (Turok Evolution: ~4,000 Set* calls per frame, most
 // byte-identical). Each mirrored entry holds the last value actually sent to
@@ -7208,8 +7285,10 @@ static void EmuPacePresent(
 HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap(
     DWORD Flags)
 {
-    EmuSwapFS(); // Win2k/XP FS
+    EmuSwapFS(); // XBox FS
     D3D_TRACE("Swap");
+
+    EmuFrameProfileFrame();
 
 // ******************************************************************
 // * debug trace
@@ -12244,6 +12323,9 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
         return size == 0;
     }
 
+    LARGE_INTEGER fpStart;
+    EmuFrameProfileStart(fpStart);
+
     std::vector<std::uint32_t> indices;
     try
     {
@@ -12251,6 +12333,7 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
     }
     catch(...)
     {
+        EmuFrameProfileAccumulate(g_FrameProfile.replayNs, fpStart);
         return false;
     }
 
@@ -12320,9 +12403,17 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                     if(recording != nullptr && drawIndex < recording->draws.size())
                     {
                         const DWORD stateBlock = recording->draws[drawIndex].stateBlock;
-                        if(stateBlock != 0 && FAILED(g_pD3DDevice8->ApplyStateBlock(stateBlock)))
+                        if(stateBlock != 0)
                         {
-                            return false;
+                            LARGE_INTEGER fpApplyStart;
+                            EmuFrameProfileStart(fpApplyStart);
+                            const HRESULT fpApplied =
+                                g_pD3DDevice8->ApplyStateBlock(stateBlock);
+                            EmuFrameProfileAccumulate(g_FrameProfile.applyNs, fpApplyStart);
+                            if(FAILED(fpApplied))
+                            {
+                                return false;
+                            }
                         }
                         EmuRestoreRecordedGuestTextures(recording->draws[drawIndex]);
                     }
@@ -12375,6 +12466,7 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                 }
                 return true;
             });
+        EmuFrameProfileAccumulate(g_FrameProfile.replayNs, fpStart);
         return walked && beginEndOperation == 0;
     }
     catch(...)
@@ -12816,6 +12908,8 @@ static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport)
 static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
                                      const EmuVshCpuVertex* vertices)
 {
+    LARGE_INTEGER fpStart;
+    EmuFrameProfileStart(fpStart);
     XTL::VshShaderRegistry::CpuFallbackMetadata* metadata =
         XTL::VshShaderRegistry::Current();
     if(metadata != nullptr && !metadata->geometryLogged && vertices != nullptr)
@@ -13156,6 +13250,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
         result = D3DERR_INVALIDCALL;
     }
 
+    EmuFrameProfileAccumulate(g_FrameProfile.cpuDrawNs, fpStart);
     __try
     {
         if(savedState != 0)
@@ -13171,6 +13266,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
     }
+    EmuFrameProfileAccumulate(g_FrameProfile.cpuDrawNs, fpStart);
     delete[] projectedVertices;
     return result;
 }
