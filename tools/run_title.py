@@ -71,6 +71,13 @@ TITLE_PROFILES: dict[str, dict[str, str]] = {
                  "CXBX_SURVIVE_THREAD_FAULT": "1",
                  "CXBX_NVNET_IRQ": "1",
                  "CXBX_NV2A_TEXTURE_LINEAR": "1"},
+    # King of Fighters 2002 (SN-006): same SNK engine and 5849 XDK as SN-004,
+    # so it inherits the same boot gates and the linear read for its
+    # SZ-format CPU texture uploads.
+    "534e0006": {"CXBX_HLE_SKIP": "XONLINES",
+                 "CXBX_SURVIVE_THREAD_FAULT": "1",
+                 "CXBX_NVNET_IRQ": "1",
+                 "CXBX_NV2A_TEXTURE_LINEAR": "1"},
 }
 # Backbuffer/scanout dumps the emulator writes to %TEMP% (ground truth for
 # "what did it render", unlike PrintWindow which can come back black).
