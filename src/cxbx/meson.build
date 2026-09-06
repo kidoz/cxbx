@@ -552,6 +552,7 @@ cxbx_volk_dep = declare_dependency(
 cxbx_hle_d3d8_vulkan = static_library(
   'cxbx_hle_d3d8_vulkan',
   'src/hle/d3d8/vulkan/vulkan_backend.cpp',
+  'src/hle/d3d8/vulkan/vulkan_renderer.cpp',
   dependencies : [cxbx_volk_dep],
 )
 

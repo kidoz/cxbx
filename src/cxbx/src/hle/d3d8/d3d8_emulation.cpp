@@ -388,6 +388,12 @@ static HRESULT EmuHostEndScene()
 // Present rect parameters stay d3d8-side until the render path migrates).
 static bool EmuPresentViaVulkan()
 {
+    // P2 render path: the frame content lives in the backend render target;
+    // present it directly instead of reading the d3d8 backbuffer.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        return cxbx::d3d8::HostBackendPresentFrame(nullptr, 0, 0, 0);
+    }
     XTL::IDirect3DSurface8* backBuffer = nullptr;
     bool presented = false;
     __try
@@ -460,8 +466,101 @@ static HRESULT EmuHostBeginScene()
     }
 }
 
+// Native-Vulkan migration P2: with the backend rendering, the guest-visible
+// backbuffer is the Vulkan render target, read back into this shadow on
+// demand (pixel probes and backbuffer LockRects).
+static unsigned char* g_EmuVulkanShadow = nullptr;
+static unsigned g_EmuVulkanShadowWidth = 0;
+static unsigned g_EmuVulkanShadowHeight = 0;
+static unsigned g_EmuVulkanShadowPitch = 0;
+
+static bool EmuVulkanSyncBackbufferShadow()
+{
+    unsigned width = 0;
+    unsigned height = 0;
+    if(!cxbx::d3d8::HostBackendTargetSize(&width, &height) || width == 0 ||
+       height == 0)
+    {
+        return false;
+    }
+    const unsigned pitch = width * 4;
+    if(g_EmuVulkanShadowWidth != width || g_EmuVulkanShadowHeight != height)
+    {
+        delete[] g_EmuVulkanShadow;
+        g_EmuVulkanShadow = new (std::nothrow) unsigned char[pitch * height];
+        g_EmuVulkanShadowWidth = width;
+        g_EmuVulkanShadowHeight = height;
+        g_EmuVulkanShadowPitch = pitch;
+    }
+    if(g_EmuVulkanShadow == nullptr)
+    {
+        return false;
+    }
+    if(!cxbx::d3d8::HostBackendReadFrame(g_EmuVulkanShadow, pitch))
+    {
+        return false;
+    }
+    {
+        static LONG dumpsWritten = 0;
+        char enabled[8] = {};
+        if(dumpsWritten < 4 &&
+           GetEnvironmentVariableA("CXBX_VULKAN_DUMP_SHADOW", enabled,
+                                   sizeof(enabled)) != 0 &&
+           enabled[0] == '1')
+        {
+            ++dumpsWritten;
+            char directory[MAX_PATH];
+            directory[0] = '\0';
+            GetTempPathA(MAX_PATH, directory);
+            char path[MAX_PATH];
+            wsprintfA(path, "%scxbx_vulkan_shadow_%ld.bmp", directory,
+                      static_cast<long>(dumpsWritten));
+            // Minimal 32-bit BMP: file header + info header + bottom-up rows.
+            const unsigned size = pitch * height;
+            const unsigned fileSize = 54 + size;
+            unsigned char header[54] = {};
+            header[0] = 'B';
+            header[1] = 'M';
+            memcpy(header + 2, &fileSize, 4);
+            header[10] = 54;
+            header[14] = 40;
+            memcpy(header + 18, &width, 4);
+            memcpy(header + 22, &height, 4);
+            header[26] = 1;
+            header[28] = 32;
+            FILE* file = fopen(path, "wb");
+            if(file != nullptr)
+            {
+                fwrite(header, 1, 54, file);
+                for(int row = static_cast<int>(height) - 1; row >= 0; --row)
+                {
+                    fwrite(g_EmuVulkanShadow + static_cast<size_t>(row) * pitch,
+                           1, pitch, file);
+                }
+                fclose(file);
+                printf("VULKAN| shadow dump: %s\n", path);
+            }
+        }
+    }
+    return true;
+}
+
 static bool EmuReadHostBackbufferPixel(UINT x, UINT y, DWORD& pixel)
 {
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        if(!EmuVulkanSyncBackbufferShadow() || x >= g_EmuVulkanShadowWidth ||
+           y >= g_EmuVulkanShadowHeight)
+        {
+            return false;
+        }
+        const BYTE* row = g_EmuVulkanShadow +
+                          static_cast<std::size_t>(y) * g_EmuVulkanShadowPitch;
+        std::memcpy(&pixel, row + static_cast<std::size_t>(x) * sizeof(pixel),
+                    sizeof(pixel));
+        return true;
+    }
+
     XTL::IDirect3DSurface8* backBuffer = nullptr;
     bool read = false;
     __try
@@ -1986,6 +2085,14 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
             // * it is necessary to store this pointer globally for emulation
             // ******************************************************************
             g_pD3DDevice8 = *g_EmuD3D8CreateDeviceProxyData.ppReturnedDeviceInterface;
+
+            // Native-Vulkan migration P2: size the backend render target to
+            // the emulated device's backbuffer.
+            cxbx::d3d8::HostBackendSetTargetSize(
+                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters
+                    ->BackBufferWidth,
+                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters
+                    ->BackBufferHeight);
 
             // Xbox D3D starts fixed-function lighting disabled, unlike host
             // Direct3D 8. Titles may rely on this default before their first
@@ -7180,7 +7287,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear(
     }
 
     HRESULT ret = D3D_OK;
-    if(Flags != 0)
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        // The backend render target replaces the host backbuffer; only the
+        // target bit is honored (P2 has no backend depth surface).
+        cxbx::d3d8::HostBackendClear(Flags & D3DCLEAR_TARGET, Color);
+        ret = D3D_OK;
+    }
+    else if(Flags != 0)
         ret = g_pD3DDevice8->Clear(Count, pRects, Flags, Color, Z, Stencil);
 
     // Advance the recording pushbuffer offset to reflect the bytes this call
@@ -7735,6 +7849,9 @@ static BOOL g_EmuImActive = FALSE;
 static BOOL g_EmuImCustomShader = FALSE;
 static BOOL g_EmuImConvertedYuv = FALSE;
 static BOOL g_EmuCurrentVertexShaderIsCustom = FALSE;
+// Raw FVF (low-bit handles) of the active vertex shader; the P2 render path
+// uses it to interpret DrawVerticesUP vertex streams.
+static DWORD g_EmuCurrentFvf = 0;
 
 VOID WINAPI XTL::EmuIDirect3DDevice8_Begin(
     X_D3DPRIMITIVETYPE PrimitiveType)
@@ -7880,7 +7997,18 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
             {
                 __try
                 {
-                    g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+                    if(cxbx::d3d8::HostBackendRenders() &&
+                       GetEnvironmentVariableA("CXBX_VULKAN_NO_QUAD",
+                                               nullptr, 0) == 0)
+                    {
+                        cxbx::d3d8::HostBackendDrawUP(
+                            D3DPT_TRIANGLELIST, n / 3, Tris,
+                            sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/);
+                    }
+                    else
+                    {
+                        g_pD3DDevice8->DrawPrimitiveUP(D3DPT_TRIANGLELIST, n / 3, Tris, sizeof(EmuImVertex));
+                    }
                 }
                 __except(EXCEPTION_EXECUTE_HANDLER)
                 {
@@ -7896,7 +8024,16 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
             {
                 __try
                 {
-                    g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+                    if(cxbx::d3d8::HostBackendRenders())
+                    {
+                        cxbx::d3d8::HostBackendDrawUP(
+                            PCPrim, PrimCount, g_EmuImVerts,
+                            sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/);
+                    }
+                    else
+                    {
+                        g_pD3DDevice8->DrawPrimitiveUP(PCPrim, PrimCount, g_EmuImVerts, sizeof(EmuImVertex));
+                    }
                 }
                 __except(EXCEPTION_EXECUTE_HANDLER)
                 {
@@ -9625,6 +9762,57 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect(
     }
 
     ZeroMemory(pLockedRect, sizeof(*pLockedRect));
+
+    // Native-Vulkan migration P2: the guest-visible backbuffer is the Vulkan
+    // render target. Read-only locks are served from the readback shadow;
+    // write locks have nowhere meaningful to land and fail explicitly.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        IDirect3DSurface8* pHostBackBuffer = NULL;
+        bool isBackBuffer = false;
+        __try
+        {
+            if(g_pD3DDevice8 != NULL &&
+               SUCCEEDED(g_pD3DDevice8->GetBackBuffer(
+                   0, XTL::D3DBACKBUFFER_TYPE_MONO, &pHostBackBuffer)) &&
+               pHostBackBuffer != NULL)
+            {
+                isBackBuffer = (pHostBackBuffer == pThis->EmuSurface8);
+                pHostBackBuffer->Release();
+            }
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            isBackBuffer = false;
+        }
+        if(isBackBuffer)
+        {
+            if((Flags & EMU_D3DLOCK_READONLY) == 0)
+            {
+                EmuWarning("Surface_LockRect rejected a write lock on the "
+                           "Vulkan-rendered backbuffer");
+                EmuSwapFS(); // XBox FS
+                return D3DERR_INVALIDCALL;
+            }
+            if(EmuVulkanSyncBackbufferShadow())
+            {
+                const RECT fullRect = {0, 0,
+                                       (LONG)g_EmuVulkanShadowWidth,
+                                       (LONG)g_EmuVulkanShadowHeight};
+                const RECT& lockRect = pRect != NULL ? *pRect : fullRect;
+                pLockedRect->pBits =
+                    g_EmuVulkanShadow +
+                    static_cast<std::size_t>(lockRect.top) *
+                        g_EmuVulkanShadowPitch +
+                    static_cast<std::size_t>(lockRect.left) * 4;
+                pLockedRect->Pitch = (LONG)g_EmuVulkanShadowPitch;
+                EmuSwapFS(); // XBox FS
+                return D3D_OK;
+            }
+            EmuSwapFS(); // XBox FS
+            return D3DERR_INVALIDCALL;
+        }
+    }
 
     EmuYuy2TextureInfo* pYuy2 = EmuResolveYuy2Texture(pThis);
     if(pYuy2 != NULL)
@@ -11797,6 +11985,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader(
             ? XTL::VshShaderRegistry::Find(reinterpret_cast<X_D3DVertexShader*>(Handle))
             : nullptr;
     g_EmuCurrentVertexShaderIsCustom = metadata != nullptr;
+    g_EmuCurrentFvf = metadata != nullptr ? 0 : Handle;
     XTL::VshShaderRegistry::SetCurrent(
         metadata != nullptr && metadata->enabled ? metadata : nullptr, "SetVertexShader");
     if(metadata != nullptr)
@@ -11892,6 +12081,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader(
             ? XTL::VshShaderRegistry::Find(reinterpret_cast<X_D3DVertexShader*>(Handle))
             : nullptr;
     g_EmuCurrentVertexShaderIsCustom = metadata != nullptr;
+    g_EmuCurrentFvf = metadata != nullptr ? 0 : Handle;
     XTL::VshShaderRegistry::SetCurrent(
         metadata != nullptr && metadata->enabled ? metadata : nullptr, "SelectVertexShader");
     if(metadata != nullptr)
@@ -13651,8 +13841,21 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
         }
         if(SUCCEEDED(result))
         {
-            result = g_pD3DDevice8->DrawPrimitiveUP(primitiveType, primitiveCount, drawVertices,
+            if(cxbx::d3d8::HostBackendRenders())
+            {
+                // P2: CPU-transformed fallback vertices draw into the
+                // backend target (position at 0, diffuse at 20 in
+                // EmuVshCpuVertex); texture stages land with P3.
+                cxbx::d3d8::HostBackendDrawUP(primitiveType, primitiveCount,
+                                              drawVertices,
+                                              sizeof(EmuVshCpuVertex), 20);
+                result = D3D_OK;
+            }
+            else
+            {
+                result = g_pD3DDevice8->DrawPrimitiveUP(primitiveType, primitiveCount, drawVertices,
                                                     sizeof(EmuVshCpuVertex));
+            }
             if(SUCCEEDED(result))
             {
                 // This draw is submitted to the current backbuffer immediately. Static
@@ -14326,6 +14529,76 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
             EmuVshLogCpuDraw("DrawVerticesUP", PrimitiveType, VertexCount, true, "none");
             EmuD3DDrawPost();
         }
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        // P2 render path: pretransformed FVF draws go into the backend
+        // target. Only XYZRHW streams (optional diffuse) are supported in
+        // this phase; other layouts are dropped by the backend with a
+        // one-time warning.
+        static LONG drawPathLogged = 0;
+        if(InterlockedIncrement(&drawPathLogged) <= 2)
+        {
+            printf("VULKAN| DrawVerticesUP path: fvf=0x%.08lX prim=%u count=%u stride=%lu\n",
+                   g_EmuCurrentFvf, (unsigned)PCPrimitiveType,
+                   (unsigned)PrimitiveCount,
+                   static_cast<unsigned long>(VertexStreamZeroStride));
+        }
+        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
+        {
+            static LONG fvfWarned = 0;
+            if(InterlockedIncrement(&fvfWarned) <= 5)
+            {
+                EmuWarning("DrawVerticesUP under the Vulkan render path "
+                           "requires XYZRHW (fvf=0x%.08lX)",
+                           g_EmuCurrentFvf);
+            }
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+        const unsigned int DiffuseOffset =
+            (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
+        unsigned int DrawPrimitiveCount = PrimitiveCount;
+        const void* DrawData = pVertexStreamZeroData;
+        unsigned int DrawStride = VertexStreamZeroStride;
+        if(PrimitiveType == 8) // quad list: expand each quad to two triangles
+        {
+            static unsigned char s_QuadExpand[EMU_IM_MAXVERTS * 3 / 2 * 64];
+            if(VertexStreamZeroStride > 64 ||
+               VertexCount > EMU_IM_MAXVERTS ||
+               VertexCount % 4 != 0)
+            {
+                EmuWarning("DrawVerticesUP quad expansion rejected "
+                           "(stride=%lu count=%lu)",
+                           static_cast<unsigned long>(VertexStreamZeroStride),
+                           static_cast<unsigned long>(VertexCount));
+                EmuSwapFS(); // XBox FS
+                return;
+            }
+            const unsigned char* src =
+                static_cast<const unsigned char*>(pVertexStreamZeroData);
+            unsigned char* dst = s_QuadExpand;
+            for(UINT quad = 0; quad < VertexCount / 4; ++quad)
+            {
+                static const UINT quadIndices[6] = {0, 1, 2, 0, 2, 3};
+                for(UINT k = 0; k < 6; ++k)
+                {
+                    memcpy(dst, src + static_cast<size_t>(quad * 4 + quadIndices[k]) *
+                                        VertexStreamZeroStride,
+                           VertexStreamZeroStride);
+                    dst += VertexStreamZeroStride;
+                }
+            }
+            DrawPrimitiveCount = VertexCount / 2; // 6 verts per quad -> 2 tris
+            DrawData = s_QuadExpand;
+            DrawStride = VertexStreamZeroStride;
+        }
+        cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
+                                      DrawData, DrawStride, DiffuseOffset);
+        EmuD3DDrawPost();
         EmuSwapFS(); // XBox FS
         return;
     }

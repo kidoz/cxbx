@@ -1,0 +1,85 @@
+// Fixed-function Vulkan render path (native-Vulkan-backend migration P2).
+// Internal to the vulkan module: vulkan_backend.cpp drives this renderer and
+// is the only consumer of this header, so Vulkan types are allowed here.
+//
+// The renderer owns a single BGRA8 color target that the HLE's
+// pretransformed draws go into. It accepts only what the P2 gate needs:
+// full-surface clears and CPU-vertex draws with position at offset 0 as
+// float4 (x, y, z, rhw) plus an optional D3DCOLOR diffuse; anything else is
+// dropped with a one-time warning. Frames batch into one command buffer and
+// are submitted on EndFrame (present or readback).
+
+#ifndef CXBX_HLE_D3D8_VULKAN_RENDERER_H
+#define CXBX_HLE_D3D8_VULKAN_RENDERER_H
+
+#include <cstdint>
+
+namespace cxbx
+{
+namespace d3d8
+{
+namespace vulkan
+{
+
+// Opaque renderer state; defined in vulkan_renderer.cpp.
+struct RendererState;
+
+// Creates the color target, sync objects, and the shared pipeline cache.
+// width/height follow the emulated device's backbuffer dimensions. The
+// device/queue/image handles are opaque Vulkan handles passed through
+// void* so this internal header needs no Vulkan declarations.
+bool RendererInitialize(void* device, void* physicalDevice, void* queue,
+                        unsigned int queueFamily, unsigned int width,
+                        unsigned int height);
+
+// Destroys renderer resources (device-level only; the caller owns the
+// device and destroys it after RendererShutdown).
+void RendererShutdown();
+
+bool RendererValid();
+
+// Sets the emulated viewport in surface pixels (draws map pretransformed
+// coordinates through it). Defaults to the full target.
+void RendererSetViewport(float x, float y, float width, float height);
+
+// D3DCLEAR flag subset (bit 0 = z, bit 1 = stencil, bits 4..7 = target) with
+// an X_D3DCOLOR clear value. Only the target bit is honored in P2.
+bool RendererClear(unsigned int flags, unsigned int color);
+
+// Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0,
+// optional D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none).
+// primitiveType uses the host D3DPRIMITIVETYPE enumeration and
+// primitiveCount follows DrawPrimitiveUP semantics (converted to a vertex
+// count internally).
+bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
+                    const void* data, unsigned int stride,
+                    unsigned int diffuseOffset);
+
+// Target dimensions for callers that stage readback shadows.
+unsigned int RendererTargetWidth();
+unsigned int RendererTargetHeight();
+
+// Submits the pending batch, then copies the target into dst (row pitch in
+// bytes). Safe to call with an empty batch.
+bool RendererReadTarget(void* dst, unsigned int pitch);
+
+// Submits the pending batch, then copies the target into the given
+// swapchain image (which transitions to present source). The image is a
+// non-dispatchable Vulkan handle, which is a 64-bit integer on Windows.
+bool RendererCopyToSwapchain(std::uint64_t swapchainImage,
+                             unsigned int imageWidth,
+                             unsigned int imageHeight);
+
+bool RendererHasPendingFrame();
+
+// Submits the pending batch (final step before the backend copies the
+// target into the swapchain for present).
+bool RendererEndFrameForPresent();
+
+void RendererShutdownAfterDeviceLoss();
+
+} // namespace vulkan
+} // namespace d3d8
+} // namespace cxbx
+
+#endif // CXBX_HLE_D3D8_VULKAN_RENDERER_H

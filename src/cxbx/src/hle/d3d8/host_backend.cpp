@@ -1,6 +1,7 @@
 #include "host_backend.h"
 
 #include "vulkan/vulkan_backend.h"
+#include "vulkan/vulkan_renderer.h"
 
 // The vendored DirectX SDK basetsd.h shadows the Windows SDK one and does
 // not define POINTER_64, which winnt.h requires (same workaround as the
@@ -67,6 +68,62 @@ void HostBackendInitialize(const void* nativeWindow)
 bool HostBackendPresents()
 {
     return g_ActiveFlavor == HostBackendFlavor::Vulkan && g_PresenterReady;
+}
+
+bool HostBackendRenders()
+{
+    return HostBackendPresents() && vulkan::RendererValid();
+}
+
+void HostBackendSetTargetSize(unsigned int width, unsigned int height)
+{
+    vulkan::SetTargetSize(width, height);
+    g_PresenterReady = vulkan::PresenterValid();
+}
+
+void HostBackendClear(unsigned int flags, unsigned int color)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererClear(flags, color);
+    }
+}
+
+void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
+                       const void* data, unsigned int stride,
+                       unsigned int diffuseOffset)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererDrawUP(primitiveType, primitiveCount, data, stride,
+                               diffuseOffset);
+    }
+}
+
+bool HostBackendTargetSize(unsigned int* width, unsigned int* height)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    if(width != nullptr)
+    {
+        *width = vulkan::RendererTargetWidth();
+    }
+    if(height != nullptr)
+    {
+        *height = vulkan::RendererTargetHeight();
+    }
+    return true;
+}
+
+bool HostBackendReadFrame(void* dst, unsigned int pitch)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererReadTarget(dst, pitch);
 }
 
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,

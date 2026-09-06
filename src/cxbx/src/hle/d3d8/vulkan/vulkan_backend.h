@@ -36,6 +36,11 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
 // d3d8 presenter for the rest of the session.
 bool PresenterValid();
 
+// Resizes (or lazily creates) the fixed-function render target to the
+// emulated device's backbuffer dimensions; the HLE calls this once its host
+// device exists. No-op unless the presenter is valid.
+void SetTargetSize(unsigned int width, unsigned int height);
+
 // Destroys every Vulkan object the presenter owns.
 void Shutdown();
 

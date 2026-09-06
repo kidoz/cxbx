@@ -69,6 +69,38 @@ bool HostBackendPresents();
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,
                              unsigned int height, unsigned int pitch);
 
+// P2 fixed-function rendering: when HostBackendRenders() is true, the HLE
+// routes full-surface clears and pretransformed CPU-vertex draws into the
+// backend's own color target (presented through the P1 present hook), and
+// backbuffer reads are served from that target. d3d8 state that the render
+// path does not consume yet (transforms, most render states) keeps flowing
+// to the host d3d8 device as a shadow, which preserves Get semantics.
+bool HostBackendRenders();
+
+// Reports the emulated device's backbuffer dimensions once the host device
+// exists; sizes (or lazily creates) the render target.
+void HostBackendSetTargetSize(unsigned int width, unsigned int height);
+
+// D3DCLEAR flag subset (bit 0 = z, bit 1 = stencil, bits 4..7 = target) with
+// an X_D3DCOLOR value; only the target bit is consumed in P2.
+void HostBackendClear(unsigned int flags, unsigned int color);
+
+// Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0, optional
+// D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none). primitiveType uses
+// the host D3DPRIMITIVETYPE enumeration and primitiveCount follows
+// DrawPrimitiveUP semantics. Unsupported layouts are dropped with a
+// one-time warning.
+void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
+                       const void* data, unsigned int stride,
+                       unsigned int diffuseOffset);
+
+// Render target dimensions; false when the render path is not active.
+bool HostBackendTargetSize(unsigned int* width, unsigned int* height);
+
+// Copies the render target into dst (row pitch in bytes) for backbuffer
+// reads. Returns false when the render path is not active.
+bool HostBackendReadFrame(void* dst, unsigned int pitch);
+
 // Releases everything the selected backend owns (the Vulkan presenter's
 // device, swapchain, and instance).
 void HostBackendShutdown();

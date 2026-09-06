@@ -1,5 +1,7 @@
 #include "vulkan_backend.h"
 
+#include "vulkan_renderer.h"
+
 // The vendored DirectX SDK basetsd.h shadows the Windows SDK one and does
 // not define POINTER_64, which winnt.h requires (same workaround as the
 // other windows.h consumers in this tree).
@@ -543,8 +545,14 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
     queueInfo.pQueuePriorities = &queuePriority;
 
     const char* deviceExtensions[1] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    // The fixed-function render path records into dynamic rendering
+    // instances (P2), which is a Vulkan 1.3 feature that must be enabled.
+    VkPhysicalDeviceVulkan13Features vulkan13Features = {};
+    vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vulkan13Features.dynamicRendering = VK_TRUE;
     VkDeviceCreateInfo deviceInfo = {};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    deviceInfo.pNext = &vulkan13Features;
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
     deviceInfo.enabledExtensionCount = 1;
@@ -559,6 +567,16 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
     }
     volkLoadDevice(g_Presenter.device);
     vkGetDeviceQueue(g_Presenter.device, queueFamily, 0, &g_Presenter.queue);
+
+    // Bring the render target up with the presenter's surface extent; the
+    // HLE corrects it to the device backbuffer size via SetTargetSize
+    // before the first draw.
+    if(!RendererInitialize(g_Presenter.device, g_Presenter.physicalDevice,
+                           g_Presenter.queue, queueFamily,
+                           640, 480))
+    {
+        printf("VULKAN| renderer init failed; present-only mode\n");
+    }
 
     if(!CreateFrameObjects())
     {
@@ -575,35 +593,52 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
 bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
                   unsigned int pitch)
 {
-    if(!g_Presenter.valid || pixels == nullptr || width == 0 || height == 0 ||
-       pitch == 0)
+    if(!g_Presenter.valid)
     {
         return false;
     }
 
-    // Staging rows are the source pitch; the copy region is the overlap of
-    // the frame and the swapchain extent. They match whenever the window was
-    // not resized; a 1:1 top-left copy is the P1 behavior otherwise.
-    const unsigned int copyWidth =
-        width < g_Presenter.extent.width ? width : g_Presenter.extent.width;
-    const unsigned int copyHeight =
-        height < g_Presenter.extent.height ? height : g_Presenter.extent.height;
-    if((copyWidth < width || copyHeight < height) && !g_Presenter.extentWarned)
+    // P2 render path: the renderer owns the frame content; the caller's
+    // pixels (a d3d8 backbuffer read) are ignored and the render target is
+    // the present source.
+    const bool renderPath = RendererValid();
+    if(!renderPath && (pixels == nullptr || width == 0 || height == 0 ||
+                       pitch == 0))
     {
-        g_Presenter.extentWarned = true;
-        printf("VULKAN| frame %ux%u exceeds surface %ux%u; presenting the "
-               "top-left region (resize recreation lands with P2)\n",
-               width, height, g_Presenter.extent.width,
-               g_Presenter.extent.height);
-    }
-
-    const VkDeviceSize needed = static_cast<VkDeviceSize>(pitch) * height;
-    if(!EnsureStagingCapacity(needed))
-    {
-        g_Presenter.valid = false;
         return false;
     }
-    memcpy(g_Presenter.stagingMapped, pixels, static_cast<size_t>(needed));
+
+    unsigned int copyWidth = 0;
+    unsigned int copyHeight = 0;
+    if(!renderPath)
+    {
+        // Staging rows are the source pitch; the copy region is the overlap
+        // of the frame and the swapchain extent. They match whenever the
+        // window was not resized; a 1:1 top-left copy is the P1 behavior
+        // otherwise.
+        copyWidth =
+            width < g_Presenter.extent.width ? width : g_Presenter.extent.width;
+        copyHeight = height < g_Presenter.extent.height
+                         ? height
+                         : g_Presenter.extent.height;
+        if((copyWidth < width || copyHeight < height) &&
+           !g_Presenter.extentWarned)
+        {
+            g_Presenter.extentWarned = true;
+            printf("VULKAN| frame %ux%u exceeds surface %ux%u; presenting the "
+                   "top-left region (resize recreation lands with P2)\n",
+                   width, height, g_Presenter.extent.width,
+                   g_Presenter.extent.height);
+        }
+
+        const VkDeviceSize needed = static_cast<VkDeviceSize>(pitch) * height;
+        if(!EnsureStagingCapacity(needed))
+        {
+            g_Presenter.valid = false;
+            return false;
+        }
+        memcpy(g_Presenter.stagingMapped, pixels, static_cast<size_t>(needed));
+    }
 
     // One bounded recreation attempt: an out-of-date swapchain is rebuilt
     // and the frame is retried; anything else hands presentation back to
@@ -636,6 +671,51 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
         printf("VULKAN| vkAcquireNextImageKHR failed (%d)\n",
                static_cast<int>(acquired));
         return false;
+    }
+
+    if(renderPath)
+    {
+        // Submit the pending render batch, copy the target into the
+        // acquired swapchain image (renderer transitions it to present
+        // source), then hand the image to the presentation engine.
+        if(!RendererCopyToSwapchain(g_Presenter.swapchainImages[imageIndex],
+                                    g_Presenter.extent.width,
+                                    g_Presenter.extent.height))
+        {
+            g_Presenter.valid = false;
+            return false;
+        }
+
+        VkPresentInfoKHR renderPresent = {};
+        renderPresent.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        renderPresent.swapchainCount = 1;
+        renderPresent.pSwapchains = &g_Presenter.swapchain;
+        renderPresent.pImageIndices = &imageIndex;
+        const VkResult presentedRender =
+            vkQueuePresentKHR(g_Presenter.queue, &renderPresent);
+        if(presentedRender == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            DestroyFrameObjects();
+            if(!CreateFrameObjects())
+            {
+                g_Presenter.valid = false;
+                return false;
+            }
+            return true;
+        }
+        if(presentedRender != VK_SUCCESS && presentedRender != VK_SUBOPTIMAL_KHR)
+        {
+            printf("VULKAN| vkQueuePresentKHR failed (%d)\n",
+                   static_cast<int>(presentedRender));
+            g_Presenter.valid = false;
+            return false;
+        }
+        if(!g_Presenter.presenting)
+        {
+            g_Presenter.presenting = true;
+            printf("VULKAN| presenting the render target via swapchain\n");
+        }
+        return true;
     }
 
     VkCommandBufferBeginInfo beginInfo = {};
@@ -762,6 +842,31 @@ bool PresenterValid()
     return g_Presenter.valid;
 }
 
+void SetTargetSize(unsigned int width, unsigned int height)
+{
+    if(!g_Presenter.valid || width == 0 || height == 0)
+    {
+        return;
+    }
+    if(!RendererValid())
+    {
+        if(!RendererInitialize(g_Presenter.device, g_Presenter.physicalDevice,
+                               g_Presenter.queue, g_Presenter.queueFamily,
+                               width, height))
+        {
+            printf("VULKAN| renderer init failed at target size %ux%u; "
+                   "present-only mode\n",
+                   width, height);
+        }
+        return;
+    }
+    // A live renderer with different dimensions is a mode change P2 does not
+    // handle mid-session; titles set the size before the first draw, so this
+    // path is diagnostic-only in practice.
+    printf("VULKAN| SetTargetSize(%ux%u) ignored: renderer already running\n",
+           width, height);
+}
+
 void Shutdown()
 {
     if(g_Presenter.instance == VK_NULL_HANDLE)
@@ -769,6 +874,7 @@ void Shutdown()
         return;
     }
     DestroyFrameObjects();
+    RendererShutdown();
     if(g_Presenter.device != VK_NULL_HANDLE)
     {
         vkDestroyDevice(g_Presenter.device, nullptr);
