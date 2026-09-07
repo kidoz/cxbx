@@ -59,6 +59,16 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
 unsigned int RendererTargetWidth();
 unsigned int RendererTargetHeight();
 
+// Switches the draw target: key == nullptr binds the main (present-source)
+// target; otherwise the key identifies (or lazily creates) a
+// render-to-texture target of the given size.
+void RendererSetRenderTarget(void* key, unsigned int width,
+                             unsigned int height);
+
+// Binds a registered render target as a stage texture (render-to-texture
+// sampling). Returns false when the key has no target.
+bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key);
+
 // Binds (or unbinds, key == nullptr) the stage texture. pixels are the
 // level-0 texels in the host format's byte layout (row pitch in bytes);
 // the renderer uploads and caches by key. hostFormat is the host D3DFORMAT

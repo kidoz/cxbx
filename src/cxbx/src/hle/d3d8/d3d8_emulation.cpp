@@ -3243,6 +3243,15 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport(
     // the call. (Same guard discipline as SetRenderTarget / Clear.)
     D3DVIEWPORT8 vp = *pViewport;
 
+    // P5: pretransformed draws map through the viewport inside the backend
+    // shader, so the render path needs the live viewport.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        cxbx::d3d8::HostBackendSetViewport(pViewport->X, pViewport->Y,
+                                           pViewport->Width,
+                                           pViewport->Height);
+    }
+
     const FLOAT XboxHalfWidth = static_cast<FLOAT>(pViewport->Width) * 0.5f;
     const FLOAT XboxHalfHeight = static_cast<FLOAT>(pViewport->Height) * 0.5f;
     const FLOAT XboxViewportScale[4] = {
@@ -7011,6 +7020,25 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
     {
         cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
         return;
+    }
+
+    // P5: a texture whose level-0 surface is a registered render target
+    // samples that target directly (the host d3d8 copy never sees the
+    // Vulkan-rendered content).
+    {
+        XTL::IDirect3DSurface8* pLevel0 = NULL;
+        if(SUCCEEDED(pTexture8->GetSurfaceLevel(0, &pLevel0)) &&
+           pLevel0 != NULL)
+        {
+            const bool boundAsTarget =
+                cxbx::d3d8::HostBackendSetStageRenderTargetTexture(
+                    Stage, pLevel0);
+            pLevel0->Release();
+            if(boundAsTarget)
+            {
+                return;
+            }
+        }
     }
     XTL::D3DLOCKED_RECT locked = {};
     if(FAILED(pTexture8->LockRect(0, &locked, NULL, D3DLOCK_READONLY)))
@@ -15192,6 +15220,48 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget(
         g_pCachedZStencilSurface = pNewZStencil;
     else
         g_pCachedZStencilSurface = NULL;
+
+    // P5 render targets: under the render path the Vulkan-side target keyed
+    // by the host surface pointer is switched (created on demand from the
+    // resolved dimensions). The backbuffer resolves to the main target; the
+    // depth-stencil surface is accepted but not bound in this phase (ZEnable
+    // FALSE covers the P5 gate; real depth testing lands with P6).
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        IDirect3DSurface8* pHostBackBuffer = NULL;
+        bool isBackBuffer = false;
+        __try
+        {
+            if(g_pD3DDevice8 != NULL &&
+               SUCCEEDED(g_pD3DDevice8->GetBackBuffer(
+                   0, XTL::D3DBACKBUFFER_TYPE_MONO, &pHostBackBuffer)) &&
+               pHostBackBuffer != NULL)
+            {
+                isBackBuffer =
+                    (pHostBackBuffer == pRenderTarget->EmuSurface8);
+                pHostBackBuffer->Release();
+            }
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            isBackBuffer = false;
+        }
+
+        if(pRenderTarget == 0)
+        {
+            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0);
+        }
+        else if(isBackBuffer)
+        {
+            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0);
+        }
+        else if(GotRTDesc)
+        {
+            cxbx::d3d8::HostBackendSetRenderTarget(
+                pPCRenderTarget != NULL ? pPCRenderTarget : nullptr,
+                RTDesc.Width, RTDesc.Height);
+        }
+    }
 
     EmuSwapFS(); // XBox FS
 

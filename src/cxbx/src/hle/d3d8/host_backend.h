@@ -126,32 +126,17 @@ void HostBackendSetPixelShader(const std::uint32_t* def60);
 void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
                                        const float* value);
 
-// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
-// register-combiner interpreter. A nullptr also results from an unresolvable
-// handle, falling those draws back to the fixed cascade.
-void HostBackendSetPixelShader(const std::uint32_t* def60);
+// Forward the live viewport for pretransformed draws (surface pixels).
+void HostBackendSetViewport(float x, float y, float width, float height);
 
-// Updates combiner constant register (0..7).
-void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
-                                       const float* value);
-
-// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
-// register-combiner interpreter. A nullptr also results from an unresolvable
-// handle, falling those draws back to the fixed cascade.
-void HostBackendSetPixelShader(const std::uint32_t* def60);
-
-// Updates combiner constant register (0..7).
-void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
-                                       const float* value);
-
-// Activates (def60 = raw X_D3DPIXELSHADERDEF) or deactivates (nullptr) the
-// register-combiner interpreter. A nullptr also results from an unresolvable
-// handle, falling those draws back to the fixed cascade.
-void HostBackendSetPixelShader(const std::uint32_t* def60);
-
-// Updates combiner constant register (0..7).
-void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
-                                       const float* value);
+// P5 render targets: switches the draw target (key == nullptr binds the main
+// backbuffer target; otherwise the key identifies or lazily creates a
+// render-to-texture target of the given size), and binds a registered
+// render target as a stage texture (render-to-texture sampling; false when
+// the key has no target).
+void HostBackendSetRenderTarget(void* key, unsigned int width,
+                                unsigned int height);
+bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key);
 
 // Copies the render target into dst (row pitch in bytes) for backbuffer
 // reads. Returns false when the render path is not active.

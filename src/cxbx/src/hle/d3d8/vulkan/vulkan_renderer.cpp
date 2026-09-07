@@ -93,6 +93,22 @@ struct RendererState
     VkDeviceMemory targetMemory = VK_NULL_HANDLE;
     VkImageView targetView = VK_NULL_HANDLE;
 
+    // P5 render-target registry: the main target (index 0, the present
+    // source) plus render-to-texture targets keyed by host surface pointer.
+    struct RTEntry
+    {
+        void* key = nullptr;
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        unsigned int width = 0;
+        unsigned int height = 0;
+    };
+    RTEntry rtTargets[8] = {};
+    unsigned int rtTargetCount = 0;
+    int rtCurrent = -1; // -1 = main target; else rtTargets index
+    VkImageView stageOverrideView[4] = {};
+
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
 
@@ -141,6 +157,8 @@ struct RendererState
 };
 
 RendererState g_R;
+
+using RTEntry = RendererState::RTEntry;
 
 // The renderer is entered from the guest execution thread, the device proxy
 // thread (initial present), and present/readback paths; all public entries
@@ -403,7 +421,10 @@ bool SubmitFrame()
         range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         range.levelCount = 1;
         range.layerCount = 1;
-        vkCmdClearColorImage(g_R.commandBuffer, g_R.target,
+        const VkImage currentImage =
+            g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].image
+                               : g_R.target;
+        vkCmdClearColorImage(g_R.commandBuffer, currentImage,
                              VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
         g_R.hasPendingClear = false;
     }
@@ -460,6 +481,99 @@ unsigned int TextureFormatBytesPerPixel(unsigned int hostFormat,
             *formatOut = VK_FORMAT_UNDEFINED;
             return 0;
     }
+}
+
+// Creates a GENERAL-layout BGRA color image (renderable + sampleable) and
+// transitions it in a one-shot submit. Used for render-to-texture targets.
+bool CreateRenderableTarget(void* key, unsigned int width, unsigned int height)
+{
+    if(g_R.rtTargetCount >= 8)
+    {
+        return false;
+    }
+    RTEntry& entry = g_R.rtTargets[g_R.rtTargetCount];
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+    imageInfo.extent = { width, height, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                      VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if(vkCreateImage(g_R.device, &imageInfo, nullptr, &entry.image) !=
+       VK_SUCCESS)
+    {
+        return false;
+    }
+    VkMemoryRequirements requirements = {};
+    vkGetImageMemoryRequirements(g_R.device, entry.image, &requirements);
+    if(!AllocateDeviceMemory(&entry.memory, requirements.size,
+                             requirements.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+       vkBindImageMemory(g_R.device, entry.image, entry.memory, 0) !=
+           VK_SUCCESS)
+    {
+        vkDestroyImage(g_R.device, entry.image, nullptr);
+        entry.image = VK_NULL_HANDLE;
+        return false;
+    }
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = entry.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    if(vkCreateImageView(g_R.device, &viewInfo, nullptr, &entry.view) !=
+       VK_SUCCESS)
+    {
+        vkDestroyImage(g_R.device, entry.image, nullptr);
+        entry.image = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // One-shot transition to GENERAL (attachment + sampled + copy source).
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkResetCommandBuffer(g_R.commandBuffer, 0);
+    vkBeginCommandBuffer(g_R.commandBuffer, &beginInfo);
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_SHADER_READ_BIT |
+                            VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = entry.image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+    vkEndCommandBuffer(g_R.commandBuffer);
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &g_R.commandBuffer;
+    vkQueueSubmit(g_R.queue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_R.queue);
+
+    entry.key = key;
+    entry.width = width;
+    entry.height = height;
+    g_R.rtTargetCount++;
+    return true;
 }
 
 bool EnsureTextureStaging(VkDeviceSize needed)
@@ -1129,6 +1243,28 @@ void RendererShutdown()
         DestroyTextureEntry(&g_R.textures[i]);
     }
     g_R.textureCount = 0;
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        RTEntry& entry = g_R.rtTargets[i];
+        if(entry.view != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(g_R.device, entry.view, nullptr);
+        }
+        if(entry.image != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(g_R.device, entry.image, nullptr);
+        }
+        if(entry.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(g_R.device, entry.memory, nullptr);
+        }
+    }
+    g_R.rtTargetCount = 0;
+    g_R.rtCurrent = -1;
+    for(unsigned int stage = 0; stage < 4; ++stage)
+    {
+        g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+    }
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
         g_R.stageTexture[stage] = nullptr;
@@ -1343,9 +1479,16 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
 
     if(!g_R.renderingActive)
     {
+        const RTEntry* current =
+            g_R.rtCurrent >= 0 ? &g_R.rtTargets[g_R.rtCurrent] : nullptr;
+        const unsigned int targetWidth =
+            current != nullptr ? current->width : g_R.width;
+        const unsigned int targetHeight =
+            current != nullptr ? current->height : g_R.height;
         VkRenderingAttachmentInfo attachment = {};
         attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        attachment.imageView = g_R.targetView;
+        attachment.imageView = current != nullptr ? current->view
+                                                  : g_R.targetView;
         attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         attachment.loadOp = g_R.hasPendingClear ? VK_ATTACHMENT_LOAD_OP_CLEAR
                                                 : VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -1358,7 +1501,7 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         }
         VkRenderingInfo rendering = {};
         rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        rendering.renderArea.extent = { g_R.width, g_R.height };
+        rendering.renderArea.extent = { targetWidth, targetHeight };
         rendering.layerCount = 1;
         rendering.colorAttachmentCount = 1;
         rendering.pColorAttachments = &attachment;
@@ -1403,7 +1546,9 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         RendererTexture* texture = g_R.stageTexture[stage];
         imageInfos[stage].sampler = SamplerFor(stage);
         imageInfos[stage].imageView =
-            texture != nullptr ? texture->view : g_R.dummyView;
+            g_R.stageOverrideView[stage] != VK_NULL_HANDLE
+                ? g_R.stageOverrideView[stage]
+                : (texture != nullptr ? texture->view : g_R.dummyView);
         imageInfos[stage].imageLayout =
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         writes[stage].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1452,18 +1597,6 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         drawCount = vertexCount; // vertices, not primitives
     }
     vkCmdDraw(g_R.commandBuffer, drawCount, 1, 0, 0);
-    {
-        static LONG drawsRecorded = 0;
-        if(drawsRecorded < 4)
-        {
-            ++drawsRecorded;
-            printf("VULKAN| recorded draw: prim=%u verts=%u stride=%u diff=%u tex=%u comb=%d slot=%u\n",
-                   primitiveType, drawCount, stride,
-                   diffuseOffset == 0xFFFFFFFFu ? 0u : 1u,
-                   texCoordOffset == 0xFFFFFFFFu ? 0u : 1u,
-                   g_R.useCombiner ? 1 : 0, g_R.combinerActiveSlot);
-        }
-    }
     return true;
 }
 
@@ -1666,7 +1799,67 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
                          0, nullptr, 1, &toShader);
     entry->lastUse = ++g_R.textureUseCounter;
     g_R.stageTexture[stage] = entry;
+    g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
     return true;
+}
+
+// Binds a registered render target as a stage texture (render-to-texture
+// sampling). Returns false when the key has no target; the caller then
+// falls back to the host-texture pull.
+bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || stage >= 4 || key == nullptr)
+    {
+        return false;
+    }
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        if(g_R.rtTargets[i].key == key)
+        {
+            g_R.stageTexture[stage] = nullptr;
+            g_R.stageOverrideView[stage] = g_R.rtTargets[i].view;
+            return true;
+        }
+    }
+    return false;
+}
+
+void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid)
+    {
+        return;
+    }
+    if(key == nullptr)
+    {
+        // Main (backbuffer) target.
+        CloseRendering();
+        g_R.rtCurrent = -1;
+        g_R.viewport[0] = 0.0f;
+        g_R.viewport[1] = 0.0f;
+        g_R.viewport[2] = static_cast<float>(g_R.width);
+        g_R.viewport[3] = static_cast<float>(g_R.height);
+        return;
+    }
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        if(g_R.rtTargets[i].key == key)
+        {
+            CloseRendering();
+            g_R.rtCurrent = static_cast<int>(i);
+            return;
+        }
+    }
+    if(width == 0 || height == 0 || !CreateRenderableTarget(key, width, height))
+    {
+        printf("VULKAN| render target %ux%u creation failed; keeping main\n",
+               width, height);
+        return;
+    }
+    CloseRendering();
+    g_R.rtCurrent = static_cast<int>(g_R.rtTargetCount) - 1;
 }
 
 void RendererSetTextureOp(unsigned int stage, unsigned int type,
@@ -1843,8 +2036,16 @@ bool RendererReadTarget(void* dst, unsigned int pitch)
     VkBufferImageCopy region = {};
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.imageSubresource.layerCount = 1;
-    region.imageExtent = { g_R.width, g_R.height, 1 };
-    vkCmdCopyImageToBuffer(g_R.commandBuffer, g_R.target,
+    const unsigned dbgW =
+        g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].width : g_R.width;
+    const unsigned dbgH =
+        g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].height : g_R.height;
+    const unsigned copyW = dbgW;
+    const unsigned copyH = dbgH;
+    region.imageExtent = { dbgW, dbgH, 1 };
+    const VkImage readImage =
+        g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].image : g_R.target;
+    vkCmdCopyImageToBuffer(g_R.commandBuffer, readImage,
                            VK_IMAGE_LAYOUT_GENERAL, g_R.readbackStaging, 1,
                            &region);
     vkEndCommandBuffer(g_R.commandBuffer);
@@ -1858,12 +2059,12 @@ bool RendererReadTarget(void* dst, unsigned int pitch)
         return false;
     }
     vkQueueWaitIdle(g_R.queue);
-    for(unsigned int row = 0; row < g_R.height; ++row)
+    for(unsigned int row = 0; row < copyH && row < g_R.height; ++row)
     {
         memcpy(static_cast<char*>(dst) + static_cast<size_t>(row) * pitch,
                static_cast<const char*>(g_R.readbackMapped) +
-                   static_cast<size_t>(row) * g_R.width * 4,
-               g_R.width * 4);
+                   static_cast<size_t>(row) * copyW * 4,
+               copyW * 4);
     }
     return true;
 }

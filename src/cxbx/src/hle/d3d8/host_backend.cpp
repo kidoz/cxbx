@@ -131,6 +131,32 @@ void HostBackendSetSamplerState(unsigned int stage, unsigned int type,
     }
 }
 
+void HostBackendSetViewport(float x, float y, float width, float height)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetViewport(x, y, width, height);
+    }
+}
+
+void HostBackendSetRenderTarget(void* key, unsigned int width,
+                                unsigned int height)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetRenderTarget(key, width, height);
+    }
+}
+
+bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererSetStageRenderTargetTexture(stage, key);
+}
+
 void HostBackendSetPixelShader(const std::uint32_t* def60)
 {
     if(HostBackendRenders())
