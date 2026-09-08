@@ -97,6 +97,20 @@ void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        unsigned int diffuseOffset,
                        unsigned int texCoordOffset);
 
+// Draws indexed CPU vertices: same vertex layout rules as
+// HostBackendDrawUP with vertexCount vertices in the block, indexCount
+// uint16 indices relative to the block start, and vertexOffset (the
+// SetIndices base vertex) added to every index. primitiveCount follows
+// DrawIndexedPrimitive semantics. Unsupported layouts are dropped with a
+// one-time warning.
+void HostBackendDrawIndexed(unsigned int primitiveType,
+                            unsigned int primitiveCount,
+                            const void* vertexData, unsigned int vertexCount,
+                            unsigned int stride, unsigned int diffuseOffset,
+                            unsigned int texCoordOffset,
+                            const void* indexData, unsigned int indexCount,
+                            int vertexOffset);
+
 // Render target dimensions; false when the render path is not active.
 bool HostBackendTargetSize(unsigned int* width, unsigned int* height);
 

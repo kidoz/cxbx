@@ -36,6 +36,8 @@ constexpr unsigned int kTriangleFan = 6;
 constexpr unsigned int kNoDiffuse = 0xFFFFFFFFu;
 constexpr unsigned int kNoTexCoord = 0xFFFFFFFFu;
 constexpr unsigned int kVertexStagingInitial = 256 * 1024;
+// uint16 indices: 512k indices per frame before the draw drops loudly.
+constexpr unsigned int kIndexStagingInitial = 256 * 1024;
 constexpr unsigned int kMaxTextures = 48;
 constexpr unsigned int kMaxDescriptorSets = 512;
 
@@ -122,6 +124,13 @@ struct RendererState
     void* vertexMapped = nullptr;
     VkDeviceSize vertexStagingSize = 0;
     VkDeviceSize vertexCursor = 0;
+    // Index staging for the indexed-draw path (uint16 indices, caller-pulled
+    // per draw); the cursor resets with each frame like the vertex ring.
+    VkBuffer indexStaging = VK_NULL_HANDLE;
+    VkDeviceMemory indexStagingMemory = VK_NULL_HANDLE;
+    void* indexMapped = nullptr;
+    VkDeviceSize indexStagingSize = 0;
+    VkDeviceSize indexCursor = 0;
 
     VkBuffer readbackStaging = VK_NULL_HANDLE;
     VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
@@ -426,6 +435,7 @@ bool OpenFrame()
     }
     g_R.frameOpen = true;
     g_R.vertexCursor = 0;
+    g_R.indexCursor = 0;
     return true;
 }
 
@@ -785,6 +795,64 @@ bool EnsureStaging(VkDeviceSize needed)
     return true;
 }
 
+// Index staging for the indexed-draw path: same host-visible staging model
+// as the vertex ring, but VK_INDEX_BUFFER_USAGE and uint16 entries.
+bool EnsureIndexStaging(VkDeviceSize needed)
+{
+    if(g_R.indexStagingSize >= needed)
+    {
+        return true;
+    }
+    if(g_R.indexMapped != nullptr)
+    {
+        vkUnmapMemory(g_R.device, g_R.indexStagingMemory);
+        g_R.indexMapped = nullptr;
+    }
+    if(g_R.indexStaging != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(g_R.device, g_R.indexStaging, nullptr);
+        g_R.indexStaging = VK_NULL_HANDLE;
+    }
+    if(g_R.indexStagingMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.indexStagingMemory, nullptr);
+        g_R.indexStagingMemory = VK_NULL_HANDLE;
+    }
+    g_R.indexStagingSize = 0;
+
+    VkBufferCreateInfo bufferInfo = {};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = needed;
+    bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    if(vkCreateBuffer(g_R.device, &bufferInfo, nullptr, &g_R.indexStaging) !=
+       VK_SUCCESS)
+    {
+        return false;
+    }
+    VkMemoryRequirements requirements = {};
+    vkGetBufferMemoryRequirements(g_R.device, g_R.indexStaging,
+                                  &requirements);
+    if(!AllocateDeviceMemory(&g_R.indexStagingMemory, requirements.size,
+                             requirements.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+    {
+        return false;
+    }
+    if(vkBindBufferMemory(g_R.device, g_R.indexStaging,
+                          g_R.indexStagingMemory, 0) != VK_SUCCESS)
+    {
+        return false;
+    }
+    if(vkMapMemory(g_R.device, g_R.indexStagingMemory, 0, needed, 0,
+                   &g_R.indexMapped) != VK_SUCCESS)
+    {
+        return false;
+    }
+    g_R.indexStagingSize = needed;
+    return true;
+}
+
 } // namespace
 
 bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
@@ -906,6 +974,31 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         return false;
     }
     g_R.vertexStagingSize = kVertexStagingInitial;
+
+    bufferInfo.size = kIndexStagingInitial;
+    bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    if(vkCreateBuffer(device, &bufferInfo, nullptr, &g_R.indexStaging) !=
+       VK_SUCCESS)
+    {
+        printf("VULKAN| renderer index staging failed\n");
+        RendererShutdown();
+        return false;
+    }
+    vkGetBufferMemoryRequirements(device, g_R.indexStaging, &requirements);
+    if(!AllocateDeviceMemory(&g_R.indexStagingMemory, requirements.size,
+                             requirements.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ||
+       vkBindBufferMemory(device, g_R.indexStaging, g_R.indexStagingMemory,
+                          0) != VK_SUCCESS ||
+       vkMapMemory(device, g_R.indexStagingMemory, 0, kIndexStagingInitial, 0,
+                   &g_R.indexMapped) != VK_SUCCESS)
+    {
+        printf("VULKAN| renderer index staging failed\n");
+        RendererShutdown();
+        return false;
+    }
+    g_R.indexStagingSize = kIndexStagingInitial;
 
     const VkDeviceSize readbackSize =
         static_cast<VkDeviceSize>(g_R.width) * g_R.height * 4;
@@ -1356,6 +1449,22 @@ void RendererShutdown()
         g_R.vertexStagingMemory = VK_NULL_HANDLE;
     }
     g_R.vertexStagingSize = 0;
+    if(g_R.indexMapped != nullptr)
+    {
+        vkUnmapMemory(g_R.device, g_R.indexStagingMemory);
+        g_R.indexMapped = nullptr;
+    }
+    if(g_R.indexStaging != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(g_R.device, g_R.indexStaging, nullptr);
+        g_R.indexStaging = VK_NULL_HANDLE;
+    }
+    if(g_R.indexStagingMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.indexStagingMemory, nullptr);
+        g_R.indexStagingMemory = VK_NULL_HANDLE;
+    }
+    g_R.indexStagingSize = 0;
     if(g_R.readbackMapped != nullptr)
     {
         vkUnmapMemory(g_R.device, g_R.readbackMemory);
@@ -1438,38 +1547,15 @@ bool RendererClear(unsigned int flags, unsigned int color)
     return true;
 }
 
-bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
-                    const void* data, unsigned int stride,
-                    unsigned int diffuseOffset, unsigned int texCoordOffset)
+// Shared recording tail for both draw kinds: validates the vertex layout,
+// opens the frame, stages the vertex block, opens the rendering instance,
+// and binds pipeline and draw state. Returns true with the staging offset
+// of the vertex block in *outOffset.
+static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
+                            unsigned int diffuseOffset,
+                            unsigned int texCoordOffset, const void* data,
+                            VkDeviceSize bytes, VkDeviceSize* outOffset)
 {
-    RendererLockScope rendererLock;
-    if(!g_R.valid || data == nullptr || primitiveCount == 0 || stride == 0)
-    {
-        return false;
-    }
-    // DrawPrimitiveUP semantics: primitive count -> vertex count.
-    unsigned int vertexCount = 0;
-    switch(primitiveType)
-    {
-        case kPointList:
-            vertexCount = primitiveCount;
-            break;
-        case kLineList:
-            vertexCount = primitiveCount * 2;
-            break;
-        case kLineStrip:
-            vertexCount = primitiveCount + 1;
-            break;
-        case kTriangleList:
-            vertexCount = primitiveCount * 3;
-            break;
-        case kTriangleStrip:
-        case kTriangleFan:
-            vertexCount = primitiveCount + 2;
-            break;
-        default:
-            return false;
-    }
     if((stride < 16) || (diffuseOffset != kNoDiffuse && diffuseOffset + 4 > stride))
     {
         if(!g_R.unsupportedLogged)
@@ -1482,8 +1568,6 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         return false;
     }
 
-    const VkDeviceSize bytes =
-        static_cast<VkDeviceSize>(stride) * vertexCount;
     if(!OpenFrame())
     {
         g_R.valid = false;
@@ -1492,8 +1576,9 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     const VkDeviceSize offset = g_R.vertexCursor;
     if(offset + bytes > g_R.vertexStagingSize)
     {
-        // P2 keeps the staging buffer at a fixed generous size; oversized
-        // draws are dropped loudly instead of growing mid-frame.
+        // Fixed generous staging; oversized draws are dropped loudly instead
+        // of growing mid-frame (a recorded bind would outlive the old
+        // buffer if it were recreated here).
         printf("VULKAN| renderer: draw exceeds vertex staging (%llu bytes)\n",
                static_cast<unsigned long long>(bytes));
         return false;
@@ -1612,17 +1697,95 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     stageConstants[16] = g_R.useCombiner ? 1u : 0u;
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 16, 80, stageConstants);
-    VkDeviceSize bufferOffset = offset;
     vkCmdBindVertexBuffers(g_R.commandBuffer, 0, 1, &g_R.vertexStaging,
-                           &bufferOffset);
+                           &offset);
+    *outOffset = offset;
+    return true;
+}
 
-    unsigned int drawCount = vertexCount;
-    if(primitiveType == kTriangleList || primitiveType == kTriangleStrip ||
-       primitiveType == kTriangleFan)
+bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
+                    const void* data, unsigned int stride,
+                    unsigned int diffuseOffset, unsigned int texCoordOffset)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || data == nullptr || primitiveCount == 0 || stride == 0)
     {
-        drawCount = vertexCount; // vertices, not primitives
+        return false;
     }
-    vkCmdDraw(g_R.commandBuffer, drawCount, 1, 0, 0);
+    // DrawPrimitiveUP semantics: primitive count -> vertex count.
+    unsigned int vertexCount = 0;
+    switch(primitiveType)
+    {
+        case kPointList:
+            vertexCount = primitiveCount;
+            break;
+        case kLineList:
+            vertexCount = primitiveCount * 2;
+            break;
+        case kLineStrip:
+            vertexCount = primitiveCount + 1;
+            break;
+        case kTriangleList:
+            vertexCount = primitiveCount * 3;
+            break;
+        case kTriangleStrip:
+        case kTriangleFan:
+            vertexCount = primitiveCount + 2;
+            break;
+        default:
+            return false;
+    }
+    VkDeviceSize offset = 0;
+    if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
+                        data, static_cast<VkDeviceSize>(stride) * vertexCount,
+                        &offset))
+    {
+        return false;
+    }
+    vkCmdDraw(g_R.commandBuffer, vertexCount, 1, 0, 0);
+    return true;
+}
+
+bool RendererDrawIndexed(unsigned int primitiveType,
+                         unsigned int primitiveCount, const void* vertexData,
+                         unsigned int vertexCount, unsigned int stride,
+                         unsigned int diffuseOffset,
+                         unsigned int texCoordOffset, const void* indexData,
+                         unsigned int indexCount, int vertexOffset)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || vertexData == nullptr || indexData == nullptr ||
+       primitiveCount == 0 || indexCount == 0 || stride == 0)
+    {
+        return false;
+    }
+    VkDeviceSize offset = 0;
+    if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
+                        vertexData,
+                        static_cast<VkDeviceSize>(stride) * vertexCount,
+                        &offset))
+    {
+        return false;
+    }
+    const VkDeviceSize indexBytes =
+        static_cast<VkDeviceSize>(indexCount) * sizeof(std::uint16_t);
+    const VkDeviceSize indexOffset = g_R.indexCursor;
+    if(indexOffset + indexBytes > g_R.indexStagingSize)
+    {
+        // Fixed generous staging, mirrored from the vertex path: a
+        // mid-frame grow would invalidate the bind recorded here once the
+        // old buffer was destroyed.
+        printf("VULKAN| renderer: draw exceeds index staging (%llu bytes)\n",
+               static_cast<unsigned long long>(indexBytes));
+        return false;
+    }
+    memcpy(static_cast<char*>(g_R.indexMapped) + indexOffset, indexData,
+           static_cast<size_t>(indexBytes));
+    g_R.indexCursor = indexOffset + indexBytes;
+    vkCmdBindIndexBuffer(g_R.commandBuffer, g_R.indexStaging, indexOffset,
+                         VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(g_R.commandBuffer, indexCount, 1, 0,
+                     static_cast<std::uint32_t>(vertexOffset), 0);
     return true;
 }
 

@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): pixel-exact verification of the
+# indexed draw path (SetStreamSource + SetIndices + DrawIndexedVertices
+# triangle lists, with a nonzero index-buffer offset on the second draw).
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

@@ -14674,20 +14674,18 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         // target. Only XYZRHW streams (optional diffuse) are supported in
         // this phase; other layouts are dropped by the backend with a
         // one-time warning.
-        static LONG drawPathLogged = 0;
-        if(InterlockedIncrement(&drawPathLogged) <= 2)
-            if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
+        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
+        {
+            static LONG fvfWarned = 0;
+            if(InterlockedIncrement(&fvfWarned) <= 5)
             {
-                static LONG fvfWarned = 0;
-                if(InterlockedIncrement(&fvfWarned) <= 5)
-                {
-                    EmuWarning("DrawVerticesUP under the Vulkan render path "
-                               "requires XYZRHW (fvf=0x%.08lX)",
-                               g_EmuCurrentFvf);
-                }
-                EmuSwapFS(); // XBox FS
-                return;
+                EmuWarning("DrawVerticesUP under the Vulkan render path "
+                           "requires XYZRHW (fvf=0x%.08lX)",
+                           g_EmuCurrentFvf);
             }
+            EmuSwapFS(); // XBox FS
+            return;
+        }
         const unsigned int DiffuseOffset =
             (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
         unsigned int DrawPrimitiveCount = PrimitiveCount;
@@ -14996,6 +14994,178 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
         return;
     }
 
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        // Indexed draws under the Vulkan render path: pull the current
+        // stream-0 and index-buffer bytes and hand the staging blocks to
+        // the backend (fixed-function XYZRHW FVF, mirroring DrawVerticesUP).
+        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
+        {
+            static LONG fvfWarned = 0;
+            if(InterlockedIncrement(&fvfWarned) <= 5)
+            {
+                EmuWarning("DrawIndexedVertices under the Vulkan render path "
+                           "requires XYZRHW (fvf=0x%.08lX)",
+                           g_EmuCurrentFvf);
+            }
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+        const XTL::VshCpuDeviceState::StreamBinding streamBinding =
+            XTL::VshCpuDeviceState::Stream(0);
+        const XTL::VshCpuDeviceState::IndexBinding indexBinding =
+            XTL::VshCpuDeviceState::IndexBuffer();
+        if(streamBinding.resource == nullptr || streamBinding.stride == 0 ||
+           indexBinding.resource == nullptr)
+        {
+            static LONG bindWarned = 0;
+            if(InterlockedIncrement(&bindWarned) <= 5)
+            {
+                EmuWarning("DrawIndexedVertices under the Vulkan render path "
+                           "requires a bound stream-0 vertex buffer and "
+                           "index buffer");
+            }
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+
+        const EmuRegisteredVertexBuffer* registration =
+            EmuFindRegisteredVertexBuffer(streamBinding.resource);
+        const BYTE* vertexBytes = nullptr;
+        UINT vertexByteSize = 0;
+        XTL::IDirect3DVertexBuffer8* lockedVertexBuffer = nullptr;
+        BYTE* lockedVertexData = nullptr;
+        if(registration != nullptr && registration->guestData != nullptr &&
+           EmuD3DIsReadableRange(registration->guestData,
+                                 registration->byteSize))
+        {
+            vertexBytes = registration->guestData;
+            vertexByteSize = registration->byteSize;
+        }
+        else
+        {
+            UINT lockSize = 0;
+            if(FAILED(EmuVshLockVertexBuffer(streamBinding.resource,
+                                             &lockedVertexData, &lockSize)))
+            {
+                EmuWarning("DrawIndexedVertices could not lock stream 0 "
+                           "under the Vulkan render path");
+                EmuSwapFS(); // XBox FS
+                return;
+            }
+            lockedVertexBuffer = streamBinding.resource->EmuVertexBuffer8;
+            vertexBytes = lockedVertexData;
+            vertexByteSize = lockSize;
+        }
+
+        BYTE* indexBytes = nullptr;
+        UINT indexByteSize = 0;
+        bool indexLocked =
+            SUCCEEDED(EmuVshLockIndexBuffer(indexBinding.resource, &indexBytes,
+                                            &indexByteSize)) &&
+            indexBytes != nullptr;
+        const std::size_t indexByteOffset =
+            reinterpret_cast<std::size_t>(pIndexData);
+        bool ready = indexLocked && indexByteOffset <= indexByteSize &&
+                     static_cast<std::size_t>(VertexCount) * sizeof(WORD) <=
+                         indexByteSize - indexByteOffset;
+
+        // Quad list: expand each quad's four indices to two triangles (the
+        // static buffer keeps the host-forward __try below unwind-free).
+        static WORD s_IndexQuadExpand[EMU_IM_MAXVERTS * 3 / 2];
+        const WORD* drawIndices = nullptr;
+        UINT indexCount = VertexCount;
+        UINT drawPrimitiveCount = PrimitiveCount;
+        D3DPRIMITIVETYPE drawPrimitiveType = PCPrimitiveType;
+        if(ready && (DWORD)PrimitiveType == 8)
+        {
+            if(VertexCount % 4 != 0 || VertexCount > EMU_IM_MAXVERTS)
+            {
+                ready = false;
+            }
+            else
+            {
+                for(UINT quad = 0; quad < VertexCount / 4; ++quad)
+                {
+                    static const WORD quadOrder[6] = { 0, 1, 2, 0, 2, 3 };
+                    for(UINT k = 0; k < 6; ++k)
+                    {
+                        s_IndexQuadExpand[quad * 6 + k] = reinterpret_cast<const WORD*>(
+                            indexBytes + indexByteOffset)[quad * 4 + quadOrder[k]];
+                    }
+                }
+                drawIndices = s_IndexQuadExpand;
+                indexCount = VertexCount / 4 * 6;
+                drawPrimitiveCount = VertexCount / 2;
+                drawPrimitiveType = D3DPT_TRIANGLELIST;
+            }
+        }
+        else if(ready)
+        {
+            drawIndices =
+                reinterpret_cast<const WORD*>(indexBytes + indexByteOffset);
+        }
+
+        unsigned int drawVertexCount = 0;
+        if(ready)
+        {
+            WORD maxIndex = 0;
+            for(UINT i = 0; i < indexCount; ++i)
+            {
+                if(drawIndices[i] > maxIndex)
+                {
+                    maxIndex = drawIndices[i];
+                }
+            }
+            const unsigned int spanVertexCount =
+                indexBinding.baseVertex + maxIndex + 1;
+            if(spanVertexCount <= vertexByteSize / streamBinding.stride)
+            {
+                drawVertexCount = spanVertexCount;
+            }
+            else
+            {
+                ready = false;
+            }
+        }
+
+        if(ready)
+        {
+            const unsigned int DiffuseOffset =
+                (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
+            const unsigned int TexCoordOffset =
+                (g_EmuCurrentFvf & D3DFVF_TEX1) != 0
+                    ? (DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u)
+                    : 0xFFFFFFFFu;
+            cxbx::d3d8::HostBackendDrawIndexed(
+                drawPrimitiveType, drawPrimitiveCount, vertexBytes,
+                drawVertexCount, streamBinding.stride, DiffuseOffset,
+                TexCoordOffset, drawIndices, indexCount,
+                static_cast<int>(indexBinding.baseVertex));
+            EmuD3DDrawPost();
+        }
+        else
+        {
+            static LONG dropWarned = 0;
+            if(InterlockedIncrement(&dropWarned) <= 5)
+            {
+                EmuWarning("DrawIndexedVertices dropped under the Vulkan "
+                           "render path (unreadable index or vertex range)");
+            }
+        }
+
+        if(lockedVertexData != nullptr)
+        {
+            EmuVshUnlockVertexBuffer(lockedVertexBuffer);
+        }
+        if(indexLocked)
+        {
+            EmuVshUnlockIndexBuffer(indexBinding.resource->EmuIndexBuffer8);
+        }
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
     IDirect3DVertexBuffer8* pOrigVertexBuffer8 = 0;
     IDirect3DVertexBuffer8* pHackVertexBuffer8 = 0;
 
@@ -15007,10 +15177,55 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
         nStride = EmuQuadHackA(PrimitiveCount, pOrigVertexBuffer8, pHackVertexBuffer8, 0, 0, 0, 0);
     }
 
+    UINT NumVertices = VertexCount;
+    if((DWORD)PrimitiveType != 8)
+    {
+        // Host DrawIndexedPrimitive validates referenced vertices against
+        // [BaseVertexIndex, BaseVertexIndex + NumVertices); the Xbox call
+        // carries no range, so derive it from the indices actually drawn
+        // (the same derivation DrawIndexedVerticesUP performs). Passing the
+        // raw index count rejected draws whose indices reach beyond it.
+        const XTL::VshCpuDeviceState::IndexBinding indexBinding =
+            XTL::VshCpuDeviceState::IndexBuffer();
+        if(indexBinding.resource != nullptr)
+        {
+            BYTE* indexBytes = nullptr;
+            UINT indexByteSize = 0;
+            if(SUCCEEDED(EmuVshLockIndexBuffer(indexBinding.resource,
+                                               &indexBytes, &indexByteSize)) &&
+               indexBytes != nullptr)
+            {
+                const UINT startIndex = (UINT)(((DWORD)pIndexData) / 2);
+                if(startIndex < indexByteSize / sizeof(WORD))
+                {
+                    const UINT available =
+                        (UINT)(indexByteSize / sizeof(WORD) - startIndex);
+                    const UINT scan =
+                        VertexCount <= available ? VertexCount : available;
+                    const WORD* words =
+                        reinterpret_cast<const WORD*>(indexBytes) + startIndex;
+                    WORD maxIndex = 0;
+                    for(UINT i = 0; i < scan; ++i)
+                    {
+                        if(words[i] > maxIndex)
+                        {
+                            maxIndex = words[i];
+                        }
+                    }
+                    if(maxIndex + 1 > NumVertices)
+                    {
+                        NumVertices = maxIndex + 1;
+                    }
+                }
+                EmuVshUnlockIndexBuffer(indexBinding.resource->EmuIndexBuffer8);
+            }
+        }
+    }
+
     __try
     {
         g_pD3DDevice8->DrawIndexedPrimitive(
-            PCPrimitiveType, 0, VertexCount, ((DWORD)pIndexData) / 2, PrimitiveCount);
+            PCPrimitiveType, 0, NumVertices, ((DWORD)pIndexData) / 2, PrimitiveCount);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {

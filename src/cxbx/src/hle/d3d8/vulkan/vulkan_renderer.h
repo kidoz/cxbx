@@ -55,6 +55,17 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
                     unsigned int diffuseOffset, unsigned int texCoordOffset);
 
+// Draws indexed vertices from a caller-pulled staging block: vertexData
+// holds vertexCount vertices (same layout rules as RendererDrawUP),
+// indexData holds indexCount uint16 indices relative to vertex block start,
+// and vertexOffset (the SetIndices base vertex) is added to every index.
+// primitiveCount follows DrawIndexedPrimitive semantics.
+bool RendererDrawIndexed(unsigned int primitiveType, unsigned int primitiveCount,
+                         const void* vertexData, unsigned int vertexCount,
+                         unsigned int stride, unsigned int diffuseOffset,
+                         unsigned int texCoordOffset, const void* indexData,
+                         unsigned int indexCount, int vertexOffset);
+
 // Target dimensions for callers that stage readback shadows.
 unsigned int RendererTargetWidth();
 unsigned int RendererTargetHeight();
@@ -86,33 +97,6 @@ void RendererSetTextureOp(unsigned int stage, unsigned int type,
                           unsigned int value);
 void RendererSetSamplerState(unsigned int stage, unsigned int type,
                              unsigned int value);
-
-// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
-// (nullptr) the register-combiner interpreter for subsequent draws. The
-// definition's constants come from RendererSetPixelShaderConstant.
-void RendererSetPixelShader(const std::uint32_t* def60);
-
-// Updates combiner constant register (0..7) with four floats.
-void RendererSetPixelShaderConstant(unsigned int registerIndex,
-                                    const float* value);
-
-// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
-// (nullptr) the register-combiner interpreter for subsequent draws. The
-// definition's constants come from RendererSetPixelShaderConstant.
-void RendererSetPixelShader(const std::uint32_t* def60);
-
-// Updates combiner constant register (0..7) with four floats.
-void RendererSetPixelShaderConstant(unsigned int registerIndex,
-                                    const float* value);
-
-// Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
-// (nullptr) the register-combiner interpreter for subsequent draws. The
-// definition's constants come from RendererSetPixelShaderConstant.
-void RendererSetPixelShader(const std::uint32_t* def60);
-
-// Updates combiner constant register (0..7) with four floats.
-void RendererSetPixelShaderConstant(unsigned int registerIndex,
-                                    const float* value);
 
 // Activates (def60 = the raw 60-dword X_D3DPIXELSHADERDEF) or deactivates
 // (nullptr) the register-combiner interpreter for subsequent draws. The

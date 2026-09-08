@@ -101,6 +101,23 @@ void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     }
 }
 
+void HostBackendDrawIndexed(unsigned int primitiveType,
+                            unsigned int primitiveCount,
+                            const void* vertexData, unsigned int vertexCount,
+                            unsigned int stride, unsigned int diffuseOffset,
+                            unsigned int texCoordOffset,
+                            const void* indexData, unsigned int indexCount,
+                            int vertexOffset)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererDrawIndexed(primitiveType, primitiveCount, vertexData,
+                                    vertexCount, stride, diffuseOffset,
+                                    texCoordOffset, indexData, indexCount,
+                                    vertexOffset);
+    }
+}
+
 void HostBackendSetTexture(unsigned int stage, void* hostTexture,
                            const void* pixels, unsigned int pitch,
                            unsigned int width, unsigned int height,
