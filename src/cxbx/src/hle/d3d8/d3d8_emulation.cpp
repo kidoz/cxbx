@@ -1954,7 +1954,38 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
                 if(g_XBVideo.GetVSync())
                     g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->SwapEffect = XTL::D3DSWAPEFFECT_COPY_VSYNC;
 
-                g_EmuD3D8CreateDeviceProxyData.hFocusWindow = XTL::g_hEmuWindow;
+                // Under the Vulkan render path the backend swapchain owns
+                // the emulator window's flip (P1); the host d3d8 device must
+                // not bind its own swapchain to the same window — two
+                // presenters on one HWND crash the NVIDIA user-mode driver
+                // (Turok Evolution's attract transition). Park the host
+                // device on a hidden dummy window instead; its Present is
+                // never reached (EmuHostPresent routes to the backend).
+                HWND hostDeviceWindow = XTL::g_hEmuWindow;
+                if(cxbx::d3d8::HostBackendPresents())
+                {
+                    static HWND s_HostDummyWindow = NULL;
+                    if(s_HostDummyWindow == NULL)
+                    {
+                        s_HostDummyWindow = CreateWindowExA(
+                            WS_EX_TOOLWINDOW, "STATIC", "CxbxHostDevice",
+                            WS_POPUP, 0, 0, 8, 8, NULL, NULL,
+                            GetModuleHandleA(NULL), NULL);
+                        if(s_HostDummyWindow == NULL)
+                        {
+                            EmuWarning("Host dummy device window creation "
+                                       "failed (0x%.08X)",
+                                       static_cast<unsigned>(GetLastError()));
+                        }
+                    }
+                    if(s_HostDummyWindow != NULL)
+                    {
+                        hostDeviceWindow = s_HostDummyWindow;
+                    }
+                }
+                g_EmuD3D8CreateDeviceProxyData.hFocusWindow = hostDeviceWindow;
+                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters
+                    ->hDeviceWindow = hostDeviceWindow;
 
                 g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->BackBufferFormat = XTL::EmuXB2PC_D3DFormat(g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->BackBufferFormat);
                 g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->AutoDepthStencilFormat = XTL::EmuXB2PC_D3DFormat(g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->AutoDepthStencilFormat);

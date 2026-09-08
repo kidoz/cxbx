@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <vector>
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #define VK_NO_PROTOTYPES
@@ -567,6 +568,153 @@ bool SubmitFrame()
 }
 
 // Host-format byte size for the supported mirror formats (0 = unsupported).
+// Decodes a DXT1/2/3/4/5 (BC1/BC2/BC3) level-0 image into tightly packed
+// BGRA (B8G8R8A8 byte order). Titles bind block-compressed uploads (Turok
+// Evolution's world textures) that the host path serves linearly through
+// LockRect; the Vulkan side samples the decoded RGBA instead of mapping the
+// compressed format directly (keeps the upload path format-neutral).
+bool DecodeDxtToBgra(unsigned int hostFormat, const void* pixels,
+                     unsigned int pitch, unsigned int width,
+                     unsigned int height, std::vector<std::uint32_t>* out)
+{
+    unsigned int blockBytes = 0;
+    unsigned int alphaMode = 0; // 0 = none, 1 = 4-bit (DXT2/3), 2 = interp (DXT4/5)
+    switch(hostFormat)
+    {
+        case 0x31545844: blockBytes = 8; break; // 'DXT1'
+        case 0x32545844:
+            blockBytes = 16;
+            alphaMode = 1;
+            break; // 'DXT2'
+        case 0x33545844:
+            blockBytes = 16;
+            alphaMode = 1;
+            break; // 'DXT3'
+        case 0x34545844:
+            blockBytes = 16;
+            alphaMode = 2;
+            break; // 'DXT4'
+        case 0x35545844:
+            blockBytes = 16;
+            alphaMode = 2;
+            break; // 'DXT5'
+        default:
+            return false;
+    }
+    out->assign(static_cast<size_t>(width) * height, 0);
+    const unsigned int blocksX = (width + 3) / 4;
+    const unsigned int blocksY = (height + 3) / 4;
+    const std::uint8_t* base = static_cast<const std::uint8_t*>(pixels);
+    const auto expand565 = [](std::uint16_t value, std::uint8_t rgb[3])
+    {
+        const unsigned r = (value >> 11) & 0x1F;
+        const unsigned g = (value >> 5) & 0x3F;
+        const unsigned b = value & 0x1F;
+        rgb[0] = static_cast<std::uint8_t>((r << 3) | (r >> 2));
+        rgb[1] = static_cast<std::uint8_t>((g << 2) | (g >> 4));
+        rgb[2] = static_cast<std::uint8_t>((b << 3) | (b >> 2));
+    };
+    for(unsigned int by = 0; by < blocksY; ++by)
+    {
+        for(unsigned int bx = 0; bx < blocksX; ++bx)
+        {
+            const std::uint8_t* block =
+                base + static_cast<size_t>(by) * pitch +
+                static_cast<size_t>(bx) * blockBytes;
+            std::uint8_t alpha[16];
+            std::fill(alpha, alpha + 16, 255);
+            if(alphaMode == 1)
+            {
+                for(unsigned int i = 0; i < 16; ++i)
+                {
+                    alpha[i] = static_cast<std::uint8_t>(
+                        ((block[i >> 1] >> ((i & 1) * 4)) & 0xF) * 17);
+                }
+            }
+            else if(alphaMode == 2)
+            {
+                const unsigned a0 = block[0];
+                const unsigned a1 = block[1];
+                std::uint8_t palette[8] = {};
+                palette[0] = static_cast<std::uint8_t>(a0);
+                palette[1] = static_cast<std::uint8_t>(a1);
+                if(a0 > a1)
+                {
+                    for(unsigned k = 2; k < 8; ++k)
+                    {
+                        palette[k] = static_cast<std::uint8_t>(
+                            ((8 - k) * a0 + (k - 1) * a1) / 7);
+                    }
+                }
+                else
+                {
+                    for(unsigned k = 2; k < 6; ++k)
+                    {
+                        palette[k] = static_cast<std::uint8_t>(
+                            ((6 - k) * a0 + (k - 1) * a1) / 5);
+                    }
+                    palette[6] = 0;
+                    palette[7] = 255;
+                }
+                std::uint64_t codes = 0;
+                for(unsigned k = 0; k < 6; ++k)
+                {
+                    codes |= static_cast<std::uint64_t>(block[2 + k]) << (8 * k);
+                }
+                for(unsigned int i = 0; i < 16; ++i)
+                {
+                    alpha[i] = palette[(codes >> (3 * i)) & 7];
+                }
+            }
+            const std::uint8_t* colorBlock =
+                block + (blockBytes == 16 ? 8 : 0);
+            const std::uint16_t c0 = static_cast<std::uint16_t>(
+                colorBlock[0] | (colorBlock[1] << 8));
+            const std::uint16_t c1 = static_cast<std::uint16_t>(
+                colorBlock[2] | (colorBlock[3] << 8));
+            std::uint8_t color[4][3];
+            expand565(c0, color[0]);
+            expand565(c1, color[1]);
+            for(unsigned k = 0; k < 3; ++k)
+            {
+                color[2][k] = static_cast<std::uint8_t>((2 * color[0][k] +
+                                                         color[1][k] + 1) /
+                                                        3);
+                color[3][k] = static_cast<std::uint8_t>((color[0][k] +
+                                                         2 * color[1][k] + 1) /
+                                                        3);
+            }
+            const bool threeColorMode = (blockBytes == 8 && c0 <= c1);
+            std::uint32_t indices = 0;
+            for(unsigned k = 0; k < 4; ++k)
+            {
+                indices |= static_cast<std::uint32_t>(colorBlock[4 + k]) << (8 * k);
+            }
+            for(unsigned int i = 0; i < 16; ++i)
+            {
+                const unsigned int x = bx * 4 + (i & 3);
+                const unsigned int y = by * 4 + (i >> 2);
+                if(x >= width || y >= height)
+                {
+                    continue;
+                }
+                const unsigned index = (indices >> (2 * i)) & 3;
+                std::uint8_t a = alpha[i];
+                if(threeColorMode && index == 3)
+                {
+                    a = 0;
+                }
+                const std::uint8_t* rgb = color[index];
+                (*out)[static_cast<size_t>(y) * width + x] =
+                    (static_cast<std::uint32_t>(a) << 24) |
+                    (static_cast<std::uint32_t>(rgb[0]) << 16) |
+                    (static_cast<std::uint32_t>(rgb[1]) << 8) | rgb[2];
+            }
+        }
+    }
+    return true;
+}
+
 unsigned int TextureFormatBytesPerPixel(unsigned int hostFormat,
                                         VkFormat* formatOut)
 {
@@ -1814,15 +1962,35 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         g_R.valid = false;
         return false;
     }
-    const VkDeviceSize offset = g_R.vertexCursor;
+    VkDeviceSize offset = g_R.vertexCursor;
     if(offset + bytes > g_R.vertexStagingSize)
     {
-        // Fixed generous staging; oversized draws are dropped loudly instead
-        // of growing mid-frame (a recorded bind would outlive the old
-        // buffer if it were recreated here).
-        printf("VULKAN| renderer: draw exceeds vertex staging (%llu bytes)\n",
-               static_cast<unsigned long long>(bytes));
-        return false;
+        // Title-scale vertex blocks (pushbuffer draws) exceed the initial
+        // budget: submit the recorded batch first so nothing references the
+        // old buffer, then grow. Growing mid-frame is otherwise unsafe — a
+        // recorded bind would outlive the destroyed buffer.
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            return false;
+        }
+        constexpr VkDeviceSize kVertexStagingMax = 16 * 1024 * 1024;
+        if(bytes > kVertexStagingMax ||
+           !EnsureStaging(bytes < g_R.vertexStagingSize * 2
+                              ? g_R.vertexStagingSize * 2
+                              : bytes))
+        {
+            printf("VULKAN| renderer: draw exceeds vertex staging (%llu "
+                   "bytes); draw dropped\n",
+                   static_cast<unsigned long long>(bytes));
+            return false;
+        }
+        offset = g_R.vertexCursor;
+        if(offset + bytes > g_R.vertexStagingSize)
+        {
+            offset = 0;
+            g_R.vertexCursor = 0;
+        }
     }
     memcpy(static_cast<char*>(g_R.vertexMapped) + offset, data,
            static_cast<size_t>(bytes));
@@ -2042,15 +2210,33 @@ bool RendererDrawIndexed(unsigned int primitiveType,
     }
     const VkDeviceSize indexBytes =
         static_cast<VkDeviceSize>(indexCount) * sizeof(std::uint16_t);
-    const VkDeviceSize indexOffset = g_R.indexCursor;
+    VkDeviceSize indexOffset = g_R.indexCursor;
     if(indexOffset + indexBytes > g_R.indexStagingSize)
     {
-        // Fixed generous staging, mirrored from the vertex path: a
-        // mid-frame grow would invalidate the bind recorded here once the
-        // old buffer was destroyed.
-        printf("VULKAN| renderer: draw exceeds index staging (%llu bytes)\n",
-               static_cast<unsigned long long>(indexBytes));
-        return false;
+        // Mirrors the vertex path: submit first so no recorded bind
+        // outlives the replaced buffer, then grow.
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            return false;
+        }
+        constexpr VkDeviceSize kIndexStagingMax = 16 * 1024 * 1024;
+        const VkDeviceSize grown =
+            indexBytes < g_R.indexStagingSize * 2 ? g_R.indexStagingSize * 2
+                                                  : indexBytes;
+        if(indexBytes > kIndexStagingMax || !EnsureIndexStaging(grown))
+        {
+            printf("VULKAN| renderer: draw exceeds index staging (%llu "
+                   "bytes); draw dropped\n",
+                   static_cast<unsigned long long>(indexBytes));
+            return false;
+        }
+        indexOffset = g_R.indexCursor;
+        if(indexOffset + indexBytes > g_R.indexStagingSize)
+        {
+            indexOffset = 0;
+            g_R.indexCursor = 0;
+        }
     }
     memcpy(static_cast<char*>(g_R.indexMapped) + indexOffset, indexData,
            static_cast<size_t>(indexBytes));
@@ -2088,22 +2274,35 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     }
 
     VkFormat format = VK_FORMAT_UNDEFINED;
-    const unsigned int bytesPerPixel =
+    unsigned int bytesPerPixel =
         TextureFormatBytesPerPixel(hostFormat, &format);
+    std::vector<std::uint32_t> decodedStorage;
+    const void* uploadPixels = pixels;
+    unsigned int uploadPitch = pitch;
     if(bytesPerPixel == 0)
     {
-        if(!g_R.textureFormatLogged)
+        // Block-compressed uploads decode to RGBA at bind time (the cache
+        // key covers the format, so the decode runs once per texture).
+        if(!DecodeDxtToBgra(hostFormat, pixels, pitch, width, height,
+                            &decodedStorage))
         {
-            g_R.textureFormatLogged = true;
-            printf("VULKAN| texture host format %u not mirrored yet; stage "
-                   "samples white\n",
-                   hostFormat);
+            if(!g_R.textureFormatLogged)
+            {
+                g_R.textureFormatLogged = true;
+                printf("VULKAN| texture host format %u not mirrored yet; "
+                       "stage samples white\n",
+                       hostFormat);
+            }
+            g_R.stageTexture[stage] = nullptr;
+            return false;
         }
-        g_R.stageTexture[stage] = nullptr;
-        return false;
+        uploadPixels = decodedStorage.data();
+        uploadPitch = width * 4;
+        format = VK_FORMAT_B8G8R8A8_UNORM;
+        bytesPerPixel = 4;
     }
     if(width > 4096 || height > 4096 ||
-       static_cast<VkDeviceSize>(pitch) * height > 16 * 1024 * 1024)
+       static_cast<VkDeviceSize>(uploadPitch) * height > 16 * 1024 * 1024)
     {
         printf("VULKAN| texture %ux%u exceeds the P3 upload budget\n", width,
                height);
@@ -2218,8 +2417,8 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     {
         memcpy(static_cast<char*>(g_R.textureMapped) +
                    static_cast<size_t>(row) * tightPitch,
-               static_cast<const char*>(pixels) +
-                   static_cast<size_t>(row) * pitch,
+               static_cast<const char*>(uploadPixels) +
+                   static_cast<size_t>(row) * uploadPitch,
                tightPitch);
     }
 
