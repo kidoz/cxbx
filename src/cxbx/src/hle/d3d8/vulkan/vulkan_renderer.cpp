@@ -69,6 +69,11 @@ struct RendererState
     float viewport[4] = { 0.0f, 0.0f, 640.0f, 480.0f };
     float pendingClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     bool hasPendingClear = false;
+    // True when recorded-but-not-yet-synchronized GPU work has written a
+    // target this command buffer (finished rendering instance or direct
+    // clear); the next rendering instance must emit a memory barrier so a
+    // target sampled as a texture sees the writes.
+    bool gpuWroteTarget = false;
 
     // Texture-stage state (d3d8 values), stage order 0..3.
     std::uint32_t stageOp[4] = { kDefaultColorOp, kDefaultColorOpOff,
@@ -318,18 +323,6 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
         return false;
     }
     g_R.pipelines[key] = pipeline;
-    {
-        static LONG createdLogged = 0;
-        if(createdLogged < 6)
-        {
-            ++createdLogged;
-            printf("VULKAN| pipeline created: topology=%u stride=%u "
-                   "diffuse=%u texcoord=%u\n",
-                   static_cast<unsigned>(topology), stride,
-                   static_cast<unsigned>((key >> 44) & 0xFFFFu),
-                   static_cast<unsigned>((key >> 20) & 0xFFFFu));
-        }
-    }
     return true;
 }
 
@@ -382,7 +375,37 @@ void CloseRendering()
     {
         vkCmdEndRendering(g_R.commandBuffer);
         g_R.renderingActive = false;
+        g_R.gpuWroteTarget = true;
     }
+}
+
+// Memory dependency between GPU work recorded earlier in this command
+// buffer (previous rendering instance or direct clear) and the following
+// recording: targets rest in GENERAL, so writes must be made visible to
+// shader reads (sampling) and to the next instance's attachment access.
+void BarrierAfterTargetWrite()
+{
+    if(!g_R.gpuWroteTarget)
+    {
+        return;
+    }
+    g_R.gpuWroteTarget = false;
+    VkMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    // Depth-testing attachment writes join the source mask when the depth
+    // path lands (EARLY/LATE_FRAGMENT_TESTS). Outside-rendering clear
+    // commands execute in the TRANSFER stage under legacy synchronization.
+    vkCmdPipelineBarrier(
+        g_R.commandBuffer,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
 bool OpenFrame()
@@ -395,6 +418,7 @@ bool OpenFrame()
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkResetCommandBuffer(g_R.commandBuffer, 0);
+    g_R.gpuWroteTarget = false;
     if(vkBeginCommandBuffer(g_R.commandBuffer, &begin) != VK_SUCCESS)
     {
         printf("VULKAN| renderer command buffer begin failed\n");
@@ -427,6 +451,7 @@ bool SubmitFrame()
         vkCmdClearColorImage(g_R.commandBuffer, currentImage,
                              VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
         g_R.hasPendingClear = false;
+        g_R.gpuWroteTarget = true;
     }
     CloseRendering();
     if(vkEndCommandBuffer(g_R.commandBuffer) != VK_SUCCESS)
@@ -1505,6 +1530,7 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
         rendering.layerCount = 1;
         rendering.colorAttachmentCount = 1;
         rendering.pColorAttachments = &attachment;
+        BarrierAfterTargetWrite();
         vkCmdBeginRendering(g_R.commandBuffer, &rendering);
         g_R.renderingActive = true;
     }
@@ -2036,13 +2062,11 @@ bool RendererReadTarget(void* dst, unsigned int pitch)
     VkBufferImageCopy region = {};
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.imageSubresource.layerCount = 1;
-    const unsigned dbgW =
+    const unsigned int readWidth =
         g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].width : g_R.width;
-    const unsigned dbgH =
+    const unsigned int readHeight =
         g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].height : g_R.height;
-    const unsigned copyW = dbgW;
-    const unsigned copyH = dbgH;
-    region.imageExtent = { dbgW, dbgH, 1 };
+    region.imageExtent = { readWidth, readHeight, 1 };
     const VkImage readImage =
         g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].image : g_R.target;
     vkCmdCopyImageToBuffer(g_R.commandBuffer, readImage,
@@ -2059,12 +2083,12 @@ bool RendererReadTarget(void* dst, unsigned int pitch)
         return false;
     }
     vkQueueWaitIdle(g_R.queue);
-    for(unsigned int row = 0; row < copyH && row < g_R.height; ++row)
+    for(unsigned int row = 0; row < readHeight && row < g_R.height; ++row)
     {
         memcpy(static_cast<char*>(dst) + static_cast<size_t>(row) * pitch,
                static_cast<const char*>(g_R.readbackMapped) +
-                   static_cast<size_t>(row) * copyW * 4,
-               copyW * 4);
+                   static_cast<size_t>(row) * readWidth * 4,
+               readWidth * 4);
     }
     return true;
 }
