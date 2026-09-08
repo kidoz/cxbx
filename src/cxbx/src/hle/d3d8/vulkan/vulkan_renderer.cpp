@@ -71,6 +71,14 @@ struct RendererState
     float viewport[4] = { 0.0f, 0.0f, 640.0f, 480.0f };
     float pendingClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     bool hasPendingClear = false;
+    float pendingClearZ = 1.0f;
+    unsigned int pendingClearStencil = 0;
+    bool hasPendingClearZ = false;
+    // d3d8 depth-test state (ZEnable / ZWriteEnable / ZFUNC); the compare
+    // value is the host D3DCMPFUNC enumeration.
+    bool depthEnable = false;
+    bool depthWrite = true;
+    unsigned int depthFunc = 4; // D3DCMP_LESSEQUAL
     // True when recorded-but-not-yet-synchronized GPU work has written a
     // target this command buffer (finished rendering instance or direct
     // clear); the next rendering instance must emit a memory barrier so a
@@ -108,12 +116,22 @@ struct RendererState
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
+        // Size-matched depth attachment (D32; Xbox D24S8 stencil lands in a
+        // later phase). Created alongside the color target; the main target
+        // gets one lazily when a depth-stencil surface is first bound.
+        VkImage depthImage = VK_NULL_HANDLE;
+        VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+        VkImageView depthView = VK_NULL_HANDLE;
         unsigned int width = 0;
         unsigned int height = 0;
     };
     RTEntry rtTargets[8] = {};
     unsigned int rtTargetCount = 0;
     int rtCurrent = -1; // -1 = main target; else rtTargets index
+    // Depth attachment for the main target (present source).
+    VkImage mainDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory mainDepthMemory = VK_NULL_HANDLE;
+    VkImageView mainDepthView = VK_NULL_HANDLE;
     VkImageView stageOverrideView[4] = {};
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -277,6 +295,16 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    // Depth state is fully dynamic (core 1.3); the static block only needs
+    // to exist. Targets always carry a D32 depth attachment so pipelines
+    // declare it unconditionally.
+    VkPipelineDepthStencilStateCreateInfo depthStencil = {};
+    depthStencil.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     // D3D8 defaults: blending disabled, alpha test off.
     VkPipelineColorBlendAttachmentState blendAttachment = {};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
@@ -298,15 +326,31 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
     stages[1].module = g_R.fragmentShader;
     stages[1].pName = "main";
 
-    VkDynamicState dynamicStates[2] = { VK_DYNAMIC_STATE_VIEWPORT,
-                                        VK_DYNAMIC_STATE_SCISSOR };
+    VkDynamicState dynamicStates[5] = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+    };
     VkPipelineDynamicStateCreateInfo dynamic = {};
     dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic.dynamicStateCount = 2;
+    dynamic.dynamicStateCount = 5;
     dynamic.pDynamicStates = dynamicStates;
+
+    // Dynamic rendering needs the attachment formats the pipeline was built
+    // for (no render pass object carries them).
+    const VkFormat renderingFormats[2] = { VK_FORMAT_B8G8R8A8_UNORM,
+                                           VK_FORMAT_D32_SFLOAT };
+    VkPipelineRenderingCreateInfo renderingInfo = {};
+    renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderingInfo.colorAttachmentCount = 1;
+    renderingInfo.pColorAttachmentFormats = &renderingFormats[0];
+    renderingInfo.depthAttachmentFormat = renderingFormats[1];
 
     VkGraphicsPipelineCreateInfo pipelineInfo = {};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &renderingInfo;
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
     pipelineInfo.pVertexInputState = &vertexInput;
@@ -314,7 +358,7 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &raster;
     pipelineInfo.pMultisampleState = &multisample;
-    pipelineInfo.pDepthStencilState = nullptr;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &blend;
     pipelineInfo.pDynamicState = &dynamic;
     pipelineInfo.layout = g_R.pipelineLayout;
@@ -401,19 +445,26 @@ void BarrierAfterTargetWrite()
     g_R.gpuWroteTarget = false;
     VkMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
                             VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    // Depth-testing attachment writes join the source mask when the depth
-    // path lands (EARLY/LATE_FRAGMENT_TESTS). Outside-rendering clear
-    // commands execute in the TRANSFER stage under legacy synchronization.
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    // Outside-rendering clear commands execute in the TRANSFER stage under
+    // legacy synchronization; fragment depth writes ride the fragment-tests
+    // stages.
     vkCmdPipelineBarrier(
         g_R.commandBuffer,
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
             VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
         0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
@@ -462,6 +513,28 @@ bool SubmitFrame()
                              VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
         g_R.hasPendingClear = false;
         g_R.gpuWroteTarget = true;
+    }
+    if(g_R.hasPendingClearZ)
+    {
+        const VkImage depthImage = g_R.rtCurrent >= 0
+                                       ? g_R.rtTargets[g_R.rtCurrent].depthImage
+                                       : g_R.mainDepthImage;
+        if(depthImage != VK_NULL_HANDLE)
+        {
+            VkClearDepthStencilValue depthValue = {};
+            depthValue.depth = g_R.pendingClearZ;
+            depthValue.stencil = g_R.pendingClearStencil;
+            VkImageSubresourceRange depthRange = {};
+            depthRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            depthRange.levelCount = 1;
+            depthRange.layerCount = 1;
+            vkCmdClearDepthStencilImage(
+                g_R.commandBuffer, depthImage,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthValue, 1,
+                &depthRange);
+            g_R.gpuWroteTarget = true;
+        }
+        g_R.hasPendingClearZ = false;
     }
     CloseRendering();
     if(vkEndCommandBuffer(g_R.commandBuffer) != VK_SUCCESS)
@@ -520,6 +593,96 @@ unsigned int TextureFormatBytesPerPixel(unsigned int hostFormat,
 
 // Creates a GENERAL-layout BGRA color image (renderable + sampleable) and
 // transitions it in a one-shot submit. Used for render-to-texture targets.
+// Creates one D32 depth attachment with a one-shot transition to
+// DEPTH_ATTACHMENT_OPTIMAL and a far-plane clear, so draws that never clear
+// depth test deterministically against the far plane (matching the host
+// d3d8 path's backbuffer depth behavior).
+bool CreateDepthAttachment(unsigned int width, unsigned int height,
+                           VkImage* outImage, VkDeviceMemory* outMemory,
+                           VkImageView* outView)
+{
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_D32_SFLOAT;
+    imageInfo.extent = { width, height, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if(vkCreateImage(g_R.device, &imageInfo, nullptr, outImage) != VK_SUCCESS)
+    {
+        return false;
+    }
+    VkMemoryRequirements requirements = {};
+    vkGetImageMemoryRequirements(g_R.device, *outImage, &requirements);
+    if(!AllocateDeviceMemory(outMemory, requirements.size,
+                             requirements.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+       vkBindImageMemory(g_R.device, *outImage, *outMemory, 0) != VK_SUCCESS)
+    {
+        vkDestroyImage(g_R.device, *outImage, nullptr);
+        *outImage = VK_NULL_HANDLE;
+        return false;
+    }
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = *outImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_D32_SFLOAT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    if(vkCreateImageView(g_R.device, &viewInfo, nullptr, outView) !=
+       VK_SUCCESS)
+    {
+        vkDestroyImage(g_R.device, *outImage, nullptr);
+        *outImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // One-shot transition + deterministic far-plane clear.
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkResetCommandBuffer(g_R.commandBuffer, 0);
+    vkBeginCommandBuffer(g_R.commandBuffer, &beginInfo);
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = *outImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+    VkClearDepthStencilValue clearValue = { 1.0f, 0 };
+    VkImageSubresourceRange clearRange = {};
+    clearRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    clearRange.levelCount = 1;
+    clearRange.layerCount = 1;
+    vkCmdClearDepthStencilImage(g_R.commandBuffer, *outImage,
+                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                &clearValue, 1, &clearRange);
+    vkEndCommandBuffer(g_R.commandBuffer);
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &g_R.commandBuffer;
+    vkQueueSubmit(g_R.queue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_R.queue);
+    return true;
+}
+
 bool CreateRenderableTarget(void* key, unsigned int width, unsigned int height)
 {
     if(g_R.rtTargetCount >= 8)
@@ -607,6 +770,11 @@ bool CreateRenderableTarget(void* key, unsigned int width, unsigned int height)
     entry.key = key;
     entry.width = width;
     entry.height = height;
+    if(!CreateDepthAttachment(width, height, &entry.depthImage,
+                              &entry.depthMemory, &entry.depthView))
+    {
+        printf("VULKAN| render target depth creation failed; keeping main\n");
+    }
     g_R.rtTargetCount++;
     return true;
 }
@@ -1307,6 +1475,16 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         }
     }
 
+    // Pipelines declare a D32 depth attachment unconditionally, so the main
+    // target gets its depth image even when nothing depth-tests yet.
+    if(!CreateDepthAttachment(g_R.width, g_R.height, &g_R.mainDepthImage,
+                              &g_R.mainDepthMemory, &g_R.mainDepthView))
+    {
+        printf("VULKAN| renderer main depth attachment failed\n");
+        RendererShutdown();
+        return false;
+    }
+
     printf("VULKAN| renderer ready: target %ux%u B8G8R8A8\n", g_R.width,
            g_R.height);
     return true;
@@ -1376,9 +1554,36 @@ void RendererShutdown()
         {
             vkFreeMemory(g_R.device, entry.memory, nullptr);
         }
+        if(entry.depthView != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(g_R.device, entry.depthView, nullptr);
+        }
+        if(entry.depthImage != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(g_R.device, entry.depthImage, nullptr);
+        }
+        if(entry.depthMemory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(g_R.device, entry.depthMemory, nullptr);
+        }
     }
     g_R.rtTargetCount = 0;
     g_R.rtCurrent = -1;
+    if(g_R.mainDepthView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(g_R.device, g_R.mainDepthView, nullptr);
+        g_R.mainDepthView = VK_NULL_HANDLE;
+    }
+    if(g_R.mainDepthImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(g_R.device, g_R.mainDepthImage, nullptr);
+        g_R.mainDepthImage = VK_NULL_HANDLE;
+    }
+    if(g_R.mainDepthMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.mainDepthMemory, nullptr);
+        g_R.mainDepthMemory = VK_NULL_HANDLE;
+    }
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
         g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
@@ -1521,7 +1726,8 @@ void RendererSetViewport(float x, float y, float width, float height)
     g_R.viewport[3] = height != 0.0f ? height : static_cast<float>(g_R.height);
 }
 
-bool RendererClear(unsigned int flags, unsigned int color)
+bool RendererClear(unsigned int flags, unsigned int color, float z,
+                   unsigned int stencil)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid || flags == 0)
@@ -1535,16 +1741,51 @@ bool RendererClear(unsigned int flags, unsigned int color)
     }
     CloseRendering();
 
+    // PC D3DCLEAR flag subset: bit 0 = target, bit 1 = z, bit 2 = stencil.
     // X_D3DCOLOR 0xAARRGGBB into RGBA channel order: VkClearColorValue
     // components are channel roles (R, G, B, A), not format byte order. The
-    // clear rides on the next rendering instance's loadOp so it cannot be
+    // clears ride on the next rendering instance's loadOp so they cannot be
     // lost against the draw batch or reordered ahead of a submit.
-    g_R.pendingClear[0] = static_cast<float>((color >> 16) & 0xFF) / 255.0f;
-    g_R.pendingClear[1] = static_cast<float>((color >> 8) & 0xFF) / 255.0f;
-    g_R.pendingClear[2] = static_cast<float>(color & 0xFF) / 255.0f;
-    g_R.pendingClear[3] = static_cast<float>((color >> 24) & 0xFF) / 255.0f;
-    g_R.hasPendingClear = true;
+    if((flags & 0x1) != 0)
+    {
+        g_R.pendingClear[0] = static_cast<float>((color >> 16) & 0xFF) / 255.0f;
+        g_R.pendingClear[1] = static_cast<float>((color >> 8) & 0xFF) / 255.0f;
+        g_R.pendingClear[2] = static_cast<float>(color & 0xFF) / 255.0f;
+        g_R.pendingClear[3] = static_cast<float>((color >> 24) & 0xFF) / 255.0f;
+        g_R.hasPendingClear = true;
+    }
+    if((flags & 0x2) != 0)
+    {
+        g_R.pendingClearZ = z;
+        g_R.pendingClearStencil = stencil;
+        g_R.hasPendingClearZ = true;
+    }
     return true;
+}
+
+// Stores d3d8 depth-test state (type: 0 = ZEnable, 1 = ZWriteEnable,
+// 2 = ZFUNC with the host D3DCMPFUNC value).
+void RendererSetDepthState(unsigned int type, unsigned int value)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid)
+    {
+        return;
+    }
+    switch(type)
+    {
+        case 0:
+            g_R.depthEnable = value != 0;
+            break;
+        case 1:
+            g_R.depthWrite = value != 0;
+            break;
+        case 2:
+            g_R.depthFunc = value;
+            break;
+        default:
+            break;
+    }
 }
 
 // Shared recording tail for both draw kinds: validates the vertex layout,
@@ -1615,6 +1856,27 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         rendering.layerCount = 1;
         rendering.colorAttachmentCount = 1;
         rendering.pColorAttachments = &attachment;
+        // Every target carries a size-matched depth attachment (cleared to
+        // the far plane at creation), so it is always declared.
+        VkRenderingAttachmentInfo depthAttachment = {};
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = current != nullptr
+                                        ? current->depthView
+                                        : g_R.mainDepthView;
+        depthAttachment.imageLayout =
+            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = g_R.hasPendingClearZ
+                                     ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                     : VK_ATTACHMENT_LOAD_OP_LOAD;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.clearValue.depthStencil.depth = g_R.pendingClearZ;
+        depthAttachment.clearValue.depthStencil.stencil =
+            g_R.pendingClearStencil;
+        if(g_R.hasPendingClearZ)
+        {
+            g_R.hasPendingClearZ = false;
+        }
+        rendering.pDepthAttachment = &depthAttachment;
         BarrierAfterTargetWrite();
         vkCmdBeginRendering(g_R.commandBuffer, &rendering);
         g_R.renderingActive = true;
@@ -1633,6 +1895,17 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     VkRect2D scissor = { { 0, 0 }, { g_R.width, g_R.height } };
     vkCmdSetViewport(g_R.commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(g_R.commandBuffer, 0, 1, &scissor);
+    // d3d8 depth state: ZEnable / ZWriteEnable / ZFUNC. The d3d8 compare
+    // enumeration is VkCompareOp shifted by one (NEVER = 1 vs 0).
+    vkCmdSetDepthTestEnable(g_R.commandBuffer,
+                            g_R.depthEnable ? VK_TRUE : VK_FALSE);
+    vkCmdSetDepthWriteEnable(g_R.commandBuffer,
+                             g_R.depthWrite ? VK_TRUE : VK_FALSE);
+    vkCmdSetDepthCompareOp(
+        g_R.commandBuffer,
+        static_cast<VkCompareOp>(g_R.depthFunc >= 1 && g_R.depthFunc <= 8
+                                     ? g_R.depthFunc - 1
+                                     : 3 /* LESS_OR_EQUAL */));
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, 16, g_R.viewport);
 

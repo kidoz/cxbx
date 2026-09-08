@@ -42,9 +42,14 @@ bool RendererValid();
 // coordinates through it). Defaults to the full target.
 void RendererSetViewport(float x, float y, float width, float height);
 
-// D3DCLEAR flag subset (bit 0 = z, bit 1 = stencil, bits 4..7 = target) with
-// an X_D3DCOLOR clear value. Only the target bit is honored in P2.
-bool RendererClear(unsigned int flags, unsigned int color);
+// PC D3DCLEAR flag subset (bit 0 = target, bit 1 = z, bit 2 = stencil) with
+// an X_D3DCOLOR clear value and the Clear call's z/stencil values.
+bool RendererClear(unsigned int flags, unsigned int color, float z,
+                   unsigned int stencil);
+
+// Stores d3d8 depth-test state for subsequent draws (type: 0 = ZEnable,
+// 1 = ZWriteEnable, 2 = ZFUNC with the host D3DCMPFUNC value).
+void RendererSetDepthState(unsigned int type, unsigned int value);
 
 // Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0,
 // optional D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none), optional

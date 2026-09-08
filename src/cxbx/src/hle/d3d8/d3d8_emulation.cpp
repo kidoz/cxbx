@@ -7410,9 +7410,10 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear(
     HRESULT ret = D3D_OK;
     if(cxbx::d3d8::HostBackendRenders())
     {
-        // The backend render target replaces the host backbuffer; only the
-        // target bit is honored (P2 has no backend depth surface).
-        cxbx::d3d8::HostBackendClear(Flags & D3DCLEAR_TARGET, Color);
+        // The backend render target replaces the host backbuffer; the
+        // PC-flag subset carries the target/z/stencil bits with the
+        // call's z and stencil values.
+        cxbx::d3d8::HostBackendClear(Flags, Color, Z, Stencil);
         ret = D3D_OK;
     }
     else if(Flags != 0)
@@ -11141,6 +11142,21 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple(
 
         // Todo: Verify these params as you add support for them!
         g_pD3DDevice8->SetRenderState((D3DRENDERSTATETYPE)State, Value);
+
+        // Depth-test state rides the render-state stream into the render
+        // path (Value here is already translated to the host enumeration).
+        if(State == D3DRS_ZENABLE)
+        {
+            cxbx::d3d8::HostBackendSetDepthState(0, Value);
+        }
+        else if(State == D3DRS_ZWRITEENABLE)
+        {
+            cxbx::d3d8::HostBackendSetDepthState(1, Value);
+        }
+        else if(State == D3DRS_ZFUNC)
+        {
+            cxbx::d3d8::HostBackendSetDepthState(2, Value);
+        }
     }
 
     EmuSwapFS(); // XBox FS
@@ -11269,6 +11285,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ZEnable(
 #endif
 
     g_pD3DDevice8->SetRenderState(D3DRS_ZENABLE, Value);
+    cxbx::d3d8::HostBackendSetDepthState(0, Value);
 
     EmuSwapFS(); // XBox FS
 

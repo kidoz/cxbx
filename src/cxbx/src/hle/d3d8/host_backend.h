@@ -82,9 +82,10 @@ bool HostBackendRenders();
 // exists; sizes (or lazily creates) the render target.
 void HostBackendSetTargetSize(unsigned int width, unsigned int height);
 
-// D3DCLEAR flag subset (bit 0 = z, bit 1 = stencil, bits 4..7 = target) with
-// an X_D3DCOLOR value; only the target bit is consumed in P2.
-void HostBackendClear(unsigned int flags, unsigned int color);
+// PC D3DCLEAR flag subset (bit 0 = target, bit 1 = z, bit 2 = stencil) with
+// an X_D3DCOLOR clear value and the Clear call's z/stencil values.
+void HostBackendClear(unsigned int flags, unsigned int color, float z,
+                      unsigned int stencil);
 
 // Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0, optional
 // D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none), optional float2
@@ -142,6 +143,10 @@ void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
 
 // Forward the live viewport for pretransformed draws (surface pixels).
 void HostBackendSetViewport(float x, float y, float width, float height);
+
+// d3d8 depth-test state, one component at a time (type: 0 = ZEnable,
+// 1 = ZWriteEnable, 2 = ZFUNC with the host D3DCMPFUNC value).
+void HostBackendSetDepthState(unsigned int type, unsigned int value);
 
 // P5 render targets: switches the draw target (key == nullptr binds the main
 // backbuffer target; otherwise the key identifies or lazily creates a

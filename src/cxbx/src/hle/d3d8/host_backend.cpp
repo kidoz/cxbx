@@ -81,11 +81,20 @@ void HostBackendSetTargetSize(unsigned int width, unsigned int height)
     g_PresenterReady = vulkan::PresenterValid();
 }
 
-void HostBackendClear(unsigned int flags, unsigned int color)
+void HostBackendClear(unsigned int flags, unsigned int color, float z,
+                      unsigned int stencil)
 {
     if(HostBackendRenders())
     {
-        vulkan::RendererClear(flags, color);
+        vulkan::RendererClear(flags, color, z, stencil);
+    }
+}
+
+void HostBackendSetDepthState(unsigned int type, unsigned int value)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetDepthState(type, value);
     }
 }
 
