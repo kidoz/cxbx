@@ -1,0 +1,14 @@
+[wrap-git]
+# NodalKit 0.2.0 (MIT), pinned to the commit the launcher UI was written
+# against. Bump the revision to move the launcher to a newer NodalKit.
+url = https://github.com/kidoz/nodalkit.git
+revision = 870ffc4965d50e560de8b56575bfbddd6e0c586e
+depth = 1
+# Only the library is consumed; the diff drops upstream's examples, tests,
+# and tools subdirectories so a production build never downloads Catch2 or
+# builds development programs. NodalKit builds as C++23 inside its own
+# subproject while the emulator stays C++20.
+diff_files = nodalkit-library-only.diff
+
+[provide]
+nodalkit = nk_dep

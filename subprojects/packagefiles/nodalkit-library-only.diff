@@ -1,0 +1,14 @@
+diff --git a/meson.build b/meson.build
+index 191d644..50bae08 100644
+--- a/meson.build
++++ b/meson.build
+@@ -517,6 +517,6 @@ pkgconfig.generate(
+     version : meson.project_version(),
+ )
+ 
+-subdir('examples')
+-subdir('tests')
+-subdir('tools')
++# CXBX consumes only the library: the examples, tests, and tools
++# subdirectories are dropped by subprojects/packagefiles/nodalkit-library-only.diff
++# so a production build never downloads Catch2 or builds development programs.

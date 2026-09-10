@@ -2,7 +2,7 @@ project(
   'cxbx',
   ['c', 'cpp'],
   version : '0.1.0',
-  meson_version : '>=1.4.0',
+  meson_version : '>=1.11.0',
   default_options : [
     'c_std=c17',
     'cpp_std=c++20',
