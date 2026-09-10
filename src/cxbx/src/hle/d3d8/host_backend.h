@@ -161,6 +161,15 @@ bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key);
 // reads. Returns false when the render path is not active.
 bool HostBackendReadFrame(void* dst, unsigned int pitch);
 
+// Dimensions of the target HostBackendReadFrame reads (a bound render
+// target, else the main target); false when the render path is not active.
+bool HostBackendCurrentTargetSize(unsigned int* width, unsigned int* height);
+
+// Copies the main (present-source) target into dst regardless of the bound
+// render target, for backbuffer ground-truth dumps. Returns false when the
+// render path is not active.
+bool HostBackendReadMainTarget(void* dst, unsigned int pitch);
+
 // Releases everything the selected backend owns (the Vulkan presenter's
 // device, swapchain, and instance).
 void HostBackendShutdown();

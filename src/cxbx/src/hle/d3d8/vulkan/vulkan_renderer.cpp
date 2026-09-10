@@ -2674,10 +2674,20 @@ bool RendererEndFrameForPresent()
     return SubmitFrame();
 }
 
-bool RendererReadTarget(void* dst, unsigned int pitch)
+namespace
 {
-    RendererLockScope rendererLock;
-    if(!g_R.valid || dst == nullptr)
+// Submits the pending batch, then copies one color target into dst through
+// the readback staging (sized for the main target, so a larger render
+// target is refused rather than overrun). Caller holds the renderer lock.
+bool ReadTargetImage(VkImage image, unsigned int readWidth,
+                     unsigned int readHeight, void* dst, unsigned int pitch)
+{
+    if(!g_R.valid || dst == nullptr || image == VK_NULL_HANDLE)
+    {
+        return false;
+    }
+    if(static_cast<VkDeviceSize>(readWidth) * readHeight >
+       static_cast<VkDeviceSize>(g_R.width) * g_R.height)
     {
         return false;
     }
@@ -2726,6 +2736,40 @@ bool RendererReadTarget(void* dst, unsigned int pitch)
                readWidth * 4);
     }
     return true;
+}
+} // namespace
+
+void RendererCurrentTargetSize(unsigned int* width, unsigned int* height)
+{
+    RendererLockScope rendererLock;
+    const bool boundTarget = g_R.rtCurrent >= 0;
+    if(width != nullptr)
+    {
+        *width = boundTarget ? g_R.rtTargets[g_R.rtCurrent].width : g_R.width;
+    }
+    if(height != nullptr)
+    {
+        *height =
+            boundTarget ? g_R.rtTargets[g_R.rtCurrent].height : g_R.height;
+    }
+}
+
+bool RendererReadTarget(void* dst, unsigned int pitch)
+{
+    RendererLockScope rendererLock;
+    if(g_R.rtCurrent >= 0)
+    {
+        const auto& target = g_R.rtTargets[g_R.rtCurrent];
+        return ReadTargetImage(target.image, target.width, target.height, dst,
+                               pitch);
+    }
+    return ReadTargetImage(g_R.target, g_R.width, g_R.height, dst, pitch);
+}
+
+bool RendererReadMainTarget(void* dst, unsigned int pitch)
+{
+    RendererLockScope rendererLock;
+    return ReadTargetImage(g_R.target, g_R.width, g_R.height, dst, pitch);
 }
 
 bool RendererCopyToSwapchain(std::uint64_t swapchainImageHandle,

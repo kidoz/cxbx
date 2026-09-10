@@ -4594,8 +4594,40 @@ static bool EmuD3DWriteBmp(const char* path, DWORD width, DWORD height,
     return ok;
 }
 
+// Under the Vulkan render path the host d3d8 backbuffer and render targets
+// are never drawn into (the legacy dumps came out solid-color), so the
+// ground-truth dumps read the backend's own targets: mainTarget selects the
+// present-source target, otherwise the target draws currently land in.
+static bool EmuVulkanDumpTarget(const char* path, bool mainTarget)
+{
+    unsigned width = 0;
+    unsigned height = 0;
+    const bool sized =
+        mainTarget ? cxbx::d3d8::HostBackendTargetSize(&width, &height)
+                   : cxbx::d3d8::HostBackendCurrentTargetSize(&width, &height);
+    if(!sized || width == 0 || height == 0)
+    {
+        return false;
+    }
+    const unsigned pitch = width * 4;
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(pitch) * height);
+    const bool read =
+        mainTarget ? cxbx::d3d8::HostBackendReadMainTarget(pixels.data(), pitch)
+                   : cxbx::d3d8::HostBackendReadFrame(pixels.data(), pitch);
+    if(!read)
+    {
+        return false;
+    }
+    return EmuD3DWriteBmp(path, width, height, static_cast<INT>(pitch),
+                          pixels.data(), XTL::D3DFMT_A8R8G8B8);
+}
+
 static bool EmuD3DDumpBackbuffer(const char* path)
 {
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        return EmuVulkanDumpTarget(path, true);
+    }
     XTL::IDirect3DSurface8* backBuffer = nullptr;
     bool dumped = false;
     __try
@@ -4639,6 +4671,10 @@ static bool EmuD3DDumpBackbuffer(const char* path)
 // surface (CopyRects) before locking.
 static bool EmuD3DDumpCurrentRenderTarget(const char* path)
 {
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        return EmuVulkanDumpTarget(path, false);
+    }
     XTL::IDirect3DSurface8* renderTarget = nullptr;
     XTL::IDirect3DSurface8* scratch = nullptr;
     bool dumped = false;

@@ -226,6 +226,25 @@ bool HostBackendReadFrame(void* dst, unsigned int pitch)
     return vulkan::RendererReadTarget(dst, pitch);
 }
 
+bool HostBackendCurrentTargetSize(unsigned int* width, unsigned int* height)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    vulkan::RendererCurrentTargetSize(width, height);
+    return true;
+}
+
+bool HostBackendReadMainTarget(void* dst, unsigned int pitch)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererReadMainTarget(dst, pitch);
+}
+
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,
                              unsigned int height, unsigned int pitch)
 {

@@ -112,9 +112,17 @@ void RendererSetPixelShader(const std::uint32_t* def60);
 void RendererSetPixelShaderConstant(unsigned int registerIndex,
                                     const float* value);
 
-// Submits the pending batch, then copies the target into dst (row pitch in
+// Submits the pending batch, then copies the target draws currently land in
+// (the bound render target, else the main target) into dst (row pitch in
 // bytes). Safe to call with an empty batch.
 bool RendererReadTarget(void* dst, unsigned int pitch);
+
+// Dimensions of the target RendererReadTarget reads.
+void RendererCurrentTargetSize(unsigned int* width, unsigned int* height);
+
+// Submits the pending batch, then copies the main (present-source) target
+// into dst regardless of the bound render target.
+bool RendererReadMainTarget(void* dst, unsigned int pitch);
 
 // Submits the pending batch, then copies the target into the given
 // swapchain image (which transitions to present source). The image is a
