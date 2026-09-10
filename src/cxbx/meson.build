@@ -430,18 +430,14 @@ cxbx_launcher_src = files(
   'src/platform/win32/shared_controller_config.cpp',
   'src/platform/win32/shared_runtime_state_launcher.cpp',
   'src/platform/win32/shared_video_config.cpp',
-  'src/frontend/win32_legacy/controller_config_dialog.cpp',
-  'src/frontend/win32_legacy/video_config_dialog.cpp',
-  'src/frontend/win32_legacy/xbe_to_pe_converter.cpp',
-  'src/frontend/win32_legacy/executable_prolog.cpp',
-  'src/frontend/win32_legacy/win_main.cpp',
-  'src/frontend/win32_legacy/window.cpp',
-  'src/frontend/win32_legacy/about_window.cpp',
-  'src/frontend/win32_legacy/main_window.cpp',
+  'src/frontend/launcher_session.cpp',
+  'src/frontend/launcher_settings.cpp',
+  'src/frontend/win32/xbe_to_pe_converter.cpp',
+  'src/frontend/win32/executable_prolog.cpp',
 )
 
-cxbx_frontend_win32 = static_library(
-  'cxbx_frontend_win32',
+cxbx_launcher_service = static_library(
+  'cxbx_launcher_service',
   cxbx_launcher_src,
   dependencies : [
     cxbx_platform_win32_dep,
@@ -453,12 +449,28 @@ cxbx_frontend_win32 = static_library(
   ],
 )
 
-cxbx_frontend_win32_dep = declare_dependency(
-  link_whole : cxbx_frontend_win32,
+cxbx_launcher_service_dep = declare_dependency(
+  link_whole : cxbx_launcher_service,
   dependencies : [
     cxbx_platform_win32_dep.partial_dependency(link_args : true, links : true),
     cxbx_core_dep.partial_dependency(links : true),
   ],
+)
+
+# This presentation target deliberately does not inherit the legacy DXSDK or
+# emulator include closure. The session interface contains standard C++ only.
+nodalkit_project = subproject('nodalkit')
+nodalkit_dep = nodalkit_project.get_variable('nk_dep')
+cxbx_frontend_nodalkit = static_library(
+  'cxbx_frontend_nodalkit',
+  'src/frontend/nodalkit/launcher_ui.cpp',
+  dependencies : nodalkit_dep,
+  override_options : ['cpp_std=c++23'],
+  cpp_args : ['-DWIN32_LEAN_AND_MEAN', '-DNOMINMAX'],
+)
+cxbx_frontend_nodalkit_dep = declare_dependency(
+  link_whole : cxbx_frontend_nodalkit,
+  dependencies : nodalkit_dep.partial_dependency(links : true, link_args : true),
 )
 
 cxbx_link_libs = [
@@ -653,8 +665,6 @@ cxbx_launcher_resources = custom_target(
   ],
   depend_files : files(
     '../../docs/branding/cxbx.ico',
-    'src/frontend/win32_legacy/launcher_resource_ids.gen.h',
-    '../../Resource/Splash.bmp',
   ),
 )
 
@@ -691,14 +701,17 @@ cxbx_runtime = shared_library(
   name_prefix : '',
 )
 
-executable(
+cxbx_launcher = executable(
   'cxbx',
   cxbx_launcher_resources,
-  dependencies : cxbx_frontend_win32_dep,
+  'src/frontend/win32/win_main.cpp',
+  dependencies : [cxbx_launcher_service_dep, cxbx_frontend_nodalkit_dep,
+    cxbx_platform_win32_dep.partial_dependency(includes : true, compile_args : true),
+    cxbx_core_dep.partial_dependency(includes : true)],
+  cpp_args : ['-DXBOXKRNL_NO_EXTERN_C', '-Wno-c++11-narrowing'],
   link_with : [
     cxbx_runtime,
     d3d8_import_lib,
-    cxbx_link_libs,
   ],
   win_subsystem : 'windows',
 )

@@ -33,6 +33,7 @@ This repository is for development and emulator bring-up. It is not a polished
 end-user release.
 
 - Build system: Meson-only.
+- Launcher: [NodalKit UI](docs/launcher.md), with a shared GUI/command-line launch workflow.
 - Primary target: 32-bit Windows (`i686-pc-windows-msvc`) with clang/lld tooling.
 - Emulation model: HLE loader/API bridge; guest x86 code runs directly on the host CPU.
 - Graphics: Direct3D HLE plus a partial register-level NV2A model for MMIO/RAMIN/PFIFO/PGRAPH-method paths. This is not full NV2A rasterization.
@@ -64,8 +65,10 @@ state.
 
 - **clang/LLVM** (clang, lld, llvm-lib, llvm-dlltool) — the primary toolchain.
   On Windows, install via `scoop install llvm` or download from llvm.org.
-- **Meson ≥ 1.4** and **Ninja** — `pip install meson ninja` or
+- **Meson ≥ 1.11** and **Ninja** — `pip install meson ninja` or
   `scoop install meson ninja`.
+- A C++23-capable compiler and Windows SDK for the NodalKit launcher. Emulator
+  and launcher workflow code retain the C++20 baseline.
 - **Python 3.13+** with **uv** for the conformance-suite and OOVPA tooling:
   `pip install uv`.
 - **just** (command runner) — optional but recommended:

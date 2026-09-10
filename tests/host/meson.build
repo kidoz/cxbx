@@ -1,4 +1,23 @@
 if not build_host_asan
+  launcher_session_test = executable(
+    'launcher_session_test',
+    'launcher_session.cpp',
+    dependencies : [cxbx_launcher_service_dep, cxbx_core_dep,
+      cxbx_platform_win32_dep.partial_dependency(includes : true)],
+    link_with : [cxbx_runtime, d3d8_import_lib],
+  )
+  launcher_test_env = environment()
+  launcher_test_env.prepend('PATH', meson.project_build_root() / 'src/cxbx')
+  test('host-launcher-session', import('python').find_installation(),
+    args : [files('run_launcher_session.py'), launcher_session_test],
+    env : launcher_test_env,
+  )
+  test('launcher-ui-smoke', cxbx_launcher, args : ['--ui-smoke-test'],
+    suite : 'ui', timeout : 20, is_parallel : false)
+  test('launcher-ui-document', import('python').find_installation(),
+    args : [files('run_launcher_session.py'), launcher_session_test, cxbx_launcher],
+    env : launcher_test_env, suite : 'ui', timeout : 30, is_parallel : false)
+
   host_input_test = executable(
     'host_input_test',
     'input_translation.cpp',
