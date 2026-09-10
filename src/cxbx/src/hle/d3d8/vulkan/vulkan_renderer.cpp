@@ -168,6 +168,9 @@ struct RendererState
     VkDeviceMemory textureStagingMemory = VK_NULL_HANDLE;
     void* textureMapped = nullptr;
     VkDeviceSize textureStagingSize = 0;
+    // Next free byte in the texture staging ring; resets with each frame
+    // (uploads recorded in one frame each own a range until submit).
+    VkDeviceSize textureCursor = 0;
     VkImageView dummyView = VK_NULL_HANDLE;
     VkImage dummyImage = VK_NULL_HANDLE;
     VkDeviceMemory dummyMemory = VK_NULL_HANDLE;
@@ -488,6 +491,7 @@ bool OpenFrame()
     g_R.frameOpen = true;
     g_R.vertexCursor = 0;
     g_R.indexCursor = 0;
+    g_R.textureCursor = 0;
     return true;
 }
 
@@ -925,6 +929,22 @@ bool CreateRenderableTarget(void* key, unsigned int width, unsigned int height)
     }
     g_R.rtTargetCount++;
     return true;
+}
+
+// CXBX_TEX_TRACE=1: texture upload trace (bring-up diagnostics; pairs with
+// the HLE-side TEX| mirror lines).
+bool TextureTraceEnabled()
+{
+    static int enabled = -1;
+    if(enabled < 0)
+    {
+        char value[8] = {};
+        const DWORD length =
+            GetEnvironmentVariableA("CXBX_TEX_TRACE", value, sizeof(value));
+        enabled = (length > 0 && length < sizeof(value) && value[0] == '1') ? 1
+                                                                            : 0;
+    }
+    return enabled == 1;
 }
 
 bool EnsureTextureStaging(VkDeviceSize needed)
@@ -2405,18 +2425,36 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
         entry->lastUse = ++g_R.textureUseCounter;
     }
 
-    // Tight row copy into the upload staging, then buffer->image.
-    if(!EnsureTextureStaging(static_cast<VkDeviceSize>(width) * height *
-                             bytesPerPixel))
+    // Tight row copy into the upload staging ring, then buffer->image. The
+    // copies execute at submit, so every upload recorded in one frame needs
+    // its own staging range (reusing offset 0 would hand each earlier
+    // texture the last texture's pixels). A full ring submits and drains
+    // the batch first, then grows between submits.
+    const VkDeviceSize uploadBytes =
+        static_cast<VkDeviceSize>(width) * height * bytesPerPixel;
+    VkDeviceSize uploadOffset =
+        (g_R.textureCursor + 15) & ~static_cast<VkDeviceSize>(15);
+    if(uploadOffset + uploadBytes > g_R.textureStagingSize)
     {
-        g_R.stageTexture[stage] = nullptr;
-        return false;
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        uploadOffset = 0;
+        g_R.textureCursor = 0;
+        if(!EnsureTextureStaging(uploadBytes))
+        {
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
     }
     const unsigned tightPitch = width * bytesPerPixel;
+    char* uploadBase = static_cast<char*>(g_R.textureMapped) + uploadOffset;
     for(unsigned row = 0; row < height; ++row)
     {
-        memcpy(static_cast<char*>(g_R.textureMapped) +
-                   static_cast<size_t>(row) * tightPitch,
+        memcpy(uploadBase + static_cast<size_t>(row) * tightPitch,
                static_cast<const char*>(uploadPixels) +
                    static_cast<size_t>(row) * uploadPitch,
                tightPitch);
@@ -2427,6 +2465,19 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
         g_R.valid = false;
         g_R.stageTexture[stage] = nullptr;
         return false;
+    }
+    // Transfer commands are illegal inside a rendering instance: close the
+    // batch's instance first (the next draw reopens it, loading the
+    // target). Recording the upload inside one faulted in the NVIDIA ICD
+    // (Turok Evolution's first world-load texture bind, ~50 s).
+    CloseRendering();
+    if(TextureTraceEnabled())
+    {
+        printf("VULKAN| tex upload key=0x%p %ux%u host format %u at staging "
+               "offset %llu\n",
+               key, width, height, hostFormat,
+               static_cast<unsigned long long>(uploadOffset));
+        fflush(stdout);
     }
     VkImageMemoryBarrier toDst = {};
     toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -2443,6 +2494,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &toDst);
     VkBufferImageCopy region = {};
+    region.bufferOffset = uploadOffset;
     region.bufferRowLength = 0;
     region.bufferImageHeight = 0;
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2458,6 +2510,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &toShader);
+    g_R.textureCursor = uploadOffset + uploadBytes;
     entry->lastUse = ++g_R.textureUseCounter;
     g_R.stageTexture[stage] = entry;
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
@@ -2707,16 +2760,9 @@ bool ReadTargetImage(VkImage image, unsigned int readWidth,
     VkBufferImageCopy region = {};
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.imageSubresource.layerCount = 1;
-    const unsigned int readWidth =
-        g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].width : g_R.width;
-    const unsigned int readHeight =
-        g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].height : g_R.height;
     region.imageExtent = { readWidth, readHeight, 1 };
-    const VkImage readImage =
-        g_R.rtCurrent >= 0 ? g_R.rtTargets[g_R.rtCurrent].image : g_R.target;
-    vkCmdCopyImageToBuffer(g_R.commandBuffer, readImage,
-                           VK_IMAGE_LAYOUT_GENERAL, g_R.readbackStaging, 1,
-                           &region);
+    vkCmdCopyImageToBuffer(g_R.commandBuffer, image, VK_IMAGE_LAYOUT_GENERAL,
+                           g_R.readbackStaging, 1, &region);
     vkEndCommandBuffer(g_R.commandBuffer);
     VkSubmitInfo submit = {};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -2728,7 +2774,7 @@ bool ReadTargetImage(VkImage image, unsigned int readWidth,
         return false;
     }
     vkQueueWaitIdle(g_R.queue);
-    for(unsigned int row = 0; row < readHeight && row < g_R.height; ++row)
+    for(unsigned int row = 0; row < readHeight; ++row)
     {
         memcpy(static_cast<char*>(dst) + static_cast<size_t>(row) * pitch,
                static_cast<const char*>(g_R.readbackMapped) +
