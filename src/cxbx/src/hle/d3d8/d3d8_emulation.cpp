@@ -432,10 +432,39 @@ static bool EmuPresentViaVulkan()
     return presented;
 }
 
+// Whether the host presents in exclusive fullscreen. The Vulkan backend
+// presents windowed only: its swapchain owns the emulator window and the
+// host d3d8 device is parked on a hidden dummy window that must never own
+// an exclusive mode (a fullscreen host Present would flip the dummy window
+// and show nothing). Decided from the CXBX_HOST_BACKEND selection rather
+// than HostBackendPresents(): the render window is created before the
+// presenter exists, and window style, device mode, and Present routing
+// must agree.
+static bool EmuHostFullscreen()
+{
+    if(!g_XBVideo.GetFullscreen())
+    {
+        return false;
+    }
+    if(cxbx::d3d8::HostBackendFlavorFromEnvironment() !=
+       cxbx::d3d8::HostBackendFlavor::Vulkan)
+    {
+        return true;
+    }
+    static bool s_Reported = false;
+    if(!s_Reported)
+    {
+        s_Reported = true;
+        printf("VULKAN| fullscreen video setting ignored: CXBX_HOST_BACKEND="
+               "vulkan presents windowed\n");
+    }
+    return false;
+}
+
 static HRESULT EmuHostPresent(const RECT* sourceRect, const RECT* destinationRect,
                               HWND destinationWindow, const RGNDATA* dirtyRegion)
 {
-    if(cxbx::d3d8::HostBackendPresents() && !g_XBVideo.GetFullscreen())
+    if(cxbx::d3d8::HostBackendPresents())
     {
         if(EmuPresentViaVulkan())
         {
@@ -1773,7 +1802,7 @@ static DWORD WINAPI EmuRenderWindow(LPVOID)
 
             sscanf(g_XBVideo.GetVideoResolution(), "%d x %d", &nWidth, &nHeight);
 
-            if(g_XBVideo.GetFullscreen())
+            if(EmuHostFullscreen())
             {
                 x = y = nWidth = nHeight = 0;
                 dwStyle = WS_POPUP;
@@ -1876,7 +1905,7 @@ static LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
 
         case WM_SETCURSOR:
-            if(g_XBVideo.GetFullscreen())
+            if(EmuHostFullscreen())
             {
                 SetCursor(NULL);
                 return 0;
@@ -1949,7 +1978,7 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
                 g_EmuD3D8CreateDeviceProxyData.DeviceType = (g_XBVideo.GetDirect3DDevice() == 0) ? XTL::D3DDEVTYPE_HAL : XTL::D3DDEVTYPE_REF;
                 g_EmuD3D8CreateDeviceProxyData.Adapter = g_XBVideo.GetDisplayAdapter();
 
-                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->Windowed = !g_XBVideo.GetFullscreen();
+                g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->Windowed = !EmuHostFullscreen();
 
                 if(g_XBVideo.GetVSync())
                     g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->SwapEffect = XTL::D3DSWAPEFFECT_COPY_VSYNC;
@@ -1990,11 +2019,11 @@ static DWORD WINAPI EmuCreateDeviceProxy(LPVOID)
                 g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->BackBufferFormat = XTL::EmuXB2PC_D3DFormat(g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->BackBufferFormat);
                 g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->AutoDepthStencilFormat = XTL::EmuXB2PC_D3DFormat(g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->AutoDepthStencilFormat);
 
-                if(!g_XBVideo.GetVSync() && (g_D3DCaps.PresentationIntervals & D3DPRESENT_INTERVAL_IMMEDIATE) && g_XBVideo.GetFullscreen())
+                if(!g_XBVideo.GetVSync() && (g_D3DCaps.PresentationIntervals & D3DPRESENT_INTERVAL_IMMEDIATE) && EmuHostFullscreen())
                     g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
                 else
                 {
-                    if(g_D3DCaps.PresentationIntervals & D3DPRESENT_INTERVAL_ONE && g_XBVideo.GetFullscreen())
+                    if(g_D3DCaps.PresentationIntervals & D3DPRESENT_INTERVAL_ONE && EmuHostFullscreen())
                         g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_ONE;
                     else
                         g_EmuD3D8CreateDeviceProxyData.pPresentationParameters->FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
