@@ -7118,6 +7118,72 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
         return;
     }
 
+    static int mirrorTraceEnabled = -1;
+    if(mirrorTraceEnabled < 0)
+    {
+        mirrorTraceEnabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
+    }
+    {
+        // Bring-up switch: CXBX_VULKAN_SKIP_MIRROR=1 binds white instead of
+        // mirroring host textures (no host lock, no backend upload). Turok
+        // Evolution's world load dies inside the NVIDIA ICD on the first
+        // mirrored upload after its attract transition; with the mirror off
+        // the world pass renders (untextured), which keeps the title usable
+        // for geometry/depth/render-target work while that fault is chased.
+        static int skipMirror = -1;
+        if(skipMirror < 0)
+        {
+            skipMirror =
+                EmuD3DEnvironmentEnabled("CXBX_VULKAN_SKIP_MIRROR") ? 1 : 0;
+        }
+        if(skipMirror == 1)
+        {
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0,
+                                              0);
+            return;
+        }
+    }
+    if(mirrorTraceEnabled == 1)
+    {
+        printf("TEX| mirror stage=%lu host=0x%.08lX format=%u usage=0x%.08lX "
+               "%ux%u\n",
+               static_cast<unsigned long>(Stage),
+               reinterpret_cast<unsigned long>(pBaseTexture8),
+               static_cast<unsigned>(description.Format),
+               static_cast<unsigned long>(description.Usage),
+               static_cast<unsigned>(description.Width),
+               static_cast<unsigned>(description.Height));
+    }
+
+    // Depth surfaces bound as textures (NV2A shadow-buffer sampling; Turok
+    // Evolution arms SetRenderState_ShadowFunc right before the bind) are
+    // not mirrored yet, and locking one through the host d3d8 stack faults
+    // inside the Vulkan ICD. Sample white and report once until the
+    // shadow-map path lands.
+    {
+        const XTL::D3DFORMAT format = description.Format;
+        const bool depthFormat =
+            format == XTL::D3DFMT_D16_LOCKABLE || format == XTL::D3DFMT_D32 ||
+            format == XTL::D3DFMT_D15S1 || format == XTL::D3DFMT_D24S8 ||
+            format == XTL::D3DFMT_D24X8 || format == XTL::D3DFMT_D24X4S4 ||
+            format == XTL::D3DFMT_D16;
+        if(depthFormat || (description.Usage & D3DUSAGE_DEPTHSTENCIL) != 0)
+        {
+            static bool s_Reported = false;
+            if(!s_Reported)
+            {
+                s_Reported = true;
+                printf("VULKAN| depth texture (host format %u) bound on stage "
+                       "%lu not mirrored; stage samples white\n",
+                       static_cast<unsigned>(format),
+                       static_cast<unsigned long>(Stage));
+            }
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0,
+                                              0);
+            return;
+        }
+    }
+
     // P5: a texture whose level-0 surface is a registered render target
     // samples that target directly (the host d3d8 copy never sees the
     // Vulkan-rendered content).
