@@ -7124,17 +7124,18 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
         mirrorTraceEnabled = EmuD3DEnvironmentEnabled("CXBX_TEX_TRACE") ? 1 : 0;
     }
     {
-        // Bring-up switch: CXBX_VULKAN_SKIP_MIRROR=1 binds white instead of
-        // mirroring host textures (no host lock, no backend upload). Turok
-        // Evolution's world load dies inside the NVIDIA ICD on the first
-        // mirrored upload after its attract transition; with the mirror off
-        // the world pass renders (untextured), which keeps the title usable
-        // for geometry/depth/render-target work while that fault is chased.
+        // Diagnostic bypass: only an explicit 1 disables texture mirroring.
+        // The generic presence-only trace helper also considers "0" enabled,
+        // which makes backend comparisons accidentally render white textures.
         static int skipMirror = -1;
         if(skipMirror < 0)
         {
-            skipMirror =
-                EmuD3DEnvironmentEnabled("CXBX_VULKAN_SKIP_MIRROR") ? 1 : 0;
+            char value[8] = {};
+            skipMirror = EmuD3DReadEnvironment("CXBX_VULKAN_SKIP_MIRROR", value,
+                                               sizeof(value)) &&
+                                 strcmp(value, "1") == 0
+                             ? 1
+                             : 0;
         }
         if(skipMirror == 1)
         {
