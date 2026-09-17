@@ -120,7 +120,11 @@ jobs:
       - name: Lint Python developer tools
         run: |
           uv sync --locked --dev
-          uv run ruff check tools/xtest
+          uv run ruff check tools/xtest tools/xdk_build.py tools/capture_window.py .github/scripts tests/host/run_vulkan_validation.py tests/tools/test_python_scripts.py
+          uv run mypy tools/xdk_build.py tools/capture_window.py .github/scripts tests/host/run_vulkan_validation.py
+
+      - name: Test Python automation
+        run: uv run python -m unittest discover -s tests/tools -p test_python_scripts.py
 
   native-x64-asan:
     name: Native x64 ASan (advisory)
