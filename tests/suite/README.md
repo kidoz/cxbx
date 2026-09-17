@@ -137,12 +137,24 @@ Harness API: `xt_begin/xt_end`, `xt_ev/xt_note`,
 `xt_check_u32/u64/bool/str`, `xt_check` (generic), `xt_check_flags` (EFLAGS),
 `xt_enable_screen`. See `common/xtrace.h`.
 
-### XDK-toolchain probes (`build.ps1` instead of a `Makefile`)
+### XDK-toolchain probes (`build.py` instead of a `Makefile`)
 
 nxdk probes contain no XDK library code, so they can never exercise the HLE
 layer (`EmuD3D8`/`EmuDSound`/`EmuXapi`) — OOVPA signatures have nothing to
-match. A probe directory with a **`build.ps1`** is instead built with the real
-Xbox XDK 5849 toolchain from `other/sdk/XDKSetup5849.15_extracted/XDK`:
+match. A probe directory with a **`build.py`** is instead built with the real
+Xbox XDK toolchain. Select the SDK required by the probe with `--xdk`,
+`CXBX_XDK_ROOT` (or `CXBX_XDK`), or the `xdkaudit.xdk_root` tool configuration.
+The shared Python builder preserves the probe's libraries, test ID and assets:
+
+```powershell
+uv run python tests/suite/probes/xdk_smoke/build.py --xdk <xdk-root>
+```
+
+`--output-dir` selects an alternate artifact directory. The `d3d_makespace`
+probe defaults to the XDK 4627 C++ export; `--no-cpp-makespace` selects its C
+variant when using another compatible SDK.
+
+The build pipeline is:
 
 ```
 xbox\bin\vc71\CL.Exe   (/D_XBOX /ML, /I xbox\include)

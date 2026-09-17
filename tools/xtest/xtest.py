@@ -85,14 +85,14 @@ def load_config() -> Config:
 
 def discover_probes(suite_dir: Path) -> list[str]:
     """Every subdir of probes/ that has a build entry point, sorted by name.
-    A Makefile means an nxdk probe; a build.ps1 means an XDK-toolchain probe
+    A Makefile means an nxdk probe; a build.py means an XDK-toolchain probe
     (built with the real XDK compiler so the image contains genuine XDK
     library code the HLE layer can hook)."""
     pdir = suite_dir / "probes"
     return sorted(
         d.name
         for d in pdir.iterdir()
-        if d.is_dir() and ((d / "Makefile").exists() or (d / "build.ps1").exists())
+        if d.is_dir() and ((d / "Makefile").exists() or (d / "build.py").exists())
     )
 
 
@@ -190,17 +190,25 @@ def target_capabilities(cfg: Config, args: argparse.Namespace) -> set[str] | Non
 def build_probe(cfg: Config, name: str) -> tuple[bool, str]:
     suite_dir = Path(cfg["paths"]["suite_dir"])
     probe_dir = suite_dir / "probes" / name
-    ps1 = probe_dir / "build.ps1"
-    if ps1.exists():
+    builder = probe_dir / "build.py"
+    if builder.exists():
         # XDK-toolchain probe: the script drives the XDK's own CL/Link/imagebld.
-        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        cmd = [sys.executable, str(builder)]
     else:
         # build_probe.py reads the toolchain paths from tools/config.toml and
         # runs make inside MSYS2 bash itself.
         script = suite_dir / "build_probe.py"
         cmd = [sys.executable, str(script), str(probe_dir), "-j4"]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, f"Build failed: {error}"
     xbe = probe_dir / "bin" / "default.xbe"
     ok = r.returncode == 0 and xbe.exists()
     tail = (r.stdout + r.stderr).strip().splitlines()[-4:]

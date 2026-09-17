@@ -8,7 +8,7 @@
 // It goes past creation into an actual frame decode (the heavy WMV path):
 //   1. create a D3D device (the frame surfaces are GPU textures)
 //   2. XMVDecoder_CreateDecoderForFile on the SDK's Test.xmv (staged to
-//      D:\Media\Videos by build.ps1)
+//      D:\Media\Videos by build.py)
 //   3. verify the exact video/audio descriptors and audio stream ownership
 //   4. create a YUY2 texture of that size and pump GetNextFrame until a
 //      XMV_NEWFRAME comes back

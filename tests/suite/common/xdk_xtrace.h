@@ -2,7 +2,7 @@
 // counterpart of common/xtrace.h for nxdk probes). Same wire protocol:
 // D:\<probe>.trace file + DbgPrint "XT| " mirror, CHK/#result grammar parsed
 // by tools/xtest/xtest.py. Include from a probe built with the real XDK
-// compiler (see probes/xdk_smoke/build.ps1 for the pipeline).
+// compiler (see probes/xdk_smoke/build.py for the pipeline).
 #ifndef XDK_XTRACE_H
 #define XDK_XTRACE_H
 
