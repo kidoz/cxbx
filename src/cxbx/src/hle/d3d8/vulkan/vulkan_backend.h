@@ -36,6 +36,10 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
 // d3d8 presenter for the rest of the session.
 bool PresenterValid();
 
+// Validation errors observed since Initialize, including resource teardown.
+// Zero alone does not imply validation was enabled (missing layers log once).
+unsigned int ValidationErrorCount();
+
 // Resizes (or lazily creates) the fixed-function render target to the
 // emulated device's backbuffer dimensions; the HLE calls this once its host
 // device exists. No-op unless the presenter is valid.

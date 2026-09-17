@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <atomic>
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #define VK_NO_PROTOTYPES
@@ -61,6 +62,9 @@ struct PresenterState
 };
 
 PresenterState g_Presenter;
+// Driver validation callbacks may arrive on different threads. This counter
+// is diagnostic only and publishes no renderer state.
+std::atomic<unsigned int> g_ValidationErrors{ 0 };
 
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -69,6 +73,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
 {
     (void)types;
     (void)userData;
+    if((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0)
+    {
+        g_ValidationErrors.fetch_add(1, std::memory_order_relaxed);
+    }
     printf("VULKAN| validation [%d] %s\n", static_cast<int>(severity),
            data->pMessage != nullptr ? data->pMessage : "");
     fflush(stdout);
@@ -349,6 +357,7 @@ bool EnsureStagingCapacity(VkDeviceSize needed)
 
 bool Initialize(const void* nativeWindow, bool validationLayers)
 {
+    g_ValidationErrors.store(0, std::memory_order_relaxed);
     if(nativeWindow == nullptr)
     {
         printf("VULKAN| no render window; cannot open a surface\n");
@@ -443,6 +452,10 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
                                        &g_Presenter.messenger) != VK_SUCCESS)
         {
             g_Presenter.messenger = VK_NULL_HANDLE;
+        }
+        if(g_Presenter.messenger != VK_NULL_HANDLE)
+        {
+            printf("VULKAN| Khronos validation active\n");
         }
     }
 
@@ -841,6 +854,11 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
 bool PresenterValid()
 {
     return g_Presenter.valid;
+}
+
+unsigned int ValidationErrorCount()
+{
+    return g_ValidationErrors.load(std::memory_order_relaxed);
 }
 
 void SetTargetSize(unsigned int width, unsigned int height)

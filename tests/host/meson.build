@@ -534,3 +534,18 @@ host_backend_test = executable(
 )
 
 test('host-host-backend', host_backend_test)
+
+if not build_host_asan
+  # Production GPU integration, opt-in through CXBX_TEST_VULKAN=1. No guest
+  # runtime or D3D8 dependency; disabled runs report Meson's skip code 77.
+  host_vulkan_renderer_test = executable(
+    'host_vulkan_renderer_test',
+    'vulkan_renderer.cpp',
+    include_directories : include_directories('../../src/cxbx/src/hle/d3d8'),
+    dependencies : [cxbx_hle_d3d8_vulkan_dep, meson.get_compiler('cpp').find_library('user32')],
+  )
+  foreach scenario : ['vertex', 'index', 'target', 'combiner', 'combiner_logic', 'depth', 'sampling', 'descriptors', 'raster', 'present']
+    test('host-vulkan-' + scenario, host_vulkan_renderer_test,
+      args : [scenario], suite : 'vulkan-gpu', timeout : 30, is_parallel : false)
+  endforeach
+endif
