@@ -69,7 +69,7 @@ state.
   `scoop install meson ninja`.
 - A C++23-capable compiler and Windows SDK for the NodalKit launcher. Emulator
   and launcher workflow code retain the C++20 baseline.
-- **Python 3.13+** with **uv** for the conformance-suite and OOVPA tooling:
+- **Python 3.14+** with **uv** for the conformance-suite and OOVPA tooling:
   `pip install uv`.
 - **just** (command runner) — optional but recommended:
   `scoop install just`.
