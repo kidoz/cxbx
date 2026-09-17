@@ -1,5 +1,7 @@
 # Changelog
 
+[Historical records](README.md)
+
 This changelog records the original caustik CXBX release history and is
 preserved as archival project context.
 

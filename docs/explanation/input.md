@@ -1,9 +1,12 @@
 # Input Notes
 
+[Explanation](README.md)
+
 ## Controller Configuration
 
-Controller input configuration is handled through the dialog implemented around
-`dinput_emulation.cpp` and `dinput_emulation.h`.
+The [launcher settings](../reference/launcher.md#files-and-settings) expose
+controller mapping. The legacy DirectInput backend implements the configurable
+input path.
 
 Configuration is saved in two places:
 

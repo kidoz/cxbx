@@ -1,9 +1,12 @@
-# Developer Notes
+# Development and OpenXDK
+
+[Explanation](README.md)
 
 ## Current Build Context
 
-CXBX is now built with Meson as a 32-bit Windows/x86 target. See the root
-[README](../README.md) for the current quick start and development commands.
+CXBX is built with Meson as a 32-bit Windows/x86 target. See
+[Build CXBX](../how-to/build.md) for setup and verification.
+The [root README](../../README.md) lists development commands.
 
 The tree still bundles open-xdk support headers and libraries under
 `include/open-xdk/include` and `src/open-xdk/src`. Keep those include paths

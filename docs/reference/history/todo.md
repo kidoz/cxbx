@@ -1,5 +1,7 @@
 # Todo
 
+[Historical records](README.md)
+
 This list captures historical project tasks and open engineering topics. Current
 bring-up work should be tracked through the Meson build, conformance probes, and
 issue/PR workflow.

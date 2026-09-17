@@ -33,7 +33,7 @@ This repository is for development and emulator bring-up. It is not a polished
 end-user release.
 
 - Build system: Meson-only.
-- Launcher: [NodalKit UI](docs/launcher.md), with a shared GUI/command-line launch workflow.
+- Launcher: [NodalKit UI](docs/reference/launcher.md), with a shared GUI/command-line launch workflow.
 - Primary target: 32-bit Windows (`i686-pc-windows-msvc`) with clang/lld tooling.
 - Emulation model: HLE loader/API bridge; guest x86 code runs directly on the host CPU.
 - Graphics: Direct3D HLE plus a partial register-level NV2A model for MMIO/RAMIN/PFIFO/PGRAPH-method paths. This is not full NV2A rasterization.
@@ -266,13 +266,15 @@ tools/xtest/                 Conformance-suite runner
 
 ## Documentation
 
-Useful starting points:
+The [documentation index](docs/README.md) organizes the docs by reader need:
 
-- [docs/README.md](docs/README.md) - documentation index.
-- [docs/todo.md](docs/todo.md) - task list and open engineering topics.
-- [docs/changelog.md](docs/changelog.md) - historical project changes.
-- [docs/direct3d.md](docs/direct3d.md) - Direct3D notes.
-- [docs/input.md](docs/input.md) - input notes.
+- [Tutorials](docs/tutorials/README.md) - learn through a guided exercise.
+- [How-to guides](docs/how-to/README.md) - build, launch, test, and debug.
+- [Reference](docs/reference/README.md) - settings, formats, supported behavior,
+  and recorded compatibility.
+- [Explanation](docs/explanation/README.md) - architecture and design rationale.
+- [Historical records](docs/reference/history/README.md) - original releases,
+  task lists, and implementation experiments.
 - [tests/suite/README.md](tests/suite/README.md) - conformance suite guide.
 - [tools/xtest/README.md](tools/xtest/README.md) - probe runner usage.
 

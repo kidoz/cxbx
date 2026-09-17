@@ -1,5 +1,5 @@
 # Exercises the native XMV library through Cxbx's filesystem, D3D/YUY2,
-# DirectSound, and timing boundaries. See docs/xmv-architecture.md.
+# DirectSound, and timing boundaries. See docs/explanation/xmv-architecture.md.
 tags = ["xmv", "xdk"]
 
 [env]

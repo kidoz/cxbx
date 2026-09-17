@@ -1,8 +1,10 @@
-# XACT 5849 HLE bring-up
+# XACT 5849 HLE support
 
-The first integration target is the engine lifecycle, not cue playback. The
-`xact_engine` conformance probe links the 5849 `xacteng.lib` and verifies engine
-creation, reference counting, `XACTEngineDoWork`, deterministic teardown, and
+[Reference](README.md)
+
+The initial integration established the engine lifecycle before adding cue
+playback. The `xact_engine` conformance probe links the 5849 `xacteng.lib` and
+verifies engine creation, reference counting, `XACTEngineDoWork`, deterministic teardown, and
 recreation. Its four public entry points are HLE-patched together so a title
 cannot receive an emulator-owned engine and then fall through to a native XACT
 method for lifecycle management.
@@ -52,10 +54,10 @@ Releasing a caller's engine reference therefore leaves the engine alive while a
 bank exists; unregistering or finally releasing the last bank can complete
 engine teardown.
 
-The remaining order is:
+## Extension requirements
 
-1. Streaming wave banks, parameter controls, and WMA playlists, each added only
-   with its own probe or title trace.
+Streaming wave banks, parameter controls, and WMA playlists remain future
+work, each requiring its own probe or title trace.
 
 Every slice must add exact 5849 signatures, verify one match in its probe and
 at most one across the XBE corpus, and retain a fail-before/pass-after golden.

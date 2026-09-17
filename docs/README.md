@@ -1,28 +1,28 @@
-# Documentation
+# CXBX documentation
 
-This directory contains project documentation, reference notes, historical
-release records, and screenshots.
+Choose a starting point based on what you need to do. These docs follow
+[Diátaxis](https://diataxis.fr/): lessons, task guides, technical reference,
+and explanations each have their own place.
 
-## Guides
+| Your need | Start here |
+|---|---|
+| Learn through a guided exercise | [Tutorials](tutorials/README.md) |
+| Build, launch, test, or diagnose something | [How-to guides](how-to/README.md) |
+| Look up settings, formats, contracts, or recorded results | [Reference](reference/README.md) |
+| Understand architecture and design decisions | [Explanation](explanation/README.md) |
 
-- [Conformance suite](../tests/suite/README.md)
-- [Probe runner](../tools/xtest/README.md)
+New contributors can begin with [Explore a conformance probe](tutorials/explore-conformance.md),
+then [build CXBX](how-to/build.md). For title bring-up, start with
+[Collect and narrow down a title failure](how-to/debug-title.md).
 
-## Reference Notes
+## Project records and assets
 
-- [Developer notes](developer.md) - build and open-xdk development context.
-- [Direct3D notes](direct3d.md) - Direct3D HLE resource strategy.
-- [Input notes](input.md) - controller configuration and shared-memory notes.
-- [Kernel test suite](kernel-test-suite.md) - kernel test and conformance runner
-  notes.
+- [Historical records](reference/history/README.md): release history, old task
+  lists, implementation experiments, and acknowledgements.
+- [Screenshots](screenshots/) and [branding](branding/).
+- [Project overview](../README.md).
 
-## Historical Records
+## Contributing documentation
 
-- [Changelog](changelog.md) - original caustik CXBX release history.
-- [Removed code notes](removed-code.md) - archived implementation fragments.
-- [Thanks](thanks.md) - acknowledgements.
-- [Todo](todo.md) - historical task list and open engineering topics.
-
-## Assets
-
-- [Screenshots](screenshots/)
+Follow [Write and organize documentation](how-to/write-documentation.md) when
+adding a page or splitting a page that serves several reader needs.

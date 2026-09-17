@@ -1,5 +1,7 @@
 # Removed Code Notes
 
+[Historical records](README.md)
+
 These are archival references, not active implementation guidance.
 
 ## NtCreateFile Handle Wrapping Experiment

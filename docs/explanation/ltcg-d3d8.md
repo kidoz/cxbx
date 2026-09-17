@@ -1,5 +1,11 @@
 # LTCG D3D8 titles (D3D8LTCG) — why API-level HLE cannot work
 
+[Explanation](README.md)
+
+This is a historical investigation of API-level HLE failures, preserved for
+its design rationale. Its startup observations are not current compatibility
+claims; see [recorded compatibility results](../reference/compatibility.md).
+
 Findings from investigating why **Samurai Shodown V** does not run. They apply
 equally to **King of Fighters 2002** (same SNK engine, same XDK) and, in principle,
 to any title that links an LTCG library.
@@ -36,11 +42,8 @@ against Samurai Shodown V, and every rendering-critical one (`CreateDevice`,
 `Swap`, `Clear`, `DrawVertices`, `SetTexture`, the whole `SetRenderState_*` family)
 is among the misses:
 
-```
-python tools/oovpa/scan_oovpa.py --table D3D8_1_0_5849 \
-    --inl "src/cxbx/src/win32/CxbxKrnl/*.inl" \
-    --image "other/games/Samurai Showdown V/default.xbe"
-```
+The investigation used `tools/oovpa/scan_oovpa.py` to compare the stock
+5849 table against the title image.
 
 Note the title still declares `D3DX8`, and `EmuInit`'s `D3DX8 -> D3D8` alias
 therefore installs the *stock* table on it anyway. That is what leaves D3D
@@ -77,9 +80,7 @@ linker inlined them **into the game's own code**, leaving behind only direct cal
 to D3D's *internal* helpers. The game does not call `D3DDevice_SetRenderState_*`;
 it calls the pushbuffer primitives underneath them.
 
-```
-python tools/oovpa/xbe_api_usage.py "other/games/Samurai Showdown V/default.xbe" --section D3D
-```
+The call-edge investigation used `tools/oovpa/xbe_api_usage.py`.
 
 Of the 47 D3D entry points the game actually calls, most are internal helpers.
 The hottest, called **19 times directly from `.text`**, is a 39-byte function at

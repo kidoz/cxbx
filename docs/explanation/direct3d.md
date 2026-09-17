@@ -1,5 +1,7 @@
 # Direct3D Notes
 
+[Explanation](README.md)
+
 This describes the Direct3D HLE resource strategy captured in the original CXBX
 notes. Treat it as implementation context, not as a complete modern graphics
 design.
@@ -36,8 +38,8 @@ registration.
 The recorded method stores the host pointer in `Lock` and hijacks functions that
 access the `Lock` member.
 
-## Current Context
+## Related graphics paths
 
-The repository also has a partial register-level NV2A model for MMIO, RAMIN,
-PFIFO, and PGRAPH method paths. That model is not full rasterization; Direct3D
-HLE and NV2A register modeling remain separate graphics bring-up concerns.
+Direct3D HLE and raw NV2A emulation are separate graphics paths. See
+[LTCG D3D8](ltcg-d3d8.md) for why some titles need the latter, and the
+[NV2A replay reference](../reference/nv2a-capture.md) for its offline replay boundary.

@@ -1,11 +1,14 @@
 # XMV architecture spike
 
+[Explanation](README.md)
+
 The existing `xmv_decode` probe is the architecture baseline: the 5849 native
 XMV library opens a file, reports exact video and audio descriptors, creates and
 synchronizes a DirectSound stream, decodes a timestamped frame into a YUY2
 Direct3D surface, resets to the beginning, and decodes again under Cxbx. That
-26-check lifecycle is green, so replacing the decoder with speculative HLE
-would add risk without a demonstrated compatibility gain.
+26-check lifecycle was reported green in the architecture investigation;
+replacing the decoder with speculative HLE would add risk without a
+demonstrated compatibility gain.
 
 ## Recommended boundary
 

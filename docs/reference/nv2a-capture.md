@@ -1,4 +1,6 @@
-# NV2A pushbuffer capture and replay
+# NV2A capture and replay reference
+
+[Reference](README.md)
 
 CXBX can record a bounded raw-NV2A frame bundle and replay its PFIFO packet
 control flow without booting the title again. The bundle joins the evidence that
@@ -11,22 +13,14 @@ was previously spread across logs, draw dumps, and guest memory:
 - exact successful guest-memory reads made while processing the frame;
 - normalized scanout pixels and their expected CRC32.
 
-## Capture a frame
+For commands and workflow, see [Capture and compare NV2A execution](../how-to/capture-nv2a.md).
 
-The title runner chooses the output path and records the replay verdict in its
-`summary.json`:
-
-```powershell
-python tools/run_title.py path/to/default.xbe `
-  --profile nv2a --capture-pushbuffer 0 --seconds 20 --shots 20
-```
+## Capture controls
 
 `FRAME` is zero-based. A capture includes GPU activity from reset through that
 frame, rather than starting at the selected frame, so persistent PGRAPH state is
 not missing. The runner does not honor `--until-visible` until the requested
 capture has a complete footer.
-
-The runtime interface is also available directly:
 
 | Variable | Meaning |
 |---|---|
@@ -38,11 +32,6 @@ Capture is disabled unless `CXBX_NV2A_CAPTURE` is set. Reaching the byte limit
 marks the footer as truncated; replay rejects it unless explicitly allowed.
 
 ## Replay and validate
-
-```powershell
-python tools/nv2a_capture.py path/to/frame00000.nv2acap
-python tools/nv2a_capture.py path/to/frame00000.nv2acap --json
-```
 
 Replay checks:
 
@@ -57,11 +46,6 @@ The command exits nonzero on corruption or divergence, so it can be used as a
 focused regression predicate.
 
 ## Compare captures
-
-```powershell
-python tools/nv2a_capture.py compare baseline.nv2acap candidate.nv2acap
-python tools/nv2a_capture.py compare baseline.nv2acap candidate.nv2acap --json
-```
 
 Comparison validates and replays both inputs before comparing them. It reports
 the first divergence in the complete record stream and independently for PFIFO
@@ -83,24 +67,7 @@ Exit codes form a stable automation contract:
 | `1` | A valid capture differs. |
 | `2` | An input is missing, corrupt, truncated, or otherwise invalid. |
 
-A bisect wrapper should generate `candidate.nv2acap` for the checked-out commit
-and then return the comparator's result:
-
-```powershell
-git bisect run uv run python path/to/run_capture_bisect.py
-```
-
-Keep the baseline outside build/run output that the wrapper replaces. Treat
-exit code `2` explicitly in the wrapper if an unbuildable commit should be
-reported to Git as `125` (skip) instead of bad.
-
 ## Replay PGRAPH state
-
-```powershell
-python tools/nv2a_capture.py pgraph frame00005.nv2acap
-python tools/nv2a_capture.py pgraph frame00005.nv2acap --json
-python tools/nv2a_capture.py pgraph baseline.nv2acap candidate.nv2acap
-```
 
 PGRAPH replay resolves subchannel object bindings from the captured RAMIN image,
 filters non-Kelvin methods, and applies the Kelvin state stream without starting
@@ -119,11 +86,6 @@ The PGRAPH command uses the same automation exit codes as capture comparison:
 an invalid capture.
 
 ## Replay deterministic pixels
-
-```powershell
-python tools/nv2a_capture.py pixels frame00000.nv2acap
-python tools/nv2a_capture.py pixels frame00000.nv2acap --json
-```
 
 Pixel replay reconstructs sparse surfaces from ordered captured-memory
 observations and resolves color, zeta, and vertex DMA objects through RAMIN. It
