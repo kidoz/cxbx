@@ -115,7 +115,7 @@ jobs:
       - name: Analyze changed C/C++ lines
         env:
           BASE_REVISION: ${{ steps.comparison.outputs.base_revision }}
-        run: .github/scripts/clang_tidy_diff.ps1 -BuildDirectory build-quality -BaseRevision $env:BASE_REVISION
+        run: python .github/scripts/clang_tidy_diff.py --build-directory build-quality --base-revision $env:BASE_REVISION
 
       - name: Lint Python developer tools
         run: |
@@ -151,10 +151,10 @@ jobs:
           ASAN_BUILD_DIR: ${{ runner.temp }}\cxbx-host-asan-build
           ASAN_DIAGNOSTICS_DIR: ${{ runner.temp }}\cxbx-host-asan-diagnostics
         run: |
-          .github/scripts/run_native_asan.ps1 `
-              -SourceDirectory . `
-              -BuildDirectory $env:ASAN_BUILD_DIR `
-              -DiagnosticsDirectory $env:ASAN_DIAGNOSTICS_DIR
+          python .github/scripts/run_native_asan.py `
+              --source-directory . `
+              --build-directory $env:ASAN_BUILD_DIR `
+              --diagnostics-directory $env:ASAN_DIAGNOSTICS_DIR
 
       - name: Summarize advisory result
         if: always()
