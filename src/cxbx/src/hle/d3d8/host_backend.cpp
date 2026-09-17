@@ -98,6 +98,14 @@ void HostBackendSetDepthState(unsigned int type, unsigned int value)
     }
 }
 
+void HostBackendSetRasterState(unsigned int state, unsigned int value)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetRasterState(state, value);
+    }
+}
+
 void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
                        unsigned int diffuseOffset,

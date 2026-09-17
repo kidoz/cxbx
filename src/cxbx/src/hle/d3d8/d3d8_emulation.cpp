@@ -11305,6 +11305,8 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple(
         // Todo: Verify these params as you add support for them!
         g_pD3DDevice8->SetRenderState((D3DRENDERSTATETYPE)State, Value);
 
+        cxbx::d3d8::HostBackendSetRasterState(State, Value);
+
         // Depth-test state rides the render-state stream into the render
         // path (Value here is already translated to the host enumeration).
         if(State == D3DRS_ZENABLE)
@@ -11418,6 +11420,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_CullMode(
     }
 
     g_pD3DDevice8->SetRenderState(D3DRS_CULLMODE, Value);
+    cxbx::d3d8::HostBackendSetRasterState(D3DRS_CULLMODE, Value);
 
     EmuSwapFS(); // XBox FS
 

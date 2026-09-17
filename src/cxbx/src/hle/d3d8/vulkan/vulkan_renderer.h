@@ -21,9 +21,6 @@ namespace d3d8
 namespace vulkan
 {
 
-// Opaque renderer state; defined in vulkan_renderer.cpp.
-struct RendererState;
-
 // Creates the color target, sync objects, and the shared pipeline cache.
 // width/height follow the emulated device's backbuffer dimensions. The
 // device/queue/image handles are opaque Vulkan handles passed through
@@ -50,6 +47,10 @@ bool RendererClear(unsigned int flags, unsigned int color, float z,
 // Stores d3d8 depth-test state for subsequent draws (type: 0 = ZEnable,
 // 1 = ZWriteEnable, 2 = ZFUNC with the host D3DCMPFUNC value).
 void RendererSetDepthState(unsigned int type, unsigned int value);
+
+// Host D3D8 render-state numbers and already translated values for blend,
+// alpha test, color writes and culling. Unknown states are ignored.
+void RendererSetRasterState(unsigned int state, unsigned int value);
 
 // Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0,
 // optional D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none), optional
@@ -127,9 +128,12 @@ bool RendererReadMainTarget(void* dst, unsigned int pitch);
 // Submits the pending batch, then copies the target into the given
 // swapchain image (which transitions to present source). The image is a
 // non-dispatchable Vulkan handle, which is a 64-bit integer on Windows.
+// The copy submission consumes acquireSemaphore before touching the image,
+// and completes before returning, so the presenter can safely queue Present.
 bool RendererCopyToSwapchain(std::uint64_t swapchainImage,
                              unsigned int imageWidth,
-                             unsigned int imageHeight);
+                             unsigned int imageHeight,
+                             std::uint64_t acquireSemaphore);
 
 bool RendererHasPendingFrame();
 

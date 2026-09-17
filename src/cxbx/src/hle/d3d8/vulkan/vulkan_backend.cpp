@@ -680,7 +680,8 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
         // source), then hand the image to the presentation engine.
         if(!RendererCopyToSwapchain(g_Presenter.swapchainImages[imageIndex],
                                     g_Presenter.extent.width,
-                                    g_Presenter.extent.height))
+                                    g_Presenter.extent.height,
+                                    g_Presenter.acquireSemaphore))
         {
             g_Presenter.valid = false;
             return false;

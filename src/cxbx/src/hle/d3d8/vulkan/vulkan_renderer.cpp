@@ -11,11 +11,14 @@
 
 #include <cstdio>
 #include <cstring>
+#include <array>
 #include <map>
 #include <vector>
 
 #define VK_USE_PLATFORM_WIN32_KHR
+#ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES
+#endif
 #include <volk.h>
 
 namespace cxbx
@@ -41,6 +44,9 @@ constexpr unsigned int kVertexStagingInitial = 256 * 1024;
 constexpr unsigned int kIndexStagingInitial = 256 * 1024;
 constexpr unsigned int kMaxTextures = 48;
 constexpr unsigned int kMaxDescriptorSets = 512;
+constexpr unsigned int kCombinerSlotSize = 512;
+constexpr unsigned int kCombinerSlotCount = 16;
+using PipelineKey = std::array<unsigned int, 10>;
 
 // d3d8 texture-stage defaults (stage 0 MODULATEs, later stages disabled).
 constexpr unsigned int kDefaultColorOp = 4;    // D3DTOP_MODULATE
@@ -58,6 +64,7 @@ struct RendererTexture
     unsigned int hostFormat = 0;
     void* key = nullptr;
     unsigned long long lastUse = 0;
+    bool uploaded = false;
 };
 
 struct RendererState
@@ -80,6 +87,15 @@ struct RendererState
     bool depthEnable = false;
     bool depthWrite = true;
     unsigned int depthFunc = 4; // D3DCMP_LESSEQUAL
+    bool blendEnable = false;
+    unsigned int sourceBlend = 2;      // ONE
+    unsigned int destinationBlend = 1; // ZERO
+    unsigned int blendOp = 1;          // ADD
+    unsigned int colorWriteMask = 15;
+    unsigned int cullMode = 1; // NONE until guest state is supplied
+    bool alphaTest = false;
+    unsigned int alphaRef = 0;
+    unsigned int alphaFunc = 8; // ALWAYS
     // True when recorded-but-not-yet-synchronized GPU work has written a
     // target this command buffer (finished rendering instance or direct
     // clear); the next rendering instance must emit a memory barrier so a
@@ -158,11 +174,10 @@ struct RendererState
     VkShaderModule vertexShader = VK_NULL_HANDLE;
     VkShaderModule fragmentShader = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    std::map<unsigned long long, VkPipeline> pipelines;
+    std::map<PipelineKey, VkPipeline> pipelines;
 
     // Texture mirror (P3): guest textures pulled at bind time.
     RendererTexture textures[kMaxTextures] = {};
-    unsigned int textureCount = 0;
     unsigned long long textureUseCounter = 0;
     VkBuffer textureStaging = VK_NULL_HANDLE;
     VkDeviceMemory textureStagingMemory = VK_NULL_HANDLE;
@@ -177,7 +192,7 @@ struct RendererState
     std::map<unsigned long long, VkSampler> samplers;
     VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    unsigned int descriptorSetCount = 0;
 
     // P4 register-combiner config, mirrored into a persistent UBO. The
     // layout matches the CombinConfig block in shader_spirv.h (std140).
@@ -186,7 +201,7 @@ struct RendererState
     void* combinerMapped = nullptr;
     unsigned int combinerWriteSlot = 0;  // next free ring slot
     unsigned int combinerActiveSlot = 0; // slot bound by the next draw
-    unsigned int ringWraps = 0;
+    bool combinerDirty = true;
     std::uint32_t pixelShaderDefs[64][60] = {}; // handle-table slot storage
     bool useCombiner = false;
     std::uint32_t lastConfig[104] = {};
@@ -237,7 +252,26 @@ bool AllocateDeviceMemory(VkDeviceMemory* memory, VkDeviceSize size,
     return vkAllocateMemory(g_R.device, &info, nullptr, memory) == VK_SUCCESS;
 }
 
-bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
+VkBlendFactor BlendFactor(unsigned int value)
+{
+    switch(value)
+    {
+        case 1: return VK_BLEND_FACTOR_ZERO;
+        case 2: return VK_BLEND_FACTOR_ONE;
+        case 3: return VK_BLEND_FACTOR_SRC_COLOR;
+        case 4: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        case 5: return VK_BLEND_FACTOR_SRC_ALPHA;
+        case 6: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        case 7: return VK_BLEND_FACTOR_DST_ALPHA;
+        case 8: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+        case 9: return VK_BLEND_FACTOR_DST_COLOR;
+        case 10: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+        case 11: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+        default: return VK_BLEND_FACTOR_ONE;
+    }
+}
+
+bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
                     unsigned int stride, bool hasDiffuse,
                     unsigned int diffuseOffset, unsigned int texCoordOffset)
 {
@@ -291,8 +325,10 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
     VkPipelineRasterizationStateCreateInfo raster = {};
     raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
-    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    raster.cullMode = g_R.cullMode == 1 ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+    // D3DCULL_CW rejects clockwise triangles in framebuffer coordinates.
+    raster.frontFace = g_R.cullMode == 2 ? VK_FRONT_FACE_COUNTER_CLOCKWISE
+                                         : VK_FRONT_FACE_CLOCKWISE;
     raster.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample = {};
@@ -309,12 +345,25 @@ bool CreatePipeline(unsigned long long key, VkPrimitiveTopology topology,
     depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-    // D3D8 defaults: blending disabled, alpha test off.
     VkPipelineColorBlendAttachmentState blendAttachment = {};
-    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                     VK_COLOR_COMPONENT_G_BIT |
-                                     VK_COLOR_COMPONENT_B_BIT |
-                                     VK_COLOR_COMPONENT_A_BIT;
+    blendAttachment.colorWriteMask = g_R.colorWriteMask & 15u;
+    blendAttachment.blendEnable = g_R.blendEnable;
+    unsigned int source = g_R.sourceBlend;
+    unsigned int destination = g_R.destinationBlend;
+    if(source == 12 || source == 13) // D3DBLEND_BOTHSRCALPHA / BOTHINVSRCALPHA
+    {
+        destination = source == 12 ? 6 : 5;
+        source = source == 12 ? 5 : 6;
+    }
+    blendAttachment.srcColorBlendFactor = BlendFactor(source);
+    blendAttachment.dstColorBlendFactor = BlendFactor(destination);
+    blendAttachment.srcAlphaBlendFactor = BlendFactor(source);
+    blendAttachment.dstAlphaBlendFactor = BlendFactor(destination);
+    const VkBlendOp operation = g_R.blendOp >= 1 && g_R.blendOp <= 5
+                                    ? static_cast<VkBlendOp>(g_R.blendOp - 1)
+                                    : VK_BLEND_OP_ADD;
+    blendAttachment.colorBlendOp = operation;
+    blendAttachment.alphaBlendOp = operation;
     VkPipelineColorBlendStateCreateInfo blend = {};
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blend.attachmentCount = 1;
@@ -408,13 +457,10 @@ VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
             topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             break;
     }
-    const unsigned long long key =
-        static_cast<unsigned long long>(topology) |
-        (static_cast<unsigned long long>(stride) << 8) |
-        (static_cast<unsigned long long>(diffuseOffset != kNoDiffuse ? 1u : 0u)
-         << 40) |
-        (static_cast<unsigned long long>(diffuseOffset) << 44) |
-        (static_cast<unsigned long long>(texCoordOffset) << 20);
+    const PipelineKey key = { static_cast<unsigned int>(topology), stride,
+                              diffuseOffset, texCoordOffset, g_R.blendEnable ? 1u : 0u,
+                              g_R.sourceBlend, g_R.destinationBlend, g_R.blendOp,
+                              g_R.colorWriteMask, g_R.cullMode };
     auto found = g_R.pipelines.find(key);
     if(found != g_R.pipelines.end())
     {
@@ -449,9 +495,12 @@ void BarrierAfterTargetWrite()
     g_R.gpuWroteTarget = false;
     VkMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT |
+                            VK_ACCESS_TRANSFER_WRITE_BIT |
+                            VK_ACCESS_SHADER_READ_BIT |
                             VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
@@ -465,7 +514,8 @@ void BarrierAfterTargetWrite()
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
             VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_TRANSFER_BIT |
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
@@ -495,15 +545,17 @@ bool OpenFrame()
     return true;
 }
 
-bool SubmitFrame()
+// Materialize deferred clears before changing targets or ending the batch.
+// The color and depth targets stay in GENERAL for attachment and transfer use.
+void FlushPendingClears()
 {
-    if(!g_R.frameOpen)
+    if(!g_R.hasPendingClear && !g_R.hasPendingClearZ)
     {
-        return true;
+        return;
     }
-    // A clear with no following draw never opens a rendering instance, so
-    // its pending color is applied directly (the target rests in GENERAL).
-    if(g_R.hasPendingClear && !g_R.renderingActive)
+    CloseRendering();
+    BarrierAfterTargetWrite();
+    if(g_R.hasPendingClear)
     {
         VkClearColorValue value = {};
         memcpy(value.float32, g_R.pendingClear, sizeof(g_R.pendingClear));
@@ -535,13 +587,25 @@ bool SubmitFrame()
             depthRange.layerCount = 1;
             vkCmdClearDepthStencilImage(
                 g_R.commandBuffer, depthImage,
-                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthValue, 1,
+                VK_IMAGE_LAYOUT_GENERAL, &depthValue, 1,
                 &depthRange);
             g_R.gpuWroteTarget = true;
         }
         g_R.hasPendingClearZ = false;
     }
+}
+
+bool SubmitFrame()
+{
+    if(!g_R.frameOpen)
+    {
+        return true;
+    }
     CloseRendering();
+    FlushPendingClears();
+    // Publish attachment/clear writes for later submissions, including
+    // readback and presentation copies that do not open a rendering instance.
+    BarrierAfterTargetWrite();
     if(vkEndCommandBuffer(g_R.commandBuffer) != VK_SUCCESS)
     {
         printf("VULKAN| renderer command buffer end failed\n");
@@ -558,16 +622,46 @@ bool SubmitFrame()
         g_R.frameOpen = false;
         return false;
     }
-    vkQueueWaitIdle(g_R.queue);
+    if(vkQueueWaitIdle(g_R.queue) != VK_SUCCESS)
+    {
+        g_R.valid = false;
+        return false;
+    }
     g_R.frameOpen = false;
     g_R.vertexCursor = 0;
+    g_R.indexCursor = 0;
+    g_R.textureCursor = 0;
     // Draws recorded this frame referenced descriptor sets from the pool;
     // nothing is in flight after the idle wait, so the pool recycles.
     vkResetDescriptorPool(g_R.device, g_R.descriptorPool, 0);
-    g_R.descriptorSet = VK_NULL_HANDLE;
+    g_R.descriptorSetCount = 0;
     g_R.combinerWriteSlot = 0;
     g_R.combinerActiveSlot = 0;
-    memset(g_R.lastConfig, 0, sizeof(g_R.lastConfig));
+    // Preserve emulated shader state across implicit submits. Its next draw
+    // allocates a fresh GPU snapshot before a recycled slot can be referenced.
+    g_R.combinerDirty = true;
+    return true;
+}
+
+bool PrepareCombinerSnapshot()
+{
+    if(g_R.combinerMapped == nullptr)
+    {
+        return false;
+    }
+    if(!g_R.combinerDirty)
+    {
+        return true;
+    }
+    if(g_R.combinerWriteSlot == kCombinerSlotCount && !SubmitFrame())
+    {
+        return false;
+    }
+    auto* slot = static_cast<char*>(g_R.combinerMapped) +
+                 g_R.combinerWriteSlot * kCombinerSlotSize;
+    memcpy(slot, g_R.lastConfig, sizeof(g_R.lastConfig));
+    g_R.combinerActiveSlot = g_R.combinerWriteSlot++;
+    g_R.combinerDirty = false;
     return true;
 }
 
@@ -746,7 +840,7 @@ unsigned int TextureFormatBytesPerPixel(unsigned int hostFormat,
 // Creates a GENERAL-layout BGRA color image (renderable + sampleable) and
 // transitions it in a one-shot submit. Used for render-to-texture targets.
 // Creates one D32 depth attachment with a one-shot transition to
-// DEPTH_ATTACHMENT_OPTIMAL and a far-plane clear, so draws that never clear
+// GENERAL and a far-plane clear, so draws that never clear
 // depth test deterministically against the far plane (matching the host
 // d3d8 path's backbuffer depth behavior).
 bool CreateDepthAttachment(unsigned int width, unsigned int height,
@@ -804,10 +898,9 @@ bool CreateDepthAttachment(unsigned int width, unsigned int height,
     vkBeginCommandBuffer(g_R.commandBuffer, &beginInfo);
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = *outImage;
@@ -823,8 +916,16 @@ bool CreateDepthAttachment(unsigned int width, unsigned int height,
     clearRange.levelCount = 1;
     clearRange.layerCount = 1;
     vkCmdClearDepthStencilImage(g_R.commandBuffer, *outImage,
-                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_GENERAL,
                                 &clearValue, 1, &clearRange);
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
     vkEndCommandBuffer(g_R.commandBuffer);
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -839,6 +940,13 @@ bool CreateRenderableTarget(void* key, unsigned int width, unsigned int height)
 {
     if(g_R.rtTargetCount >= 8)
     {
+        return false;
+    }
+    // Initialization uses the shared command buffer. Finish the old target's
+    // draws/clears before resetting it for these one-shot transitions.
+    if(!SubmitFrame())
+    {
+        g_R.valid = false;
         return false;
     }
     RTEntry& entry = g_R.rtTargets[g_R.rtTargetCount];
@@ -997,8 +1105,18 @@ bool EnsureTextureStaging(VkDeviceSize needed)
     return true;
 }
 
-void DestroyTextureEntry(RendererTexture* texture)
+void DestroyTextureEntry(RendererTexture* texture, bool unbind = true)
 {
+    if(unbind)
+    {
+        for(auto& binding : g_R.stageTexture)
+        {
+            if(binding == texture)
+            {
+                binding = nullptr;
+            }
+        }
+    }
     if(texture->view != VK_NULL_HANDLE)
     {
         vkDestroyImageView(g_R.device, texture->view, nullptr);
@@ -1389,8 +1507,9 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     pushRanges[0].offset = 0;
     pushRanges[0].size = 16;
     pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRanges[1].offset = 16;
-    pushRanges[1].size = 80; // stageOp[4] + extra (useCombiner)
+    // The fragment SPIR-V declares the full block, including the viewport.
+    pushRanges[1].offset = 0;
+    pushRanges[1].size = 96;
 
     VkDescriptorSetLayoutBinding bindings[2] = {};
     bindings[0].binding = 0;
@@ -1484,12 +1603,12 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         return false;
     }
 
-    // Persistent combiner-config UBO (binding 1). The descriptor write for
-    // it happens once; contents update through the mapped pointer.
+    // Persistent combiner-config ring (binding 1). A draw snapshots the CPU
+    // state into a free slot; recycling requires the recorded batch to finish.
     {
         VkBufferCreateInfo bufferInfo = {};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = 8192;
+        bufferInfo.size = kCombinerSlotSize * kCombinerSlotCount;
         bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         if(vkCreateBuffer(device, &bufferInfo, nullptr,
                           &g_R.combinerBuffer) == VK_SUCCESS)
@@ -1503,19 +1622,10 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) &&
                vkBindBufferMemory(device, g_R.combinerBuffer,
                                   g_R.combinerMemory, 0) == VK_SUCCESS &&
-               vkMapMemory(device, g_R.combinerMemory, 0, 8192, 0,
+               vkMapMemory(device, g_R.combinerMemory, 0, bufferInfo.size, 0,
                            &g_R.combinerMapped) == VK_SUCCESS)
             {
-                memset(g_R.combinerMapped, 0, 8192);
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[96] = 1;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[32] = 0x08040000;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[33] = 0x18140000;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[34] = 0x00000C00;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[35] = 0x00000C00;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[28] = 0x3F800000;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[29] = 0;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[30] = 0x3F800000;
-                static_cast<std::uint32_t*>(g_R.combinerMapped)[31] = 0x3F800000;
+                memset(g_R.combinerMapped, 0, static_cast<size_t>(bufferInfo.size));
             }
             else
             {
@@ -1524,6 +1634,18 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
             }
         }
     }
+
+    if(g_R.combinerMapped == nullptr)
+    {
+        printf("VULKAN| renderer combiner buffer creation failed\n");
+        RendererShutdown();
+        return false;
+    }
+    g_R.combinerWriteSlot = 0;
+    g_R.combinerActiveSlot = 0;
+    g_R.combinerDirty = true;
+    g_R.useCombiner = false;
+    memset(g_R.lastConfig, 0, sizeof(g_R.lastConfig));
 
     g_R.valid = true;
 
@@ -1618,13 +1740,8 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
                                      &g_R.dummyView) == VK_SUCCESS)
                 {
                     // Ownership moves to the renderer state.
-                    g_R.textures[kMaxTextures - 1].image = dummyImage;
-                    g_R.textures[kMaxTextures - 1].memory = dummyMemory;
-                    g_R.textures[kMaxTextures - 1].width = 1;
-                    g_R.textures[kMaxTextures - 1].height = 1;
-                    g_R.textureCount = kMaxTextures - 1 < g_R.textureCount
-                                           ? g_R.textureCount
-                                           : g_R.textureCount;
+                    g_R.dummyImage = dummyImage;
+                    g_R.dummyMemory = dummyMemory;
                 }
             }
         }
@@ -1706,7 +1823,6 @@ void RendererShutdown()
     {
         DestroyTextureEntry(&g_R.textures[i]);
     }
-    g_R.textureCount = 0;
     for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
     {
         RTEntry& entry = g_R.rtTargets[i];
@@ -1956,6 +2072,28 @@ void RendererSetDepthState(unsigned int type, unsigned int value)
     }
 }
 
+void RendererSetRasterState(unsigned int state, unsigned int value)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid)
+    {
+        return;
+    }
+    switch(state)
+    {
+        case 15: g_R.alphaTest = value != 0; break;
+        case 19: g_R.sourceBlend = value; break;
+        case 20: g_R.destinationBlend = value; break;
+        case 22: g_R.cullMode = value; break;
+        case 24: g_R.alphaRef = value & 255u; break;
+        case 25: g_R.alphaFunc = value; break;
+        case 27: g_R.blendEnable = value != 0; break;
+        case 168: g_R.colorWriteMask = value & 15u; break;
+        case 171: g_R.blendOp = value; break;
+        default: break;
+    }
+}
+
 // Shared recording tail for both draw kinds: validates the vertex layout,
 // opens the frame, stages the vertex block, opens the rendering instance,
 // and binds pipeline and draw state. Returns true with the staging offset
@@ -1977,7 +2115,8 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         return false;
     }
 
-    if(!OpenFrame())
+    // Submit before recording this draw when its descriptor pool is full.
+    if(g_R.descriptorSetCount == kMaxDescriptorSets && !SubmitFrame())
     {
         g_R.valid = false;
         return false;
@@ -2012,6 +2151,14 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
             g_R.vertexCursor = 0;
         }
     }
+    // Either staging growth or the shader ring may submit the prior batch.
+    // Reopen recording and allocate vertices only after both are ready.
+    if(!PrepareCombinerSnapshot() || !OpenFrame())
+    {
+        g_R.valid = false;
+        return false;
+    }
+    offset = g_R.vertexCursor;
     memcpy(static_cast<char*>(g_R.vertexMapped) + offset, data,
            static_cast<size_t>(bytes));
     g_R.vertexCursor = offset + bytes;
@@ -2052,7 +2199,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
                                         ? current->depthView
                                         : g_R.mainDepthView;
         depthAttachment.imageLayout =
-            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            VK_IMAGE_LAYOUT_GENERAL;
         depthAttachment.loadOp = g_R.hasPendingClearZ
                                      ? VK_ATTACHMENT_LOAD_OP_CLEAR
                                      : VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -2095,7 +2242,8 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
                                      ? g_R.depthFunc - 1
                                      : 3 /* LESS_OR_EQUAL */));
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT, 0, 16, g_R.viewport);
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, 16, g_R.viewport);
 
     // Fresh descriptor set per draw (pool resets after each frame submit):
     // the four stage textures plus the combiner-config UBO slot.
@@ -2110,6 +2258,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         printf("VULKAN| descriptor set allocation failed\n");
         return false;
     }
+    ++g_R.descriptorSetCount;
     VkDescriptorImageInfo imageInfos[4] = {};
     VkDescriptorBufferInfo bufferInfo = {};
     VkWriteDescriptorSet writes[5] = {};
@@ -2122,7 +2271,9 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
                 ? g_R.stageOverrideView[stage]
                 : (texture != nullptr ? texture->view : g_R.dummyView);
         imageInfos[stage].imageLayout =
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            g_R.stageOverrideView[stage] != VK_NULL_HANDLE
+                ? VK_IMAGE_LAYOUT_GENERAL
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         writes[stage].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[stage].dstSet = set;
         writes[stage].dstBinding = 0;
@@ -2134,7 +2285,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     }
     bufferInfo.buffer = g_R.combinerBuffer;
     bufferInfo.offset = 0;
-    bufferInfo.range = 512; // one combiner-config slot per dynamic bind
+    bufferInfo.range = kCombinerSlotSize;
     writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[4].dstSet = set;
     writes[4].dstBinding = 1;
@@ -2143,7 +2294,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     writes[4].pBufferInfo = &bufferInfo;
     vkUpdateDescriptorSets(g_R.device, 5, writes, 0, nullptr);
     const uint32_t combinerDynamicOffset =
-        static_cast<uint32_t>(g_R.combinerActiveSlot * 512);
+        static_cast<uint32_t>(g_R.combinerActiveSlot * kCombinerSlotSize);
     vkCmdBindDescriptorSets(g_R.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             g_R.pipelineLayout, 0, 1, &set, 1,
                             &combinerDynamicOffset);
@@ -2156,6 +2307,8 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         stageConstants[stage * 4 + 2] = g_R.stageArg2[stage];
     }
     stageConstants[16] = g_R.useCombiner ? 1u : 0u;
+    stageConstants[17] = g_R.alphaTest ? g_R.alphaFunc : 8u;
+    stageConstants[18] = g_R.alphaRef;
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 16, 80, stageConstants);
     vkCmdBindVertexBuffers(g_R.commandBuffer, 0, 1, &g_R.vertexStaging,
@@ -2220,14 +2373,6 @@ bool RendererDrawIndexed(unsigned int primitiveType,
     {
         return false;
     }
-    VkDeviceSize offset = 0;
-    if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
-                        vertexData,
-                        static_cast<VkDeviceSize>(stride) * vertexCount,
-                        &offset))
-    {
-        return false;
-    }
     const VkDeviceSize indexBytes =
         static_cast<VkDeviceSize>(indexCount) * sizeof(std::uint16_t);
     VkDeviceSize indexOffset = g_R.indexCursor;
@@ -2254,17 +2399,26 @@ bool RendererDrawIndexed(unsigned int primitiveType,
         indexOffset = g_R.indexCursor;
         if(indexOffset + indexBytes > g_R.indexStagingSize)
         {
-            indexOffset = 0;
             g_R.indexCursor = 0;
         }
     }
+    // Index growth must finish before recording any state for this draw.
+    // RecordDrawState may itself submit on vertex/constant-ring exhaustion.
+    VkDeviceSize offset = 0;
+    if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
+                        vertexData,
+                        static_cast<VkDeviceSize>(stride) * vertexCount,
+                        &offset))
+    {
+        return false;
+    }
+    indexOffset = g_R.indexCursor;
     memcpy(static_cast<char*>(g_R.indexMapped) + indexOffset, indexData,
            static_cast<size_t>(indexBytes));
     g_R.indexCursor = indexOffset + indexBytes;
     vkCmdBindIndexBuffer(g_R.commandBuffer, g_R.indexStaging, indexOffset,
                          VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(g_R.commandBuffer, indexCount, 1, 0,
-                     static_cast<std::uint32_t>(vertexOffset), 0);
+    vkCmdDrawIndexed(g_R.commandBuffer, indexCount, 1, 0, vertexOffset, 0);
     return true;
 }
 
@@ -2287,6 +2441,8 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     {
         return false;
     }
+    // A null/unsupported ordinary texture must also unbind an earlier RT.
+    g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
     if(key == nullptr || pixels == nullptr || width == 0 || height == 0)
     {
         g_R.stageTexture[stage] = nullptr;
@@ -2331,7 +2487,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     }
 
     RendererTexture* entry = nullptr;
-    for(unsigned int i = 0; i < g_R.textureCount; ++i)
+    for(unsigned int i = 0; i < kMaxTextures; ++i)
     {
         if(g_R.textures[i].key == key)
         {
@@ -2343,31 +2499,46 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
        (entry->width != width || entry->height != height ||
         entry->hostFormat != hostFormat))
     {
-        DestroyTextureEntry(entry);
-        entry = nullptr;
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            return false;
+        }
+        DestroyTextureEntry(entry, false);
     }
     if(entry == nullptr)
     {
-        if(g_R.textureCount == kMaxTextures)
+        // A stage binding outlives a batch. Keep bound entries resident;
+        // evicting one would silently change another stage's texture.
+        g_R.stageTexture[stage] = nullptr;
+        for(auto& candidate : g_R.textures)
         {
-            // Evict the least recently used entry (images may be referenced
-            // by the pending batch; the idle wait below keeps it safe).
-            unsigned int oldest = 0;
-            for(unsigned int i = 1; i < g_R.textureCount; ++i)
+            bool bound = false;
+            for(const auto* binding : g_R.stageTexture)
             {
-                if(g_R.textures[i].lastUse < g_R.textures[oldest].lastUse)
-                {
-                    oldest = i;
-                }
+                bound = bound || binding == &candidate;
             }
-            SubmitFrame();
-            DestroyTextureEntry(&g_R.textures[oldest]);
-            entry = &g_R.textures[oldest];
+            if(!bound && (entry == nullptr || candidate.lastUse < entry->lastUse))
+            {
+                entry = &candidate;
+            }
         }
-        else
+        if(entry == nullptr)
         {
-            entry = &g_R.textures[g_R.textureCount++];
+            return false;
         }
+        if(entry->image != VK_NULL_HANDLE)
+        {
+            if(!SubmitFrame())
+            {
+                g_R.valid = false;
+                return false;
+            }
+            DestroyTextureEntry(entry);
+        }
+    }
+    if(entry->image == VK_NULL_HANDLE)
+    {
         entry->key = key;
         entry->width = width;
         entry->height = height;
@@ -2389,7 +2560,6 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
            VK_SUCCESS)
         {
             DestroyTextureEntry(entry);
-            g_R.textureCount--;
             g_R.stageTexture[stage] = nullptr;
             return false;
         }
@@ -2402,7 +2572,6 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
                VK_SUCCESS)
         {
             DestroyTextureEntry(entry);
-            g_R.textureCount--;
             g_R.stageTexture[stage] = nullptr;
             return false;
         }
@@ -2418,7 +2587,6 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
            VK_SUCCESS)
         {
             DestroyTextureEntry(entry);
-            g_R.textureCount--;
             g_R.stageTexture[stage] = nullptr;
             return false;
         }
@@ -2481,8 +2649,10 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     }
     VkImageMemoryBarrier toDst = {};
     toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.srcAccessMask = entry->uploaded ? VK_ACCESS_SHADER_READ_BIT : 0;
     toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.oldLayout = entry->uploaded ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                      : VK_IMAGE_LAYOUT_UNDEFINED;
     toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -2490,7 +2660,9 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     toDst.subresourceRange.levelCount = 1;
     toDst.subresourceRange.layerCount = 1;
-    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(g_R.commandBuffer,
+                         entry->uploaded ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &toDst);
     VkBufferImageCopy region = {};
@@ -2511,6 +2683,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &toShader);
     g_R.textureCursor = uploadOffset + uploadBytes;
+    entry->uploaded = true;
     entry->lastUse = ++g_R.textureUseCounter;
     g_R.stageTexture[stage] = entry;
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
@@ -2546,6 +2719,7 @@ void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
     {
         return;
     }
+    FlushPendingClears();
     if(key == nullptr)
     {
         // Main (backbuffer) target.
@@ -2647,6 +2821,8 @@ void RendererSetPixelShader(const std::uint32_t* def60)
         return;
     }
     std::uint32_t config[104] = {};
+    // Runtime constants are device state, independent of the shader handle.
+    memcpy(config, g_R.lastConfig, 32 * sizeof(std::uint32_t));
     for(unsigned int i = 0; i < 8; ++i)
     {
         config[32 + i * 4 + 0] = def60[34 + i]; // stageA.x = PSRGBInputs
@@ -2664,25 +2840,15 @@ void RendererSetPixelShader(const std::uint32_t* def60)
     config[96 + 3] = def60[59]; // meta.w = FinalCombinerConstants
     config[100 + 0] = def60[43];
     config[100 + 1] = def60[44];
+    config[102] = g_R.lastConfig[102]; // runtime constant validity
 
-    // Host-written ring slot: coherent mapping makes the config visible to
-    // the next submit, and one slot per SetPixelShader keeps every draw's
-    // recorded dynamic offset pointing at its own config.
+    g_R.useCombiner = true;
     if(memcmp(g_R.lastConfig, config, sizeof(config)) == 0)
     {
         return; // identical to the active revision; draws keep its slot
     }
-    std::uint32_t* slot = static_cast<std::uint32_t*>(g_R.combinerMapped) +
-                          g_R.combinerWriteSlot * 128;
-    memcpy(slot, config, sizeof(config));
     memcpy(g_R.lastConfig, config, sizeof(config));
-    g_R.combinerActiveSlot = g_R.combinerWriteSlot;
-    g_R.combinerWriteSlot = (g_R.combinerWriteSlot + 1) % (8192 / 512);
-    if(g_R.combinerWriteSlot == 0)
-    {
-        g_R.ringWraps++;
-    }
-    g_R.useCombiner = true;
+    g_R.combinerDirty = true;
 }
 
 void RendererSetPixelShaderConstant(unsigned int registerIndex,
@@ -2698,21 +2864,14 @@ void RendererSetPixelShaderConstant(unsigned int registerIndex,
     {
         memcpy(&updated[c], value + c, 4);
     }
-    if(memcmp(&g_R.lastConfig[registerIndex * 4], updated, 16) == 0)
+    if((g_R.lastConfig[102] & (1u << registerIndex)) != 0 &&
+       memcmp(&g_R.lastConfig[registerIndex * 4], updated, 16) == 0)
     {
         return; // identical to the active revision
     }
-    std::uint32_t* slot = static_cast<std::uint32_t*>(g_R.combinerMapped) +
-                          g_R.combinerWriteSlot * 128;
-    memcpy(slot, g_R.lastConfig, 416);
-    memcpy(&slot[registerIndex * 4], updated, 16);
-    memcpy(g_R.lastConfig, slot, 416);
-    g_R.combinerActiveSlot = g_R.combinerWriteSlot;
-    g_R.combinerWriteSlot = (g_R.combinerWriteSlot + 1) % (8192 / 512);
-    if(g_R.combinerWriteSlot == 0)
-    {
-        g_R.ringWraps++;
-    }
+    memcpy(&g_R.lastConfig[registerIndex * 4], updated, sizeof(updated));
+    g_R.lastConfig[102] |= 1u << registerIndex;
+    g_R.combinerDirty = true;
 }
 
 bool RendererHasPendingFrame()
@@ -2819,7 +2978,8 @@ bool RendererReadMainTarget(void* dst, unsigned int pitch)
 }
 
 bool RendererCopyToSwapchain(std::uint64_t swapchainImageHandle,
-                             unsigned int imageWidth, unsigned int imageHeight)
+                             unsigned int imageWidth, unsigned int imageHeight,
+                             std::uint64_t acquireSemaphoreHandle)
 {
     RendererLockScope rendererLock;
     const VkImage swapchainImage = static_cast<VkImage>(swapchainImageHandle);
@@ -2883,6 +3043,12 @@ bool RendererCopyToSwapchain(std::uint64_t swapchainImageHandle,
     vkEndCommandBuffer(g_R.commandBuffer);
     VkSubmitInfo submit = {};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    const VkSemaphore acquireSemaphore = static_cast<VkSemaphore>(acquireSemaphoreHandle);
+    // Include the layout transition, not just the later transfer access.
+    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    submit.waitSemaphoreCount = 1;
+    submit.pWaitSemaphores = &acquireSemaphore;
+    submit.pWaitDstStageMask = &waitStage;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &g_R.commandBuffer;
     if(vkQueueSubmit(g_R.queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
@@ -2890,7 +3056,11 @@ bool RendererCopyToSwapchain(std::uint64_t swapchainImageHandle,
         g_R.valid = false;
         return false;
     }
-    vkQueueWaitIdle(g_R.queue);
+    if(vkQueueWaitIdle(g_R.queue) != VK_SUCCESS)
+    {
+        g_R.valid = false;
+        return false;
+    }
     return true;
 }
 

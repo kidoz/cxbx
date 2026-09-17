@@ -148,6 +148,10 @@ void HostBackendSetViewport(float x, float y, float width, float height);
 // 1 = ZWriteEnable, 2 = ZFUNC with the host D3DCMPFUNC value).
 void HostBackendSetDepthState(unsigned int type, unsigned int value);
 
+// Host D3D8 render-state numbers and values (blend, alpha test, color mask,
+// culling), after Xbox-to-host enumeration conversion.
+void HostBackendSetRasterState(unsigned int state, unsigned int value);
+
 // P5 render targets: switches the draw target (key == nullptr binds the main
 // backbuffer target; otherwise the key identifies or lazily creates a
 // render-to-texture target of the given size), and binds a registered
