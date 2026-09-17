@@ -325,9 +325,9 @@ def capture_window(helper: Path, guest_pid: int | None, out_png: Path) -> dict[s
         return {"saved": False, "status": "no-guest"}
     try:
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-File", str(helper), "-TargetPid", str(guest_pid), "-Out", str(out_png)],
-            capture_output=True, text=True, timeout=30)
+            [sys.executable, str(helper), "--target-pid", str(guest_pid), "--out", str(out_png)],
+            capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
         raw = (r.stdout.strip().splitlines() or ["capture-failed"])[-1]
         return parse_capture_result(raw)
     except (OSError, subprocess.SubprocessError):
@@ -473,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     if not exe.is_file():
         die(f"emulator exe not found: {exe}")
 
-    helper = Path(__file__).resolve().parent / "run" / "capture_window.ps1"
+    helper = Path(__file__).resolve().parent / "capture_window.py"
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     base = Path(args.out) if args.out else (repo / "tools" / "run")
