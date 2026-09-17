@@ -87,7 +87,7 @@ A bisect wrapper should generate `candidate.nv2acap` for the checked-out commit
 and then return the comparator's result:
 
 ```powershell
-git bisect run powershell -File path/to/run_capture_bisect.ps1
+git bisect run uv run python path/to/run_capture_bisect.py
 ```
 
 Keep the baseline outside build/run output that the wrapper replaces. Treat
