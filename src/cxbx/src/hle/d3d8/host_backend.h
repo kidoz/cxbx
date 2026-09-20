@@ -78,6 +78,11 @@ bool HostBackendPresentFrame(const void* pixels, unsigned int width,
 // to the host d3d8 device as a shadow, which preserves Get semantics.
 bool HostBackendRenders();
 
+// Composite a converted BGRA movie frame over the main backbuffer, scaled to
+// its full extent. Preserves the guest draw target, viewport and render state.
+bool HostBackendComposeOverlay(const void* pixels, unsigned int width,
+                               unsigned int height, unsigned int pitch);
+
 // Reports the emulated device's backbuffer dimensions once the host device
 // exists; sizes (or lazily creates) the render target.
 void HostBackendSetTargetSize(unsigned int width, unsigned int height);

@@ -125,6 +125,12 @@ void RendererCurrentTargetSize(unsigned int* width, unsigned int* height);
 // into dst regardless of the bound render target.
 bool RendererReadMainTarget(void* dst, unsigned int pitch);
 
+// Opaque, full-backbuffer BGRA video overlay, independent of guest render
+// state and the currently bound render target. Copies the supplied pixels
+// before returning; subsequent draws retain all of their previous state.
+bool RendererComposeOverlay(const void* pixels, unsigned int width,
+                            unsigned int height, unsigned int pitch);
+
 // Submits the pending batch, then copies the target into the given
 // swapchain image (which transitions to present source). The image is a
 // non-dispatchable Vulkan handle, which is a 64-bit integer on Windows.

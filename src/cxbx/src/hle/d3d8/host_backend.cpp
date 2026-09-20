@@ -75,6 +75,13 @@ bool HostBackendRenders()
     return HostBackendPresents() && vulkan::RendererValid();
 }
 
+bool HostBackendComposeOverlay(const void* pixels, unsigned int width,
+                               unsigned int height, unsigned int pitch)
+{
+    return HostBackendRenders() &&
+           vulkan::RendererComposeOverlay(pixels, width, height, pitch);
+}
+
 void HostBackendSetTargetSize(unsigned int width, unsigned int height)
 {
     vulkan::SetTargetSize(width, height);

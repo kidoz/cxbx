@@ -364,6 +364,75 @@ bool Run(const char* scenario)
         }
         return Pixel(100, 100, Green);
     }
+    if(std::strcmp(scenario, "overlay") == 0)
+    {
+        // Padded rows, BGRA channel order, scaling and source ownership. An
+        // overlay must bypass guest viewport, target and color/alpha state.
+        std::array<std::uint32_t, 6> movie = { Red, Green, 0, Blue, 0xFFFFFFFFu, 0 };
+        if(vk::RendererComposeOverlay(movie.data(), 2, 2, 4) || !Pixel(100, 100, Blue))
+        {
+            return false;
+        }
+        int textureKey = 0;
+        const std::uint32_t texel = Green;
+        if(!vk::RendererSetTexture(0, &textureKey, &texel, 4, 1, 1, 21))
+        {
+            return false;
+        }
+        vk::RendererSetTextureOp(0, 0, 2); // SELECTARG1 (texture)
+        int targetKey = 0;
+        vk::RendererSetRenderTarget(&targetKey, 64, 64);
+        vk::RendererSetViewport(0, 0, 64, 64);
+        vk::RendererClear(1, Red, 1, 0);
+        vk::RendererSetRasterState(168, 0); // no guest color writes
+        vk::RendererSetRasterState(15, 1);  // alpha test
+        vk::RendererSetRasterState(25, 1);  // NEVER
+        if(!vk::RendererComposeOverlay(movie.data(), 2, 2, 12))
+        {
+            return false;
+        }
+        movie.fill(0); // the queued upload must already own its bytes
+        if(!Pixel(0, 0, Red) || !Pixel(Width - 1, 0, Green) ||
+           !Pixel(0, Height - 1, Blue) || !Pixel(Width - 1, Height - 1, 0xFFFFFFFFu))
+        {
+            return false;
+        }
+        std::array<std::uint32_t, 64 * 64> target = {};
+        if(!Draw(8, 8, Blue) || !vk::RendererReadTarget(target.data(), 64 * 4) ||
+           target[16 * 64 + 16] != Red)
+        {
+            return false;
+        }
+        vk::RendererSetRasterState(168, 15);
+        if(!Draw(8, 8, Blue) || !vk::RendererReadTarget(target.data(), 64 * 4) ||
+           target[16 * 64 + 16] != Red)
+        {
+            return false;
+        }
+        vk::RendererSetRasterState(15, 0);
+        if(!Draw(8, 8, Blue) || !vk::RendererReadTarget(target.data(), 64 * 4) ||
+           target[16 * 64 + 16] != Green || target[40 * 64 + 40] != Red)
+        {
+            return false;
+        }
+        // Repeated uploads and a resolution change must replace the movie,
+        // without retaining the prior staging bytes or destroying in-flight work.
+        movie.fill(Blue);
+        if(!vk::RendererComposeOverlay(movie.data(), 2, 2, 12))
+        {
+            return false;
+        }
+        movie.fill(Green);
+        if(!vk::RendererComposeOverlay(movie.data(), 2, 2, 12) || !Pixel(100, 100, Green) ||
+           !vk::RendererComposeOverlay(&texel, 1, 1, 4) ||
+           !vk::PresentFrame(nullptr, 0, 0, 0) || !Pixel(100, 100, Green))
+        {
+            return false;
+        }
+        // Ending the overlay does not leave a persistent compositor enabled.
+        vk::RendererSetRenderTarget(nullptr, 0, 0);
+        return vk::RendererClear(1, Blue, 1, 0) && Pixel(100, 100, Blue);
+    }
     return false;
 }
 } // namespace

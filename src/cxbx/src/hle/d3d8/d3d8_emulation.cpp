@@ -7921,7 +7921,36 @@ static void EmuComposeOverlay()
     using namespace XTL;
 
     if(g_pOverlayFrameTexture == NULL)
+    {
         return;
+    }
+
+    // The native renderer owns a separate backbuffer. Drawing the movie quad
+    // directly on the D3D8 shadow would leave the Vulkan present source black.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        D3DSURFACE_DESC description = {};
+        D3DLOCKED_RECT locked = {};
+        bool composed = false;
+        if(SUCCEEDED(g_pOverlayFrameTexture->GetLevelDesc(0, &description)) &&
+           SUCCEEDED(g_pOverlayFrameTexture->LockRect(0, &locked, nullptr, D3DLOCK_READONLY)))
+        {
+            if(locked.pBits != nullptr && locked.Pitch > 0)
+            {
+                composed = cxbx::d3d8::HostBackendComposeOverlay(
+                    locked.pBits, description.Width, description.Height,
+                    static_cast<unsigned int>(locked.Pitch));
+            }
+            g_pOverlayFrameTexture->UnlockRect(0);
+        }
+        static bool warned = false;
+        if(!composed && !warned)
+        {
+            EmuWarning("Vulkan movie overlay composition failed");
+            warned = true;
+        }
+        return;
+    }
 
     IDirect3DSurface8* pBackBuffer = NULL;
     if(FAILED(g_pD3DDevice8->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &pBackBuffer)) || pBackBuffer == NULL)

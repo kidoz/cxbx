@@ -178,6 +178,8 @@ struct RendererState
 
     // Texture mirror (P3): guest textures pulled at bind time.
     RendererTexture textures[kMaxTextures] = {};
+    // Video uploads must not evict guest textures or change stage bindings.
+    RendererTexture overlayTexture;
     unsigned long long textureUseCounter = 0;
     VkBuffer textureStaging = VK_NULL_HANDLE;
     VkDeviceMemory textureStagingMemory = VK_NULL_HANDLE;
@@ -1823,6 +1825,7 @@ void RendererShutdown()
     {
         DestroyTextureEntry(&g_R.textures[i]);
     }
+    DestroyTextureEntry(&g_R.overlayTexture);
     for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
     {
         RTEntry& entry = g_R.rtTargets[i];
@@ -2975,6 +2978,118 @@ bool RendererReadMainTarget(void* dst, unsigned int pitch)
 {
     RendererLockScope rendererLock;
     return ReadTargetImage(g_R.target, g_R.width, g_R.height, dst, pitch);
+}
+
+bool RendererComposeOverlay(const void* pixels, unsigned int width,
+                            unsigned int height, unsigned int pitch)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || pixels == nullptr || width == 0 || height == 0 ||
+       width > 4096 || height > 4096 || pitch < width * 4)
+    {
+        return false;
+    }
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4;
+    if(bytes > 16 * 1024 * 1024)
+    {
+        return false;
+    }
+    // Drain guest draws/clears before reusing upload memory or resizing the
+    // dedicated video image. Presentation already uses this synchronous queue.
+    if(!SubmitFrame())
+    {
+        g_R.valid = false;
+        return false;
+    }
+    auto& overlay = g_R.overlayTexture;
+    if(overlay.width != width || overlay.height != height)
+    {
+        DestroyTextureEntry(&overlay);
+    }
+    if(overlay.image == VK_NULL_HANDLE)
+    {
+        VkImageCreateInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        info.imageType = VK_IMAGE_TYPE_2D;
+        info.format = VK_FORMAT_B8G8R8A8_UNORM;
+        info.extent = { width, height, 1 };
+        info.mipLevels = 1;
+        info.arrayLayers = 1;
+        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if(vkCreateImage(g_R.device, &info, nullptr, &overlay.image) != VK_SUCCESS)
+        {
+            return false;
+        }
+        VkMemoryRequirements requirements = {};
+        vkGetImageMemoryRequirements(g_R.device, overlay.image, &requirements);
+        if(!AllocateDeviceMemory(&overlay.memory, requirements.size,
+                                 requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+           vkBindImageMemory(g_R.device, overlay.image, overlay.memory, 0) != VK_SUCCESS)
+        {
+            DestroyTextureEntry(&overlay);
+            return false;
+        }
+        overlay.width = width;
+        overlay.height = height;
+    }
+    if(!EnsureTextureStaging(bytes) || !OpenFrame())
+    {
+        return false;
+    }
+    for(unsigned int row = 0; row < height; ++row)
+    {
+        memcpy(static_cast<char*>(g_R.textureMapped) + static_cast<size_t>(row) * width * 4,
+               static_cast<const char*>(pixels) + static_cast<size_t>(row) * pitch, width * 4);
+    }
+    g_R.textureCursor = bytes;
+
+    VkImageMemoryBarrier upload = {};
+    upload.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    upload.srcAccessMask = overlay.uploaded ? VK_ACCESS_TRANSFER_READ_BIT : 0;
+    upload.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    upload.oldLayout = overlay.uploaded ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                        : VK_IMAGE_LAYOUT_UNDEFINED;
+    upload.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    upload.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    upload.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    upload.image = overlay.image;
+    upload.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    upload.subresourceRange.levelCount = 1;
+    upload.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &upload);
+    VkBufferImageCopy copy = {};
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent = { width, height, 1 };
+    vkCmdCopyBufferToImage(g_R.commandBuffer, g_R.textureStaging, overlay.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+
+    VkImageMemoryBarrier barriers[2] = { upload, upload };
+    barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[1].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barriers[1].image = g_R.target;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, barriers);
+
+    VkImageBlit blit = {};
+    blit.srcSubresource = copy.imageSubresource;
+    blit.dstSubresource = copy.imageSubresource;
+    blit.srcOffsets[1] = { static_cast<int>(width), static_cast<int>(height), 1 };
+    blit.dstOffsets[1] = { static_cast<int>(g_R.width), static_cast<int>(g_R.height), 1 };
+    vkCmdBlitImage(g_R.commandBuffer, overlay.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   g_R.target, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+    overlay.uploaded = true;
+    g_R.gpuWroteTarget = true;
+    return true;
 }
 
 bool RendererCopyToSwapchain(std::uint64_t swapchainImageHandle,
