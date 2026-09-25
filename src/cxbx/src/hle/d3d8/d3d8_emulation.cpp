@@ -691,6 +691,7 @@ static void EmuDrawHostControlTriangles(HRESULT& simpleResult, HRESULT& complexR
                 XTL::D3DPT_TRIANGLELIST, 1, complexVertices,
                 sizeof(ComplexControlVertex));
             g_pD3DDevice8->ApplyStateBlock(savedState);
+            cxbx::d3d8::HostBackendStateBlockApply(savedState);
             EmuForwardCacheFlush();
             g_pD3DDevice8->DeleteStateBlock(savedState);
             savedState = 0;
@@ -1271,6 +1272,10 @@ static DWORD EmuCaptureD3DStateBlock()
     {
         stateBlock = 0;
     }
+    if(stateBlock != 0)
+    {
+        cxbx::d3d8::HostBackendStateBlockCapture(stateBlock);
+    }
     return stateBlock;
 }
 
@@ -1280,6 +1285,7 @@ static void EmuDeleteD3DStateBlock(DWORD stateBlock)
     {
         return;
     }
+    cxbx::d3d8::HostBackendStateBlockDelete(stateBlock);
     __try
     {
         g_pD3DDevice8->DeleteStateBlock(stateBlock);
@@ -2980,6 +2986,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_BeginStateBlock()
 
     ULONG ret = g_pD3DDevice8->BeginStateBlock();
 
+    if(SUCCEEDED(static_cast<HRESULT>(ret)))
+    {
+        cxbx::d3d8::HostBackendStateBlockBegin();
+    }
+
     EmuSwapFS(); // XBox FS
 
     return ret;
@@ -3008,6 +3019,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CaptureStateBlock(DWORD Token)
 
     ULONG ret = g_pD3DDevice8->CaptureStateBlock(Token);
 
+    if(SUCCEEDED(static_cast<HRESULT>(ret)))
+    {
+        cxbx::d3d8::HostBackendStateBlockCapture(Token);
+    }
+
     EmuSwapFS(); // XBox FS
 
     return ret;
@@ -3035,6 +3051,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_ApplyStateBlock(DWORD Token)
 #endif
 
     ULONG ret = g_pD3DDevice8->ApplyStateBlock(Token);
+
+    if(SUCCEEDED(static_cast<HRESULT>(ret)))
+    {
+        cxbx::d3d8::HostBackendStateBlockApply(Token);
+    }
     EmuForwardCacheFlush();
 
     EmuSwapFS(); // XBox FS
@@ -3064,6 +3085,11 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndStateBlock(DWORD* pToken)
 #endif
 
     ULONG ret = g_pD3DDevice8->EndStateBlock(pToken);
+
+    if(SUCCEEDED(static_cast<HRESULT>(ret)) && pToken != NULL)
+    {
+        cxbx::d3d8::HostBackendStateBlockEnd(*pToken);
+    }
 
     EmuSwapFS(); // XBox FS
 
@@ -13381,6 +13407,7 @@ static bool EmuReplayHlePushBuffer(const DWORD* commandData, DWORD size,
                             {
                                 return false;
                             }
+                            cxbx::d3d8::HostBackendStateBlockApply(stateBlock);
                         }
                         EmuRestoreRecordedGuestTextures(recording->draws[drawIndex]);
                     }

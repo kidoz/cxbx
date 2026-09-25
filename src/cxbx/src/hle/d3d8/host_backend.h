@@ -157,6 +157,19 @@ void HostBackendSetDepthState(unsigned int type, unsigned int value);
 // culling), after Xbox-to-host enumeration conversion.
 void HostBackendSetRasterState(unsigned int state, unsigned int value);
 
+// P6 state blocks: backend-side mirrors of the host d3d8 state-block tokens.
+// Begin/end record the backend-relevant state forwards made between them
+// (d3d8 recording semantics; the forwards still apply live), capture stores
+// the live backend state, apply replays a recorded block or restores a
+// snapshot, delete drops the token. Recorded texture ops rebind the cached
+// upload at apply time; no pixel copies are taken. All are no-ops when the
+// render path is inactive.
+void HostBackendStateBlockBegin();
+void HostBackendStateBlockEnd(unsigned int token);
+void HostBackendStateBlockCapture(unsigned int token);
+void HostBackendStateBlockApply(unsigned int token);
+void HostBackendStateBlockDelete(unsigned int token);
+
 // P5 render targets: switches the draw target (key == nullptr binds the main
 // backbuffer target; otherwise the key identifies or lazily creates a
 // render-to-texture target of the given size), and binds a registered

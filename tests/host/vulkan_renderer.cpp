@@ -310,6 +310,35 @@ bool Run(const char* scenario)
         }
         return Draw(40, 8, Green) && Pixel(16, 16, Red) && Pixel(48, 16, Green);
     }
+    if(std::strcmp(scenario, "state_block") == 0)
+    {
+        // P6 state blocks: capture the live state, mutate it, and verify the
+        // apply restores the write mask and rebinds the stage texture from
+        // the upload cache.
+        int textureKey = 0;
+        if(!vk::RendererSetTexture(0, &textureKey, &Red, 4, 1, 1, 21) ||
+           !Draw(8, 8, 0xFFFFFFFFu) || !Pixel(16, 16, Red))
+        {
+            return false;
+        }
+        if(!vk::RendererStateBlockCapture(1))
+        {
+            return false;
+        }
+        vk::RendererSetTexture(0, nullptr, nullptr, 0, 0, 0, 0);
+        vk::RendererSetRasterState(168, 2); // green-only write mask
+        if(!Draw(40, 8, Green) || !Pixel(48, 16, 0x00FFFFu))
+        {
+            return false;
+        }
+        if(!vk::RendererStateBlockApply(1))
+        {
+            return false;
+        }
+        // The restored mask must write all channels again and the restored
+        // stage-0 binding must sample the red texture (not the white dummy).
+        return Draw(40, 8, 0xFFFFFFFFu) && Pixel(48, 16, Red);
+    }
     if(std::strcmp(scenario, "raster") == 0)
     {
         vk::RendererSetRasterState(19, 5); // SRCALPHA

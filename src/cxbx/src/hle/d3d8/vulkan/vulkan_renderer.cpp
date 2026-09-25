@@ -150,6 +150,9 @@ struct RendererState
     VkDeviceMemory mainDepthMemory = VK_NULL_HANDLE;
     VkImageView mainDepthView = VK_NULL_HANDLE;
     VkImageView stageOverrideView[4] = {};
+    // The render-target registry key behind each stage override view (state
+    // blocks re-resolve the binding at apply time).
+    void* stageOverrideKey[4] = {};
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -212,6 +215,50 @@ struct RendererState
 RendererState g_R;
 
 using RTEntry = RendererState::RTEntry;
+
+// P6 state blocks: a snapshot of the guest-visible renderer state (the
+// subset the HLE forwards through the seam). Texture-stage bindings store
+// cache keys, not entry pointers, so an apply never resurrects an evicted
+// upload; an evicted binding rebinds white until the next real SetTexture.
+struct RendererStateSnapshot
+{
+    float viewport[4] = {};
+    bool depthEnable = false;
+    bool depthWrite = true;
+    unsigned int depthFunc = 4; // D3DCMP_LESSEQUAL
+    bool blendEnable = false;
+    unsigned int sourceBlend = 2;      // ONE
+    unsigned int destinationBlend = 1; // ZERO
+    unsigned int blendOp = 1;          // ADD
+    unsigned int colorWriteMask = 15;
+    unsigned int cullMode = 1; // NONE
+    bool alphaTest = false;
+    unsigned int alphaRef = 0;
+    unsigned int alphaFunc = 8; // ALWAYS
+    unsigned int stageOp[4] = {};
+    unsigned int stageArg1[4] = {};
+    unsigned int stageArg2[4] = {};
+    unsigned int stageAddressU[4] = {};
+    unsigned int stageAddressV[4] = {};
+    unsigned int stageMagFilter[4] = {};
+    unsigned int stageMinFilter[4] = {};
+    void* stageTextureKey[4] = {};
+    void* stageRenderTargetKey[4] = {};
+    bool useCombiner = false;
+    std::uint32_t lastConfig[104] = {};
+};
+
+constexpr unsigned int kMaxStateBlocks = 16;
+struct RendererStateBlock
+{
+    unsigned int token = 0;
+    bool used = false;
+    unsigned long long lastUse = 0;
+    RendererStateSnapshot snapshot;
+};
+RendererStateBlock g_StateBlocks[kMaxStateBlocks];
+unsigned long long g_StateBlockUseCounter = 0;
+bool g_StateBlockEvictLogged = false;
 
 // The renderer is entered from the guest execution thread, the device proxy
 // thread (initial present), and present/readback paths; all public entries
@@ -1874,6 +1921,7 @@ void RendererShutdown()
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
         g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+        g_R.stageOverrideKey[stage] = nullptr;
     }
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
@@ -2446,6 +2494,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     }
     // A null/unsupported ordinary texture must also unbind an earlier RT.
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+    g_R.stageOverrideKey[stage] = nullptr;
     if(key == nullptr || pixels == nullptr || width == 0 || height == 0)
     {
         g_R.stageTexture[stage] = nullptr;
@@ -2690,6 +2739,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     entry->lastUse = ++g_R.textureUseCounter;
     g_R.stageTexture[stage] = entry;
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+    g_R.stageOverrideKey[stage] = nullptr;
     return true;
 }
 
@@ -2709,6 +2759,7 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
         {
             g_R.stageTexture[stage] = nullptr;
             g_R.stageOverrideView[stage] = g_R.rtTargets[i].view;
+            g_R.stageOverrideKey[stage] = key;
             return true;
         }
     }
@@ -2875,6 +2926,205 @@ void RendererSetPixelShaderConstant(unsigned int registerIndex,
     memcpy(&g_R.lastConfig[registerIndex * 4], updated, sizeof(updated));
     g_R.lastConfig[102] |= 1u << registerIndex;
     g_R.combinerDirty = true;
+}
+
+bool RendererStateBlockCapture(unsigned int token)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || token == 0)
+    {
+        return false;
+    }
+    RendererStateBlock* block = nullptr;
+    for(auto& candidate : g_StateBlocks)
+    {
+        if(candidate.used && candidate.token == token)
+        {
+            block = &candidate;
+            break;
+        }
+    }
+    if(block == nullptr)
+    {
+        for(auto& candidate : g_StateBlocks)
+        {
+            if(!candidate.used)
+            {
+                block = &candidate;
+                break;
+            }
+            if(block == nullptr || candidate.lastUse < block->lastUse)
+            {
+                block = &candidate;
+            }
+        }
+        if(block->used && !g_StateBlockEvictLogged)
+        {
+            g_StateBlockEvictLogged = true;
+            printf("VULKAN| renderer: state block registry full; evicting "
+                   "token %u\n",
+                   block->token);
+        }
+        block->token = token;
+    }
+    block->used = true;
+    block->lastUse = ++g_StateBlockUseCounter;
+    RendererStateSnapshot& snapshot = block->snapshot;
+    for(unsigned int i = 0; i < 4; ++i)
+    {
+        snapshot.viewport[i] = g_R.viewport[i];
+        snapshot.stageOp[i] = g_R.stageOp[i];
+        snapshot.stageArg1[i] = g_R.stageArg1[i];
+        snapshot.stageArg2[i] = g_R.stageArg2[i];
+        snapshot.stageAddressU[i] = g_R.stageAddressU[i];
+        snapshot.stageAddressV[i] = g_R.stageAddressV[i];
+        snapshot.stageMagFilter[i] = g_R.stageMagFilter[i];
+        snapshot.stageMinFilter[i] = g_R.stageMinFilter[i];
+        snapshot.stageTextureKey[i] = g_R.stageTexture[i] != nullptr
+                                          ? g_R.stageTexture[i]->key
+                                          : nullptr;
+        snapshot.stageRenderTargetKey[i] = g_R.stageOverrideKey[i];
+    }
+    snapshot.depthEnable = g_R.depthEnable;
+    snapshot.depthWrite = g_R.depthWrite;
+    snapshot.depthFunc = g_R.depthFunc;
+    snapshot.blendEnable = g_R.blendEnable;
+    snapshot.sourceBlend = g_R.sourceBlend;
+    snapshot.destinationBlend = g_R.destinationBlend;
+    snapshot.blendOp = g_R.blendOp;
+    snapshot.colorWriteMask = g_R.colorWriteMask;
+    snapshot.cullMode = g_R.cullMode;
+    snapshot.alphaTest = g_R.alphaTest;
+    snapshot.alphaRef = g_R.alphaRef;
+    snapshot.alphaFunc = g_R.alphaFunc;
+    snapshot.useCombiner = g_R.useCombiner;
+    memcpy(snapshot.lastConfig, g_R.lastConfig, sizeof(snapshot.lastConfig));
+    return true;
+}
+
+bool RendererStateBlockApply(unsigned int token)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || token == 0)
+    {
+        return false;
+    }
+    RendererStateBlock* block = nullptr;
+    for(auto& candidate : g_StateBlocks)
+    {
+        if(candidate.used && candidate.token == token)
+        {
+            block = &candidate;
+            break;
+        }
+    }
+    if(block == nullptr)
+    {
+        return false;
+    }
+    block->lastUse = ++g_StateBlockUseCounter;
+    const RendererStateSnapshot& snapshot = block->snapshot;
+    for(unsigned int i = 0; i < 4; ++i)
+    {
+        g_R.viewport[i] = snapshot.viewport[i];
+        g_R.stageOp[i] = snapshot.stageOp[i];
+        g_R.stageArg1[i] = snapshot.stageArg1[i];
+        g_R.stageArg2[i] = snapshot.stageArg2[i];
+        g_R.stageAddressU[i] = snapshot.stageAddressU[i];
+        g_R.stageAddressV[i] = snapshot.stageAddressV[i];
+        g_R.stageMagFilter[i] = snapshot.stageMagFilter[i];
+        g_R.stageMinFilter[i] = snapshot.stageMinFilter[i];
+        // Re-resolve texture bindings by key: the entry the block captured
+        // may have been evicted since; binding then falls back to white.
+        g_R.stageOverrideView[i] = VK_NULL_HANDLE;
+        g_R.stageTexture[i] = nullptr;
+        g_R.stageOverrideKey[i] = nullptr;
+        if(snapshot.stageRenderTargetKey[i] != nullptr)
+        {
+            for(unsigned int target = 0; target < g_R.rtTargetCount; ++target)
+            {
+                if(g_R.rtTargets[target].key ==
+                   snapshot.stageRenderTargetKey[i])
+                {
+                    g_R.stageOverrideView[i] = g_R.rtTargets[target].view;
+                    g_R.stageOverrideKey[i] = snapshot.stageRenderTargetKey[i];
+                    break;
+                }
+            }
+        }
+        else if(snapshot.stageTextureKey[i] != nullptr)
+        {
+            for(auto& entry : g_R.textures)
+            {
+                if(entry.key == snapshot.stageTextureKey[i])
+                {
+                    entry.lastUse = ++g_R.textureUseCounter;
+                    g_R.stageTexture[i] = &entry;
+                    break;
+                }
+            }
+        }
+    }
+    g_R.depthEnable = snapshot.depthEnable;
+    g_R.depthWrite = snapshot.depthWrite;
+    g_R.depthFunc = snapshot.depthFunc;
+    g_R.blendEnable = snapshot.blendEnable;
+    g_R.sourceBlend = snapshot.sourceBlend;
+    g_R.destinationBlend = snapshot.destinationBlend;
+    g_R.blendOp = snapshot.blendOp;
+    g_R.colorWriteMask = snapshot.colorWriteMask;
+    g_R.cullMode = snapshot.cullMode;
+    g_R.alphaTest = snapshot.alphaTest;
+    g_R.alphaRef = snapshot.alphaRef;
+    g_R.alphaFunc = snapshot.alphaFunc;
+    g_R.useCombiner = snapshot.useCombiner;
+    memcpy(g_R.lastConfig, snapshot.lastConfig, sizeof(g_R.lastConfig));
+    // Restoring bypasses the Set* dedupe paths; force the next draw to
+    // record a fresh combiner ring slot for the restored revision.
+    g_R.combinerDirty = true;
+    return true;
+}
+
+void RendererStateBlockDelete(unsigned int token)
+{
+    RendererLockScope rendererLock;
+    for(auto& block : g_StateBlocks)
+    {
+        if(block.used && block.token == token)
+        {
+            block.used = false;
+            block.token = 0;
+            return;
+        }
+    }
+}
+
+bool RendererRebindStageTexture(unsigned int stage, void* key)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || stage >= 4)
+    {
+        return false;
+    }
+    g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+    g_R.stageOverrideKey[stage] = nullptr;
+    if(key == nullptr)
+    {
+        g_R.stageTexture[stage] = nullptr;
+        return true;
+    }
+    for(auto& entry : g_R.textures)
+    {
+        if(entry.key == key)
+        {
+            entry.lastUse = ++g_R.textureUseCounter;
+            g_R.stageTexture[stage] = &entry;
+            return true;
+        }
+    }
+    // Not cached (evicted since the block captured it): bind white.
+    g_R.stageTexture[stage] = nullptr;
+    return false;
 }
 
 bool RendererHasPendingFrame()

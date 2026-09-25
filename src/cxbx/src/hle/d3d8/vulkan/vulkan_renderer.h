@@ -141,6 +141,24 @@ bool RendererCopyToSwapchain(std::uint64_t swapchainImage,
                              unsigned int imageHeight,
                              std::uint64_t acquireSemaphore);
 
+// P6 state blocks: capture/restore the guest-visible renderer state under a
+// caller-chosen token (the host d3d8 state-block token; 0 is rejected).
+// Capture stores a full snapshot (raster/depth/alpha, texture-stage state
+// and bindings, combiner definition and constants, viewport); apply restores
+// it. Texture bindings restore by cache key: a binding whose upload was
+// evicted since the capture binds white until the next real SetTexture.
+// Returns false when the render path is inactive or the token is unknown
+// (delete is always a no-op success).
+bool RendererStateBlockCapture(unsigned int token);
+bool RendererStateBlockApply(unsigned int token);
+void RendererStateBlockDelete(unsigned int token);
+
+// Rebinds a cached texture upload to a stage without re-uploading (state
+// block replay; the cache holds the content the block captured). Unbinds
+// the stage for a null key. Returns false when the key is not in the cache;
+// the stage then binds white.
+bool RendererRebindStageTexture(unsigned int stage, void* key);
+
 bool RendererHasPendingFrame();
 
 // Submits the pending batch (final step before the backend copies the

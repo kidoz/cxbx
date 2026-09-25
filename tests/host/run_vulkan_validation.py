@@ -21,6 +21,7 @@ SCENARIOS = (
     "sampling",
     "descriptors",
     "raster",
+    "state_block",
     "present",
     "overlay",
 )
