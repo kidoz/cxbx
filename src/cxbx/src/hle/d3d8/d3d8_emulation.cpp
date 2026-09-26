@@ -14923,10 +14923,167 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
     if(cxbx::d3d8::HostBackendRenders())
     {
         // P2 render path: pretransformed FVF draws go into the backend
-        // target. Only XYZRHW streams (optional diffuse) are supported in
-        // this phase; other layouts are dropped by the backend with a
-        // one-time warning.
-        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
+        // target. XYZRHW streams (optional diffuse) feed the backend
+        // directly. Fixed-function XYZ streams transform CPU-side through
+        // the composite WORLD*VIEW*PROJECTION and the live viewport (Xbox
+        // starts with fixed-function lighting disabled; lit FVF draws keep
+        // the drop until lighting is modeled).
+        unsigned int DiffuseOffset = 0xFFFFFFFFu;
+        unsigned int DrawPrimitiveCount = PrimitiveCount;
+        const void* DrawData = pVertexStreamZeroData;
+        unsigned int DrawStride = VertexStreamZeroStride;
+        static unsigned char s_TransformedVertices[EMU_IM_MAXVERTS * 20];
+        bool transformed = false;
+
+        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) != 0)
+        {
+            DiffuseOffset =
+                (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
+        }
+        else if((g_EmuCurrentFvf & D3DFVF_XYZ) != 0 &&
+                g_pD3DDevice8 != NULL)
+        {
+            DWORD lighting = 0;
+            g_pD3DDevice8->GetRenderState(XTL::D3DRS_LIGHTING, &lighting);
+            if(lighting != 0)
+            {
+                static LONG litWarned = 0;
+                if(InterlockedIncrement(&litWarned) <= 5)
+                {
+                    EmuWarning("DrawVerticesUP fixed-function lighting is "
+                               "not modeled under the Vulkan render path "
+                               "(fvf=0x%.08lX); draw dropped",
+                               g_EmuCurrentFvf);
+                }
+                EmuSwapFS(); // XBox FS
+                return;
+            }
+            if(VertexCount > EMU_IM_MAXVERTS)
+            {
+                static LONG countWarned = 0;
+                if(InterlockedIncrement(&countWarned) <= 5)
+                {
+                    EmuWarning("DrawVerticesUP fixed-function transform "
+                               "rejected (count=%lu > %d)",
+                               static_cast<unsigned long>(VertexCount),
+                               EMU_IM_MAXVERTS);
+                }
+                EmuSwapFS(); // XBox FS
+                return;
+            }
+
+            // The host shadow carries the live guest transform and viewport
+            // state (both forwarded on write).
+            XTL::D3DMATRIX world = {};
+            XTL::D3DMATRIX view = {};
+            XTL::D3DMATRIX projection = {};
+            XTL::D3DVIEWPORT8 viewport = {};
+            g_pD3DDevice8->GetTransform(
+                static_cast<XTL::D3DTRANSFORMSTATETYPE>(256), &world);
+            g_pD3DDevice8->GetTransform(XTL::D3DTS_VIEW, &view);
+            g_pD3DDevice8->GetTransform(XTL::D3DTS_PROJECTION, &projection);
+            g_pD3DDevice8->GetViewport(&viewport);
+
+            // Composite row-vector transform: clip = v * WORLD * VIEW * PROJ.
+            float composite[4][4] = {};
+            const XTL::D3DMATRIX* chain[2] = { &view, &projection };
+            const XTL::D3DMATRIX* stage = &world;
+            for(int stageIndex = 0; stageIndex < 2; ++stageIndex)
+            {
+                const XTL::D3DMATRIX* next = chain[stageIndex];
+                float result[4][4] = {};
+                for(int row = 0; row < 4; ++row)
+                {
+                    for(int col = 0; col < 4; ++col)
+                    {
+                        float sum = 0.0f;
+                        for(int k = 0; k < 4; ++k)
+                        {
+                            sum += stage->m[row][k] * next->m[k][col];
+                        }
+                        result[row][col] = sum;
+                    }
+                }
+                memcpy(composite, result, sizeof(composite));
+                stage = reinterpret_cast<const XTL::D3DMATRIX*>(composite);
+            }
+
+            // Source diffuse position within the guest FVF: XYZ, then
+            // NORMAL, then POINTSIZE, then DIFFUSE.
+            unsigned int sourceDiffuse = 12;
+            if((g_EmuCurrentFvf & D3DFVF_NORMAL) != 0)
+            {
+                sourceDiffuse += 12;
+            }
+            if((g_EmuCurrentFvf & D3DFVF_PSIZE) != 0)
+            {
+                sourceDiffuse += 4;
+            }
+            const bool hasDiffuse = (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0;
+
+            const unsigned char* source =
+                static_cast<const unsigned char*>(pVertexStreamZeroData);
+            for(UINT vertex = 0; vertex < VertexCount; ++vertex)
+            {
+                const BYTE* in = source + static_cast<size_t>(vertex) * VertexStreamZeroStride;
+                float x = 0.0f;
+                float y = 0.0f;
+                float z = 0.0f;
+                memcpy(&x, in, sizeof(x));
+                memcpy(&y, in + 4, sizeof(y));
+                memcpy(&z, in + 8, sizeof(z));
+
+                const float clip[4] = {
+                    x * composite[0][0] + y * composite[1][0] +
+                        z * composite[2][0] + composite[3][0],
+                    x * composite[0][1] + y * composite[1][1] +
+                        z * composite[2][1] + composite[3][1],
+                    x * composite[0][2] + y * composite[1][2] +
+                        z * composite[2][2] + composite[3][2],
+                    x * composite[0][3] + y * composite[1][3] +
+                        z * composite[2][3] + composite[3][3],
+                };
+                float w = clip[3];
+                if(w < 1e-8f && w > -1e-8f)
+                {
+                    w = w < 0.0f ? -1e-8f : 1e-8f;
+                }
+                const float ndcX = clip[0] / w;
+                const float ndcY = clip[1] / w;
+                const float ndcZ = clip[2] / w;
+                // D3D viewport mapping (y flips from NDC's up-positive to
+                // the framebuffer's down-positive pixels).
+                const float screenX =
+                    static_cast<float>(viewport.X) +
+                    (ndcX + 1.0f) * static_cast<float>(viewport.Width) / 2.0f;
+                const float screenY =
+                    static_cast<float>(viewport.Y) +
+                    (1.0f - ndcY) * static_cast<float>(viewport.Height) / 2.0f;
+                const float screenZ =
+                    viewport.MinZ +
+                    ndcZ * (viewport.MaxZ - viewport.MinZ);
+
+                unsigned char* out =
+                    s_TransformedVertices + static_cast<size_t>(vertex) * 20;
+                memcpy(out, &screenX, sizeof(screenX));
+                memcpy(out + 4, &screenY, sizeof(screenY));
+                memcpy(out + 8, &screenZ, sizeof(screenZ));
+                const float rhw = 1.0f / w;
+                memcpy(out + 12, &rhw, sizeof(rhw));
+                DWORD diffuse = 0;
+                if(hasDiffuse)
+                {
+                    memcpy(&diffuse, in + sourceDiffuse, sizeof(diffuse));
+                }
+                memcpy(out + 16, &diffuse, sizeof(diffuse));
+            }
+
+            DrawData = s_TransformedVertices;
+            DrawStride = 20;
+            DiffuseOffset = hasDiffuse ? 16u : 0xFFFFFFFFu;
+            transformed = true;
+        }
+        else
         {
             static LONG fvfWarned = 0;
             if(InterlockedIncrement(&fvfWarned) <= 5)
@@ -14938,44 +15095,40 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
             EmuSwapFS(); // XBox FS
             return;
         }
-        const unsigned int DiffuseOffset =
-            (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
-        unsigned int DrawPrimitiveCount = PrimitiveCount;
-        const void* DrawData = pVertexStreamZeroData;
-        unsigned int DrawStride = VertexStreamZeroStride;
         if(PrimitiveType == 8) // quad list: expand each quad to two triangles
         {
             static unsigned char s_QuadExpand[EMU_IM_MAXVERTS * 3 / 2 * 64];
-            if(VertexStreamZeroStride > 64 ||
+            if(DrawStride > 64 ||
                VertexCount > EMU_IM_MAXVERTS ||
                VertexCount % 4 != 0)
             {
                 EmuWarning("DrawVerticesUP quad expansion rejected "
                            "(stride=%lu count=%lu)",
-                           static_cast<unsigned long>(VertexStreamZeroStride),
+                           static_cast<unsigned long>(DrawStride),
                            static_cast<unsigned long>(VertexCount));
                 EmuSwapFS(); // XBox FS
                 return;
             }
             const unsigned char* src =
-                static_cast<const unsigned char*>(pVertexStreamZeroData);
+                static_cast<const unsigned char*>(DrawData);
             unsigned char* dst = s_QuadExpand;
             for(UINT quad = 0; quad < VertexCount / 4; ++quad)
             {
                 static const UINT quadIndices[6] = { 0, 1, 2, 0, 2, 3 };
                 for(UINT k = 0; k < 6; ++k)
                 {
-                    memcpy(dst, src + static_cast<size_t>(quad * 4 + quadIndices[k]) * VertexStreamZeroStride,
-                           VertexStreamZeroStride);
-                    dst += VertexStreamZeroStride;
+                    memcpy(dst, src + static_cast<size_t>(quad * 4 + quadIndices[k]) * DrawStride,
+                           DrawStride);
+                    dst += DrawStride;
                 }
             }
             DrawPrimitiveCount = VertexCount / 2; // 6 verts per quad -> 2 tris
             DrawData = s_QuadExpand;
-            DrawStride = VertexStreamZeroStride;
+            DrawStride = DrawStride;
         }
         const unsigned int TexCoordOffset =
-            (g_EmuCurrentFvf & D3DFVF_TEX1) != 0
+            !transformed &&
+                    (g_EmuCurrentFvf & D3DFVF_TEX1) != 0
                 ? (DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u)
                 : 0xFFFFFFFFu;
         cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
