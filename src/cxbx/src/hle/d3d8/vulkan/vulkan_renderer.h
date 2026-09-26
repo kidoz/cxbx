@@ -159,6 +159,15 @@ void RendererStateBlockDelete(unsigned int token);
 // the stage then binds white.
 bool RendererRebindStageTexture(unsigned int stage, void* key);
 
+// P6 resource lifetime: drops backend state for a released host resource.
+// The host d3d8 object is gone, so its pointer can be recycled by a new
+// texture/surface at any time; cached uploads or registry entries keyed by
+// it must not survive. Unknown keys are ignored. Pending GPU work is
+// submitted before destruction, and stage bindings referencing the dropped
+// resources revert to the white dummy / main target.
+void RendererReleaseTexture(void* key);
+void RendererReleaseRenderTarget(void* key);
+
 bool RendererHasPendingFrame();
 
 // Submits the pending batch (final step before the backend copies the

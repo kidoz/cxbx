@@ -544,7 +544,7 @@ if not build_host_asan
     include_directories : include_directories('../../src/cxbx/src/hle/d3d8'),
     dependencies : [cxbx_hle_d3d8_vulkan_dep, meson.get_compiler('cpp').find_library('user32')],
   )
-  foreach scenario : ['vertex', 'index', 'target', 'combiner', 'combiner_logic', 'depth', 'sampling', 'descriptors', 'raster', 'state_block', 'present', 'overlay']
+  foreach scenario : ['vertex', 'index', 'target', 'combiner', 'combiner_logic', 'depth', 'sampling', 'descriptors', 'raster', 'state_block', 'lifetime', 'present', 'overlay']
     test('host-vulkan-' + scenario, host_vulkan_renderer_test,
       args : [scenario], suite : 'vulkan-gpu', timeout : 30, is_parallel : false)
   endforeach

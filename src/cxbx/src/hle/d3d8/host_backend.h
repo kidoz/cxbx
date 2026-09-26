@@ -179,6 +179,13 @@ void HostBackendSetRenderTarget(void* key, unsigned int width,
                                 unsigned int height);
 bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key);
 
+// P6 resource lifetime: the host d3d8 texture/surface was released, so its
+// pointer can be recycled by a new resource at any time. The backend drops
+// cached uploads and registry entries keyed by that pointer. No-ops when
+// the render path is inactive; unknown keys are ignored.
+void HostBackendReleaseTexture(void* hostTexture);
+void HostBackendReleaseRenderTarget(void* key);
+
 // Copies the render target into dst (row pitch in bytes) for backbuffer
 // reads. Returns false when the render path is not active.
 bool HostBackendReadFrame(void* dst, unsigned int pitch);

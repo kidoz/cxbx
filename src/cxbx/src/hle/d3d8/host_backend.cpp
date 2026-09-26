@@ -431,6 +431,22 @@ bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key)
     return vulkan::RendererSetStageRenderTargetTexture(stage, key);
 }
 
+void HostBackendReleaseTexture(void* hostTexture)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererReleaseTexture(hostTexture);
+    }
+}
+
+void HostBackendReleaseRenderTarget(void* key)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererReleaseRenderTarget(key);
+    }
+}
+
 void HostBackendSetPixelShader(const std::uint32_t* def60)
 {
     if(HostBackendRenders())

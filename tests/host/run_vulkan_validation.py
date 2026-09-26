@@ -22,6 +22,7 @@ SCENARIOS = (
     "descriptors",
     "raster",
     "state_block",
+    "lifetime",
     "present",
     "overlay",
 )

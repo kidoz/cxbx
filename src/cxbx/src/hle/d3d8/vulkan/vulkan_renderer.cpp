@@ -1181,6 +1181,38 @@ void DestroyTextureEntry(RendererTexture* texture, bool unbind = true)
     *texture = {};
 }
 
+// Destroys one render-target registry entry's Vulkan resources. Callers
+// must have submitted pending GPU work and cleared stage overrides and the
+// current-target index themselves.
+void DestroyRenderTargetEntry(RTEntry& entry)
+{
+    if(entry.view != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(g_R.device, entry.view, nullptr);
+    }
+    if(entry.image != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(g_R.device, entry.image, nullptr);
+    }
+    if(entry.memory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, entry.memory, nullptr);
+    }
+    if(entry.depthView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(g_R.device, entry.depthView, nullptr);
+    }
+    if(entry.depthImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(g_R.device, entry.depthImage, nullptr);
+    }
+    if(entry.depthMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, entry.depthMemory, nullptr);
+    }
+    entry = {};
+}
+
 VkSampler SamplerFor(unsigned int stage)
 {
     // d3d8 values normalize to their defaults when never set.
@@ -1875,31 +1907,7 @@ void RendererShutdown()
     DestroyTextureEntry(&g_R.overlayTexture);
     for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
     {
-        RTEntry& entry = g_R.rtTargets[i];
-        if(entry.view != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(g_R.device, entry.view, nullptr);
-        }
-        if(entry.image != VK_NULL_HANDLE)
-        {
-            vkDestroyImage(g_R.device, entry.image, nullptr);
-        }
-        if(entry.memory != VK_NULL_HANDLE)
-        {
-            vkFreeMemory(g_R.device, entry.memory, nullptr);
-        }
-        if(entry.depthView != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(g_R.device, entry.depthView, nullptr);
-        }
-        if(entry.depthImage != VK_NULL_HANDLE)
-        {
-            vkDestroyImage(g_R.device, entry.depthImage, nullptr);
-        }
-        if(entry.depthMemory != VK_NULL_HANDLE)
-        {
-            vkFreeMemory(g_R.device, entry.depthMemory, nullptr);
-        }
+        DestroyRenderTargetEntry(g_R.rtTargets[i]);
     }
     g_R.rtTargetCount = 0;
     g_R.rtCurrent = -1;
@@ -2789,6 +2797,47 @@ void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
     {
         if(g_R.rtTargets[i].key == key)
         {
+            if(g_R.rtTargets[i].width != width ||
+               g_R.rtTargets[i].height != height)
+            {
+                // A recycled key with different geometry: drop the stale
+                // entry and create fresh (defends even if a release
+                // notification was missed).
+                if(!SubmitFrame())
+                {
+                    g_R.valid = false;
+                    return;
+                }
+                const VkImageView view = g_R.rtTargets[i].view;
+                for(unsigned int stage = 0; stage < 4; ++stage)
+                {
+                    if(g_R.stageOverrideView[stage] == view)
+                    {
+                        g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+                    }
+                    if(g_R.stageOverrideKey[stage] == key)
+                    {
+                        g_R.stageOverrideKey[stage] = nullptr;
+                    }
+                }
+                DestroyRenderTargetEntry(g_R.rtTargets[i]);
+                const bool wasCurrent = (g_R.rtCurrent == static_cast<int>(i));
+                const unsigned int last = g_R.rtTargetCount - 1;
+                if(i != last)
+                {
+                    g_R.rtTargets[i] = g_R.rtTargets[last];
+                    if(g_R.rtCurrent == static_cast<int>(last))
+                    {
+                        g_R.rtCurrent = static_cast<int>(i);
+                    }
+                }
+                g_R.rtTargetCount = last;
+                if(wasCurrent)
+                {
+                    g_R.rtCurrent = -1;
+                }
+                break;
+            }
             CloseRendering();
             g_R.rtCurrent = static_cast<int>(i);
             return;
@@ -3125,6 +3174,84 @@ bool RendererRebindStageTexture(unsigned int stage, void* key)
     // Not cached (evicted since the block captured it): bind white.
     g_R.stageTexture[stage] = nullptr;
     return false;
+}
+
+void RendererReleaseTexture(void* key)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || key == nullptr)
+    {
+        return;
+    }
+    for(auto& entry : g_R.textures)
+    {
+        if(entry.key == key && entry.image != VK_NULL_HANDLE)
+        {
+            // No recorded work may outlive the destroyed upload: submit
+            // first (the same discipline as eviction and growth).
+            if(!SubmitFrame())
+            {
+                g_R.valid = false;
+                return;
+            }
+            DestroyTextureEntry(&entry);
+        }
+    }
+}
+
+void RendererReleaseRenderTarget(void* key)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || key == nullptr)
+    {
+        return;
+    }
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        if(g_R.rtTargets[i].key != key)
+        {
+            continue;
+        }
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            return;
+        }
+        const VkImageView view = g_R.rtTargets[i].view;
+        // Stage override views referencing the destroyed target revert to
+        // the ordinary stage texture (the next bind re-resolves).
+        for(unsigned int stage = 0; stage < 4; ++stage)
+        {
+            if(g_R.stageOverrideView[stage] == view)
+            {
+                g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+            }
+            if(g_R.stageOverrideKey[stage] == key)
+            {
+                g_R.stageOverrideKey[stage] = nullptr;
+            }
+        }
+        DestroyRenderTargetEntry(g_R.rtTargets[i]);
+        // Keep the registry dense: move the last entry into the hole. A
+        // current-target index is fixed up before the released entry's
+        // fall-back to main is applied.
+        const bool wasCurrent = (g_R.rtCurrent == static_cast<int>(i));
+        const unsigned int last = g_R.rtTargetCount - 1;
+        if(i != last)
+        {
+            g_R.rtTargets[i] = g_R.rtTargets[last];
+            if(g_R.rtCurrent == static_cast<int>(last))
+            {
+                g_R.rtCurrent = static_cast<int>(i);
+            }
+        }
+        g_R.rtTargetCount = last;
+        if(wasCurrent)
+        {
+            g_R.rtCurrent = -1;
+        }
+        return;
+    }
 }
 
 bool RendererHasPendingFrame()

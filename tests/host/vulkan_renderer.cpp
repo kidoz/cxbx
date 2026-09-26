@@ -339,6 +339,51 @@ bool Run(const char* scenario)
         // stage-0 binding must sample the red texture (not the white dummy).
         return Draw(40, 8, 0xFFFFFFFFu) && Pixel(48, 16, Red);
     }
+    if(std::strcmp(scenario, "lifetime") == 0)
+    {
+        // P6 resource lifetime: a released host key must not serve stale
+        // cached content, and its registry entry must be gone.
+        int keyA = 0;
+        if(!vk::RendererSetTexture(0, &keyA, &Red, 4, 1, 1, 21) ||
+           !Draw(8, 8, 0xFFFFFFFFu) || !Pixel(16, 16, Red))
+        {
+            return false;
+        }
+        vk::RendererReleaseTexture(&keyA);
+        // The released key is no longer cached: a rebind binds white, not
+        // the red upload that existed before the release.
+        if(vk::RendererRebindStageTexture(0, &keyA))
+        {
+            return false;
+        }
+        if(!Draw(40, 8, 0xFFFFFFFFu) || !Pixel(48, 16, 0xFFFFFFu))
+        {
+            return false;
+        }
+        // A recycled pointer re-uploads fresh content normally.
+        if(!vk::RendererSetTexture(0, &keyA, &Blue, 4, 1, 1, 21) ||
+           !Draw(72, 8, 0xFFFFFFFFu) || !Pixel(80, 16, Blue))
+        {
+            return false;
+        }
+        // Render-target release: the registry entry and any stage override
+        // view referencing it are gone; sampling falls back to the
+        // ordinary stage texture (the white dummy here).
+        int rtKey = 0;
+        vk::RendererSetRenderTarget(&rtKey, 64, 64);
+        vk::RendererClear(1, Green, 1, 0);
+        vk::RendererSetRenderTarget(nullptr, 0, 0);
+        if(!vk::RendererSetStageRenderTargetTexture(0, &rtKey))
+        {
+            return false;
+        }
+        vk::RendererReleaseRenderTarget(&rtKey);
+        if(vk::RendererSetStageRenderTargetTexture(0, &rtKey))
+        {
+            return false;
+        }
+        return Draw(104, 8, 0xFFFFFFFFu) && Pixel(112, 16, 0xFFFFFFu);
+    }
     if(std::strcmp(scenario, "raster") == 0)
     {
         vk::RendererSetRasterState(19, 5); // SRCALPHA

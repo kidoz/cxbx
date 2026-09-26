@@ -9699,6 +9699,19 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
             EmuDiscardLinearTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
+            // Resource-lifetime parity: the host object is dying, so its
+            // pointer can be recycled by a new texture/surface at any time.
+            // The backend must drop cached uploads and registry entries
+            // keyed by that pointer (the same pointer identity SetTexture /
+            // SetRenderTarget forwarded).
+            if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_TEXTURE)
+            {
+                cxbx::d3d8::HostBackendReleaseTexture(pResource8);
+            }
+            else if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_SURFACE)
+            {
+                cxbx::d3d8::HostBackendReleaseRenderTarget(pResource8);
+            }
             if(EmuForgetOwnedGuestResource(pThis))
             {
                 delete pThis;
