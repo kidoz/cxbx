@@ -38,6 +38,7 @@ struct PresenterState
 {
     bool valid = false;
     bool presenting = false; // logged once on the first successful frame
+    bool debugUtils = false; // VK_EXT_debug_utils labels/object names active
     bool extentWarned = false;
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
@@ -355,7 +356,8 @@ bool EnsureStagingCapacity(VkDeviceSize needed)
 
 } // namespace
 
-bool Initialize(const void* nativeWindow, bool validationLayers)
+bool Initialize(const void* nativeWindow, bool validationLayers,
+                bool debugUtils)
 {
     g_ValidationErrors.store(0, std::memory_order_relaxed);
     if(nativeWindow == nullptr)
@@ -383,6 +385,8 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
     {
         extensionNames[extensionCount++] = name;
     }
+    g_Presenter.debugUtils = debugUtils;
+    bool debugUtilsActive = debugUtils;
 
     if(validationLayers)
     {
@@ -430,7 +434,7 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
     }
     volkLoadInstance(g_Presenter.instance);
 
-    if(validationLayers && layerCount != 0)
+    if(layerCount != 0)
     {
         VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
         messengerInfo.sType =
@@ -579,6 +583,15 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
         return false;
     }
     volkLoadDevice(g_Presenter.device);
+    if(g_Presenter.debugUtils && (vkSetDebugUtilsObjectNameEXT == nullptr ||
+                                  vkCmdBeginDebugUtilsLabelEXT == nullptr))
+    {
+        // 32-bit ICDs may not export the debug-utils entry points even when
+        // the extension is requested (the same x86 story as the validation
+        // layer); degrade to unlabeled captures instead of crashing.
+        printf("VULKAN| driver lacks debug-utils entry points; labels disabled\n");
+        g_Presenter.debugUtils = false;
+    }
     vkGetDeviceQueue(g_Presenter.device, queueFamily, 0, &g_Presenter.queue);
 
     // Bring the render target up with the presenter's surface extent; the
@@ -586,7 +599,7 @@ bool Initialize(const void* nativeWindow, bool validationLayers)
     // before the first draw.
     if(!RendererInitialize(g_Presenter.device, g_Presenter.physicalDevice,
                            g_Presenter.queue, queueFamily,
-                           640, 480))
+                           640, 480, debugUtilsActive))
     {
         printf("VULKAN| renderer init failed; present-only mode\n");
     }
@@ -871,7 +884,7 @@ void SetTargetSize(unsigned int width, unsigned int height)
     {
         if(!RendererInitialize(g_Presenter.device, g_Presenter.physicalDevice,
                                g_Presenter.queue, g_Presenter.queueFamily,
-                               width, height))
+                               width, height, g_Presenter.debugUtils))
         {
             printf("VULKAN| renderer init failed at target size %ux%u; "
                    "present-only mode\n",

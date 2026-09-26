@@ -167,10 +167,11 @@ void HostBackendInitialize(const void* nativeWindow)
     }
 
     const bool validate = EnvironmentFlagEnabled("CXBX_VULKAN_VALIDATE");
+    const bool debugUtils = EnvironmentFlagEnabled("CXBX_D3D_PERF_MARKERS");
     printf("VULKAN| CXBX_HOST_BACKEND=vulkan: presenter bring-up "
-           "(validation=%d)\n",
-           validate ? 1 : 0);
-    if(!vulkan::Initialize(nativeWindow, validate))
+           "(validation=%d debug-utils=%d)\n",
+           validate ? 1 : 0, debugUtils ? 1 : 0);
+    if(!vulkan::Initialize(nativeWindow, validate, debugUtils))
     {
         g_PresenterReady = false;
         printf("VULKAN| presenter bring-up failed; d3d8 remains the presenter\n");

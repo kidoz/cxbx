@@ -74,6 +74,11 @@ struct RendererState
     bool renderingActive = false;
     bool unsupportedLogged = false;
     bool textureFormatLogged = false;
+    // P7 tooling parity: VK_EXT_debug_utils labels/object names, mirroring
+    // the d3d8 flavor's CXBX_D3D_PERF_MARKERS events.
+    bool debugUtils = false;
+    unsigned int frameIndex = 0;
+    unsigned int frameDrawIndex = 0;
     unsigned int width = 640;
     unsigned int height = 480;
     float viewport[4] = { 0.0f, 0.0f, 640.0f, 480.0f };
@@ -571,6 +576,74 @@ void BarrierAfterTargetWrite()
         0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
+// P7 tooling parity: the d3d8 flavor's CXBX_D3D_PERF_MARKERS events (a
+// frame event opened at Swap, a marker per draw) as VK_EXT_debug_utils
+// command-buffer labels, so RenderDoc/apitrace captures over the native
+// backend are self-describing exactly like captures over DXVK.
+void BeginFrameLabel()
+{
+    if(!g_R.debugUtils || vkCmdBeginDebugUtilsLabelEXT == nullptr)
+    {
+        return;
+    }
+    char name[32];
+    snprintf(name, sizeof(name), "Frame %u", ++g_R.frameIndex);
+    VkDebugUtilsLabelEXT label = {};
+    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    label.pLabelName = name;
+    // The d3d8 frame-event color 0xFF4080FF (ARGB) as RGBA floats.
+    label.color[0] = 0.25f;
+    label.color[1] = 0.5f;
+    label.color[2] = 1.0f;
+    label.color[3] = 1.0f;
+    vkCmdBeginDebugUtilsLabelEXT(g_R.commandBuffer, &label);
+}
+
+void EndFrameLabel()
+{
+    if(g_R.debugUtils && vkCmdEndDebugUtilsLabelEXT != nullptr)
+    {
+        vkCmdEndDebugUtilsLabelEXT(g_R.commandBuffer);
+    }
+}
+
+void InsertDrawLabel()
+{
+    if(!g_R.debugUtils || vkCmdInsertDebugUtilsLabelEXT == nullptr)
+    {
+        return;
+    }
+    char name[32];
+    snprintf(name, sizeof(name), "draw %u", ++g_R.frameDrawIndex);
+    VkDebugUtilsLabelEXT label = {};
+    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    label.pLabelName = name;
+    // The d3d8 draw-marker color 0xFF00FF00 (ARGB) as RGBA floats.
+    label.color[0] = 0.0f;
+    label.color[1] = 1.0f;
+    label.color[2] = 0.0f;
+    label.color[3] = 1.0f;
+    vkCmdInsertDebugUtilsLabelEXT(g_R.commandBuffer, &label);
+}
+
+// Names major Vulkan objects so external captures identify them. String
+// arguments are literal call-site buffers; the extension copies them.
+void NameDebugObject(VkObjectType type, std::uint64_t handle,
+                     const char* name)
+{
+    if(!g_R.debugUtils || handle == 0 ||
+       vkSetDebugUtilsObjectNameEXT == nullptr)
+    {
+        return;
+    }
+    VkDebugUtilsObjectNameInfoEXT info = {};
+    info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    info.objectType = type;
+    info.objectHandle = handle;
+    info.pObjectName = name;
+    vkSetDebugUtilsObjectNameEXT(g_R.device, &info);
+}
+
 bool OpenFrame()
 {
     if(g_R.frameOpen)
@@ -591,6 +664,8 @@ bool OpenFrame()
     g_R.vertexCursor = 0;
     g_R.indexCursor = 0;
     g_R.textureCursor = 0;
+    g_R.frameDrawIndex = 0;
+    BeginFrameLabel();
     return true;
 }
 
@@ -655,6 +730,7 @@ bool SubmitFrame()
     // Publish attachment/clear writes for later submissions, including
     // readback and presentation copies that do not open a rendering instance.
     BarrierAfterTargetWrite();
+    EndFrameLabel();
     if(vkEndCommandBuffer(g_R.commandBuffer) != VK_SUCCESS)
     {
         printf("VULKAN| renderer command buffer end failed\n");
@@ -1045,6 +1121,12 @@ bool CreateRenderableTarget(void* key, unsigned int width, unsigned int height)
         entry.image = VK_NULL_HANDLE;
         return false;
     }
+    {
+        char name[32];
+        snprintf(name, sizeof(name), "cxbx rt %p", key);
+        NameDebugObject(VK_OBJECT_TYPE_IMAGE,
+                        static_cast<std::uint64_t>(entry.image), name);
+    }
 
     // One-shot transition to GENERAL (attachment + sampled + copy source).
     VkCommandBufferBeginInfo beginInfo = {};
@@ -1392,7 +1474,8 @@ bool EnsureIndexStaging(VkDeviceSize needed)
 
 bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
                         void* queueHandle, unsigned int queueFamily,
-                        unsigned int width, unsigned int height)
+                        unsigned int width, unsigned int height,
+                        bool debugUtils)
 {
     const VkDevice device = static_cast<VkDevice>(deviceHandle);
     const VkPhysicalDevice physicalDevice =
@@ -1403,6 +1486,7 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     g_R.physicalDevice = physicalDevice;
     g_R.queue = queue;
     g_R.queueFamily = queueFamily;
+    g_R.debugUtils = debugUtils;
     g_R.width = width != 0 ? width : 640;
     g_R.height = height != 0 ? height : 480;
     g_R.viewport[0] = 0.0f;
@@ -1444,6 +1528,9 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
         RendererShutdown();
         return false;
     }
+    NameDebugObject(VK_OBJECT_TYPE_IMAGE,
+                    static_cast<std::uint64_t>(g_R.target),
+                    "cxbx main target");
 
     VkImageViewCreateInfo viewInfo = {};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -2415,6 +2502,7 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     {
         return false;
     }
+    InsertDrawLabel();
     vkCmdDraw(g_R.commandBuffer, vertexCount, 1, 0, 0);
     return true;
 }
@@ -2477,6 +2565,7 @@ bool RendererDrawIndexed(unsigned int primitiveType,
     g_R.indexCursor = indexOffset + indexBytes;
     vkCmdBindIndexBuffer(g_R.commandBuffer, g_R.indexStaging, indexOffset,
                          VK_INDEX_TYPE_UINT16);
+    InsertDrawLabel();
     vkCmdDrawIndexed(g_R.commandBuffer, indexCount, 1, 0, vertexOffset, 0);
     return true;
 }
@@ -2649,6 +2738,12 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
             DestroyTextureEntry(entry);
             g_R.stageTexture[stage] = nullptr;
             return false;
+        }
+        {
+            char name[32];
+            snprintf(name, sizeof(name), "cxbx tex %p", key);
+            NameDebugObject(VK_OBJECT_TYPE_IMAGE,
+                            static_cast<std::uint64_t>(entry->image), name);
         }
         entry->lastUse = ++g_R.textureUseCounter;
     }

@@ -24,10 +24,14 @@ namespace vulkan
 // Creates the color target, sync objects, and the shared pipeline cache.
 // width/height follow the emulated device's backbuffer dimensions. The
 // device/queue/image handles are opaque Vulkan handles passed through
-// void* so this internal header needs no Vulkan declarations.
+// void* so this internal header needs no Vulkan declarations. debugUtils
+// mirrors the d3d8 flavor's CXBX_D3D_PERF_MARKERS: VK_EXT_debug_utils
+// frame/draw labels and object names make external captures
+// (RenderDoc/apitrace) self-describing; it requires the instance to have
+// the debug_utils extension enabled.
 bool RendererInitialize(void* device, void* physicalDevice, void* queue,
                         unsigned int queueFamily, unsigned int width,
-                        unsigned int height);
+                        unsigned int height, bool debugUtils);
 
 // Destroys renderer resources (device-level only; the caller owns the
 // device and destroys it after RendererShutdown).

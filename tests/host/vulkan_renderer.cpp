@@ -529,7 +529,8 @@ int main(int argc, char** argv)
     {
         return 1;
     }
-    const bool ready = vk::Initialize(window, true) && vk::RendererValid();
+    const bool ready =
+        vk::Initialize(window, true, true) && vk::RendererValid();
     const bool passed = ready && Run(argv[1]);
     vk::Shutdown();
     DestroyWindow(window);

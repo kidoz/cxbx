@@ -18,10 +18,13 @@ namespace vulkan
 // Creates the persistent presenter: Vulkan instance, Vulkan 1.3 physical
 // device, Win32 surface and swapchain on nativeWindow (a borrowed native
 // window handle), plus the upload staging and per-frame sync objects.
+// debugUtils enables VK_EXT_debug_utils (labels/object names) for
+// external captures, mirroring the d3d8 flavor's CXBX_D3D_PERF_MARKERS.
 // Everything is logged under the "VULKAN|" prefix. Returns true when the
 // presenter is ready to take Present frames; on false the caller stays with
 // the d3d8 presenter. Until Shutdown, the presenter owns no guest state.
-bool Initialize(const void* nativeWindow, bool validationLayers);
+bool Initialize(const void* nativeWindow, bool validationLayers,
+                bool debugUtils);
 
 // Uploads one full BGRA frame (top-left origin, pitch in bytes) into the
 // staging buffer, copies it into the acquired swapchain image, and queues a
