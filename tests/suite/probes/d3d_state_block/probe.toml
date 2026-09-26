@@ -1,0 +1,8 @@
+# XDK-toolchain probe (see xdk_smoke): exercises the D3D8 HLE state-block
+# path end-to-end -- Begin/End (recorded) and CaptureStateBlock (captured)
+# blocks applied after the recorded state was broken, with pixel readback.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
