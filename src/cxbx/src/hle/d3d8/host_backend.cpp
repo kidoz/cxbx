@@ -73,6 +73,27 @@ std::vector<RecordedStateBlock> g_RecordedBlocks;
 bool g_StateBlockOverflowLogged = false;
 bool g_StateBlockUnknownLogged = false;
 
+// P8 part 2, phase A: the backend-side state mirror. Pure device state the
+// HLE consults internally (the guest reads its own state arrays, so no
+// guest-visible Get wrapper depends on this). Recorded unconditionally from
+// the Set* forwards, the dedicated record entry points, and the state-block
+// replay; read with found-or-fallback semantics.
+struct StateMirror
+{
+    // Host render-state values; valid[i] set on first record.
+    unsigned int renderState[256] = {};
+    bool renderStateValid[256] = {};
+    // Host transform-state indices (the SetTransform wrapper records
+    // State < 256 after Xbox-to-host translation).
+    float transform[300][16] = {};
+    bool transformValid[300] = {};
+    // Full D3DVIEWPORT8 payload as six floats: X Y Width Height MinZ MaxZ.
+    float viewport[6] = {};
+    bool viewportValid = false;
+};
+
+StateMirror g_StateMirror;
+
 void RecordStateOp(RecordedStateOp::Kind kind, unsigned int a, unsigned int b,
                    unsigned int c = 0, void* key = nullptr)
 {
@@ -107,10 +128,10 @@ void ReplayRecordedOps(const std::vector<RecordedStateOp>& ops)
         switch(op.kind)
         {
             case RecordedStateOp::Kind::RasterState:
-                vulkan::RendererSetRasterState(op.a, op.b);
+                HostBackendSetRasterState(op.a, op.b);
                 break;
             case RecordedStateOp::Kind::DepthState:
-                vulkan::RendererSetDepthState(op.a, op.b);
+                HostBackendSetDepthState(op.a, op.b);
                 break;
             case RecordedStateOp::Kind::TextureOp:
                 vulkan::RendererSetTextureOp(op.a, op.b, op.c);
@@ -215,6 +236,27 @@ void HostBackendClear(unsigned int flags, unsigned int color, float z,
 
 void HostBackendSetDepthState(unsigned int type, unsigned int value)
 {
+    // The depth-test trio rides a dedicated forward (per-state wrappers
+    // bypass HostBackendSetRasterState); mirror it under the host render
+    // states the internal readers consult.
+    unsigned int renderState = 0;
+    if(type == 0)
+    {
+        renderState = 7; // D3DRS_ZENABLE
+    }
+    else if(type == 1)
+    {
+        renderState = 14; // D3DRS_ZWRITEENABLE
+    }
+    else if(type == 2)
+    {
+        renderState = 23; // D3DRS_ZFUNC
+    }
+    if(renderState != 0)
+    {
+        g_StateMirror.renderState[renderState] = value;
+        g_StateMirror.renderStateValid[renderState] = true;
+    }
     if(HostBackendRenders())
     {
         RecordStateOp(RecordedStateOp::Kind::DepthState, type, value);
@@ -224,11 +266,84 @@ void HostBackendSetDepthState(unsigned int type, unsigned int value)
 
 void HostBackendSetRasterState(unsigned int state, unsigned int value)
 {
+    if(state < 256)
+    {
+        g_StateMirror.renderState[state] = value;
+        g_StateMirror.renderStateValid[state] = true;
+    }
     if(HostBackendRenders())
     {
         RecordStateOp(RecordedStateOp::Kind::RasterState, state, value);
         vulkan::RendererSetRasterState(state, value);
     }
+}
+
+void HostBackendRecordRenderState(unsigned int state, unsigned int value)
+{
+    if(state < 256)
+    {
+        g_StateMirror.renderState[state] = value;
+        g_StateMirror.renderStateValid[state] = true;
+    }
+}
+
+bool HostBackendGetRenderState(unsigned int state, unsigned long* value)
+{
+    if(state >= 256 || !g_StateMirror.renderStateValid[state])
+    {
+        return false;
+    }
+    if(value != nullptr)
+    {
+        *value = g_StateMirror.renderState[state];
+    }
+    return true;
+}
+
+void HostBackendRecordTransform(unsigned int state, const float* matrix)
+{
+    if(state >= 300 || matrix == nullptr)
+    {
+        return;
+    }
+    memcpy(g_StateMirror.transform[state], matrix, sizeof(float) * 16);
+    g_StateMirror.transformValid[state] = true;
+}
+
+bool HostBackendGetTransform(unsigned int state, float* matrix)
+{
+    if(state >= 300 || !g_StateMirror.transformValid[state])
+    {
+        return false;
+    }
+    if(matrix != nullptr)
+    {
+        memcpy(matrix, g_StateMirror.transform[state], sizeof(float) * 16);
+    }
+    return true;
+}
+
+void HostBackendRecordViewport(const float* viewport)
+{
+    if(viewport == nullptr)
+    {
+        return;
+    }
+    memcpy(g_StateMirror.viewport, viewport, sizeof(float) * 6);
+    g_StateMirror.viewportValid = true;
+}
+
+bool HostBackendGetViewport(float* viewport)
+{
+    if(!g_StateMirror.viewportValid)
+    {
+        return false;
+    }
+    if(viewport != nullptr)
+    {
+        memcpy(viewport, g_StateMirror.viewport, sizeof(float) * 6);
+    }
+    return true;
 }
 
 void HostBackendStateBlockBegin()

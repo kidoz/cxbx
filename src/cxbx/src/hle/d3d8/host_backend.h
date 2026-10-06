@@ -154,6 +154,20 @@ void HostBackendSetDepthState(unsigned int type, unsigned int value);
 // culling), after Xbox-to-host enumeration conversion.
 void HostBackendSetRasterState(unsigned int state, unsigned int value);
 
+// P8 part 2, phase A: a backend-side mirror of the pure device state the
+// HLE used to consult on the host d3d8 shadow. The Set* forwards, the
+// dedicated record entry points below, and the state-block replay populate
+// it; the Get accessors report the mirrored value and false when the state
+// was never recorded (the caller then falls back to the host d3d8 shadow,
+// which still exists in both flavors today). Keys are the host render-state
+// enumeration and the host transform-state indices the callers already use.
+void HostBackendRecordRenderState(unsigned int state, unsigned int value);
+bool HostBackendGetRenderState(unsigned int state, unsigned long* value);
+void HostBackendRecordTransform(unsigned int state, const float* matrix);
+bool HostBackendGetTransform(unsigned int state, float* matrix);
+void HostBackendRecordViewport(const float* viewport);
+bool HostBackendGetViewport(float* viewport);
+
 // P6 state blocks: backend-side mirrors of the host d3d8 state-block tokens.
 // Begin/end record the backend-relevant state forwards made between them
 // (d3d8 recording semantics; the forwards still apply live), capture stores

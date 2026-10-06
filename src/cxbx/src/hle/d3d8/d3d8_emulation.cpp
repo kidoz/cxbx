@@ -3329,6 +3329,17 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport(
     // the call. (Same guard discipline as SetRenderTarget / Clear.)
     D3DVIEWPORT8 vp = *pViewport;
 
+    // Record the full viewport into the backend mirror (the CPU-fallback
+    // projection and the fixed-function draw path read it back).
+    {
+        const float recorded[6] = {
+            static_cast<float>(vp.X), static_cast<float>(vp.Y),
+            static_cast<float>(vp.Width), static_cast<float>(vp.Height),
+            vp.MinZ, vp.MaxZ
+        };
+        cxbx::d3d8::HostBackendRecordViewport(recorded);
+    }
+
     // P5: pretransformed draws map through the viewport inside the backend
     // shader, so the render path needs the live viewport.
     if(cxbx::d3d8::HostBackendRenders())
@@ -12029,6 +12040,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform(
         }
     }
     if(forwardTransform)
+    {
+        // Record the transformed state into the backend mirror (host
+        // transform indices; the fixed-function draw path reads it back).
+        if(pMatrix != NULL && State < 300)
+        {
+            cxbx::d3d8::HostBackendRecordTransform(
+                State, reinterpret_cast<const float*>(pMatrix));
+        }
         __try
         {
             g_pD3DDevice8->SetTransform(State, pMatrix);
@@ -12036,6 +12055,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform(
         __except(EXCEPTION_EXECUTE_HANDLER)
         {
         }
+    }
 
     EmuSwapFS(); // XBox FS
 
@@ -12097,7 +12117,12 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetTransform(
 
     State = EmuXB2PC_D3DTS(State);
 
-    g_pD3DDevice8->GetTransform(State, pMatrix);
+    if(pMatrix == NULL ||
+       !cxbx::d3d8::HostBackendGetTransform(State,
+                                            reinterpret_cast<float*>(pMatrix)))
+    {
+        g_pD3DDevice8->GetTransform(State, pMatrix);
+    }
 
     EmuSwapFS(); // XBox FS
 
@@ -12609,8 +12634,12 @@ static void EmuUpdateDeferredStates()
             g_pD3DDevice8->SetRenderState(D3DRS_WRAP0, dwConv);
         }
 
-        if(XTL::EmuD3DDeferredRenderState[10] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_LIGHTING, XTL::EmuD3DDeferredRenderState[10]);
+    if(XTL::EmuD3DDeferredRenderState[10] != X_D3DRS_UNK)
+    {
+        cxbx::d3d8::HostBackendRecordRenderState(D3DRS_LIGHTING,
+                                                 XTL::EmuD3DDeferredRenderState[10]);
+        g_pD3DDevice8->SetRenderState(D3DRS_LIGHTING, XTL::EmuD3DDeferredRenderState[10]);
+    }
 
         if(XTL::EmuD3DDeferredRenderState[11] != X_D3DRS_UNK)
             g_pD3DDevice8->SetRenderState(D3DRS_SPECULARENABLE, XTL::EmuD3DDeferredRenderState[11]);
@@ -13902,6 +13931,20 @@ static void EmuVshUnlockIndexBuffer(XTL::IDirect3DIndexBuffer8* buffer)
 
 static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport)
 {
+    // Backend mirror first (records every guest SetViewport); the host
+    // d3d8 shadow remains the fallback for a never-programmed viewport.
+    float recorded[6] = {};
+    if(viewport != NULL &&
+       cxbx::d3d8::HostBackendGetViewport(recorded))
+    {
+        viewport->X = static_cast<DWORD>(recorded[0]);
+        viewport->Y = static_cast<DWORD>(recorded[1]);
+        viewport->Width = static_cast<DWORD>(recorded[2]);
+        viewport->Height = static_cast<DWORD>(recorded[3]);
+        viewport->MinZ = recorded[4];
+        viewport->MaxZ = recorded[5];
+        return D3D_OK;
+    }
     __try
     {
         return g_pD3DDevice8->GetViewport(viewport);
@@ -13975,12 +14018,20 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             bool drawsToBackBuffer = false;
             __try
             {
-                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZENABLE, &zEnable);
-                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZFUNC, &zFunction);
-                g_pD3DDevice8->GetRenderState(XTL::D3DRS_CULLMODE, &cullMode);
-                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ALPHABLENDENABLE, &alphaBlend);
-                g_pD3DDevice8->GetRenderState(XTL::D3DRS_ALPHATESTENABLE, &alphaTest);
-                g_pD3DDevice8->GetRenderState(XTL::D3DRS_COLORWRITEENABLE, &colorWrite);
+                // Backend mirror first; the host d3d8 shadow is the
+                // fallback for a state nothing has recorded yet.
+                if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_ZENABLE, &zEnable))
+                    g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZENABLE, &zEnable);
+                if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_ZFUNC, &zFunction))
+                    g_pD3DDevice8->GetRenderState(XTL::D3DRS_ZFUNC, &zFunction);
+                if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_CULLMODE, &cullMode))
+                    g_pD3DDevice8->GetRenderState(XTL::D3DRS_CULLMODE, &cullMode);
+                if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_ALPHABLENDENABLE, &alphaBlend))
+                    g_pD3DDevice8->GetRenderState(XTL::D3DRS_ALPHABLENDENABLE, &alphaBlend);
+                if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_ALPHATESTENABLE, &alphaTest))
+                    g_pD3DDevice8->GetRenderState(XTL::D3DRS_ALPHATESTENABLE, &alphaTest);
+                if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_COLORWRITEENABLE, &colorWrite))
+                    g_pD3DDevice8->GetRenderState(XTL::D3DRS_COLORWRITEENABLE, &colorWrite);
                 XTL::IDirect3DSurface8* renderTarget = nullptr;
                 XTL::IDirect3DSurface8* backBuffer = nullptr;
                 if(SUCCEEDED(g_pD3DDevice8->GetRenderTarget(&renderTarget)) &&
@@ -14944,7 +14995,11 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
                 g_pD3DDevice8 != NULL)
         {
             DWORD lighting = 0;
-            g_pD3DDevice8->GetRenderState(XTL::D3DRS_LIGHTING, &lighting);
+            if(!cxbx::d3d8::HostBackendGetRenderState(XTL::D3DRS_LIGHTING,
+                                                      &lighting))
+            {
+                g_pD3DDevice8->GetRenderState(XTL::D3DRS_LIGHTING, &lighting);
+            }
             if(lighting != 0)
             {
                 static LONG litWarned = 0;
@@ -14978,11 +15033,40 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
             XTL::D3DMATRIX view = {};
             XTL::D3DMATRIX projection = {};
             XTL::D3DVIEWPORT8 viewport = {};
-            g_pD3DDevice8->GetTransform(
-                static_cast<XTL::D3DTRANSFORMSTATETYPE>(256), &world);
-            g_pD3DDevice8->GetTransform(XTL::D3DTS_VIEW, &view);
-            g_pD3DDevice8->GetTransform(XTL::D3DTS_PROJECTION, &projection);
-            g_pD3DDevice8->GetViewport(&viewport);
+            // Backend mirror first (the SetTransform/SetViewport forwards
+            // record); the host d3d8 shadow is the fallback.
+            if(!cxbx::d3d8::HostBackendGetTransform(
+                   256, reinterpret_cast<float*>(&world)))
+            {
+                g_pD3DDevice8->GetTransform(
+                    static_cast<XTL::D3DTRANSFORMSTATETYPE>(256), &world);
+            }
+            if(!cxbx::d3d8::HostBackendGetTransform(
+                   XTL::D3DTS_VIEW, reinterpret_cast<float*>(&view)))
+            {
+                g_pD3DDevice8->GetTransform(XTL::D3DTS_VIEW, &view);
+            }
+            if(!cxbx::d3d8::HostBackendGetTransform(
+                   XTL::D3DTS_PROJECTION, reinterpret_cast<float*>(&projection)))
+            {
+                g_pD3DDevice8->GetTransform(XTL::D3DTS_PROJECTION, &projection);
+            }
+            {
+                float recordedViewport[6] = {};
+                if(cxbx::d3d8::HostBackendGetViewport(recordedViewport))
+                {
+                    viewport.X = static_cast<DWORD>(recordedViewport[0]);
+                    viewport.Y = static_cast<DWORD>(recordedViewport[1]);
+                    viewport.Width = static_cast<DWORD>(recordedViewport[2]);
+                    viewport.Height = static_cast<DWORD>(recordedViewport[3]);
+                    viewport.MinZ = recordedViewport[4];
+                    viewport.MaxZ = recordedViewport[5];
+                }
+                else
+                {
+                    g_pD3DDevice8->GetViewport(&viewport);
+                }
+            }
 
             // Composite row-vector transform: clip = v * WORLD * VIEW * PROJ.
             float composite[4][4] = {};
