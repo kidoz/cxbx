@@ -9,6 +9,8 @@ Understand the reasoning behind the emulator's structure and subsystem boundarie
 - [Direct3D resources](direct3d.md): historical HLE resource-pointer strategies.
 - [Input](input.md): shared configuration and controller connection lifetimes.
 - [LTCG D3D8](ltcg-d3d8.md): historical findings about the limits of API interception.
+- [XACT HLE design](xact-hle.md): complete engine lifecycles, audio ownership,
+  and evidence needed to extend support.
 - [XMV architecture](xmv-architecture.md): native decode boundaries and evidence
   needed before replacing them.
 - [Title-debugging design](title-debugging.md): evidence collection, replay
