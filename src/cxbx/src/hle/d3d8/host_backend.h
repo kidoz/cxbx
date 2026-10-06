@@ -24,22 +24,18 @@ enum class HostBackendFlavor
     Vulkan,
 };
 
-// Pure mapping of a CXBX_HOST_BACKEND value to a backend flavor. Recognized
-// values are "d3d8" and "vulkan", case-insensitive. Null, empty, and
-// unrecognized values map to D3D8, the long-standing default, so a mistyped
-// override can never disable the working presenter. Header-inline so the
+// Pure mapping of a CXBX_HOST_BACKEND value to a backend flavor. P8 cutover:
+// the native Vulkan backend is the default, so null, empty, unrecognized,
+// and "vulkan" (case-insensitive) all select Vulkan; the explicit string
+// "d3d8" opts back into the legacy host-d3d8 presenter. Header-inline so the
 // contract test can compile this file without linking the backend.
 inline HostBackendFlavor HostBackendParseFlavor(const char* value)
 {
-    if(value == nullptr || value[0] == '\0')
+    if(value != nullptr && value[0] != '\0' && _stricmp(value, "d3d8") == 0)
     {
         return HostBackendFlavor::D3D8;
     }
-    if(_stricmp(value, "vulkan") == 0)
-    {
-        return HostBackendFlavor::Vulkan;
-    }
-    return HostBackendFlavor::D3D8;
+    return HostBackendFlavor::Vulkan;
 }
 
 // Reads CXBX_HOST_BACKEND through the Win32 environment API (launcher-provided

@@ -149,11 +149,12 @@ HostBackendFlavor HostBackendFlavorFromEnvironment()
     char value[16] = {};
     const DWORD length =
         GetEnvironmentVariableA("CXBX_HOST_BACKEND", value, sizeof(value));
-    if(length == 0 || length >= sizeof(value))
+    if(length >= sizeof(value))
     {
-        return HostBackendFlavor::D3D8;
+        // Overlong values are unrecognized by definition: default (Vulkan).
+        return HostBackendFlavor::Vulkan;
     }
-    return HostBackendParseFlavor(value);
+    return HostBackendParseFlavor(length == 0 ? nullptr : value);
 }
 
 void HostBackendInitialize(const void* nativeWindow)
@@ -168,8 +169,8 @@ void HostBackendInitialize(const void* nativeWindow)
 
     const bool validate = EnvironmentFlagEnabled("CXBX_VULKAN_VALIDATE");
     const bool debugUtils = EnvironmentFlagEnabled("CXBX_D3D_PERF_MARKERS");
-    printf("VULKAN| CXBX_HOST_BACKEND=vulkan: presenter bring-up "
-           "(validation=%d debug-utils=%d)\n",
+    printf("VULKAN| backend (default or CXBX_HOST_BACKEND=vulkan): presenter "
+           "bring-up (validation=%d debug-utils=%d)\n",
            validate ? 1 : 0, debugUtils ? 1 : 0);
     if(!vulkan::Initialize(nativeWindow, validate, debugUtils))
     {
