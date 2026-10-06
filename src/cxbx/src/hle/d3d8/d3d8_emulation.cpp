@@ -5935,6 +5935,71 @@ static void EmuNativeTextureForget(XTL::IDirect3DBaseTexture8* pHostTexture)
     }
 }
 
+// P8 part 2 slice B: the native byte container for vertex/index buffers,
+// the exact analogue of the texture container. Under the Vulkan flavor the
+// CPU-fallback draw paths read the container instead of host Lock(READONLY),
+// and title vertex-buffer locks write it in place. Keyed by the host buffer
+// pointer (vertex and index buffers share the registry); slice C re-keys on
+// the guest resource.
+struct EmuNativeBuffer
+{
+    void* pHostBuffer = nullptr;
+    std::vector<BYTE> Bytes;
+    UINT Size = 0;
+};
+static std::vector<EmuNativeBuffer> g_EmuNativeBuffers;
+
+static EmuNativeBuffer* EmuNativeBufferFind(void* pHostBuffer)
+{
+    for(auto& entry : g_EmuNativeBuffers)
+    {
+        if(entry.pHostBuffer == pHostBuffer)
+        {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+// Adopts an already-locked host buffer image as the container birth
+// content (the consumer lock paths and the Register fill sites).
+static void EmuNativeBufferAdopt(void* pHostBuffer, const void* pData,
+                                 UINT size)
+{
+    if(pData == nullptr || size == 0)
+    {
+        return;
+    }
+    for(auto& entry : g_EmuNativeBuffers)
+    {
+        if(entry.pHostBuffer == pHostBuffer)
+        {
+            entry.Bytes.assign(static_cast<const BYTE*>(pData),
+                               static_cast<const BYTE*>(pData) + size);
+            entry.Size = size;
+            return;
+        }
+    }
+    EmuNativeBuffer entry;
+    entry.pHostBuffer = pHostBuffer;
+    entry.Size = size;
+    entry.Bytes.assign(static_cast<const BYTE*>(pData),
+                       static_cast<const BYTE*>(pData) + size);
+    g_EmuNativeBuffers.push_back(std::move(entry));
+}
+
+static void EmuNativeBufferForget(void* pHostBuffer)
+{
+    for(std::size_t i = 0; i < g_EmuNativeBuffers.size(); ++i)
+    {
+        if(g_EmuNativeBuffers[i].pHostBuffer == pHostBuffer)
+        {
+            g_EmuNativeBuffers.erase(g_EmuNativeBuffers.begin() + i);
+            return;
+        }
+    }
+}
+
 static void EmuRefreshLinearTexture(XTL::IDirect3DBaseTexture8* pBaseTexture)
 {
     if(pBaseTexture == nullptr)
@@ -9007,6 +9072,14 @@ static HRESULT EmuResourceRegisterGuardedBody(
                         break;
                     }
 
+                    // Slice B: dual-write — the container mirrors the
+                    // registered bytes for the Vulkan flavor's reads.
+                    if(cxbx::d3d8::HostBackendRenders())
+                    {
+                        EmuNativeBufferAdopt(pResource->EmuVertexBuffer8,
+                                             pData, dwSize);
+                    }
+
                     pResource->EmuVertexBuffer8->Unlock();
 
                     pResource->Data = (ULONG)pData;
@@ -9076,6 +9149,13 @@ static HRESULT EmuResourceRegisterGuardedBody(
                         pResource->EmuIndexBuffer8 = 0;
                         pResource->Data = 0;
                         break;
+                    }
+
+                    // Slice B: dual-write — see the vertex-buffer branch.
+                    if(cxbx::d3d8::HostBackendRenders())
+                    {
+                        EmuNativeBufferAdopt(pResource->EmuIndexBuffer8,
+                                             pData, dwSize);
                     }
 
                     pResource->EmuIndexBuffer8->Unlock();
@@ -12253,6 +12333,9 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_GetTransform(
 }
 
 // ******************************************************************
+static HRESULT EmuVshLockVertexBuffer(XTL::X_D3DVertexBuffer* resource,
+                                      BYTE** data, UINT* byteSize);
+
 // * func: EmuIDirect3DVertexBuffer8_Lock
 // ******************************************************************
 VOID WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock(
@@ -12283,6 +12366,49 @@ VOID WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock(
 #endif
 
     IDirect3DVertexBuffer8* pVertexBuffer8 = ppVertexBuffer->EmuVertexBuffer8;
+
+    // Slice B: under the Vulkan flavor the title locks the container in
+    // place; the CPU-fallback reads read the same memory. The offset
+    // semantics are preserved by returning base + OffsetToLock.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        EmuNativeBuffer* native = EmuNativeBufferFind(pVertexBuffer8);
+        if(native == nullptr && pVertexBuffer8 != nullptr)
+        {
+            __try
+            {
+                XTL::D3DVERTEXBUFFER_DESC description = {
+                    XTL::D3DFMT_UNKNOWN, XTL::D3DRTYPE_VERTEXBUFFER, 0,
+                    XTL::D3DPOOL_DEFAULT, 0, 0
+                };
+                if(SUCCEEDED(pVertexBuffer8->GetDesc(&description)))
+                {
+                    BYTE* birth = nullptr;
+                    if(SUCCEEDED(pVertexBuffer8->Lock(0, 0, &birth,
+                                                      D3DLOCK_READONLY)))
+                    {
+                        EmuNativeBufferAdopt(pVertexBuffer8, birth,
+                                             description.Size);
+                        pVertexBuffer8->Unlock();
+                    }
+                }
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            native = EmuNativeBufferFind(pVertexBuffer8);
+        }
+        if(native != nullptr &&
+           OffsetToLock <= native->Size)
+        {
+            printf("BUFDBG| VB Lock container size=%u off=%u\n",
+                   native->Size, OffsetToLock);
+            *ppbData = native->Bytes.data() + OffsetToLock;
+            EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+    }
 
     HRESULT hRet = pVertexBuffer8->Lock(OffsetToLock, SizeToLock, ppbData, Flags);
     if(SUCCEEDED(hRet))
@@ -12323,6 +12449,22 @@ BYTE* WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock2(
 #endif
 
     IDirect3DVertexBuffer8* pVertexBuffer8 = ppVertexBuffer->EmuVertexBuffer8;
+
+    // Slice B: container write-in-place under the Vulkan flavor (the Lock
+    // wrapper above carries the birth logic).
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        BYTE* lockBits = nullptr;
+        UINT lockSize = 0;
+        if(EmuVshLockVertexBuffer(ppVertexBuffer, &lockBits, &lockSize) ==
+               D3D_OK &&
+           lockBits != nullptr)
+        {
+            EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
+            EmuSwapFS(); // XBox FS
+            return lockBits;
+        }
+    }
 
     BYTE* pbData = NULL;
 
@@ -13967,6 +14109,17 @@ struct EmuVshLockedStream
 
 static HRESULT EmuVshLockVertexBuffer(XTL::X_D3DVertexBuffer* resource, BYTE** data, UINT* byteSize)
 {
+    // Slice B: the container is the authoritative byte store under the
+    // Vulkan flavor; the host lock below doubles as its birth pull.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        if(EmuNativeBuffer* native = EmuNativeBufferFind(resource->EmuVertexBuffer8))
+        {
+            *data = native->Bytes.data();
+            *byteSize = native->Size;
+            return D3D_OK;
+        }
+    }
     __try
     {
         XTL::D3DVERTEXBUFFER_DESC description = {
@@ -13981,6 +14134,15 @@ static HRESULT EmuVshLockVertexBuffer(XTL::X_D3DVertexBuffer* resource, BYTE** d
         if(SUCCEEDED(result))
         {
             *byteSize = description.Size;
+            if(cxbx::d3d8::HostBackendRenders())
+            {
+                // BISECT: adopt disabled
+                if(false)
+                {
+                    EmuNativeBufferAdopt(resource->EmuVertexBuffer8, *data,
+                                         *byteSize);
+                }
+            }
         }
         return result;
     }
@@ -14034,6 +14196,17 @@ struct EmuVshLockedStreamsGuard
 
 static HRESULT EmuVshLockIndexBuffer(XTL::X_D3DIndexBuffer* resource, BYTE** data, UINT* byteSize)
 {
+    // Slice B: container-first under the Vulkan flavor (mirror of the
+    // vertex-buffer branch above).
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        if(EmuNativeBuffer* native = EmuNativeBufferFind(resource->EmuIndexBuffer8))
+        {
+            *data = native->Bytes.data();
+            *byteSize = native->Size;
+            return D3D_OK;
+        }
+    }
     __try
     {
         XTL::D3DINDEXBUFFER_DESC description = {
@@ -14048,6 +14221,15 @@ static HRESULT EmuVshLockIndexBuffer(XTL::X_D3DIndexBuffer* resource, BYTE** dat
         if(SUCCEEDED(result))
         {
             *byteSize = description.Size;
+            if(cxbx::d3d8::HostBackendRenders())
+            {
+                // BISECT: adopt disabled
+                if(false)
+                {
+                    EmuNativeBufferAdopt(resource->EmuIndexBuffer8, *data,
+                                         *byteSize);
+                }
+            }
         }
         return result;
     }
