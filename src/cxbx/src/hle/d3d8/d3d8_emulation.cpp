@@ -5833,6 +5833,108 @@ static void EmuCopyLinearTexture(XTL::IDirect3DTexture8* pTexture,
     }
 }
 
+// P8 part 2 slice A: the native pixel container. Under the Vulkan flavor
+// the container is the authoritative level-0 store: the mirror binds from
+// it without a host LockRect, title locks write it in place, the linear
+// refresh copies guest rows into it, and the swizzled commit unswizzles
+// level 0 into it. The d3d8 fallback flavor never consults it and keeps
+// today's host-texture paths. Keyed by the host texture pointer; slice C
+// re-keys on the guest resource when the host objects go away.
+struct EmuNativeTexture
+{
+    XTL::IDirect3DBaseTexture8* pHostTexture = nullptr;
+    std::vector<BYTE> Pixels; // level-0 texels, host-format byte layout
+    UINT Pitch = 0;
+    UINT Width = 0;
+    UINT Height = 0;
+    UINT HostFormat = 0;
+};
+static std::vector<EmuNativeTexture> g_EmuNativeTextures;
+
+static EmuNativeTexture* EmuNativeTextureFind(
+    XTL::IDirect3DBaseTexture8* pHostTexture)
+{
+    for(auto& entry : g_EmuNativeTextures)
+    {
+        if(entry.pHostTexture == pHostTexture)
+        {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+// Creates the container for pHostTexture when missing, pre-filling level 0
+// from the host texture so the first lock sees Register-time content.
+// Returns null when the host texture cannot be read.
+static EmuNativeTexture* EmuNativeTextureEnsure(
+    XTL::IDirect3DBaseTexture8* pHostTexture)
+{
+    if(EmuNativeTexture* existing = EmuNativeTextureFind(pHostTexture))
+    {
+        return existing;
+    }
+    XTL::IDirect3DTexture8* pTexture8 =
+        static_cast<XTL::IDirect3DTexture8*>(pHostTexture);
+    XTL::D3DSURFACE_DESC description = {};
+    if(FAILED(pTexture8->GetLevelDesc(0, &description)) ||
+       description.Width == 0 || description.Height == 0)
+    {
+        return nullptr;
+    }
+    XTL::D3DLOCKED_RECT locked = {};
+    if(FAILED(pTexture8->LockRect(0, &locked, NULL, D3DLOCK_READONLY)))
+    {
+        return nullptr;
+    }
+    EmuNativeTexture entry;
+    entry.pHostTexture = pHostTexture;
+    entry.Pitch = static_cast<UINT>(locked.Pitch);
+    entry.Width = description.Width;
+    entry.Height = description.Height;
+    entry.HostFormat = static_cast<UINT>(description.Format);
+    entry.Pixels.resize(static_cast<std::size_t>(entry.Pitch) * entry.Height);
+    memcpy(entry.Pixels.data(), locked.pBits, entry.Pixels.size());
+    pTexture8->UnlockRect(0);
+    g_EmuNativeTextures.push_back(std::move(entry));
+    return &g_EmuNativeTextures.back();
+}
+
+// Adopts an already-pulled level-0 image as the container birth content
+// (the mirror pull path; avoids a second host lock).
+static EmuNativeTexture* EmuNativeTextureAdopt(
+    XTL::IDirect3DBaseTexture8* pHostTexture, const void* pBits, UINT pitch,
+    UINT width, UINT height, UINT hostFormat)
+{
+    if(pBits == nullptr || pitch == 0 || width == 0 || height == 0)
+    {
+        return nullptr;
+    }
+    EmuNativeTexture entry;
+    entry.pHostTexture = pHostTexture;
+    entry.Pitch = pitch;
+    entry.Width = width;
+    entry.Height = height;
+    entry.HostFormat = hostFormat;
+    entry.Pixels.resize(static_cast<std::size_t>(pitch) * height);
+    memcpy(entry.Pixels.data(), pBits,
+           static_cast<std::size_t>(pitch) * height);
+    g_EmuNativeTextures.push_back(std::move(entry));
+    return &g_EmuNativeTextures.back();
+}
+
+static void EmuNativeTextureForget(XTL::IDirect3DBaseTexture8* pHostTexture)
+{
+    for(std::size_t i = 0; i < g_EmuNativeTextures.size(); ++i)
+    {
+        if(g_EmuNativeTextures[i].pHostTexture == pHostTexture)
+        {
+            g_EmuNativeTextures.erase(g_EmuNativeTextures.begin() + i);
+            return;
+        }
+    }
+}
+
 static void EmuRefreshLinearTexture(XTL::IDirect3DBaseTexture8* pBaseTexture)
 {
     if(pBaseTexture == nullptr)
@@ -5852,6 +5954,25 @@ static void EmuRefreshLinearTexture(XTL::IDirect3DBaseTexture8* pBaseTexture)
            !IsBadReadPtr(entry.pGuestData,
                          (size_t)entry.dwPitch * entry.dwHeight))
         {
+// Slice A: under the Vulkan flavor the refreshed rows land in the
+            // container (the mirror's source); the fallback copies into
+            // the host texture as today.
+            if(cxbx::d3d8::HostBackendRenders())
+            {
+                if(EmuNativeTexture* native = EmuNativeTextureEnsure(pBaseTexture))
+                {
+                    const DWORD rowBytes = entry.dwWidth * entry.dwBPP;
+                    for(DWORD y = 0; y < entry.dwHeight; ++y)
+                    {
+                        memcpy(native->Pixels.data() +
+                                   static_cast<std::size_t>(y) * native->Pitch,
+                               entry.pGuestData +
+                                   static_cast<std::size_t>(y) * entry.dwPitch,
+                               rowBytes);
+                    }
+                }
+                return;
+            }
             EmuCopyLinearTexture(static_cast<XTL::IDirect3DTexture8*>(pBaseTexture),
                                  entry.pGuestData, entry.dwPitch,
                                  entry.dwWidth, entry.dwHeight, entry.dwBPP);
