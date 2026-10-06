@@ -16,7 +16,7 @@ layout(push_constant) uniform DrawState
     uvec4 extra;
 } pc;
 layout(location = 0) in vec4 color;
-layout(location = 1) in vec2 texCoord;
+layout(location = 1) in vec4 texCoord[4];
 layout(location = 0) out vec4 outColor;
 
 vec4 constantColor(uint packed, uint mapping)
@@ -127,8 +127,18 @@ void writeColor(vec4 result)
 
 void main()
 {
-    vec4 sampled[4] = vec4[4](texture(textures[0], texCoord), texture(textures[1], texCoord),
-                              texture(textures[2], texCoord), texture(textures[3], texCoord));
+    // Stage i samples its own coordinate set with the D3D projective
+    // divide (st / q, q in the set's w). Legacy single-vec2 layouts leave
+    // the unused sets at (0,0,0,1), a neutral q of one.
+    vec2 stageTexCoord[4];
+    for(uint set = 0u; set < 4u; ++set)
+    {
+        float q = texCoord[set].w;
+        q = abs(q) < 1.0e-6 ? 1.0 : q;
+        stageTexCoord[set] = texCoord[set].xy / q;
+    }
+    vec4 sampled[4] = vec4[4](texture(textures[0], stageTexCoord[0]), texture(textures[1], stageTexCoord[1]),
+                              texture(textures[2], stageTexCoord[2]), texture(textures[3], stageTexCoord[3]));
     if(pc.extra.x == 0u)
     {
         vec4 current = color;

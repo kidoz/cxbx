@@ -61,9 +61,14 @@ void RendererSetRasterState(unsigned int state, unsigned int value);
 // float2 texcoord at texCoordOffset (0xFFFFFFFF = none). primitiveType uses
 // the host D3DPRIMITIVETYPE enumeration and primitiveCount follows
 // DrawPrimitiveUP semantics (converted to a vertex count internally).
+// texCoordSets selects the texcoord layout: 0 = the legacy single float2 at
+// texCoordOffset; 4 = four vec4 sets at texCoordOffset + 16*i with the
+// projective q in each set's w (the per-stage coordinates program shaders
+// write; the fragment samples stage i from set i).
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
-                    unsigned int diffuseOffset, unsigned int texCoordOffset);
+                    unsigned int diffuseOffset, unsigned int texCoordOffset,
+                    unsigned int texCoordSets);
 
 // Draws indexed vertices from a caller-pulled staging block: vertexData
 // holds vertexCount vertices (same layout rules as RendererDrawUP),
@@ -74,7 +79,8 @@ bool RendererDrawIndexed(unsigned int primitiveType, unsigned int primitiveCount
                          const void* vertexData, unsigned int vertexCount,
                          unsigned int stride, unsigned int diffuseOffset,
                          unsigned int texCoordOffset, const void* indexData,
-                         unsigned int indexCount, int vertexOffset);
+                         unsigned int indexCount, int vertexOffset,
+                         unsigned int texCoordSets);
 
 // Target dimensions for callers that stage readback shadows.
 unsigned int RendererTargetWidth();

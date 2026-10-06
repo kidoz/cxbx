@@ -46,7 +46,7 @@ constexpr unsigned int kMaxTextures = 48;
 constexpr unsigned int kMaxDescriptorSets = 512;
 constexpr unsigned int kCombinerSlotSize = 512;
 constexpr unsigned int kCombinerSlotCount = 16;
-using PipelineKey = std::array<unsigned int, 10>;
+using PipelineKey = std::array<unsigned int, 11>;
 
 // d3d8 texture-stage defaults (stage 0 MODULATEs, later stages disabled).
 constexpr unsigned int kDefaultColorOp = 4;    // D3DTOP_MODULATE
@@ -327,14 +327,15 @@ VkBlendFactor BlendFactor(unsigned int value)
 
 bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
                     unsigned int stride, bool hasDiffuse,
-                    unsigned int diffuseOffset, unsigned int texCoordOffset)
+                    unsigned int diffuseOffset, unsigned int texCoordOffset,
+                    unsigned int texCoordSets)
 {
     VkVertexInputBindingDescription binding = {};
     binding.binding = 0;
     binding.stride = stride;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attributes[3] = {};
+    VkVertexInputAttributeDescription attributes[6] = {};
     attributes[0].location = 0;
     attributes[0].binding = 0;
     attributes[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -350,13 +351,25 @@ bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
     }
     // The vertex shader always reads the texcoord; draws without one bind
     // offset 0, whose values are only consumed when a stage enables a
-    // TEXTURE argument (those draws always supply real texcoords).
-    attributes[attributeCount].location = 2;
-    attributes[attributeCount].binding = 0;
-    attributes[attributeCount].format = VK_FORMAT_R32G32_SFLOAT;
-    attributes[attributeCount].offset =
-        texCoordOffset != kNoTexCoord ? texCoordOffset : 0;
-    ++attributeCount;
+    // TEXTURE argument (those draws always supply real texcoords). Four-set
+    // layouts carry vec4 sets (projective q in w) at locations 2..5; the
+    // unused components of legacy single-vec2 layouts default to (0,0,0,1),
+    // which divides by a neutral q of one.
+    const VkFormat texcoordFormat =
+        texCoordSets == 4 ? VK_FORMAT_R32G32B32A32_SFLOAT
+                          : VK_FORMAT_R32G32_SFLOAT;
+    const unsigned int texcoordStride = texCoordSets == 4 ? 16u : 8u;
+    const unsigned int texcoordCount = texCoordSets == 4 ? 4u : 1u;
+    for(unsigned int set = 0; set < texcoordCount; ++set)
+    {
+        attributes[attributeCount].location = 2 + set;
+        attributes[attributeCount].binding = 0;
+        attributes[attributeCount].format = texcoordFormat;
+        attributes[attributeCount].offset =
+            (texCoordOffset != kNoTexCoord ? texCoordOffset : 0) +
+            set * texcoordStride;
+        ++attributeCount;
+    }
 
     VkPipelineVertexInputStateCreateInfo vertexInput = {};
     vertexInput.sType =
@@ -487,7 +500,8 @@ bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
 }
 
 VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
-                       unsigned int diffuseOffset, unsigned int texCoordOffset)
+                       unsigned int diffuseOffset, unsigned int texCoordOffset,
+                       unsigned int texCoordSets)
 {
     VkPrimitiveTopology topology;
     switch(primitiveType)
@@ -514,14 +528,14 @@ VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
     const PipelineKey key = { static_cast<unsigned int>(topology), stride,
                               diffuseOffset, texCoordOffset, g_R.blendEnable ? 1u : 0u,
                               g_R.sourceBlend, g_R.destinationBlend, g_R.blendOp,
-                              g_R.colorWriteMask, g_R.cullMode };
+                              g_R.colorWriteMask, g_R.cullMode, texCoordSets };
     auto found = g_R.pipelines.find(key);
     if(found != g_R.pipelines.end())
     {
         return found->second;
     }
     return CreatePipeline(key, topology, stride, diffuseOffset != kNoDiffuse,
-                          diffuseOffset, texCoordOffset)
+                          diffuseOffset, texCoordOffset, texCoordSets)
                ? g_R.pipelines[key]
                : VK_NULL_HANDLE;
 }
@@ -1671,11 +1685,14 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     // Push constants: vec4 viewport + uvec4 stageOp[4] (80 bytes), shared
     // by the vertex (viewport) and fragment (stage cascade) stages.
     VkPushConstantRange pushRanges[2] = {};
+    // The vertex SPIR-V declares the viewport plus the per-draw texcoord
+    // layout mode at 96 (one block, [0,100]). The fragment SPIR-V declares
+    // the full block over [0,96]. Two ranges, one per stage; the overlap in
+    // [0,96] is legal because the stages differ.
     pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRanges[0].offset = 0;
-    pushRanges[0].size = 16;
+    pushRanges[0].size = 100;
     pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    // The fragment SPIR-V declares the full block, including the viewport.
     pushRanges[1].offset = 0;
     pushRanges[1].size = 96;
 
@@ -2246,8 +2263,9 @@ void RendererSetRasterState(unsigned int state, unsigned int value)
 // of the vertex block in *outOffset.
 static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
                             unsigned int diffuseOffset,
-                            unsigned int texCoordOffset, const void* data,
-                            VkDeviceSize bytes, VkDeviceSize* outOffset)
+                            unsigned int texCoordOffset, unsigned int texCoordSets,
+                            const void* data, VkDeviceSize bytes,
+                            VkDeviceSize* outOffset)
 {
     if((stride < 16) || (diffuseOffset != kNoDiffuse && diffuseOffset + 4 > stride))
     {
@@ -2308,7 +2326,6 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     memcpy(static_cast<char*>(g_R.vertexMapped) + offset, data,
            static_cast<size_t>(bytes));
     g_R.vertexCursor = offset + bytes;
-
     if(!g_R.renderingActive)
     {
         const RTEntry* current =
@@ -2364,7 +2381,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     }
 
     VkPipeline pipeline = PipelineFor(primitiveType, stride, diffuseOffset,
-                                      texCoordOffset);
+                                      texCoordOffset, texCoordSets);
     if(pipeline == VK_NULL_HANDLE)
     {
         return false;
@@ -2390,6 +2407,9 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 16, g_R.viewport);
+    const std::uint32_t texCoordSetsPush = texCoordSets;
+    vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT, 96, 4, &texCoordSetsPush);
 
     // Fresh descriptor set per draw (pool resets after each frame submit):
     // the four stage textures plus the combiner-config UBO slot.
@@ -2455,8 +2475,11 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     stageConstants[16] = g_R.useCombiner ? 1u : 0u;
     stageConstants[17] = g_R.alphaTest ? g_R.alphaFunc : 8u;
     stageConstants[18] = g_R.alphaRef;
+    // The vertex range [0,100] overlaps these bytes, so the call's
+    // stageFlags must include the vertex stage as well.
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, 16, 80, stageConstants);
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       16, 80, stageConstants);
     vkCmdBindVertexBuffers(g_R.commandBuffer, 0, 1, &g_R.vertexStaging,
                            &offset);
     *outOffset = offset;
@@ -2465,7 +2488,8 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
 
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
-                    unsigned int diffuseOffset, unsigned int texCoordOffset)
+                    unsigned int diffuseOffset, unsigned int texCoordOffset,
+                    unsigned int texCoordSets)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid || data == nullptr || primitiveCount == 0 || stride == 0)
@@ -2497,7 +2521,8 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     }
     VkDeviceSize offset = 0;
     if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
-                        data, static_cast<VkDeviceSize>(stride) * vertexCount,
+                        texCoordSets, data,
+                        static_cast<VkDeviceSize>(stride) * vertexCount,
                         &offset))
     {
         return false;
@@ -2512,7 +2537,8 @@ bool RendererDrawIndexed(unsigned int primitiveType,
                          unsigned int vertexCount, unsigned int stride,
                          unsigned int diffuseOffset,
                          unsigned int texCoordOffset, const void* indexData,
-                         unsigned int indexCount, int vertexOffset)
+                         unsigned int indexCount, int vertexOffset,
+                         unsigned int texCoordSets)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid || vertexData == nullptr || indexData == nullptr ||
@@ -2553,7 +2579,7 @@ bool RendererDrawIndexed(unsigned int primitiveType,
     // RecordDrawState may itself submit on vertex/constant-ring exhaustion.
     VkDeviceSize offset = 0;
     if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
-                        vertexData,
+                        texCoordSets, vertexData,
                         static_cast<VkDeviceSize>(stride) * vertexCount,
                         &offset))
     {

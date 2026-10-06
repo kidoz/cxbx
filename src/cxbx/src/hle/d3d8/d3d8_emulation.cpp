@@ -8344,7 +8344,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                         cxbx::d3d8::HostBackendDrawUP(
                             D3DPT_TRIANGLELIST, n / 3, Tris,
                             sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/,
-                            20 /*u,v after diffuse*/);
+                            20 /*u,v after diffuse*/, 0);
                     }
                     else
                     {
@@ -8370,7 +8370,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                         cxbx::d3d8::HostBackendDrawUP(
                             PCPrim, PrimCount, g_EmuImVerts,
                             sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/,
-                            20 /*u,v after diffuse*/);
+                            20 /*u,v after diffuse*/, 0);
                     }
                     else
                     {
@@ -14235,7 +14235,7 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                 cxbx::d3d8::HostBackendDrawUP(primitiveType, primitiveCount,
                                               drawVertices,
                                               sizeof(EmuVshCpuVertex), 20,
-                                              28 /*texCoords[0]*/);
+                                              28 /*texCoords[0]*/, 4);
                 result = D3D_OK;
             }
             else
@@ -15133,7 +15133,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
                 : 0xFFFFFFFFu;
         cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
                                       DrawData, DrawStride, DiffuseOffset,
-                                      TexCoordOffset);
+                                      TexCoordOffset, 0);
         EmuD3DDrawPost();
         EmuSwapFS(); // XBox FS
         return;
@@ -15546,7 +15546,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
                 drawPrimitiveType, drawPrimitiveCount, vertexBytes,
                 drawVertexCount, streamBinding.stride, DiffuseOffset,
                 TexCoordOffset, drawIndices, indexCount,
-                static_cast<int>(indexBinding.baseVertex));
+                static_cast<int>(indexBinding.baseVertex), 0);
             EmuD3DDrawPost();
         }
         else

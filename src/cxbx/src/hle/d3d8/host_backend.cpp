@@ -337,12 +337,13 @@ void HostBackendStateBlockDelete(unsigned int token)
 void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
                        unsigned int diffuseOffset,
-                       unsigned int texCoordOffset)
+                       unsigned int texCoordOffset,
+                       unsigned int texCoordSets)
 {
     if(HostBackendRenders())
     {
         vulkan::RendererDrawUP(primitiveType, primitiveCount, data, stride,
-                               diffuseOffset, texCoordOffset);
+                               diffuseOffset, texCoordOffset, texCoordSets);
     }
 }
 
@@ -352,14 +353,14 @@ void HostBackendDrawIndexed(unsigned int primitiveType,
                             unsigned int stride, unsigned int diffuseOffset,
                             unsigned int texCoordOffset,
                             const void* indexData, unsigned int indexCount,
-                            int vertexOffset)
+                            int vertexOffset, unsigned int texCoordSets)
 {
     if(HostBackendRenders())
     {
         vulkan::RendererDrawIndexed(primitiveType, primitiveCount, vertexData,
                                     vertexCount, stride, diffuseOffset,
                                     texCoordOffset, indexData, indexCount,
-                                    vertexOffset);
+                                    vertexOffset, texCoordSets);
     }
 }
 

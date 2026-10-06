@@ -45,7 +45,8 @@ bool Draw(float x, float y, std::uint32_t color, float z = 0.5f)
 {
     const auto vertices = Quad(x, y, color, z);
     return vk::RendererDrawUP(4, 2, vertices.data(), sizeof(Vertex),
-                              offsetof(Vertex, color), offsetof(Vertex, u));
+                              offsetof(Vertex, color), offsetof(Vertex, u),
+                              0);
 }
 
 bool Pixel(unsigned int x, unsigned int y, std::uint32_t expected, bool checkAlpha = false,
@@ -92,7 +93,7 @@ bool Run(const char* scenario)
         }
         return vk::RendererDrawUP(4, static_cast<unsigned int>(vertices.size() / 3),
                                   vertices.data(), sizeof(Vertex), offsetof(Vertex, color),
-                                  NoAttribute) &&
+                                  NoAttribute, 0) &&
                Pixel(16, 16, Red) && Pixel(48, 16, Green);
     }
     if(std::strcmp(scenario, "index") == 0)
@@ -109,7 +110,7 @@ bool Run(const char* scenario)
         return Draw(8, 8, Red) &&
                vk::RendererDrawIndexed(4, static_cast<unsigned int>(indices.size() / 3),
                                        quad.data(), 6, sizeof(Vertex), offsetof(Vertex, color),
-                                       NoAttribute, indices.data(), static_cast<unsigned int>(indices.size()), 0) &&
+                                       NoAttribute, indices.data(), static_cast<unsigned int>(indices.size()), 0, 0) &&
                Pixel(16, 16, Red) && Pixel(48, 16, Green);
     }
     if(std::strcmp(scenario, "target") == 0)

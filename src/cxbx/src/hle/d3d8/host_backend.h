@@ -101,7 +101,8 @@ void HostBackendClear(unsigned int flags, unsigned int color, float z,
 void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
                        unsigned int diffuseOffset,
-                       unsigned int texCoordOffset);
+                       unsigned int texCoordOffset,
+                       unsigned int texCoordSets);
 
 // Draws indexed CPU vertices: same vertex layout rules as
 // HostBackendDrawUP with vertexCount vertices in the block, indexCount
@@ -115,7 +116,7 @@ void HostBackendDrawIndexed(unsigned int primitiveType,
                             unsigned int stride, unsigned int diffuseOffset,
                             unsigned int texCoordOffset,
                             const void* indexData, unsigned int indexCount,
-                            int vertexOffset);
+                            int vertexOffset, unsigned int texCoordSets);
 
 // Render target dimensions; false when the render path is not active.
 bool HostBackendTargetSize(unsigned int* width, unsigned int* height);
