@@ -36,6 +36,8 @@ and visibility threshold.
    with an XDK conformance probe where possible.
 
 To compare command streams and isolate state divergence without repeated
-title boots, [capture and compare NV2A execution](capture-nv2a.md).
+title boots, [capture an NV2A frame](capture-nv2a.md), then
+[compare the baseline and candidate](compare-nv2a-captures.md). For a single
+capture, [inspect state and pixel replay](inspect-nv2a-capture.md).
 See [Title-debugging design](../explanation/title-debugging.md) for rationale
 and planned tooling.

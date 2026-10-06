@@ -13,7 +13,9 @@ was previously spread across logs, draw dumps, and guest memory:
 - exact successful guest-memory reads made while processing the frame;
 - normalized scanout pixels and their expected CRC32.
 
-For commands and workflow, see [Capture and compare NV2A execution](../how-to/capture-nv2a.md).
+For procedures, use [capture and validation](../how-to/capture-nv2a.md),
+[comparison between runs](../how-to/compare-nv2a-captures.md), or
+[offline state and pixel inspection](../how-to/inspect-nv2a-capture.md).
 
 ## Capture controls
 
