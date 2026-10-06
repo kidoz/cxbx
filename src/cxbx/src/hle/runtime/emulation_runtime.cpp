@@ -7545,17 +7545,27 @@ struct EmuNv2aRasterVertex
 
 static EmuNv2aRasterVertex
 EmuNv2aBuildVertexProgramRasterVertex(
-    const EmuNv2aVertexProgramExecutionResult& VertexProgram)
+    const EmuNv2aVertexProgramExecutionResult& VertexProgram,
+    const cxbx::nv2a::PgraphTransformState& TransformState)
 {
     EmuNv2aRasterVertex Result{};
-    // NV2A vertex programs produce screen-space oPos directly. Host renderers
-    // convert it back to clip space only for their API; the software
-    // rasterizer consumes the native result as-is.
-    Result.Position = VertexProgram.Position;
-    Result.HomogeneousPosition = VertexProgram.Position;
+    // The program writes homogeneous clip-space oPos; the raster completes
+    // the transform exactly like the fixed-function path (divide, viewport
+    // scale, viewport offset -- the uniform pre-refactor projection the
+    // nv2a_vp probe pins). Program output that is already screen-space
+    // (w == 0, e.g. SS5's text layer) keeps the degenerate-w guard below.
     const float W = VertexProgram.Position[3];
-    Result.InverseW =
+    const float InvW =
         W > 1e-6f || W < -1e-6f ? 1.0f / W : 1.0f;
+    Result.Position[0] =
+        VertexProgram.Position[0] * InvW * TransformState.viewportScale[0] +
+        TransformState.viewportOffset[0];
+    Result.Position[1] =
+        VertexProgram.Position[1] * InvW * TransformState.viewportScale[1] +
+        TransformState.viewportOffset[1];
+    Result.Position[2] = VertexProgram.Position[2];
+    Result.HomogeneousPosition = VertexProgram.Position;
+    Result.InverseW = InvW;
     // A pass-through program that never writes oPos.w leaves it at zero, which
     // the rasterizer's homogeneous-w guard rejects -- dropping the primitive
     // and rendering nothing (Samurai Shodown V's screen-space text layer
@@ -9675,7 +9685,7 @@ static void EmuNv2aTransformVertexRange(const EmuNv2aTransformChunk* Ctx)
             }
             Vertex =
                 EmuNv2aBuildVertexProgramRasterVertex(
-                    VertexProgram);
+                    VertexProgram, TransformState);
         }
         else
         {

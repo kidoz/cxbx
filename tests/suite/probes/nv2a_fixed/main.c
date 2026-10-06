@@ -3,10 +3,10 @@
 // nv2a_fixed - NV2A software-rasterizer fixed-function transform. Where nv2a_vp
 // transforms object-space vertices with a vertex program, this exercises the
 // other front-end: the fixed-function pipeline. It stays in FIXED execution
-// mode (no program), uploads a composite matrix (object -> screen homogeneous),
-// and submits object-space vertices. The fixed-function composite matrix
-// already includes viewport scale; hardware divides by w and then adds the
-// viewport offset.
+// mode (no program), uploads a composite matrix (object -> clip homogeneous),
+// and submits object-space vertices. The raster applies the same viewport
+// transform to every front-end (divide, viewport scale, viewport offset), so
+// the composite matrix maps object space into clip space.
 //
 // The matrix folds scale(0.5,0.5,1) into the 640x480 viewport, so the object
 // triangle maps to A(320,120) B(480,360) C(160,360), centroid (320,280) --
@@ -84,15 +84,16 @@ int main(void)
     vb[2] = (Vertex){ -1.0f, -1.0f, 0.0f, 1.0f, BLUE };
     uint32_t vbAddr = (uint32_t)(uintptr_t)vb;
 
-    // Composite matrix, row-major: object -> screen homogeneous. The XDK
-    // fixed-function path folds viewport scale into these matrix columns.
+    // Composite matrix, row-major: object -> clip homogeneous. The XDK
+    // fixed-function path maps into clip space; the raster applies the
+    // viewport scale/offset registers afterwards.
     const float M[16] = {
-        160.0f,
+        0.5f,
         0.0f,
         0.0f,
         0.0f,
         0.0f,
-        -120.0f,
+        0.5f,
         0.0f,
         0.0f,
         0.0f,

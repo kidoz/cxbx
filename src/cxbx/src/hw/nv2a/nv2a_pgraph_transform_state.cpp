@@ -150,10 +150,17 @@ PgraphFixedFunctionTransformResult TransformPgraphFixedFunctionPosition(
     {
         result.inverseW = 1.0f / homogeneousW;
     }
+    // Hardware model (uniform for fixed-function, program, and pass-through
+    // output): homogeneous clip -> perspective divide -> viewport scale ->
+    // viewport offset. Probes pin this for clip-space inputs (nv2a_transform,
+    // nv2a_vp); nv2a_fixed folds the scale into its composite matrix and
+    // pushes an identity-ish clip mapping.
     result.screenPosition = {
-        result.homogeneousPosition[0] * result.inverseW +
+        result.homogeneousPosition[0] * result.inverseW *
+                state.viewportScale[0] +
             state.viewportOffset[0],
-        result.homogeneousPosition[1] * result.inverseW +
+        result.homogeneousPosition[1] * result.inverseW *
+                state.viewportScale[1] +
             state.viewportOffset[1],
         result.homogeneousPosition[2] * result.inverseW,
     };
