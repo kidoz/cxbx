@@ -1,4 +1,4 @@
-# LTCG D3D8 titles (D3D8LTCG) — why API-level HLE cannot work
+# Why LTCG D3D8 resists API interception
 
 [Explanation](README.md)
 
@@ -6,13 +6,14 @@ This is a historical investigation of API-level HLE failures, preserved for
 its design rationale. Its startup observations are not current compatibility
 claims; see [recorded compatibility results](../reference/compatibility.md).
 
-Findings from investigating why **Samurai Shodown V** does not run. They apply
-equally to **King of Fighters 2002** (same SNK engine, same XDK) and, in principle,
-to any title that links an LTCG library.
+The investigation began with startup failures in **Samurai Shodown V** and
+**King of Fighters 2002**, which use the same SNK engine and XDK. The examples
+below describe the linked images examined in that investigation. They explain
+why public API interception was insufficient for their inlined graphics code.
 
-The conclusion is negative and worth recording so nobody re-derives it: **a
-D3D8LTCG title cannot be emulated by patching D3D API entry points.** The work that
-established this was reverted; only the diagnostic tools were kept.
+Patching public D3D API entry points alone could not cover the graphics paths
+observed in these titles. Inlined code still relied on the guest's native device
+state. The experimental hooks were reverted; the diagnostic tools were kept.
 
 ## What an LTCG title is
 
@@ -37,17 +38,17 @@ Three consequences follow, in increasing order of severity.
 ## 1. Stock signatures do not resolve
 
 LTCG re-optimises every function body at link time, so signatures cut from the
-stock library miss. Only **13 of the 88** entries in `D3D8_1_0_5849` resolve
-against Samurai Shodown V, and every rendering-critical one (`CreateDevice`,
-`Swap`, `Clear`, `DrawVertices`, `SetTexture`, the whole `SetRenderState_*` family)
-is among the misses:
+stock library miss. In the investigation, only **13 of the 88** entries in
+`D3D8_1_0_5849` resolved against Samurai Shodown V. Every rendering-critical one
+(`CreateDevice`, `Swap`, `Clear`, `DrawVertices`, `SetTexture`, the whole
+`SetRenderState_*` family) was among the misses.
 
 The investigation used `tools/oovpa/scan_oovpa.py` to compare the stock
 5849 table against the title image.
 
-Note the title still declares `D3DX8`, and `EmuInit`'s `D3DX8 -> D3D8` alias
-therefore installs the *stock* table on it anyway. That is what leaves D3D
-**half hooked** today.
+The title also declared `D3DX8`, and `EmuInit`'s `D3DX8 -> D3D8` alias
+installed the *stock* table anyway. This left D3D partially hooked in the
+investigated build.
 
 Signatures can be recovered from the shipped images (the code is there, just
 re-optimised), and were: 58 of them, verified unique across both titles. That was
@@ -111,7 +112,7 @@ inlined path dereferences null. That is exactly the observed fault: `0xC0000005`
 
 Full API coverage does not help. It is not a coverage problem.
 
-## Where that leaves these titles
+## Why raw NV2A was pursued
 
 The guest's D3D is self-contained and already drives the hardware directly — the
 un-hooked title happily performs its own GPU bring-up (`MmClaimGpuInstanceMemory`,
@@ -120,21 +121,29 @@ NV2A semaphores). The tractable path is therefore **LLE**: let the guest's D3D r
 and emulate the NV2A, which is the direction the NV2A work in this tree is already
 taking.
 
-Two things to know when picking that up:
+The early investigation recorded two bring-up limitations:
 
-- Un-hooked, the title stalls in `BlockUntilVerticalBlank`. That stall is
+- Un-hooked, the title stalled in `BlockUntilVerticalBlank`. That stall was
   deliberate and documented (`EmuKrnl.cpp`, `EmuStartVblankThread`); vblank
-  synthesis is opt-in via `CXBX_ENABLE_VBLANK=1`. Enabling it lets the ISR fire but
+  synthesis was opt-in via `CXBX_ENABLE_VBLANK=1`. Enabling it let the ISR fire but
   did not by itself reach a draw.
-- With D3D fully un-hooked (`CXBX_HLE_SKIP=D3D8`) the title emits hundreds of NV2A
+- With D3D fully un-hooked (`CXBX_HLE_SKIP=D3D8`) the title emitted hundreds of NV2A
   state methods but **no draw methods** (no `SET_BEGIN_END`, `DRAW_ARRAYS` or
-  `INLINE_ARRAY`). It never reaches its render loop, so something in the device-init
-  handshake is still unsatisfied. That is the thread to pull.
+  `INLINE_ARRAY`). It had not reached its render loop, so the device-init
+  handshake was still incomplete in that run.
+
+Later bring-up progressed beyond these stalls: the compatibility record reports
+Samurai Shodown V reaching a live match on 2026-08-27. Use the
+[dated compatibility observations](../reference/compatibility.md) for title
+results and [title debugging](../how-to/debug-title.md) for current collection
+steps.
 
 ## Tools kept
 
 - `tools/oovpa/xbe_api_usage.py` — which library APIs does a title actually call?
-  Walks `.text -> library` call edges. **Run this first on any new title**; it is
-  the check that would have short-circuited this whole investigation.
+  Walks `.text -> library` call edges to identify calls that still have an
+  interception point.
 - `tools/oovpa/scan_oovpa.py` — which signatures of an existing OOVPA table resolve
   against an image (OK / MISS / MULTI). Useful for any title, not just LTCG.
+
+The [OOVPA tools guide](../../tools/oovpa/README.md) describes their usage.

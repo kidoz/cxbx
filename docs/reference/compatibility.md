@@ -3,7 +3,7 @@
 [Reference](README.md)
 
 This table records an automated boot smoke test performed on 2026-07-26 with
-the current local emulator build. Each game was observed for a nominal
+the emulator build used for that run. Each game was observed for a nominal
 30-second run unless it exited earlier. An unresponsive window could extend the
 wall-clock duration of the capture attempt.
 
