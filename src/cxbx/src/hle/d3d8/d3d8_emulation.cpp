@@ -3432,7 +3432,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetViewport(
                        vp.X, vp.Y, vp.Width, vp.Height, vp.MinZ, vp.MaxZ);
     }
 
-    HRESULT hRet = g_pD3DDevice8->SetViewport(&vp);
+    HRESULT hRet = D3D_OK;
+    if(!cxbx::d3d8::HostBackendRenders())
+        hRet = g_pD3DDevice8->SetViewport(&vp);
 
     EmuSwapFS(); // Xbox FS
 
@@ -4141,7 +4143,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetVertexShaderConstant(
             }
             if(!identical)
             {
-                hRet = g_pD3DDevice8->SetVertexShaderConstant(Reg, pData, Count);
+                // Slice C1: the Vulkan flavor's CPU fallback reads the
+                // HLE-side constant records; the host device copy is not
+                // consulted, so keep only the forward cache fresh.
+                const bool forwardToHost = !cxbx::d3d8::HostBackendRenders();
+                if(forwardToHost)
+                    hRet = g_pD3DDevice8->SetVertexShaderConstant(Reg, pData, Count);
+                else
+                    hRet = D3D_OK;
                 if(SUCCEEDED(hRet))
                 {
                     for(DWORD constant = 0; constant < Count; ++constant)
@@ -5294,7 +5303,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetPixelShader(
     if(Handle == 0)
     {
         g_bUsePixelShaderFallback = false;
-        g_pD3DDevice8->SetPixelShader(0);
+        if(!cxbx::d3d8::HostBackendRenders())
+            g_pD3DDevice8->SetPixelShader(0);
+    }
+    else if(cxbx::d3d8::HostBackendRenders())
+    {
+        // Slice C1: the combiner interpreter handles every translated
+        // definition; the host fixed-function fallback never runs.
+        g_bUsePixelShaderFallback = false;
     }
     else if((Handle & X_PIXELSHADER_FALLBACK_MASK) == X_PIXELSHADER_FALLBACK_MARKER ||
             useFixedFunctionBump ||
@@ -11423,7 +11439,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_FillMode(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_FILLMODE, EmuXB2PC_D3DFILLMODE(Value));
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_FILLMODE, EmuXB2PC_D3DFILLMODE(Value));
 
     EmuSwapFS(); // XBox FS
 
@@ -11585,8 +11602,10 @@ VOID __fastcall XTL::EmuIDirect3DDevice8_SetRenderState_Simple(
                 break;
         };
 
-        // Todo: Verify these params as you add support for them!
-        g_pD3DDevice8->SetRenderState((D3DRENDERSTATETYPE)State, Value);
+        // Slice C1: the Vulkan flavor's state reads are mirror-served; the
+        // host-device write is d3d8-flavor-only.
+        if(!cxbx::d3d8::HostBackendRenders())
+            g_pD3DDevice8->SetRenderState((D3DRENDERSTATETYPE)State, Value);
 
         cxbx::d3d8::HostBackendSetRasterState(State, Value);
 
@@ -11702,7 +11721,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_CullMode(
             EmuCleanup("EmuIDirect3DDevice8_SetRenderState_CullMode: Unknown Cullmode (%d)", Value);
     }
 
-    g_pD3DDevice8->SetRenderState(D3DRS_CULLMODE, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_CULLMODE, Value);
     cxbx::d3d8::HostBackendSetRasterState(D3DRS_CULLMODE, Value);
 
     EmuSwapFS(); // XBox FS
@@ -11732,7 +11752,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ZEnable(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_ZENABLE, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_ZENABLE, Value);
     cxbx::d3d8::HostBackendSetDepthState(0, Value);
 
     EmuSwapFS(); // XBox FS
@@ -12251,13 +12272,14 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTransform(
             cxbx::d3d8::HostBackendRecordTransform(
                 State, reinterpret_cast<const float*>(pMatrix));
         }
-        __try
-        {
-            g_pD3DDevice8->SetTransform(State, pMatrix);
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER)
-        {
-        }
+        if(!cxbx::d3d8::HostBackendRenders())
+            __try
+            {
+                g_pD3DDevice8->SetTransform(State, pMatrix);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
     }
 
     EmuSwapFS(); // XBox FS
@@ -12658,7 +12680,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetVertexShader(
     }
 
     HRESULT hRet = D3D_OK;
-    if(XTL::VshShaderRegistry::Current() == nullptr)
+    if(XTL::VshShaderRegistry::Current() == nullptr &&
+       !cxbx::d3d8::HostBackendRenders())
     {
         __try
         {
@@ -12754,7 +12777,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SelectVertexShader(
     }
 
     HRESULT hRet = D3D_OK;
-    if(XTL::VshShaderRegistry::Current() == nullptr)
+    if(XTL::VshShaderRegistry::Current() == nullptr &&
+       !cxbx::d3d8::HostBackendRenders())
     {
         __try
         {
@@ -12883,10 +12907,12 @@ static void EmuUpdateDeferredStates()
     if(EmuD3DDeferredRenderState != 0)
     {
         if(XTL::EmuD3DDeferredRenderState[0] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_FOGENABLE, XTL::EmuD3DDeferredRenderState[0]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_FOGENABLE, XTL::EmuD3DDeferredRenderState[0]);
 
         if(XTL::EmuD3DDeferredRenderState[1] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_FOGTABLEMODE, XTL::EmuD3DDeferredRenderState[1]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_FOGTABLEMODE, XTL::EmuD3DDeferredRenderState[1]);
 
         if(XTL::EmuD3DDeferredRenderState[6] != X_D3DRS_UNK)
         {
@@ -12896,48 +12922,61 @@ static void EmuUpdateDeferredStates()
             dwConv |= (XTL::EmuD3DDeferredRenderState[6] & 0x00001000) ? D3DWRAP_V : 0;
             dwConv |= (XTL::EmuD3DDeferredRenderState[6] & 0x00100000) ? D3DWRAP_W : 0;
 
-            g_pD3DDevice8->SetRenderState(D3DRS_WRAP0, dwConv);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_WRAP0, dwConv);
         }
 
     if(XTL::EmuD3DDeferredRenderState[10] != X_D3DRS_UNK)
     {
         cxbx::d3d8::HostBackendRecordRenderState(D3DRS_LIGHTING,
                                                  XTL::EmuD3DDeferredRenderState[10]);
-        g_pD3DDevice8->SetRenderState(D3DRS_LIGHTING, XTL::EmuD3DDeferredRenderState[10]);
+        if(!cxbx::d3d8::HostBackendRenders())
+            g_pD3DDevice8->SetRenderState(D3DRS_LIGHTING, XTL::EmuD3DDeferredRenderState[10]);
     }
 
         if(XTL::EmuD3DDeferredRenderState[11] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_SPECULARENABLE, XTL::EmuD3DDeferredRenderState[11]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_SPECULARENABLE, XTL::EmuD3DDeferredRenderState[11]);
 
         if(XTL::EmuD3DDeferredRenderState[20] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, XTL::EmuD3DDeferredRenderState[20]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, XTL::EmuD3DDeferredRenderState[20]);
 
         if(XTL::EmuD3DDeferredRenderState[23] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_AMBIENT, XTL::EmuD3DDeferredRenderState[23]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_AMBIENT, XTL::EmuD3DDeferredRenderState[23]);
 
         if(XTL::EmuD3DDeferredRenderState[24] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSIZE, XTL::EmuD3DDeferredRenderState[24]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSIZE, XTL::EmuD3DDeferredRenderState[24]);
 
         if(XTL::EmuD3DDeferredRenderState[25] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSIZE_MIN, XTL::EmuD3DDeferredRenderState[25]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSIZE_MIN, XTL::EmuD3DDeferredRenderState[25]);
 
         if(XTL::EmuD3DDeferredRenderState[26] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSPRITEENABLE, XTL::EmuD3DDeferredRenderState[26]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSPRITEENABLE, XTL::EmuD3DDeferredRenderState[26]);
 
         if(XTL::EmuD3DDeferredRenderState[27] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALEENABLE, XTL::EmuD3DDeferredRenderState[27]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALEENABLE, XTL::EmuD3DDeferredRenderState[27]);
 
         if(XTL::EmuD3DDeferredRenderState[28] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALE_A, XTL::EmuD3DDeferredRenderState[28]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALE_A, XTL::EmuD3DDeferredRenderState[28]);
 
         if(XTL::EmuD3DDeferredRenderState[29] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALE_B, XTL::EmuD3DDeferredRenderState[29]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALE_B, XTL::EmuD3DDeferredRenderState[29]);
 
         if(XTL::EmuD3DDeferredRenderState[30] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALE_C, XTL::EmuD3DDeferredRenderState[30]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_POINTSCALE_C, XTL::EmuD3DDeferredRenderState[30]);
 
         if(XTL::EmuD3DDeferredRenderState[33] != X_D3DRS_UNK)
-            g_pD3DDevice8->SetRenderState(D3DRS_PATCHSEGMENTS, XTL::EmuD3DDeferredRenderState[33]);
+            if(!cxbx::d3d8::HostBackendRenders())
+                g_pD3DDevice8->SetRenderState(D3DRS_PATCHSEGMENTS, XTL::EmuD3DDeferredRenderState[33]);
 
         /** To check for unhandled RenderStates
         for(int v=0;v<117-82;v++)
@@ -12966,7 +13005,8 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ADDRESSU, pCur[0]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSU, pCur[0]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSU, pCur[0]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 0, pCur[0]);
             }
 
@@ -12976,7 +13016,8 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ADDRESSV, pCur[1]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSV, pCur[1]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSV, pCur[1]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 1, pCur[1]);
             }
 
@@ -12986,7 +13027,8 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ADDRESSW, pCur[2]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSW, pCur[2]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSW, pCur[2]);
             }
 
             if(pCur[3] != X_D3DTSS_UNK)
@@ -12995,7 +13037,8 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAGFILTER, pCur[3]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAGFILTER, pCur[3]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAGFILTER, pCur[3]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 2, pCur[3]);
             }
 
@@ -13005,7 +13048,8 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MINFILTER, pCur[4]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MINFILTER, pCur[4]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MINFILTER, pCur[4]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 3, pCur[4]);
             }
 
@@ -13015,20 +13059,24 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MIPFILTER, pCur[5]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPFILTER, pCur[5]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPFILTER, pCur[5]);
             }
 
             if(pCur[6] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
 
             if(pCur[7] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
 
             if(pCur[8] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
 
             // TODO: Use a lookup table, this is not always a 1:1 map
             if(pCur[12] != X_D3DTSS_UNK)
@@ -13037,25 +13085,29 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("(Temporarily) Unsupported D3DTSS_ALPHAOP Value (%d)", pCur[12]);
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLOROP, pCur[12]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLOROP, pCur[12]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLOROP, pCur[12]);
                 cxbx::d3d8::HostBackendSetTextureOp(v, 0, pCur[12]);
             }
 
             if(pCur[13] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
 
             if(pCur[14] != X_D3DTSS_UNK)
             {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG1, pCur[14]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG1, pCur[14]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG1, pCur[14]);
                 cxbx::d3d8::HostBackendSetTextureOp(v, 1, pCur[14]);
             }
 
             if(pCur[15] != X_D3DTSS_UNK)
             {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG2, pCur[15]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG2, pCur[15]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG2, pCur[15]);
                 cxbx::d3d8::HostBackendSetTextureOp(v, 2, pCur[15]);
             }
 
@@ -13066,32 +13118,39 @@ static void EmuUpdateDeferredStates()
                     EmuCleanup("(Temporarily) Unsupported D3DTSS_ALPHAOP Value (%d)", pCur[16]);
 
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAOP, pCur[16]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAOP, pCur[16]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAOP, pCur[16]);
             }
 
             if(pCur[17] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
 
             if(pCur[18] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
 
             if(pCur[19] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
 
             if(pCur[20] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
 
             if(pCur[21] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
 
             if(pCur[29] != X_D3DTSS_UNK)
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
-                g_pD3DDevice8->SetTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
+                if(!cxbx::d3d8::HostBackendRenders())
+                    g_pD3DDevice8->SetTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
 
             /** To check for unhandled texture stage state changes
             for(int r=0;r<32;r++)
@@ -13145,7 +13204,8 @@ static void EmuUpdateDeferredStates()
                     ::DWORD dwValue;
 
                     g_pD3DDevice8->GetTextureStageState(3, (D3DTEXTURESTAGESTATETYPE)v, &dwValue);
-                    g_pD3DDevice8->SetTextureStageState(0, (D3DTEXTURESTAGESTATETYPE)v, dwValue);
+                    if(!cxbx::d3d8::HostBackendRenders())
+                        g_pD3DDevice8->SetTextureStageState(0, (D3DTEXTURESTAGESTATETYPE)v, dwValue);
                 }
             }
         }
