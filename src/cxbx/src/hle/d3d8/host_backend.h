@@ -167,6 +167,13 @@ void HostBackendRecordTransform(unsigned int state, const float* matrix);
 bool HostBackendGetTransform(unsigned int state, float* matrix);
 void HostBackendRecordViewport(const float* viewport);
 bool HostBackendGetViewport(float* viewport);
+// Texture-stage state keyed by the stage (0..3) and the host D3DTEXTURESTAGE-
+// STATETYPE enum the applies and readers share. Populated by the deferred
+// apply loop and the immediate TexCoordIndex variant.
+void HostBackendRecordTextureStageState(unsigned int stage, unsigned int type,
+                                        unsigned int value);
+bool HostBackendGetTextureStageState(unsigned int stage, unsigned int type,
+                                     unsigned long* value);
 
 // P6 state blocks: backend-side mirrors of the host d3d8 state-block tokens.
 // Begin/end record the backend-relevant state forwards made between them

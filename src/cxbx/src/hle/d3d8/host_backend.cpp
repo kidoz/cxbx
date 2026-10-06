@@ -90,6 +90,9 @@ struct StateMirror
     // Full D3DVIEWPORT8 payload as six floats: X Y Width Height MinZ MaxZ.
     float viewport[6] = {};
     bool viewportValid = false;
+    // Texture-stage state keyed [stage][host D3DTSS enum].
+    unsigned int textureState[4][32] = {};
+    bool textureStateValid[4][32] = {};
 };
 
 StateMirror g_StateMirror;
@@ -342,6 +345,31 @@ bool HostBackendGetViewport(float* viewport)
     if(viewport != nullptr)
     {
         memcpy(viewport, g_StateMirror.viewport, sizeof(float) * 6);
+    }
+    return true;
+}
+
+void HostBackendRecordTextureStageState(unsigned int stage, unsigned int type,
+                                        unsigned int value)
+{
+    if(stage >= 4 || type >= 32)
+    {
+        return;
+    }
+    g_StateMirror.textureState[stage][type] = value;
+    g_StateMirror.textureStateValid[stage][type] = true;
+}
+
+bool HostBackendGetTextureStageState(unsigned int stage, unsigned int type,
+                                     unsigned long* value)
+{
+    if(stage >= 4 || type >= 32 || !g_StateMirror.textureStateValid[stage][type])
+    {
+        return false;
+    }
+    if(value != nullptr)
+    {
+        *value = g_StateMirror.textureState[stage][type];
     }
     return true;
 }

@@ -11072,6 +11072,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_TexCoordIndex(
     if(Value > 0x00030000)
         EmuCleanup("EmuIDirect3DDevice8_SetTextureState_TexCoordIndex: Unknown TexCoordIndex Value (0x%.08X)", Value);
 
+    cxbx::d3d8::HostBackendRecordTextureStageState(
+        Stage, D3DTSS_TEXCOORDINDEX, Value);
     g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_TEXCOORDINDEX, Value);
 
     EmuSwapFS(); // XBox FS
@@ -12700,6 +12702,7 @@ static void EmuUpdateDeferredStates()
                 if(pCur[0] == 5)
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ADDRESSU, pCur[0]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSU, pCur[0]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 0, pCur[0]);
             }
@@ -12709,6 +12712,7 @@ static void EmuUpdateDeferredStates()
                 if(pCur[1] == 5)
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ADDRESSV, pCur[1]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSV, pCur[1]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 1, pCur[1]);
             }
@@ -12718,6 +12722,7 @@ static void EmuUpdateDeferredStates()
                 if(pCur[2] == 5)
                     EmuCleanup("ClampToEdge is unsupported (temporarily)");
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ADDRESSW, pCur[2]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ADDRESSW, pCur[2]);
             }
 
@@ -12726,6 +12731,7 @@ static void EmuUpdateDeferredStates()
                 if(pCur[3] == 4)
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAGFILTER, pCur[3]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAGFILTER, pCur[3]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 2, pCur[3]);
             }
@@ -12735,6 +12741,7 @@ static void EmuUpdateDeferredStates()
                 if(pCur[4] == 4)
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MINFILTER, pCur[4]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MINFILTER, pCur[4]);
                 cxbx::d3d8::HostBackendSetSamplerState(v, 3, pCur[4]);
             }
@@ -12744,16 +12751,20 @@ static void EmuUpdateDeferredStates()
                 if(pCur[5] == 4)
                     EmuCleanup("QuinCunx is unsupported (temporarily)");
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MIPFILTER, pCur[5]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPFILTER, pCur[5]);
             }
 
             if(pCur[6] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
 
             if(pCur[7] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
 
             if(pCur[8] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
 
             // TODO: Use a lookup table, this is not always a 1:1 map
@@ -12762,21 +12773,25 @@ static void EmuUpdateDeferredStates()
                 if(pCur[12] > 12)
                     EmuCleanup("(Temporarily) Unsupported D3DTSS_ALPHAOP Value (%d)", pCur[12]);
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLOROP, pCur[12]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLOROP, pCur[12]);
                 cxbx::d3d8::HostBackendSetTextureOp(v, 0, pCur[12]);
             }
 
             if(pCur[13] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
 
             if(pCur[14] != X_D3DTSS_UNK)
             {
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG1, pCur[14]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG1, pCur[14]);
                 cxbx::d3d8::HostBackendSetTextureOp(v, 1, pCur[14]);
             }
 
             if(pCur[15] != X_D3DTSS_UNK)
             {
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG2, pCur[15]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG2, pCur[15]);
                 cxbx::d3d8::HostBackendSetTextureOp(v, 2, pCur[15]);
             }
@@ -12787,25 +12802,32 @@ static void EmuUpdateDeferredStates()
                 if(pCur[16] > 12)
                     EmuCleanup("(Temporarily) Unsupported D3DTSS_ALPHAOP Value (%d)", pCur[16]);
 
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAOP, pCur[16]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAOP, pCur[16]);
             }
 
             if(pCur[17] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
 
             if(pCur[18] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
 
             if(pCur[19] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
 
             if(pCur[20] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
 
             if(pCur[21] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
 
             if(pCur[29] != X_D3DTSS_UNK)
+                cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
                 g_pD3DDevice8->SetTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
 
             /** To check for unhandled texture stage state changes
@@ -14158,8 +14180,13 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             stage0Texture->Release();
         }
         DWORD texCoordIndexState = 0;
-        const HRESULT texCoordIndexResult = g_pD3DDevice8->GetTextureStageState(
-            0, XTL::D3DTSS_TEXCOORDINDEX, &texCoordIndexState);
+        const HRESULT texCoordIndexResult =
+            cxbx::d3d8::HostBackendGetTextureStageState(
+                0, XTL::D3DTSS_TEXCOORDINDEX,
+                reinterpret_cast<unsigned long*>(&texCoordIndexState))
+                ? D3D_OK
+                : g_pD3DDevice8->GetTextureStageState(
+                    0, XTL::D3DTSS_TEXCOORDINDEX, &texCoordIndexState);
         const DWORD texCoordIndex = texCoordIndexState & 0xFFFFu;
         bool texCoordsFinite = SUCCEEDED(texCoordIndexResult) && texCoordIndex < 4;
         bool texCoordsVary = false;
