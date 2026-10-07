@@ -14643,9 +14643,10 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
                                 projectedVertices[vertex].texCoords[stage], textureMode);
                         }
                     }
-                    g_pD3DDevice8->SetTextureStageState(
-                        stage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS,
-                        XTL::D3DTTFF_DISABLE);
+                    if(!cxbx::d3d8::HostBackendRenders())
+                        g_pD3DDevice8->SetTextureStageState(
+                            stage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS,
+                            XTL::D3DTTFF_DISABLE);
                 }
                 drawVertices = projectedVertices;
             }
@@ -14655,9 +14656,11 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             // Preserve the common NV2A combiner shapes which the D3D8 fixed-function
             // stages can express: texture-only, doubled vertex lighting, a second
             // detail texture, and the stage-3 lookup used by several lit materials.
-            EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), true);
+            // Slice C2: the host application is d3d8-flavor-only.
+            if(!cxbx::d3d8::HostBackendRenders())
+                EmuApplyPixelShaderFallback(EmuCurrentPixelShaderFallback(), true);
         }
-        else
+        else if(!cxbx::d3d8::HostBackendRenders())
         {
             g_pD3DDevice8->SetPixelShader(0);
             g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLOROP,
@@ -14673,10 +14676,19 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAOP,
                                                 XTL::D3DTOP_DISABLE);
         }
-        result = g_pD3DDevice8->GetVertexShader(&previousShader);
-        if(SUCCEEDED(result))
+        if(cxbx::d3d8::HostBackendRenders())
         {
-            result = g_pD3DDevice8->SetVertexShader(EmuVshCpuVertexFvf);
+            // Slice C2: the host shader state is invisible; the seam draw
+            // needs no FVF bind.
+            result = D3D_OK;
+        }
+        else
+        {
+            result = g_pD3DDevice8->GetVertexShader(&previousShader);
+            if(SUCCEEDED(result))
+            {
+                result = g_pD3DDevice8->SetVertexShader(EmuVshCpuVertexFvf);
+            }
         }
         if(SUCCEEDED(result))
         {
@@ -14746,21 +14758,24 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
     EmuFrameProfileAccumulate(g_FrameProfile.cpuDrawNs, fpStart);
     __try
     {
-        g_pD3DDevice8->SetPixelShader(previousPixelShader);
-        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLOROP, savedTss[0]);
-        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG1, savedTss[1]);
-        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG2, savedTss[2]);
-        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAOP, savedTss[3]);
-        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG1, savedTss[4]);
-        g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG2, savedTss[5]);
-        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLOROP, savedTss[6]);
-        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAOP, savedTss[7]);
-        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLORARG1, savedTss[8]);
-        g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAARG1, savedTss[9]);
-        for(DWORD ttfStage = 0; ttfStage < 4; ++ttfStage)
-            g_pD3DDevice8->SetTextureStageState(
-                ttfStage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS, savedTss[10 + ttfStage]);
-        g_pD3DDevice8->SetVertexShader(previousShader);
+        if(!cxbx::d3d8::HostBackendRenders())
+        {
+            g_pD3DDevice8->SetPixelShader(previousPixelShader);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLOROP, savedTss[0]);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG1, savedTss[1]);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_COLORARG2, savedTss[2]);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAOP, savedTss[3]);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG1, savedTss[4]);
+            g_pD3DDevice8->SetTextureStageState(0, XTL::D3DTSS_ALPHAARG2, savedTss[5]);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLOROP, savedTss[6]);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAOP, savedTss[7]);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_COLORARG1, savedTss[8]);
+            g_pD3DDevice8->SetTextureStageState(1, XTL::D3DTSS_ALPHAARG1, savedTss[9]);
+            for(DWORD ttfStage = 0; ttfStage < 4; ++ttfStage)
+                g_pD3DDevice8->SetTextureStageState(
+                    ttfStage, XTL::D3DTSS_TEXTURETRANSFORMFLAGS, savedTss[10 + ttfStage]);
+            g_pD3DDevice8->SetVertexShader(previousShader);
+        }
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
