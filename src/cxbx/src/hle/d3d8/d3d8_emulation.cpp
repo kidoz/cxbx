@@ -5438,7 +5438,9 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BorderColor(
     EmuSwapFS(); // Win2k/XP FS
     D3D_TRACE("SetTextureState_BorderColor");
 
-    HRESULT Result = g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_BORDERCOLOR, Value);
+HRESULT Result = D3D_OK;
+    if(!cxbx::d3d8::HostBackendRenders())
+        Result = g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_BORDERCOLOR, Value);
 
     EmuSwapFS(); // Xbox FS
 
@@ -11291,7 +11293,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_TexCoordIndex(
 
     cxbx::d3d8::HostBackendRecordTextureStageState(
         Stage, D3DTSS_TEXCOORDINDEX, Value);
-    g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_TEXCOORDINDEX, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetTextureStageState(Stage, D3DTSS_TEXCOORDINDEX, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11320,7 +11323,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_NormalizeNormals(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_NORMALIZENORMALS, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_NORMALIZENORMALS, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11349,7 +11353,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_TextureFactor(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_TEXTUREFACTOR, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_TEXTUREFACTOR, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11378,7 +11383,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ZBias(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_ZBIAS, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_ZBIAS, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11469,7 +11475,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_FogColor(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_FOGCOLOR, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_FOGCOLOR, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11664,7 +11671,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_VertexBlend(
     else
         EmuCleanup("Unsupported D3DVERTEXBLENDFLAGS (%d)", Value);
 
-    g_pD3DDevice8->SetRenderState(D3DRS_VERTEXBLEND, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_VERTEXBLEND, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11783,7 +11791,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_StencilEnable(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_STENCILENABLE, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_STENCILENABLE, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -11809,7 +11818,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_StencilFail(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_STENCILFAIL, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_STENCILFAIL, Value);
 
     EmuSwapFS(); // XBox FS
 }
@@ -11836,7 +11846,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleAntiAlias(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_MULTISAMPLEANTIALIAS, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_MULTISAMPLEANTIALIAS, Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -12132,7 +12143,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_MultiSampleMask(
     }
 #endif
 
-    g_pD3DDevice8->SetRenderState(D3DRS_MULTISAMPLEMASK, Value);
+if(!cxbx::d3d8::HostBackendRenders())
+        g_pD3DDevice8->SetRenderState(D3DRS_MULTISAMPLEMASK, Value);
 
     EmuSwapFS(); // XBox FS
 
