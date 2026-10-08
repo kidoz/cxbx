@@ -9752,6 +9752,17 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
         hRet = D3D_OK;
     }
 
+    // Slice C3: populate the native texture container at Register time so
+    // the Vulkan flavor's binds serve a deterministically populated store
+    // instead of adopting lazily at the first bind. RT/DS textures adopt
+    // empty content (their samples come through stage-override views).
+    if(SUCCEEDED(hRet) && cxbx::d3d8::HostBackendRenders() &&
+       (pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_TEXTURE &&
+       pThis->EmuTexture8 != NULL)
+    {
+        EmuNativeTextureEnsure(pThis->EmuTexture8);
+    }
+
     EmuSwapFS(); // XBox FS
 
     return hRet;
