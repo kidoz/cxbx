@@ -7545,7 +7545,12 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture(
                 }
             }
         }
-        hRet = g_pD3DDevice8->SetTexture(HostStage, pBaseTexture8);
+        // Slice C3-pre: the host shadow bind is d3d8-flavor-only; the
+        // container upload below serves the Vulkan flavor.
+        if(cxbx::d3d8::HostBackendRenders())
+            hRet = D3D_OK;
+        else
+            hRet = g_pD3DDevice8->SetTexture(HostStage, pBaseTexture8);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -12567,7 +12572,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetStreamSource(
                 g_EmuForwardedStreamValid[StreamNumber] = true;
             }
         }
-        if(forwardStream)
+        // Slice C3-pre: the host stream bind is d3d8-flavor-only.
+        if(forwardStream && !cxbx::d3d8::HostBackendRenders())
             hRet = g_pD3DDevice8->SetStreamSource(StreamNumber, pVertexBuffer8, Stride);
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
