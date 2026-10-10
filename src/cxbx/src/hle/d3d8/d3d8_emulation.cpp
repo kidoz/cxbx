@@ -966,14 +966,14 @@ struct EmuTiledSurfaceLock
 static EmuTiledSurfaceLock g_TiledSurfaceLocks[8] = {};
 
 // P8 C3-surface: the native byte container for surfaces, the exact analogue
-// of the texture container. With the lock interception enabled (opt-in,
-// CXBX_SURFACE_CONTAINER=1 -- see the serve site in Surface8_LockRect),
-// writable full-surface guest locks are served from container memory (the
-// guest's edits land in native bytes immediately) and commits push the rows
-// back into the host surface at the same flush points the tiled-lock
-// machinery uses (Clear, Present, Swap, CopyRects, re-locks). Keyed by the
-// host surface pointer; the later slices re-key on the guest resource when
-// host objects go away.
+// of the texture container. Under the Vulkan flavor, writable full-surface
+// guest locks are served from container memory (the guest's edits land in
+// native bytes immediately) and commits push the rows back into the host
+// surface at the same flush points the tiled-lock machinery uses (Clear,
+// Present, Swap, CopyRects, re-locks). UMA-aliased lock bits (surfaces whose
+// granted pBits is the host mapping of emulated RAM) stay on the host path.
+// Keyed by the host surface pointer; the later slices re-key on the guest
+// resource when host objects go away.
 //
 // The registry is a fixed slot array under one mutex, NOT a vector: Turok
 // decodes movies on a guest thread while the render thread presents, so a
@@ -999,6 +999,22 @@ static std::mutex& EmuSurfaceContainerMutex()
 {
     static std::mutex mutex;
     return mutex;
+}
+
+extern "C" ULONG EmuContiguousBlockBase(ULONG HostAddress, ULONG* BlockSize);
+
+// Uncapped serve/commit tracing (CXBX_SURFACE_CONTAINER_TRACE=1): correlates
+// the last container operations before a title fault.
+static bool EmuSurfaceContainerTraceEnabled()
+{
+    static int enabled = -1;
+    if(enabled < 0)
+    {
+        enabled = EmuD3DEnvironmentEnabled("CXBX_SURFACE_CONTAINER_TRACE")
+                      ? 1
+                      : 0;
+    }
+    return enabled != 0;
 }
 
 // Registry structure helpers; callers hold EmuSurfaceContainerMutex().
@@ -1177,6 +1193,12 @@ static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
     }
     if(FAILED(hRet))
     {
+        if(EmuSurfaceContainerTraceEnabled())
+            printf("SURF| commit tid=%X host=0x%.08lX %ux%u REFUSED\n",
+                   GetCurrentThreadId(),
+                   reinterpret_cast<unsigned long>(pSurface8),
+                   static_cast<unsigned>(pNative->Width),
+                   static_cast<unsigned>(pNative->Height));
         if(s_SurfaceCommitRefusalWarnings++ < 3)
         {
             printf("*Warning* surface container commit refused by the host "
@@ -1235,6 +1257,14 @@ static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
     {
     }
 
+    if(EmuSurfaceContainerTraceEnabled())
+        printf("SURF| commit tid=%X host=0x%.08lX %ux%u pitch=%lu ok\n",
+               GetCurrentThreadId(),
+               reinterpret_cast<unsigned long>(pSurface8),
+               static_cast<unsigned>(pNative->Width),
+               static_cast<unsigned>(pNative->Height),
+               static_cast<unsigned long>(pNative->Pitch));
+
     EmuReleaseSurfaceContainerLockSlot(pLock);
 }
 
@@ -1267,6 +1297,72 @@ static void EmuCommitSurfaceContainerLocks()
     }
 }
 
+// True when [pBase, pBase+size) is committed and readable. VirtualQuery
+// walks without faulting: a faulting probe is NOT viable here because the
+// vectored guest-trap machinery repairs the SEH chain on the first pass and
+// a real fault then bypasses inner __except handlers entirely.
+static bool EmuSpanReadable(const void* pBase, std::size_t Size)
+{
+    if(pBase == nullptr || Size == 0)
+    {
+        return false;
+    }
+    const BYTE* pCursor = static_cast<const BYTE*>(pBase);
+    const BYTE* pEnd = pCursor + Size;
+    while(pCursor < pEnd)
+    {
+        MEMORY_BASIC_INFORMATION info = {};
+        if(VirtualQuery(pCursor, &info, sizeof(info)) != sizeof(info))
+        {
+            return false;
+        }
+        if(info.State != MEM_COMMIT)
+        {
+            return false;
+        }
+        if((info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0 ||
+           info.Protect == 0)
+        {
+            return false;
+        }
+        const BYTE* pRegionEnd =
+            static_cast<const BYTE*>(info.BaseAddress) + info.RegionSize;
+        if(pRegionEnd <= pCursor)
+        {
+            return false;
+        }
+        pCursor = pRegionEnd;
+    }
+    return true;
+}
+
+// Seed-copy helper: some granted locks hand out pBits that is not safely
+// readable for Pitch*Height (Turok's movie surfaces hit an unmapped page),
+// and a faulting seed turns a granted lock into a failed one -- which the
+// title's decoder then mishandles (it memcpy's into the zeroed pBits). The
+// __try keeps the fault inside the boundary; the caller falls back to the
+// host lock on failure. POD-only: FromLock carries the registry mutex.
+static bool EmuSeedSurfaceContainerSafe(BYTE* pDst, UINT dstPitch,
+                                        const void* pSrc, UINT srcPitch,
+                                        UINT rows, UINT rowBytes)
+{
+    __try
+    {
+        for(UINT y = 0; y < rows; ++y)
+        {
+            memcpy(pDst + static_cast<std::size_t>(y) * dstPitch,
+                   static_cast<const BYTE*>(pSrc) +
+                       static_cast<std::size_t>(y) * srcPitch,
+                   rowBytes);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    return true;
+}
+
 // Re-serves a host lock the surface just granted from the container: the
 // held host bits seed it, the host lock is released, and the guest edits
 // native bytes that commits push back at the shared flush points. Called
@@ -1290,12 +1386,28 @@ static HRESULT EmuServeSurfaceContainerFromLock(
         EmuNativeSurface* pServed = EmuNativeSurfaceFind(pSurface8);
         if(pServed == nullptr)
         {
+            if(EmuSurfaceContainerTraceEnabled())
+                printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX FALLBACK "
+                       "open-lock without container\n",
+                       GetCurrentThreadId(),
+                       reinterpret_cast<unsigned long>(pResource),
+                       reinterpret_cast<unsigned long>(pSurface8));
             return D3DERR_INVALIDCALL;
         }
         EmuSafeHostSurfaceUnlock(pSurface8);
         pLockedRect->pBits = pServed->Pixels.data();
         pLockedRect->Pitch = static_cast<LONG>(pServed->Pitch);
         pOpen->Writable = pOpen->Writable || writable;
+        if(EmuSurfaceContainerTraceEnabled())
+            printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX RELOCK %ux%u "
+                   "pitch=%lu bits=0x%.08lX\n",
+                   GetCurrentThreadId(),
+                   reinterpret_cast<unsigned long>(pResource),
+                   reinterpret_cast<unsigned long>(pSurface8),
+                   static_cast<unsigned>(pServed->Width),
+                   static_cast<unsigned>(pServed->Height),
+                   static_cast<unsigned long>(pServed->Pitch),
+                   reinterpret_cast<unsigned long>(pServed->Pixels.data()));
         return D3D_OK;
     }
 
@@ -1303,6 +1415,12 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     if(!EmuTryHostSurfaceDesc(pSurface8, &description) ||
        description.Width == 0 || description.Height == 0)
     {
+        if(EmuSurfaceContainerTraceEnabled())
+            printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX FALLBACK "
+                   "desc\n",
+                   GetCurrentThreadId(),
+                   reinterpret_cast<unsigned long>(pResource),
+                   reinterpret_cast<unsigned long>(pSurface8));
         return D3DERR_INVALIDCALL;
     }
 
@@ -1360,15 +1478,95 @@ static HRESULT EmuServeSurfaceContainerFromLock(
                static_cast<std::size_t>(pNative->Pitch) * pNative->Height,
            EMU_SURFACE_CONTAINER_SLOP_FILL, EMU_SURFACE_CONTAINER_SLOP);
 
-    // Seed the container with the content the host lock granted.
+    // Seed the container with the content the host lock granted. If the
+    // granted bits are not readable at this geometry, abandon the serve: the
+    // guest keeps the held host lock and its host bits -- byte-for-byte the
+    // pre-interception outcome (a served fallback here would turn a granted
+    // lock into a failed one, which the title mishandles).
     const UINT rowBytes = min(pNative->Pitch, static_cast<UINT>(pLockedRect->Pitch));
-    for(UINT y = 0; y < pNative->Height; ++y)
+    const LONG grantedPitch = pLockedRect->Pitch;
+    const std::size_t grantedBytes =
+        static_cast<std::size_t>(pNative->Pitch) * pNative->Height;
+
+    // UMA alias detection: Turok's XMV player locks surfaces whose granted
+    // pBits IS the host mapping of emulated RAM (physically-aliased
+    // resources). The guest reads and writes that memory directly through
+    // the resource's own pointers, so the interception must not stand
+    // between them -- the guest keeps the host lock and its native bits.
     {
-        memcpy(pNative->Pixels.data() +
-                   static_cast<std::size_t>(y) * pNative->Pitch,
-               static_cast<const BYTE*>(pLockedRect->pBits) +
-                   static_cast<std::size_t>(y) * pLockedRect->Pitch,
-               rowBytes);
+        ULONG contiguousBlockSize = 0;
+        if(EmuContiguousBlockBase(
+               static_cast<ULONG>(reinterpret_cast<uintptr_t>(
+                   pLockedRect->pBits)),
+               &contiguousBlockSize) != 0)
+        {
+            if(EmuSurfaceContainerTraceEnabled())
+            {
+                printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX FALLBACK "
+                       "uma bits=0x%.08lX\n",
+                       GetCurrentThreadId(),
+                       reinterpret_cast<unsigned long>(pResource),
+                       reinterpret_cast<unsigned long>(pSurface8),
+                       reinterpret_cast<unsigned long>(pLockedRect->pBits));
+                fflush(stdout);
+            }
+            pNative->Used = false;
+            pNative->pHostSurface = nullptr;
+            pNative->Pixels.clear();
+            pNative->Pixels.shrink_to_fit();
+            return D3DERR_INVALIDCALL;
+        }
+    }
+
+    const bool bitsReadable = EmuSpanReadable(pLockedRect->pBits, grantedBytes);
+    if(EmuSurfaceContainerTraceEnabled())
+    {
+        printf("SURF| probe tid=%X res=0x%.08lX host=0x%.08lX %ux%u "
+               "bits=0x%.08lX readable=%d\n",
+               GetCurrentThreadId(),
+               reinterpret_cast<unsigned long>(pResource),
+               reinterpret_cast<unsigned long>(pSurface8),
+               static_cast<unsigned>(pNative->Width),
+               static_cast<unsigned>(pNative->Height),
+               reinterpret_cast<unsigned long>(pLockedRect->pBits),
+               bitsReadable ? 1 : 0);
+        fflush(stdout);
+    }
+    if(!bitsReadable)
+    {
+        if(EmuSurfaceContainerTraceEnabled())
+        {
+            printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX FALLBACK "
+                   "bits unreadable\n",
+                   GetCurrentThreadId(),
+                   reinterpret_cast<unsigned long>(pResource),
+                   reinterpret_cast<unsigned long>(pSurface8));
+            fflush(stdout);
+        }
+        pNative->Used = false;
+        pNative->pHostSurface = nullptr;
+        pNative->Pixels.clear();
+        pNative->Pixels.shrink_to_fit();
+        return D3DERR_INVALIDCALL;
+    }
+    if(!EmuSeedSurfaceContainerSafe(pNative->Pixels.data(), pNative->Pitch,
+                                    pLockedRect->pBits, pLockedRect->Pitch,
+                                    pNative->Height, rowBytes))
+    {
+        if(EmuSurfaceContainerTraceEnabled())
+        {
+            printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX FALLBACK "
+                   "seed fault\n",
+                   GetCurrentThreadId(),
+                   reinterpret_cast<unsigned long>(pResource),
+                   reinterpret_cast<unsigned long>(pSurface8));
+            fflush(stdout);
+        }
+        pNative->Used = false;
+        pNative->pHostSurface = nullptr;
+        pNative->Pixels.clear();
+        pNative->Pixels.shrink_to_fit();
+        return D3DERR_INVALIDCALL;
     }
 
     EmuSurfaceContainerLock* pSlot = EmuFindFreeSurfaceContainerLock();
@@ -1387,6 +1585,20 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     EmuSafeHostSurfaceUnlock(pSurface8);
     pLockedRect->pBits = pNative->Pixels.data();
     pLockedRect->Pitch = static_cast<LONG>(pNative->Pitch);
+    if(EmuSurfaceContainerTraceEnabled())
+        printf("SURF| serve tid=%X res=0x%.08lX host=0x%.08lX %ux%u pitch=%lu "
+               "fmt=%u bits=0x%.08lX (granted %lux%lu lockpitch=%ld)\n",
+               GetCurrentThreadId(),
+               reinterpret_cast<unsigned long>(pResource),
+               reinterpret_cast<unsigned long>(pSurface8),
+               static_cast<unsigned>(pNative->Width),
+               static_cast<unsigned>(pNative->Height),
+               static_cast<unsigned long>(pNative->Pitch),
+               static_cast<unsigned>(pNative->HostFormat),
+               reinterpret_cast<unsigned long>(pNative->Pixels.data()),
+               static_cast<unsigned long>(description.Width),
+               static_cast<unsigned long>(description.Height),
+               grantedPitch);
     return D3D_OK;
 }
 
@@ -8777,6 +8989,24 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap(
 
     EmuFlushTiledSurfaceLocks();
     EmuCommitSurfaceContainerLocks();
+
+    {
+        static int s_EnvProbe = 0;
+        if(s_EnvProbe++ == 0)
+        {
+            char v1[8] = {};
+            char v2[8] = {};
+            const DWORD l1 = GetEnvironmentVariableA(
+                "CXBX_SURFACE_CONTAINER", v1, sizeof(v1));
+            const DWORD l2 = GetEnvironmentVariableA(
+                "CXBX_SURFACE_CONTAINER_TRACE", v2, sizeof(v2));
+            printf("SURF| env probe container=%lu '%s' trace=%lu '%s'\n",
+                   static_cast<unsigned long>(l1), l1 != 0 ? v1 : "",
+                   static_cast<unsigned long>(l2), l2 != 0 ? v2 : "");
+            fflush(stdout);
+        }
+    }
+
     EmuComposeOverlay();
 
     // Windowed host Present does not reliably block for the Xbox's 60 Hz
@@ -11038,19 +11268,25 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect(
                 // P8 C3-surface: re-serve a granted writable full lock from
                 // the container -- the guest edits native bytes and commits
                 // push the rows back at the shared flush points. Only locks
-                // the host granted reach this path, so the container never
-                // calls through a surface the guest may have freed. Swizzled
-                // levels keep their own commit path above.
-                // OPT-IN for now (CXBX_SURFACE_CONTAINER=1): Turok's
-                // world-load movie path dies deterministically at ~11s with
-                // the interception on (driver-range SEH storms then ntdll
-                // heap faults); see the P8 spec work order before flipping
-                // the default.
+                // the host granted reach this path, and UMA-aliased lock
+                // bits (guest-RAM-backed surfaces) are excluded below the
+                // seeding step. Swizzled levels keep their own commit path
+                // above.
+                // CXBX_NO_SURFACE_CONTAINER=1 restores the pure host path.
                 if(SUCCEEDED(hRet) && pRect == NULL && pLink == nullptr &&
                    cxbx::d3d8::HostBackendRenders() &&
                    (NewFlags & D3DLOCK_READONLY) == 0 &&
-                   EmuD3DEnvironmentEnabled("CXBX_SURFACE_CONTAINER"))
+                   !EmuD3DEnvironmentEnabled("CXBX_NO_SURFACE_CONTAINER"))
                 {
+                    if(EmuSurfaceContainerTraceEnabled())
+                    {
+                        printf("SURF| gate tid=%X res=0x%.08lX host=0x%.08lX "
+                               "serving\n",
+                               GetCurrentThreadId(),
+                               reinterpret_cast<unsigned long>(pThis),
+                               reinterpret_cast<unsigned long>(pThis->EmuSurface8));
+                        fflush(stdout);
+                    }
                     EmuServeSurfaceContainerFromLock(pThis, pSurface8,
                                                      pLockedRect, true);
                 }
