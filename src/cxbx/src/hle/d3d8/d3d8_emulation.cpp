@@ -81,6 +81,7 @@ namespace XTL
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <utility>
 #include <vector>
@@ -973,6 +974,15 @@ static EmuTiledSurfaceLock g_TiledSurfaceLocks[8] = {};
 // machinery uses (Clear, Present, Swap, CopyRects, re-locks). Keyed by the
 // host surface pointer; the later slices re-key on the guest resource when
 // host objects go away.
+//
+// The registry is a fixed slot array under one mutex, NOT a vector: Turok
+// decodes movies on a guest thread while the render thread presents, so a
+// reallocating registry (or a forget that frees a served buffer) corrupted
+// the heap deterministically at world load. Slots keep buffer pointers
+// stable, and a slot referenced by an outstanding served lock is never
+// reclaimed or resized.
+#define EMU_SURFACE_CONTAINER_SLOTS 16
+
 struct EmuNativeSurface
 {
     XTL::IDirect3DSurface8* pHostSurface = nullptr;
@@ -981,17 +991,25 @@ struct EmuNativeSurface
     UINT Width = 0;
     UINT Height = 0;
     UINT HostFormat = 0;
+    bool Used = false;
 };
-static std::vector<EmuNativeSurface> g_EmuNativeSurfaces;
+static EmuNativeSurface g_EmuNativeSurfaces[EMU_SURFACE_CONTAINER_SLOTS] = {};
 
+static std::mutex& EmuSurfaceContainerMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+// Registry structure helpers; callers hold EmuSurfaceContainerMutex().
 static EmuNativeSurface* EmuNativeSurfaceFind(
     XTL::IDirect3DSurface8* pHostSurface)
 {
-    for(auto& entry : g_EmuNativeSurfaces)
+    for(auto& slot : g_EmuNativeSurfaces)
     {
-        if(entry.pHostSurface == pHostSurface)
+        if(slot.Used && slot.pHostSurface == pHostSurface)
         {
-            return &entry;
+            return &slot;
         }
     }
     return nullptr;
@@ -1020,18 +1038,6 @@ static void EmuSafeHostSurfaceUnlock(XTL::IDirect3DSurface8* pHostSurface)
     }
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
-    }
-}
-
-static void EmuNativeSurfaceForget(XTL::IDirect3DSurface8* pHostSurface)
-{
-    for(std::size_t i = 0; i < g_EmuNativeSurfaces.size(); ++i)
-    {
-        if(g_EmuNativeSurfaces[i].pHostSurface == pHostSurface)
-        {
-            g_EmuNativeSurfaces.erase(g_EmuNativeSurfaces.begin() + i);
-            return;
-        }
     }
 }
 
@@ -1085,22 +1091,77 @@ static void EmuReleaseSurfaceContainerLockSlot(
     pSlot->Writable = false;
 }
 
+// True when any outstanding served lock still hands out this surface's
+// container buffer (POD array scan; racing reads are benign).
+static bool EmuSurfaceSlotServed(XTL::IDirect3DSurface8* pHostSurface)
+{
+    for(unsigned v = 0;
+        v < sizeof(g_EmuSurfaceContainerLocks) / sizeof(g_EmuSurfaceContainerLocks[0]);
+        v++)
+    {
+        if(g_EmuSurfaceContainerLocks[v].pSurface8 == pHostSurface)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Drops a container entry. A surface with an outstanding served lock keeps
+// its slot (the buffer is live guest-visible memory); the caller's divergence
+// concern is handled by re-seeding at the next full lock.
+static void EmuNativeSurfaceForget(XTL::IDirect3DSurface8* pHostSurface)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(EmuSurfaceSlotServed(pHostSurface))
+    {
+        return;
+    }
+    for(auto& slot : g_EmuNativeSurfaces)
+    {
+        if(slot.Used && slot.pHostSurface == pHostSurface)
+        {
+            slot.Used = false;
+            slot.pHostSurface = nullptr;
+            slot.Pixels.clear();
+            slot.Pixels.shrink_to_fit();
+            return;
+        }
+    }
+}
+
 // Pushes one outstanding served lock's container rows back into the host
 // surface. A refusal (render targets and depth surfaces do not take host
 // locks) keeps the container: the guest's bytes stay readable through later
-// container-served locks.
+// container-served locks. The open-lock entry is released only after the
+// copy so the slot stays reserved (no eviction, no resize) throughout.
+//
+// Containers carry the same pattern-filled slop tail as YUY2 decode buffers:
+// title decoders that assume Xbox pitch/size padding write PAST Pitch*Height,
+// and an exactly-sized container turned that into host heap corruption.
+#define EMU_SURFACE_CONTAINER_SLOP 0x4000
+#define EMU_SURFACE_CONTAINER_SLOP_FILL 0xC5
+
 static int s_SurfaceCommitRefusalWarnings = 0;
+
+// Mutex-guarded container lookup for commit paths (separate helper: the
+// commit body itself carries __try and must stay POD-only).
+static EmuNativeSurface* EmuCommitAcquireContainerSurface(
+    XTL::IDirect3DSurface8* pSurface8)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    return pSurface8 != nullptr ? EmuNativeSurfaceFind(pSurface8) : nullptr;
+}
 
 static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
 {
     XTL::IDirect3DSurface8* pSurface8 = pLock->pSurface8;
-    EmuNativeSurface* pNative =
-        pSurface8 != nullptr ? EmuNativeSurfaceFind(pSurface8) : nullptr;
     const bool writable = pLock->Writable;
-    EmuReleaseSurfaceContainerLockSlot(pLock);
+    EmuNativeSurface* pNative = EmuCommitAcquireContainerSurface(pSurface8);
 
     if(pNative == nullptr || !writable)
     {
+        EmuReleaseSurfaceContainerLockSlot(pLock);
         return;
     }
 
@@ -1121,6 +1182,7 @@ static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
             printf("*Warning* surface container commit refused by the host "
                    "surface (content kept in the native container)\n");
         }
+        EmuReleaseSurfaceContainerLockSlot(pLock);
         return;
     }
 
@@ -1133,6 +1195,38 @@ static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
                    static_cast<std::size_t>(y) * pNative->Pitch,
                rowBytes);
     }
+
+    // Report how far the title wrote past the nominal Pitch*Height block
+    // (same diagnostic as the YUY2 tail: the overwrite is harmless here, but
+    // an exactly-sized buffer would have corrupted the host heap).
+    {
+        BYTE* pSlop =
+            pNative->Pixels.data() +
+            static_cast<std::size_t>(pNative->Pitch) * pNative->Height;
+        DWORD overrun = 0;
+        for(DWORD i = EMU_SURFACE_CONTAINER_SLOP; i > 0; --i)
+        {
+            if(pSlop[i - 1] != EMU_SURFACE_CONTAINER_SLOP_FILL)
+            {
+                overrun = i;
+                break;
+            }
+        }
+        if(overrun != 0 && s_SurfaceCommitRefusalWarnings++ < 6)
+        {
+            printf("*Warning* surface container %ux%u was overwritten 0x%X "
+                   "bytes past its %u-byte buffer\n",
+                   static_cast<unsigned>(pNative->Width),
+                   static_cast<unsigned>(pNative->Height),
+                   static_cast<unsigned>(overrun),
+                   static_cast<unsigned>(pNative->Pitch * pNative->Height));
+        }
+        if(overrun != 0)
+        {
+            memset(pSlop, EMU_SURFACE_CONTAINER_SLOP_FILL,
+                   EMU_SURFACE_CONTAINER_SLOP);
+        }
+    }
     __try
     {
         pSurface8->UnlockRect();
@@ -1140,6 +1234,8 @@ static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
     }
+
+    EmuReleaseSurfaceContainerLockSlot(pLock);
 }
 
 static void EmuCommitSurfaceContainerLock(XTL::X_D3DResource* pResource)
@@ -1176,6 +1272,9 @@ static void EmuCommitSurfaceContainerLocks()
 // native bytes that commits push back at the shared flush points. Called
 // only after a successful host LockRect, so every host object here is alive
 // -- the container never calls through a surface the guest may have freed.
+// Registry structure mutations hold EmuSurfaceContainerMutex: guest movie
+// decoders lock surfaces on their own thread while the render thread
+// presents, so unsynchronized registry edits corrupted the heap.
 static HRESULT EmuServeSurfaceContainerFromLock(
     XTL::X_D3DResource* pResource, XTL::IDirect3DSurface8* pSurface8,
     XTL::D3DLOCKED_RECT* pLockedRect, bool writable)
@@ -1184,6 +1283,7 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     // editing the same container view. Re-seeding (or resizing) here would
     // free or stale-fill memory an earlier served pointer still references,
     // so discard the fresh host bits and hand back the live container.
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
     EmuSurfaceContainerLock* pOpen = EmuFindSurfaceContainerLock(pResource);
     if(pOpen != nullptr)
     {
@@ -1209,26 +1309,56 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     EmuNativeSurface* pNative = EmuNativeSurfaceFind(pSurface8);
     if(pNative == nullptr)
     {
-        EmuNativeSurface entry;
-        entry.pHostSurface = pSurface8;
-        entry.Pitch = static_cast<UINT>(pLockedRect->Pitch);
-        entry.Width = description.Width;
-        entry.Height = description.Height;
-        entry.HostFormat = static_cast<UINT>(description.Format);
-        entry.Pixels.resize(static_cast<std::size_t>(entry.Pitch) * entry.Height);
-        g_EmuNativeSurfaces.push_back(std::move(entry));
-        pNative = &g_EmuNativeSurfaces.back();
+        // First free slot, then any slot no served lock references.
+        for(auto& slot : g_EmuNativeSurfaces)
+        {
+            if(!slot.Used)
+            {
+                pNative = &slot;
+                break;
+            }
+        }
+        if(pNative == nullptr)
+        {
+            for(auto& slot : g_EmuNativeSurfaces)
+            {
+                if(!EmuSurfaceSlotServed(slot.pHostSurface))
+                {
+                    pNative = &slot;
+                    break;
+                }
+            }
+        }
+        if(pNative == nullptr)
+        {
+            return D3DERR_INVALIDCALL;
+        }
+        pNative->Used = true;
+        pNative->pHostSurface = pSurface8;
+        pNative->HostFormat = static_cast<UINT>(description.Format);
     }
-    else if(pNative->Width != description.Width ||
-            pNative->Height != description.Height ||
-            pNative->Pitch != static_cast<UINT>(pLockedRect->Pitch))
+    if(pNative->Width != description.Width ||
+       pNative->Height != description.Height ||
+       pNative->Pitch != static_cast<UINT>(pLockedRect->Pitch))
     {
         pNative->Width = description.Width;
         pNative->Height = description.Height;
         pNative->Pitch = static_cast<UINT>(pLockedRect->Pitch);
         pNative->Pixels.resize(static_cast<std::size_t>(pNative->Pitch) *
-                               pNative->Height);
+                                   pNative->Height +
+                               EMU_SURFACE_CONTAINER_SLOP);
     }
+    else if(pNative->Pixels.size() ==
+            static_cast<std::size_t>(pNative->Pitch) * pNative->Height)
+    {
+        // A container allocated before the slop tail existed.
+        pNative->Pixels.resize(static_cast<std::size_t>(pNative->Pitch) *
+                                   pNative->Height +
+                               EMU_SURFACE_CONTAINER_SLOP);
+    }
+    memset(pNative->Pixels.data() +
+               static_cast<std::size_t>(pNative->Pitch) * pNative->Height,
+           EMU_SURFACE_CONTAINER_SLOP_FILL, EMU_SURFACE_CONTAINER_SLOP);
 
     // Seed the container with the content the host lock granted.
     const UINT rowBytes = min(pNative->Pitch, static_cast<UINT>(pLockedRect->Pitch));
@@ -1242,13 +1372,16 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     }
 
     EmuSurfaceContainerLock* pSlot = EmuFindFreeSurfaceContainerLock();
-    if(pSlot->pResource != NULL)
-    {
-        EmuCommitSurfaceContainerLock(pSlot);
-    }
+    // Claim the open-lock entry before releasing the mutex so the container
+    // slot this serve hands out is referenced (evict/forget-proof) from now
+    // on. An occupied slot is evicted by dropping its entry (a 16-slots-deep
+    // eviction means heavy churn; the stale content was already best-effort)
+    // -- committing it here would deadlock on the registry mutex and would
+    // release the freshly claimed entry.
     pSlot->pResource = pResource;
     pSlot->pSurface8 = pSurface8;
     pSlot->Writable = writable;
+    EmuSurfaceContainerMutex().unlock();
 
     // Release the host lock and hand the guest the container memory.
     EmuSafeHostSurfaceUnlock(pSurface8);
