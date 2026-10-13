@@ -8905,11 +8905,24 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear(
         // On Xbox a Clear never fails; host d3d8 rejects depth/stencil flags
         // that do not match the bound depth surface (it throws
         // D3DERR_INVALIDCALL internally -- Turok Evolution's frame loop).
-        // Drop the flags the host cannot honor.
+        // Drop the flags the host cannot honor. Under the render path the
+        // host device is unbound (the backend owns targets), so the guest's
+        // cached depth surface answers the same question.
         if(newFlags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL))
         {
             IDirect3DSurface8* pDepth = NULL;
-            if(FAILED(g_pD3DDevice8->GetDepthStencilSurface(&pDepth)) || pDepth == NULL)
+            bool HasDepth = false;
+            if(cxbx::d3d8::HostBackendRenders())
+            {
+                HasDepth = (g_pCachedZStencilSurface != NULL);
+                pDepth = HasDepth ? g_pCachedZStencilSurface->EmuSurface8 : NULL;
+            }
+            else
+            {
+                HasDepth = SUCCEEDED(g_pD3DDevice8->GetDepthStencilSurface(&pDepth));
+            }
+
+            if(!HasDepth || pDepth == NULL)
             {
                 newFlags &= ~(D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
             }
@@ -8920,7 +8933,8 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Clear(
                    Desc.Format != D3DFMT_D24S8 && Desc.Format != D3DFMT_D24X4S4 &&
                    Desc.Format != D3DFMT_D15S1)
                     newFlags &= ~D3DCLEAR_STENCIL;
-                pDepth->Release();
+                if(!cxbx::d3d8::HostBackendRenders() && pDepth != NULL)
+                    pDepth->Release();
             }
         }
 
@@ -17550,7 +17564,12 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget(
         HostCompatible = false;
 
     HRESULT hRet = D3D_OK;
-    if(HostCompatible)
+    // P8 C3: under the render path the host binding is dead state -- Clear
+    // routes to the backend, Present presents the backend target, and the
+    // RT registry is keyed by the host surface pointer, not by the host
+    // binding. The guest-visible caches below carry everything titles read
+    // back, so the host device is left unbound.
+    if(HostCompatible && !cxbx::d3d8::HostBackendRenders())
         hRet = g_pD3DDevice8->SetRenderTarget(pPCRenderTarget, pPCNewZStencil);
 
     // Update the cached guest-side pointers so GetRenderTarget2 /
