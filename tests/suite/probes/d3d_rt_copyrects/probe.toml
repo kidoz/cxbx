@@ -1,0 +1,12 @@
+# XDK-toolchain probe (see d3d_render_to_texture): pixel-exact verification
+# of CopyRects whose SOURCE is a render target. Renders into a 256x256
+# RENDERTARGET texture, copies its level surface into a system-memory image
+# surface with one whole-surface CopyRects, and locks the image back. Under
+# the native Vulkan backend the rendered pixels live in the backend's target
+# registry (the host surface holds stale bytes), so this pins the readback
+# path; without it the locked image reads garbage.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

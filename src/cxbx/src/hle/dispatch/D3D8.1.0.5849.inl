@@ -1186,6 +1186,25 @@ SOOVPA<8> IDirect3DDevice8_DeletePixelShader_1_0_5849 =
     }
 };
 
+// _D3DDevice_CopyRects@20 (d3d8.lib, 803 bytes). Unique in 91 corpus images
+// (verified against the d3d_rt_copyrects probe and the title/probe corpus).
+// Without the patch, the 5849 library body faults on the guest device
+// global, which the HLE CreateDevice does not establish.
+SOOVPA<8> IDirect3DDevice8_CopyRects_1_0_5849 =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x83 },
+        { 0x24, 0xE8 },
+        { 0x48, 0x00 },
+        { 0x6D, 0x08 },
+        { 0x91, 0x3F },
+        { 0xB6, 0x1C },
+        { 0xDA, 0x11 },
+        { 0xFF, 0x24 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // D3DDevice::CreatePushBuffer2
@@ -1967,6 +1986,14 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_DeletePixelShader,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_DeletePixelShader"
+        #endif
+    },
+    // IDirect3DDevice8::CopyRects
+    {
+        (OOVPA*)&IDirect3DDevice8_CopyRects_1_0_5849,
+        XTL::EmuIDirect3DDevice8_CopyRects,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DDevice8_CopyRects"
         #endif
     },
 

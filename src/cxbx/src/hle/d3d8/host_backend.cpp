@@ -677,6 +677,16 @@ bool HostBackendReadMainTarget(void* dst, unsigned int pitch)
     return vulkan::RendererReadMainTarget(dst, pitch);
 }
 
+bool HostBackendReadTargetPixels(void* key, void* dst, unsigned int pitch,
+                                 unsigned int width, unsigned int height)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererReadTargetPixels(key, dst, pitch, width, height);
+}
+
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,
                              unsigned int height, unsigned int pitch)
 {

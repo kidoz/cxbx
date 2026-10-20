@@ -135,6 +135,12 @@ void RendererCurrentTargetSize(unsigned int* width, unsigned int* height);
 // into dst regardless of the bound render target.
 bool RendererReadMainTarget(void* dst, unsigned int pitch);
 
+// Submits the pending batch, then copies a keyed registry target's pixels
+// (BGRA8 rows, top-left origin) into dst. Returns false when no target is
+// registered under the key or the extent exceeds the target.
+bool RendererReadTargetPixels(void* key, void* dst, unsigned int pitch,
+                              unsigned int width, unsigned int height);
+
 // Opaque, full-backbuffer BGRA video overlay, independent of guest render
 // state and the currently bound render target. Copies the supplied pixels
 // before returning; subsequent draws retain all of their previous state.

@@ -3478,6 +3478,34 @@ bool RendererReadMainTarget(void* dst, unsigned int pitch)
     return ReadTargetImage(g_R.target, g_R.width, g_R.height, dst, pitch);
 }
 
+// Reads a keyed registry target's pixels (BGRA8 rows) into dst. Returns
+// false when no target is registered under the key or the requested extent
+// exceeds the target -- the caller falls back to the host surface, which
+// holds stale content for render targets but is authoritative otherwise.
+bool RendererReadTargetPixels(void* key, void* dst, unsigned int pitch,
+                              unsigned int width, unsigned int height)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || key == nullptr)
+    {
+        return false;
+    }
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        if(g_R.rtTargets[i].key == key)
+        {
+            const auto& target = g_R.rtTargets[i];
+            if(width == 0 || height == 0 || target.width < width ||
+               target.height < height)
+            {
+                return false;
+            }
+            return ReadTargetImage(target.image, width, height, dst, pitch);
+        }
+    }
+    return false;
+}
+
 bool RendererComposeOverlay(const void* pixels, unsigned int width,
                             unsigned int height, unsigned int pitch)
 {

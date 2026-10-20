@@ -115,6 +115,8 @@ static bool EmuD3DIsReadableRange(const void* base, DWORD bytes);
 static void EmuCommitTextureContainerLocks();
 static void EmuForgetTextureContainerState(XTL::IDirect3DBaseTexture8* pHostTexture);
 static void EmuInvalidateTextureContainerForSurface(XTL::IDirect3DSurface8* pLevelHostSurface);
+static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
+                                         XTL::X_D3DSurface* pDestinationSurface);
 
 // ******************************************************************
 // * Static Variable(s)
@@ -1079,10 +1081,21 @@ struct EmuSurfaceContainerLock
     XTL::X_D3DResource* pResource = nullptr;
     XTL::IDirect3DSurface8* pSurface8 = nullptr;
     bool Writable = false;
+    // Set while a commit is copying this slot's rows: a registry-full steal
+    // must not retire (and thereby unprotect) a claim whose buffer the copy
+    // is still reading.
+    bool Committing = false;
+    // Monotonic claim order: the registry-full steal retires the oldest.
+    unsigned long ClaimSeq = 0;
 };
 static EmuSurfaceContainerLock g_EmuSurfaceContainerLocks[8] = {};
+static unsigned long g_EmuSurfaceContainerLockSeq = 0;
 
-static EmuSurfaceContainerLock* EmuFindSurfaceContainerLock(
+// Lock-slot array helpers. The _Locked forms require the caller to hold
+// EmuSurfaceContainerMutex(); the plain forms take it themselves. Slot
+// addresses are stable (fixed array), so a pointer handed out alongside the
+// mutex stays valid, but its claim must only be dropped under the mutex.
+static EmuSurfaceContainerLock* EmuFindSurfaceContainerLockLocked(
     XTL::X_D3DResource* pResource)
 {
     for(unsigned v = 0;
@@ -1097,33 +1110,65 @@ static EmuSurfaceContainerLock* EmuFindSurfaceContainerLock(
     return nullptr;
 }
 
-static EmuSurfaceContainerLock* EmuFindFreeSurfaceContainerLock()
+static EmuSurfaceContainerLock* EmuFindSurfaceContainerLock(
+    XTL::X_D3DResource* pResource)
 {
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    return EmuFindSurfaceContainerLockLocked(pResource);
+}
+
+static EmuSurfaceContainerLock* EmuFindFreeSurfaceContainerLockLocked()
+{
+    EmuSurfaceContainerLock* pRetired = nullptr;
     for(unsigned v = 0;
         v < sizeof(g_EmuSurfaceContainerLocks) / sizeof(g_EmuSurfaceContainerLocks[0]);
         v++)
     {
-        if(g_EmuSurfaceContainerLocks[v].pResource == NULL)
+        EmuSurfaceContainerLock& slot = g_EmuSurfaceContainerLocks[v];
+        if(slot.pResource == NULL)
         {
-            return &g_EmuSurfaceContainerLocks[v];
+            slot.ClaimSeq = ++g_EmuSurfaceContainerLockSeq;
+            return &slot;
+        }
+        // Steal candidate: the oldest claim no commit is copying. A slot
+        // mid-commit keeps its claim; the retired content was already
+        // best-effort (the same retirement policy as the tiled-lock
+        // registry).
+        if(!slot.Committing &&
+           (pRetired == nullptr || slot.ClaimSeq < pRetired->ClaimSeq))
+        {
+            pRetired = &slot;
         }
     }
-    // All slots outstanding: hand out slot 0 (the caller commits it before
-    // reuse), the same policy as the tiled-lock registry.
-    return &g_EmuSurfaceContainerLocks[0];
+    if(pRetired == nullptr)
+    {
+        // Every slot is mid-commit: hand out slot 0 to preserve liveness.
+        pRetired = &g_EmuSurfaceContainerLocks[0];
+    }
+    pRetired->ClaimSeq = ++g_EmuSurfaceContainerLockSeq;
+    return pRetired;
 }
 
-static void EmuReleaseSurfaceContainerLockSlot(
+static void EmuReleaseSurfaceContainerLockSlotLocked(
     EmuSurfaceContainerLock* pSlot)
 {
     pSlot->pResource = NULL;
     pSlot->pSurface8 = nullptr;
     pSlot->Writable = false;
+    pSlot->Committing = false;
+}
+
+static void EmuReleaseSurfaceContainerLockSlot(
+    EmuSurfaceContainerLock* pSlot)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    EmuReleaseSurfaceContainerLockSlotLocked(pSlot);
 }
 
 // True when any outstanding served lock still hands out this surface's
-// container buffer (POD array scan; racing reads are benign).
-static bool EmuSurfaceSlotServed(XTL::IDirect3DSurface8* pHostSurface)
+// container buffer; the caller holds EmuSurfaceContainerMutex().
+static bool EmuSurfaceSlotServedLocked(
+    XTL::IDirect3DSurface8* pHostSurface)
 {
     for(unsigned v = 0;
         v < sizeof(g_EmuSurfaceContainerLocks) / sizeof(g_EmuSurfaceContainerLocks[0]);
@@ -1143,7 +1188,7 @@ static bool EmuSurfaceSlotServed(XTL::IDirect3DSurface8* pHostSurface)
 static void EmuNativeSurfaceForget(XTL::IDirect3DSurface8* pHostSurface)
 {
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
-    if(EmuSurfaceSlotServed(pHostSurface))
+    if(EmuSurfaceSlotServedLocked(pHostSurface))
     {
         return;
     }
@@ -1183,10 +1228,35 @@ static EmuNativeSurface* EmuCommitAcquireContainerSurface(
     return pSurface8 != nullptr ? EmuNativeSurfaceFind(pSurface8) : nullptr;
 }
 
+// Mutex-carried slot claim for the commit body (separate helper: the commit
+// body itself carries __try and must stay free of unwinding objects).
+// Returns false when the slot is empty or another commit already owns it.
+// The Committing flag keeps a registry-full steal from retiring this claim
+// (and dropping the eviction protection its buffer relies on) until the
+// copy ends.
+static bool EmuClaimSurfaceContainerLockForCommit(
+    EmuSurfaceContainerLock* pLock, XTL::IDirect3DSurface8** ppSurface8,
+    bool* pWritable)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(pLock->pResource == NULL || pLock->Committing)
+    {
+        return false;
+    }
+    *ppSurface8 = pLock->pSurface8;
+    *pWritable = pLock->Writable;
+    pLock->Committing = true;
+    return true;
+}
+
 static void EmuCommitSurfaceContainerLock(EmuSurfaceContainerLock* pLock)
 {
-    XTL::IDirect3DSurface8* pSurface8 = pLock->pSurface8;
-    const bool writable = pLock->Writable;
+    XTL::IDirect3DSurface8* pSurface8 = nullptr;
+    bool writable = false;
+    if(!EmuClaimSurfaceContainerLockForCommit(pLock, &pSurface8, &writable))
+    {
+        return;
+    }
     EmuNativeSurface* pNative = EmuCommitAcquireContainerSurface(pSurface8);
 
     if(pNative == nullptr || !writable)
@@ -1300,14 +1370,27 @@ static void EmuCommitSurfaceContainerLocks()
     {
         return;
     }
-    for(unsigned v = 0;
-        v < sizeof(g_EmuSurfaceContainerLocks) / sizeof(g_EmuSurfaceContainerLocks[0]);
-        v++)
+    EmuSurfaceContainerLock* pending[sizeof(g_EmuSurfaceContainerLocks) / sizeof(g_EmuSurfaceContainerLocks[0])];
+    unsigned count = 0;
     {
-        if(g_EmuSurfaceContainerLocks[v].pResource != NULL)
+        // Snapshot the occupied slots under the mutex (slot addresses are
+        // stable); the commits themselves copy rows and call the host, so
+        // they run with the registry mutex released.
+        std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+        for(unsigned v = 0;
+            v < sizeof(g_EmuSurfaceContainerLocks) / sizeof(g_EmuSurfaceContainerLocks[0]);
+            v++)
         {
-            EmuCommitSurfaceContainerLock(&g_EmuSurfaceContainerLocks[v]);
+            if(g_EmuSurfaceContainerLocks[v].pResource != NULL &&
+               !g_EmuSurfaceContainerLocks[v].Committing)
+            {
+                pending[count++] = &g_EmuSurfaceContainerLocks[v];
+            }
         }
+    }
+    for(unsigned v = 0; v < count; v++)
+    {
+        EmuCommitSurfaceContainerLock(pending[v]);
     }
 }
 
@@ -1393,8 +1476,11 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     // editing the same container view. Re-seeding (or resizing) here would
     // free or stale-fill memory an earlier served pointer still references,
     // so discard the fresh host bits and hand back the live container.
-    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
-    EmuSurfaceContainerLock* pOpen = EmuFindSurfaceContainerLock(pResource);
+    // A unique_lock (not a lock_guard): the claim below releases it manually
+    // so EmuSafeHostSurfaceUnlock can run its SEH outside the registry
+    // mutex -- the guard destructor must then be a no-op on return.
+    std::unique_lock<std::mutex> lock(EmuSurfaceContainerMutex());
+    EmuSurfaceContainerLock* pOpen = EmuFindSurfaceContainerLockLocked(pResource);
     if(pOpen != nullptr)
     {
         EmuNativeSurface* pServed = EmuNativeSurfaceFind(pSurface8);
@@ -1454,7 +1540,7 @@ static HRESULT EmuServeSurfaceContainerFromLock(
         {
             for(auto& slot : g_EmuNativeSurfaces)
             {
-                if(!EmuSurfaceSlotServed(slot.pHostSurface))
+                if(!EmuSurfaceSlotServedLocked(slot.pHostSurface))
                 {
                     pNative = &slot;
                     break;
@@ -1583,7 +1669,7 @@ static HRESULT EmuServeSurfaceContainerFromLock(
         return D3DERR_INVALIDCALL;
     }
 
-    EmuSurfaceContainerLock* pSlot = EmuFindFreeSurfaceContainerLock();
+    EmuSurfaceContainerLock* pSlot = EmuFindFreeSurfaceContainerLockLocked();
     // Claim the open-lock entry before releasing the mutex so the container
     // slot this serve hands out is referenced (evict/forget-proof) from now
     // on. An occupied slot is evicted by dropping its entry (a 16-slots-deep
@@ -1593,7 +1679,8 @@ static HRESULT EmuServeSurfaceContainerFromLock(
     pSlot->pResource = pResource;
     pSlot->pSurface8 = pSurface8;
     pSlot->Writable = writable;
-    EmuSurfaceContainerMutex().unlock();
+    pSlot->Committing = false;
+    lock.unlock();
 
     // Release the host lock and hand the guest the container memory.
     EmuSafeHostSurfaceUnlock(pSurface8);
@@ -3749,6 +3836,226 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_EndStateBlock(DWORD* pToken)
     return ret;
 }
 
+// POD-only __try helper: locks the destination surface for a native copy.
+static bool EmuLockSurfaceForWrite(XTL::IDirect3DSurface8* pHostSurface,
+                                   XTL::D3DLOCKED_RECT* pLocked)
+{
+    __try
+    {
+        return SUCCEEDED(pHostSurface->LockRect(pLocked, NULL, 0));
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool EmuLockSurfaceForRead(XTL::IDirect3DSurface8* pHostSurface,
+                                  XTL::D3DLOCKED_RECT* pLocked)
+{
+    __try
+    {
+        return SUCCEEDED(pHostSurface->LockRect(pLocked, NULL,
+                                                D3DLOCK_READONLY));
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+// P8 C3: serves a whole-surface like-format CopyRects whose source is a
+// backend registry target. Reads the target's live pixels (the host surface
+// holds stale bytes under the render path) and writes the destination --
+// host surface, plus the served container view when one is outstanding.
+// Guest-only destinations (created by the unpatched guest library, no host
+// surface) receive the rows in their guest-RAM Data allocation, which is
+// the memory the title's own locks read. Returns false when the copy does
+// not apply and the host forward should run instead.
+static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
+                                         XTL::X_D3DSurface* pDestinationSurface)
+{
+    if(EmuSurfaceContainerTraceEnabled())
+    {
+        printf("SURF| rt-copy enter src_host=0x%.08lX dst_host=0x%.08lX\n",
+               reinterpret_cast<unsigned long>(pSourceSurface->EmuSurface8),
+               reinterpret_cast<unsigned long>(pDestinationSurface->EmuSurface8));
+        fflush(stdout);
+    }
+    XTL::D3DSURFACE_DESC SrcDesc = {};
+    if(pSourceSurface->EmuSurface8 == NULL ||
+       FAILED(pSourceSurface->EmuSurface8->GetDesc(&SrcDesc)) ||
+       SrcDesc.Width == 0 || SrcDesc.Height == 0)
+    {
+        return false;
+    }
+    const UINT rowBytes = SrcDesc.Width * 4;
+
+    std::vector<BYTE> pixels(static_cast<std::size_t>(SrcDesc.Width) *
+                             SrcDesc.Height * 4);
+    bool readOk = cxbx::d3d8::HostBackendReadTargetPixels(
+        pSourceSurface->EmuSurface8, pixels.data(), rowBytes, SrcDesc.Width,
+        SrcDesc.Height);
+    if(!readOk && !cxbx::d3d8::HostBackendRenders())
+    {
+        // d3d8 flavor: the host surface is authoritative (the host binding
+        // exists and rendering landed there) but refuses LockRect as a
+        // render target -- stage through a system-memory image, exactly like
+        // the render-target dump path.
+        XTL::IDirect3DSurface8* pScratch = NULL;
+        if(SUCCEEDED(g_pD3DDevice8->CreateImageSurface(
+               SrcDesc.Width, SrcDesc.Height, SrcDesc.Format, &pScratch)) &&
+           pScratch != NULL &&
+           SUCCEEDED(g_pD3DDevice8->CopyRects(pSourceSurface->EmuSurface8,
+                                              NULL, 0, pScratch, NULL)))
+        {
+            XTL::D3DLOCKED_RECT srcLocked = {};
+            if(EmuLockSurfaceForRead(pScratch, &srcLocked))
+            {
+                const UINT srcRowBytes =
+                    min(rowBytes, static_cast<UINT>(srcLocked.Pitch));
+                for(UINT y = 0; y < SrcDesc.Height; ++y)
+                {
+                    memcpy(pixels.data() +
+                               static_cast<std::size_t>(y) * rowBytes,
+                           static_cast<const BYTE*>(srcLocked.pBits) +
+                               static_cast<std::size_t>(y) * srcLocked.Pitch,
+                           srcRowBytes);
+                }
+                EmuSafeHostSurfaceUnlock(pScratch);
+                readOk = true;
+            }
+        }
+        if(pScratch != NULL)
+        {
+            pScratch->Release();
+        }
+    }
+    if(EmuSurfaceContainerTraceEnabled())
+    {
+        printf("SURF| rt-copy readback ok=%d\n", readOk ? 1 : 0);
+        fflush(stdout);
+    }
+    if(!readOk)
+    {
+        return false;
+    }
+
+    // Guest-only destination: write the rows straight into the surface's
+    // guest-RAM allocation. The pixel-container header carries the geometry
+    // the guest's own locks will use.
+    if(pDestinationSurface->EmuSurface8 == NULL)
+    {
+        const XTL::X_D3DPixelContainer* pContainer =
+            reinterpret_cast<const XTL::X_D3DPixelContainer*>(pDestinationSurface);
+        const DWORD guestWidth =
+            (pContainer->Size & X_D3DSIZE_WIDTH_MASK) + 1;
+        const DWORD guestHeight =
+            ((pContainer->Size & X_D3DSIZE_HEIGHT_MASK) >>
+             X_D3DSIZE_HEIGHT_SHIFT) + 1;
+        const DWORD guestPitch =
+            (((pContainer->Size & X_D3DSIZE_PITCH_MASK) >>
+              X_D3DSIZE_PITCH_SHIFT) + 1) * 64;
+        if(EmuSurfaceContainerTraceEnabled())
+        {
+            printf("SURF| rt-copy dst guest-only data=0x%.08lX common=0x%.08lX "
+                   "size=0x%.08lX fmt=0x%.08lX guest=%lux%lu pitch=%lu\n",
+                   reinterpret_cast<unsigned long>(pDestinationSurface->Data),
+                   static_cast<unsigned long>(pDestinationSurface->Common),
+                   static_cast<unsigned long>(pContainer->Size),
+                   static_cast<unsigned long>(pContainer->Format),
+                   guestWidth, guestHeight, guestPitch);
+            fflush(stdout);
+        }
+        if(pDestinationSurface->Data == 0 || guestWidth != SrcDesc.Width ||
+           guestHeight != SrcDesc.Height || guestPitch < rowBytes)
+        {
+            return false;
+        }
+        BYTE* pGuest = nullptr;
+        ULONG contiguousSize = 0;
+        const ULONG dstData = pDestinationSurface->Data;
+        if(EmuContiguousBlockBase(dstData, &contiguousSize) != 0)
+        {
+            // Kernel-contiguous allocations are host memory handed to the
+            // guest raw: the pointer is directly writable here.
+            pGuest = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(dstData));
+            const ULONG blockBase = EmuContiguousBlockBase(dstData, nullptr);
+            if(blockBase != 0 &&
+               dstData - blockBase + guestPitch * guestHeight > contiguousSize)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            pGuest = EmuResolvePhysicalHostSpan(
+                pDestinationSurface->Data,
+                static_cast<ULONG>(guestPitch) * guestHeight);
+        }
+        if(pGuest == nullptr)
+        {
+            return false;
+        }
+        for(UINT y = 0; y < SrcDesc.Height; ++y)
+        {
+            memcpy(pGuest + static_cast<std::size_t>(y) * guestPitch,
+                   pixels.data() + static_cast<std::size_t>(y) * rowBytes,
+                   rowBytes);
+        }
+        return true;
+    }
+
+    XTL::D3DSURFACE_DESC DstDesc = {};
+    if(FAILED(pDestinationSurface->EmuSurface8->GetDesc(&DstDesc)) ||
+       DstDesc.Format != SrcDesc.Format || DstDesc.Width != SrcDesc.Width ||
+       DstDesc.Height != SrcDesc.Height)
+    {
+        return false;
+    }
+
+    XTL::D3DLOCKED_RECT locked = {};
+    if(!EmuLockSurfaceForWrite(pDestinationSurface->EmuSurface8, &locked))
+    {
+        return false;
+    }
+
+    for(UINT y = 0; y < SrcDesc.Height; ++y)
+    {
+        memcpy(static_cast<BYTE*>(locked.pBits) +
+                   static_cast<std::size_t>(y) * locked.Pitch,
+               pixels.data() + static_cast<std::size_t>(y) * rowBytes,
+               rowBytes);
+    }
+    EmuSafeHostSurfaceUnlock(pDestinationSurface->EmuSurface8);
+
+    // A served destination lock keeps the container bytes authoritative for
+    // the guest: update them too.
+    if(EmuFindSurfaceContainerLock(pDestinationSurface) != nullptr)
+    {
+        if(EmuNativeSurface* pNative =
+               EmuNativeSurfaceFind(pDestinationSurface->EmuSurface8))
+        {
+            const UINT containerRows =
+                min(pNative->Height, (UINT)SrcDesc.Height);
+            const UINT containerRowBytes =
+                min(pNative->Pitch, (UINT)(SrcDesc.Width * 4));
+            for(UINT y = 0; y < containerRows; ++y)
+            {
+                memcpy(pNative->Pixels.data() +
+                           static_cast<std::size_t>(y) * pNative->Pitch,
+                       pixels.data() + static_cast<std::size_t>(y) * rowBytes,
+                       containerRowBytes);
+            }
+        }
+    }
+
+    // The destination host surface gained content behind a texture
+    // container's back: same rule as the host copy.
+    EmuInvalidateTextureContainerForSurface(pDestinationSurface->EmuSurface8);
+    return true;
+}
+
 // ******************************************************************
 // * func: EmuIDirect3DDevice8_CopyRects
 // ******************************************************************
@@ -3783,35 +4090,70 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CopyRects(
     // ******************************************************************
     // * Redirect to PC D3D
     // ******************************************************************
+    if(EmuSurfaceContainerTraceEnabled())
+    {
+        printf("SURF| copyrects wrapper src=0x%.08lX dst=0x%.08lX cRects=%lu\n",
+               reinterpret_cast<unsigned long>(
+                   pSourceSurface ? pSourceSurface->EmuSurface8 : 0),
+               reinterpret_cast<unsigned long>(
+                   pDestinationSurface ? pDestinationSurface->EmuSurface8 : 0),
+               static_cast<unsigned long>(cRects));
+        fflush(stdout);
+    }
     // Container-served surface locks commit at the shared flush points; a
     // copy between a guest lock and the next flush must see the guest's
     // bytes, so retire outstanding locks first (no-op on the d3d8 flavor).
     EmuCommitSurfaceContainerLocks();
     EmuCommitTextureContainerLocks();
 
-    HRESULT hRet = D3D_OK;
-    __try
+    // P8 C3: a render-target source's current pixels live in the backend's
+    // target registry -- the host surface holds stale bytes. For whole-
+    // surface like-format copies, read the registry target back and write
+    // the destination directly; rect lists and unlike formats keep the host
+    // forward (stale for RT sources -- a documented gap). The details live
+    // in a helper: this wrapper carries __try, which forbids unwinding
+    // locals in its frame.
+    bool NativeCopied = false;
+    if(cRects == 0 && pSourceSurface != NULL && pDestinationSurface != NULL &&
+       pSourceSurface->EmuSurface8 != NULL)
     {
-        hRet = g_pD3DDevice8->CopyRects(
-            pSourceSurface->EmuSurface8,
-            pSourceRectsArray,
-            cRects,
-            pDestinationSurface->EmuSurface8,
-            pDestPointsArray);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER)
-    {
-        hRet = D3DERR_INVALIDCALL;
+        __try
+        {
+            NativeCopied =
+                EmuCopyRectsFromTargetNative(pSourceSurface, pDestinationSurface);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            NativeCopied = false;
+        }
     }
 
-    // A copy into a texture's level surface updates the host texture behind
-    // the container's back: invalidate the capture so the bind pull falls
-    // back to the authoritative host texture (unless a served lock is
-    // outstanding, in which case the container stays authoritative).
-    if(SUCCEEDED(hRet) && cxbx::d3d8::HostBackendRenders() &&
-       pDestinationSurface != NULL && pDestinationSurface->EmuSurface8 != NULL)
+    HRESULT hRet = D3D_OK;
+    if(!NativeCopied)
     {
-        EmuInvalidateTextureContainerForSurface(pDestinationSurface->EmuSurface8);
+        __try
+        {
+            hRet = g_pD3DDevice8->CopyRects(
+                pSourceSurface->EmuSurface8,
+                pSourceRectsArray,
+                cRects,
+                pDestinationSurface->EmuSurface8,
+                pDestPointsArray);
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+            hRet = D3DERR_INVALIDCALL;
+        }
+
+        // A copy into a texture's level surface updates the host texture behind
+        // the container's back: invalidate the capture so the bind pull falls
+        // back to the authoritative host texture (unless a served lock is
+        // outstanding, in which case the container stays authoritative).
+        if(SUCCEEDED(hRet) && cxbx::d3d8::HostBackendRenders() &&
+           pDestinationSurface != NULL && pDestinationSurface->EmuSurface8 != NULL)
+        {
+            EmuInvalidateTextureContainerForSurface(pDestinationSurface->EmuSurface8);
+        }
     }
 
     EmuSwapFS(); // Xbox FS
@@ -6612,7 +6954,8 @@ static EmuNativeTexture* EmuNativeTextureAdopt(
 
 static void EmuNativeTextureForget(XTL::IDirect3DBaseTexture8* pHostTexture)
 {
-    // Self-locking: callers both hold and lack the registry mutex.
+    // Self-locking: no caller may hold the registry mutex (std::mutex is not
+    // recursive).
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
     for(std::size_t i = 0; i < g_EmuNativeTextures.size(); ++i)
     {
@@ -6646,10 +6989,18 @@ struct EmuTextureContainerLock
     XTL::IDirect3DTexture8* pTexture8 = nullptr;
     XTL::IDirect3DBaseTexture8* pHostTexture = nullptr;
     bool Writable = false;
+    // Set while a commit is copying this slot's rows: a registry-full steal
+    // must not retire a claim whose buffer the copy is still reading.
+    bool Committing = false;
+    // Monotonic claim order: the registry-full steal retires the oldest.
+    unsigned long ClaimSeq = 0;
 };
 static EmuTextureContainerLock g_EmuTextureContainerLocks[8] = {};
+static unsigned long g_EmuTextureContainerLockSeq = 0;
 
-static EmuTextureContainerLock* EmuFindTextureContainerLock(
+// Lock-slot array helpers. The _Locked forms require the caller to hold
+// EmuSurfaceContainerMutex(); the plain forms take it themselves.
+static EmuTextureContainerLock* EmuFindTextureContainerLockLocked(
     XTL::X_D3DResource* pResource)
 {
     for(auto& slot : g_EmuTextureContainerLocks)
@@ -6662,7 +7013,14 @@ static EmuTextureContainerLock* EmuFindTextureContainerLock(
     return nullptr;
 }
 
-static EmuTextureContainerLock* EmuFindTextureContainerLockByHost(
+static EmuTextureContainerLock* EmuFindTextureContainerLock(
+    XTL::X_D3DResource* pResource)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    return EmuFindTextureContainerLockLocked(pResource);
+}
+
+static EmuTextureContainerLock* EmuFindTextureContainerLockByHostLocked(
     XTL::IDirect3DBaseTexture8* pHostTexture)
 {
     for(auto& slot : g_EmuTextureContainerLocks)
@@ -6675,13 +7033,53 @@ static EmuTextureContainerLock* EmuFindTextureContainerLockByHost(
     return nullptr;
 }
 
-static void EmuReleaseTextureContainerLockSlot(
+static EmuTextureContainerLock* EmuFindTextureContainerLockByHost(
+    XTL::IDirect3DBaseTexture8* pHostTexture)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    return EmuFindTextureContainerLockByHostLocked(pHostTexture);
+}
+
+static EmuTextureContainerLock* EmuFindFreeTextureContainerLockLocked()
+{
+    EmuTextureContainerLock* pRetired = nullptr;
+    for(auto& slot : g_EmuTextureContainerLocks)
+    {
+        if(slot.pResource == nullptr)
+        {
+            slot.ClaimSeq = ++g_EmuTextureContainerLockSeq;
+            return &slot;
+        }
+        if(!slot.Committing &&
+           (pRetired == nullptr || slot.ClaimSeq < pRetired->ClaimSeq))
+        {
+            pRetired = &slot;
+        }
+    }
+    if(pRetired == nullptr)
+    {
+        // Every slot is mid-commit: hand out slot 0 to preserve liveness.
+        pRetired = &g_EmuTextureContainerLocks[0];
+    }
+    pRetired->ClaimSeq = ++g_EmuTextureContainerLockSeq;
+    return pRetired;
+}
+
+static void EmuReleaseTextureContainerLockSlotLocked(
     EmuTextureContainerLock* pSlot)
 {
     pSlot->pResource = nullptr;
     pSlot->pTexture8 = nullptr;
     pSlot->pHostTexture = nullptr;
     pSlot->Writable = false;
+    pSlot->Committing = false;
+}
+
+static void EmuReleaseTextureContainerLockSlot(
+    EmuTextureContainerLock* pSlot)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    EmuReleaseTextureContainerLockSlotLocked(pSlot);
 }
 
 // Pushes one outstanding served texture lock's container rows back into the
@@ -6717,15 +7115,40 @@ static void EmuCommitCopyTextureRows(XTL::IDirect3DBaseTexture8* pHostTexture,
     }
 }
 
+// Mutex-carried slot claim for the commit body (separate helper: the commit
+// body itself carries __try and must stay free of unwinding objects).
+// Returns false when the slot is empty or another commit already owns it;
+// the claim is held (Committing) until the copy ends.
+static bool EmuClaimTextureContainerLockForCommit(
+    EmuTextureContainerLock* pLock, XTL::IDirect3DTexture8** ppTexture8,
+    XTL::IDirect3DBaseTexture8** ppHostTexture, bool* pWritable)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(pLock->pResource == nullptr || pLock->Committing)
+    {
+        return false;
+    }
+    *ppTexture8 = pLock->pTexture8;
+    *ppHostTexture = pLock->pHostTexture;
+    *pWritable = pLock->Writable;
+    pLock->Committing = true;
+    return true;
+}
+
 static void EmuCommitTextureContainerLock(EmuTextureContainerLock* pLock)
 {
-    XTL::IDirect3DTexture8* pTexture8 = pLock->pTexture8;
-    XTL::IDirect3DBaseTexture8* pHostTexture = pLock->pHostTexture;
-    const bool writable = pLock->Writable;
-    EmuReleaseTextureContainerLockSlot(pLock);
+    XTL::IDirect3DTexture8* pTexture8 = nullptr;
+    XTL::IDirect3DBaseTexture8* pHostTexture = nullptr;
+    bool writable = false;
+    if(!EmuClaimTextureContainerLockForCommit(pLock, &pTexture8,
+                                              &pHostTexture, &writable))
+    {
+        return;
+    }
 
     if(pTexture8 == nullptr || !writable)
     {
+        EmuReleaseTextureContainerLockSlot(pLock);
         return;
     }
 
@@ -6741,6 +7164,7 @@ static void EmuCommitTextureContainerLock(EmuTextureContainerLock* pLock)
     }
     if(FAILED(hRet))
     {
+        EmuReleaseTextureContainerLockSlot(pLock);
         return;
     }
 
@@ -6752,6 +7176,7 @@ static void EmuCommitTextureContainerLock(EmuTextureContainerLock* pLock)
     __except(EXCEPTION_EXECUTE_HANDLER)
     {
     }
+    EmuReleaseTextureContainerLockSlot(pLock);
 }
 
 static void EmuCommitTextureContainerLock(XTL::X_D3DResource* pResource)
@@ -6767,20 +7192,32 @@ static void EmuCommitTextureContainerLock(XTL::X_D3DResource* pResource)
 }
 
 // Mutex note: texture locks run on the guest's D3D threads like surface
-// locks; the commit itself is called from the shared flush points and the
-// lock wrapper, which serialize per call site.
+// locks; the commits themselves run with the registry mutex released (the
+// snapshot below hands out stable slot addresses).
 static void EmuCommitTextureContainerLocks()
 {
     if(!cxbx::d3d8::HostBackendRenders())
     {
         return;
     }
-    for(auto& slot : g_EmuTextureContainerLocks)
+    EmuTextureContainerLock* pending[sizeof(g_EmuTextureContainerLocks) / sizeof(g_EmuTextureContainerLocks[0])];
+    unsigned count = 0;
     {
-        if(slot.pResource != nullptr)
+        std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+        for(unsigned v = 0;
+            v < sizeof(g_EmuTextureContainerLocks) / sizeof(g_EmuTextureContainerLocks[0]);
+            v++)
         {
-            EmuCommitTextureContainerLock(&slot);
+            if(g_EmuTextureContainerLocks[v].pResource != nullptr &&
+               !g_EmuTextureContainerLocks[v].Committing)
+            {
+                pending[count++] = &g_EmuTextureContainerLocks[v];
+            }
         }
+    }
+    for(unsigned v = 0; v < count; v++)
+    {
+        EmuCommitTextureContainerLock(pending[v]);
     }
 }
 
@@ -6798,9 +7235,15 @@ static void EmuForgetTextureContainerState(
     {
         std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
         if(EmuTextureContainerLock* pLock =
-               EmuFindTextureContainerLockByHost(pHostTexture))
+               EmuFindTextureContainerLockByHostLocked(pHostTexture))
         {
-            EmuReleaseTextureContainerLockSlot(pLock);
+            // A slot mid-commit releases itself when its copy ends; clearing
+            // it here could drop whichever claim took the slot over in the
+            // meantime.
+            if(!pLock->Committing)
+            {
+                EmuReleaseTextureContainerLockSlotLocked(pLock);
+            }
         }
     }
     // Takes the registry mutex itself.
@@ -6822,7 +7265,7 @@ static bool EmuServeTextureContainerFromLock(
     // A serve is already outstanding: the guest keeps editing the same
     // container view; discard the fresh host bits.
     if(EmuTextureContainerLock* pOpen =
-           EmuFindTextureContainerLock(pResource))
+           EmuFindTextureContainerLockLocked(pResource))
     {
         EmuNativeTexture* pServed = EmuNativeTextureFind(pTexture8);
         if(pServed != nullptr)
@@ -6907,24 +7350,12 @@ static bool EmuServeTextureContainerFromLock(
         return false;
     }
 
-    EmuTextureContainerLock* pSlot = nullptr;
-    for(auto& candidate : g_EmuTextureContainerLocks)
-    {
-        if(candidate.pResource == nullptr)
-        {
-            pSlot = &candidate;
-            break;
-        }
-    }
-    if(pSlot == nullptr)
-    {
-        // All slots outstanding: retire slot 0 (the oldest class of churn).
-        pSlot = &g_EmuTextureContainerLocks[0];
-    }
+    EmuTextureContainerLock* pSlot = EmuFindFreeTextureContainerLockLocked();
     pSlot->pResource = pResource;
     pSlot->pTexture8 = pTexture8;
     pSlot->pHostTexture = pTexture8;
     pSlot->Writable = true;
+    pSlot->Committing = false;
 
     // Release the host lock and hand the guest the container memory.
     EmuSafeHostTextureLevelUnlock(pTexture8);
@@ -6970,7 +7401,7 @@ static void EmuRefreshTextureContainerFromLock(
         return;
     }
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
-    if(EmuFindTextureContainerLockByHost(pHostTexture) != nullptr)
+    if(EmuFindTextureContainerLockByHostLocked(pHostTexture) != nullptr)
     {
         // Re-check under the mutex: a serve may have claimed meanwhile.
         return;
@@ -6997,28 +7428,47 @@ static void EmuRefreshTextureContainerFromLock(
 // and title vertex-buffer locks write it in place. Keyed by the host buffer
 // pointer (vertex and index buffers share the registry); slice C re-keys on
 // the guest resource.
+//
+// The registry is a fixed slot array under EmuSurfaceContainerMutex, NOT a
+// vector: the surface registry converted away from a reallocating vector
+// after multi-threaded churn corrupted the heap, and the buffer paths run on
+// the same guest threads. Containers carry the surface container's slop
+// tail: title writers overrun a locked buffer's nominal size the same way
+// they overrun locked surfaces, and an exactly-sized container turned that
+// into host heap corruption.
+#define EMU_BUFFER_CONTAINER_SLOTS 256
+
 struct EmuNativeBuffer
 {
     void* pHostBuffer = nullptr;
-    std::vector<BYTE> Bytes;
+    std::vector<BYTE> Bytes; // Size payload bytes plus the slop tail
     UINT Size = 0;
+    bool Used = false;
+    // Monotonic adoption order: the registry-full eviction retires the
+    // oldest (eviction is harmless -- the next lock re-births the buffer).
+    unsigned long ClaimSeq = 0;
 };
-static std::vector<EmuNativeBuffer> g_EmuNativeBuffers;
+static EmuNativeBuffer g_EmuNativeBuffers[EMU_BUFFER_CONTAINER_SLOTS] = {};
+static unsigned long g_EmuNativeBufferSeq = 0;
 
-static EmuNativeBuffer* EmuNativeBufferFind(void* pHostBuffer)
+// Caller holds EmuSurfaceContainerMutex(). The returned pointer (and its
+// Bytes buffer) stays stable while the mutex is held; hand the guest memory
+// only inside that window.
+static EmuNativeBuffer* EmuNativeBufferFindLocked(void* pHostBuffer)
 {
-    for(auto& entry : g_EmuNativeBuffers)
+    for(auto& slot : g_EmuNativeBuffers)
     {
-        if(entry.pHostBuffer == pHostBuffer)
+        if(slot.Used && slot.pHostBuffer == pHostBuffer)
         {
-            return &entry;
+            return &slot;
         }
     }
     return nullptr;
 }
 
-// Adopts an already-locked host buffer image as the container birth
-// content (the consumer lock paths and the Register fill sites).
+// Adopts an already-locked host buffer image as the container birth content
+// (the consumer lock paths and the Register fill sites). Self-locking: no
+// caller may hold EmuSurfaceContainerMutex().
 static void EmuNativeBufferAdopt(void* pHostBuffer, const void* pData,
                                  UINT size)
 {
@@ -7026,34 +7476,99 @@ static void EmuNativeBufferAdopt(void* pHostBuffer, const void* pData,
     {
         return;
     }
-    for(auto& entry : g_EmuNativeBuffers)
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(EmuNativeBuffer* existing = EmuNativeBufferFindLocked(pHostBuffer))
     {
-        if(entry.pHostBuffer == pHostBuffer)
-        {
-            entry.Bytes.assign(static_cast<const BYTE*>(pData),
+        existing->Bytes.assign(static_cast<const BYTE*>(pData),
                                static_cast<const BYTE*>(pData) + size);
-            entry.Size = size;
-            return;
+        existing->Size = size;
+        existing->Bytes.resize(
+            static_cast<std::size_t>(size) + EMU_SURFACE_CONTAINER_SLOP,
+            EMU_SURFACE_CONTAINER_SLOP_FILL);
+        return;
+    }
+    EmuNativeBuffer* pSlot = nullptr;
+    for(auto& slot : g_EmuNativeBuffers)
+    {
+        if(!slot.Used)
+        {
+            pSlot = &slot;
+            break;
         }
     }
-    EmuNativeBuffer entry;
-    entry.pHostBuffer = pHostBuffer;
-    entry.Size = size;
-    entry.Bytes.assign(static_cast<const BYTE*>(pData),
-                       static_cast<const BYTE*>(pData) + size);
-    g_EmuNativeBuffers.push_back(std::move(entry));
+    if(pSlot == nullptr)
+    {
+        // Registry full: retire the oldest container. The retired buffer's
+        // next lock re-births it, so eviction only costs a host pull.
+        pSlot = &g_EmuNativeBuffers[0];
+        for(auto& slot : g_EmuNativeBuffers)
+        {
+            if(slot.ClaimSeq < pSlot->ClaimSeq)
+            {
+                pSlot = &slot;
+            }
+        }
+    }
+    pSlot->Used = true;
+    pSlot->pHostBuffer = pHostBuffer;
+    pSlot->Size = size;
+    pSlot->ClaimSeq = ++g_EmuNativeBufferSeq;
+    pSlot->Bytes.assign(static_cast<const BYTE*>(pData),
+                        static_cast<const BYTE*>(pData) + size);
+    pSlot->Bytes.resize(
+        static_cast<std::size_t>(size) + EMU_SURFACE_CONTAINER_SLOP,
+        EMU_SURFACE_CONTAINER_SLOP_FILL);
 }
 
+// Drops a container when the host buffer dies, so a recycled pointer never
+// resolves to stale bytes. Self-locking.
 static void EmuNativeBufferForget(void* pHostBuffer)
 {
-    for(std::size_t i = 0; i < g_EmuNativeBuffers.size(); ++i)
+    if(pHostBuffer == nullptr)
     {
-        if(g_EmuNativeBuffers[i].pHostBuffer == pHostBuffer)
-        {
-            g_EmuNativeBuffers.erase(g_EmuNativeBuffers.begin() + i);
-            return;
-        }
+        return;
     }
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(EmuNativeBuffer* existing = EmuNativeBufferFindLocked(pHostBuffer))
+    {
+        existing->Used = false;
+        existing->pHostBuffer = nullptr;
+        existing->Size = 0;
+        existing->Bytes.clear();
+        existing->Bytes.shrink_to_fit();
+    }
+}
+
+// Serves a guest vertex-buffer lock from the container: base +
+// OffsetToLock, bounded by the locked range (SizeToLock 0 locks to the end
+// of the buffer). Returns false when no container backs the buffer or the
+// range leaves it, so the caller falls back to the host lock. The mutex
+// lives in this frame: the caller's body carries __try.
+static bool EmuServeNativeBufferLock(void* pHostBuffer, UINT OffsetToLock,
+                                     UINT SizeToLock, BYTE** ppbData)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    EmuNativeBuffer* native = EmuNativeBufferFindLocked(pHostBuffer);
+    if(native == nullptr || OffsetToLock > native->Size ||
+       (SizeToLock != 0 && OffsetToLock + SizeToLock > native->Size))
+    {
+        return false;
+    }
+    *ppbData = native->Bytes.data() + OffsetToLock;
+    return true;
+}
+
+// Serves a CPU-fallback read (VSH draw paths) with the whole container view.
+// Returns 0 when no container backs the buffer.
+static UINT EmuServeNativeBufferBytes(void* pHostBuffer, BYTE** ppData)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(EmuNativeBuffer* native = EmuNativeBufferFindLocked(pHostBuffer))
+    {
+        *ppData = native->Bytes.data();
+        return native->Size;
+    }
+    return 0;
 }
 
 static void EmuRefreshLinearTexture(XTL::IDirect3DBaseTexture8* pBaseTexture)
@@ -11066,10 +11581,15 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
             if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_VERTEXBUFFER)
             {
                 EmuDiscardRegisteredVertexBuffer(static_cast<X_D3DVertexBuffer*>(pThis));
+                // Resource-lifetime parity for the buffer container: the
+                // host buffer pointer dies here, so drop its native bytes
+                // before the address can be recycled by a new buffer.
+                EmuNativeBufferForget(pResource8);
             }
             else if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_INDEXBUFFER)
             {
                 EmuDiscardCreatedIndexBuffer(static_cast<X_D3DIndexBuffer*>(pThis));
+                EmuNativeBufferForget(pResource8);
             }
             EmuDiscardSwizzledTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
@@ -11093,10 +11613,19 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
                 cxbx::d3d8::HostBackendReleaseRenderTarget(pResource8);
                 // The host surface pointer dies here; drop its native
                 // container and any outstanding served lock with it.
-                if(EmuSurfaceContainerLock* pOpen =
-                       EmuFindSurfaceContainerLock(pThis))
                 {
-                    EmuReleaseSurfaceContainerLockSlot(pOpen);
+                    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+                    if(EmuSurfaceContainerLock* pOpen =
+                           EmuFindSurfaceContainerLockLocked(pThis))
+                    {
+                        // A slot mid-commit releases itself when its copy
+                        // ends; clearing it here could drop whichever claim
+                        // took the slot over in the meantime.
+                        if(!pOpen->Committing)
+                        {
+                            EmuReleaseSurfaceContainerLockSlotLocked(pOpen);
+                        }
+                    }
                 }
                 EmuNativeSurfaceForget(
                     reinterpret_cast<XTL::IDirect3DSurface8*>(pResource8));
@@ -12333,6 +12862,10 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay(
     // ******************************************************************
     // * manually copy data over to overlay
     // ******************************************************************
+    // UpdateOverlay reads the surface bytes directly, so it is a container
+    // flush point: push any outstanding served lock's rows back into the
+    // host surface first, or the overlay shows the seed frame forever.
+    EmuCommitSurfaceContainerLocks();
     if(g_bSupportsYUY2)
     {
         D3DSURFACE_DESC SurfaceDesc;
@@ -13638,11 +14171,21 @@ VOID WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock(
 
     // Slice B: under the Vulkan flavor the title locks the container in
     // place; the CPU-fallback reads read the same memory. The offset
-    // semantics are preserved by returning base + OffsetToLock.
+    // semantics are preserved by returning base + OffsetToLock, and the
+    // locked range must stay inside the container (a missing or oversized
+    // range falls back to the host lock).
     if(cxbx::d3d8::HostBackendRenders())
     {
-        EmuNativeBuffer* native = EmuNativeBufferFind(pVertexBuffer8);
-        if(native == nullptr && pVertexBuffer8 != nullptr)
+        BYTE* containerBits = nullptr;
+        if(EmuServeNativeBufferLock(pVertexBuffer8, OffsetToLock, SizeToLock,
+                                    &containerBits))
+        {
+            *ppbData = containerBits;
+            EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+        if(pVertexBuffer8 != nullptr)
         {
             __try
             {
@@ -13665,17 +14208,14 @@ VOID WINAPI XTL::EmuIDirect3DVertexBuffer8_Lock(
             __except(EXCEPTION_EXECUTE_HANDLER)
             {
             }
-            native = EmuNativeBufferFind(pVertexBuffer8);
-        }
-        if(native != nullptr &&
-           OffsetToLock <= native->Size)
-        {
-            printf("BUFDBG| VB Lock container size=%u off=%u\n",
-                   native->Size, OffsetToLock);
-            *ppbData = native->Bytes.data() + OffsetToLock;
-            EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
-            EmuSwapFS(); // XBox FS
-            return;
+            if(EmuServeNativeBufferLock(pVertexBuffer8, OffsetToLock,
+                                        SizeToLock, &containerBits))
+            {
+                *ppbData = containerBits;
+                EmuDiscardRegisteredVertexBuffer(ppVertexBuffer);
+                EmuSwapFS(); // XBox FS
+                return;
+            }
         }
     }
 
@@ -14312,19 +14852,31 @@ static void EmuUpdateDeferredStates()
             }
 
             if(pCur[6] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MIPMAPLODBIAS, pCur[6]);
+                }
+            }
 
             if(pCur[7] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXMIPLEVEL, pCur[7]);
+                }
+            }
 
             if(pCur[8] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_MAXANISOTROPY, pCur[8]);
+                }
+            }
 
             // TODO: Use a lookup table, this is not always a 1:1 map
             if(pCur[12] != X_D3DTSS_UNK)
@@ -14339,9 +14891,13 @@ static void EmuUpdateDeferredStates()
             }
 
             if(pCur[13] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_COLORARG0, pCur[13]);
+                }
+            }
 
             if(pCur[14] != X_D3DTSS_UNK)
             {
@@ -14371,34 +14927,58 @@ static void EmuUpdateDeferredStates()
             }
 
             if(pCur[17] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG0, pCur[17]);
+                }
+            }
 
             if(pCur[18] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG1, pCur[18]);
+                }
+            }
 
             if(pCur[19] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_ALPHAARG2, pCur[19]);
+                }
+            }
 
             if(pCur[20] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_RESULTARG, pCur[20]);
+                }
+            }
 
             if(pCur[21] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_TEXTURETRANSFORMFLAGS, pCur[21]);
+                }
+            }
 
             if(pCur[29] != X_D3DTSS_UNK)
+            {
                 cxbx::d3d8::HostBackendRecordTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
                 if(!cxbx::d3d8::HostBackendRenders())
+                {
                     g_pD3DDevice8->SetTextureStageState(v, D3DTSS_BORDERCOLOR, pCur[29]);
+                }
+            }
 
             /** To check for unhandled texture stage state changes
             for(int r=0;r<32;r++)
@@ -15421,10 +16001,14 @@ static HRESULT EmuVshLockVertexBuffer(XTL::X_D3DVertexBuffer* resource, BYTE** d
     // Vulkan flavor; the host lock below doubles as its birth pull.
     if(cxbx::d3d8::HostBackendRenders())
     {
-        if(EmuNativeBuffer* native = EmuNativeBufferFind(resource->EmuVertexBuffer8))
+        BYTE* containerBits = nullptr;
+        const UINT containerSize =
+            EmuServeNativeBufferBytes(resource->EmuVertexBuffer8,
+                                      &containerBits);
+        if(containerSize != 0)
         {
-            *data = native->Bytes.data();
-            *byteSize = native->Size;
+            *data = containerBits;
+            *byteSize = containerSize;
             return D3D_OK;
         }
     }
@@ -15442,15 +16026,6 @@ static HRESULT EmuVshLockVertexBuffer(XTL::X_D3DVertexBuffer* resource, BYTE** d
         if(SUCCEEDED(result))
         {
             *byteSize = description.Size;
-            if(cxbx::d3d8::HostBackendRenders())
-            {
-                // BISECT: adopt disabled
-                if(false)
-                {
-                    EmuNativeBufferAdopt(resource->EmuVertexBuffer8, *data,
-                                         *byteSize);
-                }
-            }
         }
         return result;
     }
@@ -15508,10 +16083,14 @@ static HRESULT EmuVshLockIndexBuffer(XTL::X_D3DIndexBuffer* resource, BYTE** dat
     // vertex-buffer branch above).
     if(cxbx::d3d8::HostBackendRenders())
     {
-        if(EmuNativeBuffer* native = EmuNativeBufferFind(resource->EmuIndexBuffer8))
+        BYTE* containerBits = nullptr;
+        const UINT containerSize =
+            EmuServeNativeBufferBytes(resource->EmuIndexBuffer8,
+                                      &containerBits);
+        if(containerSize != 0)
         {
-            *data = native->Bytes.data();
-            *byteSize = native->Size;
+            *data = containerBits;
+            *byteSize = containerSize;
             return D3D_OK;
         }
     }
@@ -15529,15 +16108,6 @@ static HRESULT EmuVshLockIndexBuffer(XTL::X_D3DIndexBuffer* resource, BYTE** dat
         if(SUCCEEDED(result))
         {
             *byteSize = description.Size;
-            if(cxbx::d3d8::HostBackendRenders())
-            {
-                // BISECT: adopt disabled
-                if(false)
-                {
-                    EmuNativeBufferAdopt(resource->EmuIndexBuffer8, *data,
-                                         *byteSize);
-                }
-            }
         }
         return result;
     }

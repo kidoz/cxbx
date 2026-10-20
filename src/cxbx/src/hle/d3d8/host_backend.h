@@ -217,6 +217,11 @@ bool HostBackendCurrentTargetSize(unsigned int* width, unsigned int* height);
 // render path is not active.
 bool HostBackendReadMainTarget(void* dst, unsigned int pitch);
 
+// Reads a keyed registry target's pixels (BGRA8 rows) into dst. Returns
+// false when the key has no registered target or the extent exceeds it.
+bool HostBackendReadTargetPixels(void* key, void* dst, unsigned int pitch,
+                                 unsigned int width, unsigned int height);
+
 // Releases everything the selected backend owns (the Vulkan presenter's
 // device, swapchain, and instance).
 void HostBackendShutdown();
