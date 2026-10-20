@@ -103,6 +103,10 @@ void __cdecl main()
     D3DDevice_SetViewport(&vpBB);
 
     // -- Copy the target into a system-memory image surface ----------------
+    // Whole-surface copy first, then a rect-list copy that overwrites the
+    // bottom-left quadrant with the target's top-right (green) quadrant: the
+    // offset lands the rect exactly where the whole copy put red, so the
+    // final readback proves both paths with one lock.
     D3DSurface* pImage = NULL;
     D3DDevice_CreateImageSurface(RT_SIZE, RT_SIZE, D3DFMT_LIN_A8R8G8B8,
                                  &pImage);
@@ -113,6 +117,11 @@ void __cdecl main()
     D3DDevice_CopyRects(pRTSurf, NULL, 0, pImage, NULL);
     xt_chk("d3d.copyrects_called", 1, 1);
 
+    RECT srcRect = { RT_SIZE / 2, 0, RT_SIZE, RT_SIZE / 2 }; // top-right quadrant
+    POINT dstPoint = { 0, RT_SIZE / 2 };                     // -> bottom-left
+    D3DDevice_CopyRects(pRTSurf, &srcRect, 1, pImage, &dstPoint);
+    xt_chk("d3d.copyrects_rect_called", 1, 1);
+
     // -- Single readback at the end ----------------------------------------
     D3DLOCKED_RECT lr;
     lr.pBits = NULL;
@@ -120,12 +129,17 @@ void __cdecl main()
     xt_chk("d3d.lock_ok", 1, lr.pBits != NULL);
     if(lr.pBits != NULL)
     {
-        // Left half red, right half green -- sampled at region centres so a
-        // boundary off-by-one cannot flip the verdict.
-        xt_chk_u32("d3d.rt_left_red", RT_LEFT & 0xFFFFFF,
-                   read_pixel(lr.pBits, lr.Pitch, 64, 128));
+        // Top-left: the whole copy put red here and the rect copy did not
+        // reach it.
+        xt_chk_u32("d3d.rt_whole_red", RT_LEFT & 0xFFFFFF,
+                   read_pixel(lr.pBits, lr.Pitch, 64, 64));
+        // Bottom-left: red from the whole copy, then overwritten green by
+        // the rect-list copy (target's top-right quadrant, offset (0,128)).
+        xt_chk_u32("d3d.rt_rect_green", RT_CLEAR & 0xFFFFFF,
+                   read_pixel(lr.pBits, lr.Pitch, 64, 192));
+        // Top-right: green from the whole copy, untouched by the rect copy.
         xt_chk_u32("d3d.rt_right_green", RT_CLEAR & 0xFFFFFF,
-                   read_pixel(lr.pBits, lr.Pitch, 192, 128));
+                   read_pixel(lr.pBits, lr.Pitch, 192, 64));
     }
 
     xt_end_and_exit();

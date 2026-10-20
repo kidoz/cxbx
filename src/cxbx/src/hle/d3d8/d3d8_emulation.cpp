@@ -116,7 +116,10 @@ static void EmuCommitTextureContainerLocks();
 static void EmuForgetTextureContainerState(XTL::IDirect3DBaseTexture8* pHostTexture);
 static void EmuInvalidateTextureContainerForSurface(XTL::IDirect3DSurface8* pLevelHostSurface);
 static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
-                                         XTL::X_D3DSurface* pDestinationSurface);
+                                         XTL::X_D3DSurface* pDestinationSurface,
+                                         CONST RECT* pSourceRectsArray,
+                                         UINT cRects,
+                                         CONST POINT* pDestPointsArray);
 
 // ******************************************************************
 // * Static Variable(s)
@@ -3864,16 +3867,17 @@ static bool EmuLockSurfaceForRead(XTL::IDirect3DSurface8* pHostSurface,
     }
 }
 
-// P8 C3: serves a whole-surface like-format CopyRects whose source is a
-// backend registry target. Reads the target's live pixels (the host surface
-// holds stale bytes under the render path) and writes the destination --
-// host surface, plus the served container view when one is outstanding.
-// Guest-only destinations (created by the unpatched guest library, no host
-// surface) receive the rows in their guest-RAM Data allocation, which is
-// the memory the title's own locks read. Returns false when the copy does
-// not apply and the host forward should run instead.
-static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
-                                         XTL::X_D3DSurface* pDestinationSurface)
+// P8 C3: serves whole-surface and rect-list like-format CopyRects whose
+// source is a backend registry target. Reads the target's live pixels (the
+// host surface holds stale bytes under the render path) and writes the
+// destination -- host surface, plus the served container view when one is
+// outstanding. Guest-only destinations (created by the unpatched guest
+// library, no host surface) receive the rows in their guest-RAM Data
+// allocation, which is the memory the title's own locks read. Returns false
+// when the copy does not apply and the host forward should run instead.
+static bool EmuCopyRectsFromTargetNative(
+    XTL::X_D3DSurface* pSourceSurface, XTL::X_D3DSurface* pDestinationSurface,
+    CONST RECT* pSourceRectsArray, UINT cRects, CONST POINT* pDestPointsArray)
 {
     if(EmuSurfaceContainerTraceEnabled())
     {
@@ -3886,6 +3890,11 @@ static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
     if(pSourceSurface->EmuSurface8 == NULL ||
        FAILED(pSourceSurface->EmuSurface8->GetDesc(&SrcDesc)) ||
        SrcDesc.Width == 0 || SrcDesc.Height == 0)
+    {
+        return false;
+    }
+    // 4-byte texel formats only (A8R8G8B8 / X8R8G8B8 -- the Xbox RT set).
+    if(SrcDesc.Format != 21 && SrcDesc.Format != 22)
     {
         return false;
     }
@@ -3941,6 +3950,38 @@ static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
         return false;
     }
 
+    // Resolve the copy list: NULL rects = one whole-surface copy. Every
+    // rect must sit inside the source and its destination offset must keep
+    // the copy inside the destination.
+    struct CopyRectEntry
+    {
+        RECT src;
+        POINT dst;
+    };
+    std::vector<CopyRectEntry> copies;
+    if(cRects == 0)
+    {
+        copies.push_back({{0, 0, (LONG)SrcDesc.Width, (LONG)SrcDesc.Height},
+                          {0, 0}});
+    }
+    else
+    {
+        for(UINT i = 0; i < cRects; ++i)
+        {
+            const RECT& r = pSourceRectsArray[i];
+            const POINT& p = pDestPointsArray[i];
+            if(r.left < 0 || r.top < 0 || r.right > (LONG)SrcDesc.Width ||
+               r.bottom > (LONG)SrcDesc.Height || r.left >= r.right ||
+               r.top >= r.bottom || p.x < 0 || p.y < 0 ||
+               p.x + (r.right - r.left) > (LONG)SrcDesc.Width ||
+               p.y + (r.bottom - r.top) > (LONG)SrcDesc.Height)
+            {
+                return false;
+            }
+            copies.push_back({r, p});
+        }
+    }
+
     // Guest-only destination: write the rows straight into the surface's
     // guest-RAM allocation. The pixel-container header carries the geometry
     // the guest's own locks will use.
@@ -3967,8 +4008,9 @@ static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
                    guestWidth, guestHeight, guestPitch);
             fflush(stdout);
         }
-        if(pDestinationSurface->Data == 0 || guestWidth != SrcDesc.Width ||
-           guestHeight != SrcDesc.Height || guestPitch < rowBytes)
+        if(pDestinationSurface->Data == 0 ||
+           guestWidth < SrcDesc.Width || guestHeight < SrcDesc.Height ||
+           guestPitch < rowBytes)
         {
             return false;
         }
@@ -3997,19 +4039,27 @@ static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
         {
             return false;
         }
-        for(UINT y = 0; y < SrcDesc.Height; ++y)
+        for(const CopyRectEntry& copy : copies)
         {
-            memcpy(pGuest + static_cast<std::size_t>(y) * guestPitch,
-                   pixels.data() + static_cast<std::size_t>(y) * rowBytes,
-                   rowBytes);
+            for(LONG y = copy.src.top; y < copy.src.bottom; ++y)
+            {
+                memcpy(pGuest +
+                           static_cast<std::size_t>(copy.dst.y + y - copy.src.top) *
+                               guestPitch +
+                           static_cast<std::size_t>(copy.dst.x) * 4,
+                       pixels.data() +
+                           static_cast<std::size_t>(y) * rowBytes +
+                           static_cast<std::size_t>(copy.src.left) * 4,
+                       static_cast<std::size_t>(copy.src.right - copy.src.left) * 4);
+            }
         }
         return true;
     }
 
     XTL::D3DSURFACE_DESC DstDesc = {};
     if(FAILED(pDestinationSurface->EmuSurface8->GetDesc(&DstDesc)) ||
-       DstDesc.Format != SrcDesc.Format || DstDesc.Width != SrcDesc.Width ||
-       DstDesc.Height != SrcDesc.Height)
+       DstDesc.Format != SrcDesc.Format || DstDesc.Width < SrcDesc.Width ||
+       DstDesc.Height < SrcDesc.Height)
     {
         return false;
     }
@@ -4020,12 +4070,19 @@ static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
         return false;
     }
 
-    for(UINT y = 0; y < SrcDesc.Height; ++y)
+    for(const CopyRectEntry& copy : copies)
     {
-        memcpy(static_cast<BYTE*>(locked.pBits) +
-                   static_cast<std::size_t>(y) * locked.Pitch,
-               pixels.data() + static_cast<std::size_t>(y) * rowBytes,
-               rowBytes);
+        for(LONG y = copy.src.top; y < copy.src.bottom; ++y)
+        {
+            memcpy(static_cast<BYTE*>(locked.pBits) +
+                       static_cast<std::size_t>(copy.dst.y + y - copy.src.top) *
+                           locked.Pitch +
+                       static_cast<std::size_t>(copy.dst.x) * 4,
+                   pixels.data() +
+                       static_cast<std::size_t>(y) * rowBytes +
+                       static_cast<std::size_t>(copy.src.left) * 4,
+                   static_cast<std::size_t>(copy.src.right - copy.src.left) * 4);
+        }
     }
     EmuSafeHostSurfaceUnlock(pDestinationSurface->EmuSurface8);
 
@@ -4036,16 +4093,24 @@ static bool EmuCopyRectsFromTargetNative(XTL::X_D3DSurface* pSourceSurface,
         if(EmuNativeSurface* pNative =
                EmuNativeSurfaceFind(pDestinationSurface->EmuSurface8))
         {
-            const UINT containerRows =
-                min(pNative->Height, (UINT)SrcDesc.Height);
+            const UINT containerRows = pNative->Height;
             const UINT containerRowBytes =
                 min(pNative->Pitch, (UINT)(SrcDesc.Width * 4));
-            for(UINT y = 0; y < containerRows; ++y)
+            for(const CopyRectEntry& copy : copies)
             {
-                memcpy(pNative->Pixels.data() +
-                           static_cast<std::size_t>(y) * pNative->Pitch,
-                       pixels.data() + static_cast<std::size_t>(y) * rowBytes,
-                       containerRowBytes);
+                for(LONG y = copy.src.top; y < copy.src.bottom && y < (LONG)containerRows; ++y)
+                {
+                    memcpy(pNative->Pixels.data() +
+                               static_cast<std::size_t>(copy.dst.y + y - copy.src.top) *
+                                   pNative->Pitch +
+                               static_cast<std::size_t>(copy.dst.x) * 4,
+                           pixels.data() +
+                               static_cast<std::size_t>(y) * rowBytes +
+                               static_cast<std::size_t>(copy.src.left) * 4,
+                           containerRowBytes < static_cast<std::size_t>(copy.src.right - copy.src.left) * 4
+                               ? containerRowBytes
+                               : static_cast<std::size_t>(copy.src.right - copy.src.left) * 4);
+                }
             }
         }
     }
@@ -4107,20 +4172,21 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CopyRects(
     EmuCommitTextureContainerLocks();
 
     // P8 C3: a render-target source's current pixels live in the backend's
-    // target registry -- the host surface holds stale bytes. For whole-
-    // surface like-format copies, read the registry target back and write
-    // the destination directly; rect lists and unlike formats keep the host
-    // forward (stale for RT sources -- a documented gap). The details live
-    // in a helper: this wrapper carries __try, which forbids unwinding
-    // locals in its frame.
+    // target registry -- the host surface holds stale bytes. For like-format
+    // copies (whole surface or validated rect lists), read the registry
+    // target back and write the destination directly; unlike formats keep
+    // the host forward (stale for RT sources -- a documented gap). The
+    // details live in a helper: this wrapper carries __try, which forbids
+    // unwinding locals in its frame.
     bool NativeCopied = false;
-    if(cRects == 0 && pSourceSurface != NULL && pDestinationSurface != NULL &&
+    if(pSourceSurface != NULL && pDestinationSurface != NULL &&
        pSourceSurface->EmuSurface8 != NULL)
     {
         __try
         {
-            NativeCopied =
-                EmuCopyRectsFromTargetNative(pSourceSurface, pDestinationSurface);
+            NativeCopied = EmuCopyRectsFromTargetNative(
+                pSourceSurface, pDestinationSurface, pSourceRectsArray,
+                cRects, pDestPointsArray);
         }
         __except(EXCEPTION_EXECUTE_HANDLER)
         {
