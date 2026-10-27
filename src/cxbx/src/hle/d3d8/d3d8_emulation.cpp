@@ -6971,6 +6971,10 @@ static void EmuCopyLinearTexture(XTL::IDirect3DTexture8* pTexture,
 struct EmuNativeTexture
 {
     XTL::IDirect3DBaseTexture8* pHostTexture = nullptr;
+    // Slice C: the GUEST resource pointer (stable for the resource's
+    // lifetime) when known -- binds and releases resolve by it first, so a
+    // recycled host pointer can never alias a live container.
+    XTL::X_D3DResource* pGuestResource = nullptr;
     std::vector<BYTE> Pixels; // level-0 texels, host-format byte layout
     UINT Pitch = 0;
     UINT Width = 0;
@@ -6990,6 +6994,57 @@ static EmuNativeTexture* EmuNativeTextureFind(
         }
     }
     return nullptr;
+}
+
+// Bind-time lookup: prefer the guest identity, fall back to the host
+// pointer for entries that never learned it.
+static EmuNativeTexture* EmuNativeTextureFindForBind(
+    XTL::IDirect3DBaseTexture8* pHostTexture, XTL::X_D3DResource* pGuestResource)
+{
+    if(pGuestResource != nullptr)
+    {
+        for(auto& entry : g_EmuNativeTextures)
+        {
+            if(entry.pGuestResource == pGuestResource)
+            {
+                return &entry;
+            }
+        }
+    }
+    return pHostTexture != nullptr ? EmuNativeTextureFind(pHostTexture)
+                                   : nullptr;
+}
+
+// Attaches the guest identity to an existing container (Register-time).
+static void EmuNativeTextureAttachGuest(
+    XTL::IDirect3DBaseTexture8* pHostTexture, XTL::X_D3DResource* pGuestResource)
+{
+    if(pHostTexture == nullptr || pGuestResource == nullptr)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(EmuNativeTexture* entry = EmuNativeTextureFind(pHostTexture))
+    {
+        entry->pGuestResource = pGuestResource;
+    }
+}
+
+static void EmuNativeTextureForgetGuest(XTL::X_D3DResource* pGuestResource)
+{
+    if(pGuestResource == nullptr)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    for(std::size_t i = 0; i < g_EmuNativeTextures.size(); ++i)
+    {
+        if(g_EmuNativeTextures[i].pGuestResource == pGuestResource)
+        {
+            g_EmuNativeTextures.erase(g_EmuNativeTextures.begin() + i);
+            return;
+        }
+    }
 }
 
 // Creates the container for pHostTexture when missing, pre-filling level 0
@@ -9435,7 +9490,8 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
         bool staleGeometry = false;
         {
             std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
-            EmuNativeTexture* native = EmuNativeTextureFind(pBaseTexture8);
+            EmuNativeTexture* native = EmuNativeTextureFindForBind(
+                pBaseTexture8, reinterpret_cast<XTL::X_D3DResource*>(pGuestKey));
             if(native != nullptr)
             {
                 if(native->Width == description.Width &&
@@ -11793,6 +11849,9 @@ HRESULT WINAPI XTL::EmuIDirect3DResource8_Register(
        pThis->EmuTexture8 != NULL)
     {
         EmuNativeTextureEnsureThreadsafe(pThis->EmuTexture8);
+        // Slice C: attach the guest identity so binds/releases resolve the
+        // container by the stable guest pointer.
+        EmuNativeTextureAttachGuest(pThis->EmuTexture8, pThis);
     }
 
     EmuSwapFS(); // XBox FS
@@ -11993,6 +12052,9 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
                 // container and any outstanding served lock with it.
                 EmuForgetTextureContainerState(
                     reinterpret_cast<XTL::IDirect3DBaseTexture8*>(pResource8));
+                // Slice C: also drop the HLE byte container by the guest
+                // identity (containers attached at Register carry it).
+                EmuNativeTextureForgetGuest(pThis);
             }
             else if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_SURFACE)
             {
