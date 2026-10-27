@@ -1,0 +1,10 @@
+# XDK-toolchain probe (see d3d_rt_copyrects): pixel-exact verification of
+# cube-map texture mirroring. Creates a 64x64 cube, fills all six faces via
+# D3DCubeTexture_LockRect, samples +Z/+X/-Z by direction with a 3-float FVF
+# texcoord set, and verifies backbuffer pixels. Pins the cube bind pull and
+# the renderer's samplerCube path; without them every face samples white.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"

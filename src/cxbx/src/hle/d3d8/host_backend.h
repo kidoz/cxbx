@@ -222,6 +222,12 @@ bool HostBackendReadMainTarget(void* dst, unsigned int pitch);
 bool HostBackendReadTargetPixels(void* key, void* dst, unsigned int pitch,
                                  unsigned int width, unsigned int height);
 
+// Binds a cube map on the stage (six square faces, face-major, D3D8 face
+// order). False when the render path is inactive or the bind was refused.
+bool HostBackendSetCubeTexture(unsigned int stage, void* key,
+                               const void* pixels, unsigned int pitch,
+                               unsigned int size, unsigned int hostFormat);
+
 // Releases everything the selected backend owns (the Vulkan presenter's
 // device, swapchain, and instance).
 void HostBackendShutdown();

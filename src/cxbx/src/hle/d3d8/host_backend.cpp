@@ -687,6 +687,18 @@ bool HostBackendReadTargetPixels(void* key, void* dst, unsigned int pitch,
     return vulkan::RendererReadTargetPixels(key, dst, pitch, width, height);
 }
 
+bool HostBackendSetCubeTexture(unsigned int stage, void* key,
+                               const void* pixels, unsigned int pitch,
+                               unsigned int size, unsigned int hostFormat)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererSetCubeTexture(stage, key, pixels, pitch, size,
+                                          hostFormat);
+}
+
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,
                              unsigned int height, unsigned int pitch)
 {

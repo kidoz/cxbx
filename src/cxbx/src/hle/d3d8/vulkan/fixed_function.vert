@@ -21,6 +21,15 @@ void main()
     {
         texCoord = inTexCoord;
     }
+    else if(pc.texCoordSets == 3u)
+    {
+        // Single vec3 set (cube-map directions): broadcast set 0 with a
+        // neutral projective q.
+        texCoord = vec4[4](vec4(inTexCoord[0].xyz, 1.0),
+                           vec4(inTexCoord[0].xyz, 1.0),
+                           vec4(inTexCoord[0].xyz, 1.0),
+                           vec4(inTexCoord[0].xyz, 1.0));
+    }
     else
     {
         texCoord = vec4[4](inTexCoord[0], inTexCoord[0], inTexCoord[0],

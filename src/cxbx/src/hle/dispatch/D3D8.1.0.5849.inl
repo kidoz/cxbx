@@ -1205,6 +1205,27 @@ SOOVPA<8> IDirect3DDevice8_CopyRects_1_0_5849 =
     }
 };
 
+// ?Lock2DSurface@PixelJar@D3D@@YGX... (d3d8.lib, 155 bytes, unique in 92
+// corpus images). The 5849 _D3DCubeTexture_LockRect@24 export is a bare
+// jmp thunk to this shared internal (5 bytes, not signable), and the
+// surface/texture LockRect exports -- which also call it -- are patched at
+// their own level, so redirecting the internal captures the cube path
+// only. The wrapper tolerates non-cube first arguments.
+SOOVPA<8> D3D5849_Lock2DSurface =
+{
+    0, 8, -1, 0,
+    {
+        { 0x00, 0x51 },
+        { 0x16, 0x8D },
+        { 0x2C, 0x1C },
+        { 0x42, 0x8B },
+        { 0x58, 0x56 },
+        { 0x6E, 0x0F },
+        { 0x84, 0x59 },
+        { 0x9A, 0x00 }
+    }
+};
+
 OOVPATable D3D8_1_0_5849[] =
 {
     // D3DDevice::CreatePushBuffer2
@@ -1994,6 +2015,14 @@ OOVPATable D3D8_1_0_5849[] =
         XTL::EmuIDirect3DDevice8_CopyRects,
         #ifdef _DEBUG_TRACE
         "EmuIDirect3DDevice8_CopyRects"
+        #endif
+    },
+    // D3D::PixelJar::Lock2DSurface (cube LockRect thunk target)
+    {
+        (OOVPA*)&D3D5849_Lock2DSurface,
+        XTL::EmuIDirect3DCubeTexture8_LockRect,
+        #ifdef _DEBUG_TRACE
+        "EmuIDirect3DCubeTexture8_LockRect"
         #endif
     },
 

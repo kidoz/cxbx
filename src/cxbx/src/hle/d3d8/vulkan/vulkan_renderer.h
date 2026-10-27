@@ -62,9 +62,10 @@ void RendererSetRasterState(unsigned int state, unsigned int value);
 // the host D3DPRIMITIVETYPE enumeration and primitiveCount follows
 // DrawPrimitiveUP semantics (converted to a vertex count internally).
 // texCoordSets selects the texcoord layout: 0 = the legacy single float2 at
-// texCoordOffset; 4 = four vec4 sets at texCoordOffset + 16*i with the
-// projective q in each set's w (the per-stage coordinates program shaders
-// write; the fragment samples stage i from set i).
+// texCoordOffset; 3 = one float3 set at texCoordOffset (cube-map
+// directions, neutral projective q); 4 = four vec4 sets at texCoordOffset +
+// 16*i with the projective q in each set's w (the per-stage coordinates
+// program shaders write; the fragment samples stage i from set i).
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
                     unsigned int diffuseOffset, unsigned int texCoordOffset,
@@ -103,6 +104,15 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key);
 bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
                         unsigned int pitch, unsigned int width,
                         unsigned int height, unsigned int hostFormat);
+
+// Binds a cube map on the stage: pixels hold six square faces face-major
+// (face order +X, -X, +Y, -Y, +Z, -Z; each face's rows at the given pitch);
+// size is the per-face edge. hostFormat 21/22 only. The stage samples the
+// cube through the direction texCoord[stage].xyz (2D sampling is bypassed
+// while the cube bind is active; the next RendererSetTexture rebinds 2D).
+bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
+                            unsigned int pitch, unsigned int size,
+                            unsigned int hostFormat);
 
 // d3d8 texture-stage state, one component at a time (mirrors the HLE's
 // deferred texture-state apply loop). TextureOp types: 0 = COLOROP,

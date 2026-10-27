@@ -244,6 +244,72 @@ bool Run(const char* scenario)
         vk::RendererSetPixelShaderConstant(0, zero);
         return Draw(200, 8, 0xFFFFFFFFu) && Pixel(208, 16, 0);
     }
+    if(std::strcmp(scenario, "cube") == 0)
+    {
+        // Cube-map mirroring: six solid faces uploaded face-major, sampled
+        // by direction through the vec3 texcoord layout. D3D8 face order:
+        // +X, -X, +Y, -Y, +Z, -Z.
+        struct CubeVertex
+        {
+            float x, y, z, rhw;
+            std::uint32_t color;
+            float dirX, dirY, dirZ;
+        };
+        constexpr unsigned int kCubeSize = 64;
+        std::vector<std::uint32_t> faces(
+            static_cast<std::size_t>(kCubeSize) * kCubeSize * 6);
+        for(std::size_t i = 0; i < faces.size(); ++i)
+        {
+            faces[i] = Blue;
+        }
+        const auto fillFace = [&](unsigned int face, std::uint32_t color) {
+            const std::size_t begin =
+                static_cast<std::size_t>(face) * kCubeSize * kCubeSize;
+            std::fill(faces.begin() + static_cast<std::ptrdiff_t>(begin),
+                      faces.begin() + static_cast<std::ptrdiff_t>(
+                                          begin + kCubeSize * kCubeSize),
+                      color);
+        };
+        fillFace(0, Red);    // +X
+        fillFace(4, Green);  // +Z
+        fillFace(5, 0xFFFFFF00u); // -Z (yellow)
+
+        int cubeKey = 0;
+        const auto cubeQuad = [&](float x, float y, float dx, float dy,
+                                  float dz) {
+            const CubeVertex verts[6] = {
+                { x, y, 0.5f, 1, 0xFFFFFFFFu, dx, dy, dz },
+                { x + 16, y, 0.5f, 1, 0xFFFFFFFFu, dx, dy, dz },
+                { x, y + 16, 0.5f, 1, 0xFFFFFFFFu, dx, dy, dz },
+                { x + 16, y, 0.5f, 1, 0xFFFFFFFFu, dx, dy, dz },
+                { x + 16, y + 16, 0.5f, 1, 0xFFFFFFFFu, dx, dy, dz },
+                { x, y + 16, 0.5f, 1, 0xFFFFFFFFu, dx, dy, dz },
+            };
+            return vk::RendererDrawUP(4, 2, verts, sizeof(CubeVertex),
+                                      offsetof(CubeVertex, color),
+                                      offsetof(CubeVertex, dirX), 3);
+        };
+        if(!vk::RendererSetCubeTexture(0, &cubeKey, faces.data(),
+                                       kCubeSize * 4, kCubeSize, 21) ||
+           !cubeQuad(8, 8, 0.0f, 0.0f, 1.0f) ||   // +Z -> green
+           !cubeQuad(40, 8, 1.0f, 0.0f, 0.0f) ||  // +X -> red
+           !cubeQuad(72, 8, 0.0f, 0.0f, -1.0f) || // -Z -> yellow
+           !Pixel(16, 16, Green) || !Pixel(48, 16, Red) ||
+           !Pixel(80, 16, 0xFFFF00u))
+        {
+            return false;
+        }
+        // Rebinding a 2D texture on the stage must restore 2D sampling.
+        if(!vk::RendererSetTexture(0, &cubeKey, &Red, 4, 1, 1, 21) ||
+           !cubeQuad(8, 40, 0.0f, 0.0f, 1.0f) || !Pixel(16, 48, Red))
+        {
+            return false;
+        }
+        // And back to the cube: the cached entry must survive the 2D bind.
+        return vk::RendererSetCubeTexture(0, &cubeKey, faces.data(),
+                                          kCubeSize * 4, kCubeSize, 21) &&
+               cubeQuad(40, 40, 0.0f, 0.0f, 1.0f) && Pixel(48, 48, Green);
+    }
     if(std::strcmp(scenario, "sampling") == 0)
     {
         // Reupload and resize a texture while earlier draws still reference

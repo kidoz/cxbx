@@ -1,6 +1,7 @@
 #version 450
 
 layout(set = 0, binding = 0) uniform sampler2D textures[4];
+layout(set = 0, binding = 2) uniform samplerCube cubeTextures[4];
 layout(set = 0, binding = 1, std140) uniform CombinerConfig
 {
     vec4 constants[8];
@@ -129,16 +130,20 @@ void main()
 {
     // Stage i samples its own coordinate set with the D3D projective
     // divide (st / q, q in the set's w). Legacy single-vec2 layouts leave
-    // the unused sets at (0,0,0,1), a neutral q of one.
+    // the unused sets at (0,0,0,1), a neutral q of one. Cube stages
+    // (extra.w bit i) sample the direction texCoord[i].xyz instead; the
+    // divide never applies to cube lookups.
     vec2 stageTexCoord[4];
+    vec4 sampled[4];
     for(uint set = 0u; set < 4u; ++set)
     {
         float q = texCoord[set].w;
         q = abs(q) < 1.0e-6 ? 1.0 : q;
         stageTexCoord[set] = texCoord[set].xy / q;
+        sampled[set] = ((pc.extra.w >> set) & 1u) != 0u
+            ? texture(cubeTextures[set], texCoord[set].xyz)
+            : texture(textures[set], stageTexCoord[set]);
     }
-    vec4 sampled[4] = vec4[4](texture(textures[0], stageTexCoord[0]), texture(textures[1], stageTexCoord[1]),
-                              texture(textures[2], stageTexCoord[2]), texture(textures[3], stageTexCoord[3]));
     if(pc.extra.x == 0u)
     {
         vec4 current = color;

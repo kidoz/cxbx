@@ -7936,6 +7936,23 @@ XTL::X_D3DResource* WINAPI XTL::EmuIDirect3DDevice8_CreateTexture2(
     D3DRESOURCETYPE D3DResource)
 {
     D3D_TRACE("CreateTexture2");
+
+    // The 5849 header inlines CreateCubeTexture/CreateVolumeTexture down to
+    // this entry, so the resource type must be honoured here: a cube
+    // request creates the host cube (and its guest wrapper with
+    // EmuCubeTexture8) rather than a plain 2D texture.
+    if(D3DResource == XTL::D3DRTYPE_CUBETEXTURE)
+    {
+        X_D3DCubeTexture* pCube = NULL;
+        if(SUCCEEDED(EmuIDirect3DDevice8_CreateCubeTexture(
+               Width, Levels, Usage, Format, D3DPOOL_MANAGED, &pCube)) &&
+           pCube != NULL)
+        {
+            return pCube;
+        }
+        return NULL;
+    }
+
     X_D3DTexture* pTexture;
 
     EmuIDirect3DDevice8_CreateTexture(Width, Height, Levels, Usage, Format, D3DPOOL_MANAGED, &pTexture);
@@ -8329,6 +8346,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateCubeTexture(
         EdgeLength, Levels,
         0, // TODO: Xbox Allows a border to be drawn (maybe hack this in software ;[)
         PCFormat, D3DPOOL_MANAGED, &((*ppCubeTexture)->EmuCubeTexture8));
+
+    if(SUCCEEDED(hRet) && (*ppCubeTexture)->EmuCubeTexture8 != NULL)
+    {
+        // SetTexture resolves the host object through the base-texture
+        // member; without it a bound cube reads as an unbound stage.
+        (*ppCubeTexture)->EmuBaseTexture8 =
+            (*ppCubeTexture)->EmuCubeTexture8;
+    }
 
     if(FAILED(hRet))
         printf("*Warning* CreateCubeTexture FAILED\n");
@@ -8994,11 +9019,73 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
     {
         return;
     }
+    if(pBaseTexture8 != NULL &&
+       pBaseTexture8->GetType() == XTL::D3DRTYPE_CUBETEXTURE)
+    {
+        // P8 cube mirroring: commit any pending Morton-order face writes
+        // into the host cube, then pull all six level-0 faces face-major
+        // into the backend's cube cache. Volumes mirror in a later phase.
+        auto* pCube8 = static_cast<XTL::IDirect3DCubeTexture8*>(pBaseTexture8);
+        EmuCommitSwizzledTexture(pBaseTexture8);
+        XTL::D3DSURFACE_DESC faceDesc = {};
+        if(FAILED(pCube8->GetLevelDesc(0, &faceDesc)) ||
+           faceDesc.Width == 0 || faceDesc.Height == 0 ||
+           faceDesc.Width != faceDesc.Height ||
+           (faceDesc.Format != 21 && faceDesc.Format != 22))
+        {
+            static bool s_CubeUnsupportedLogged = false;
+            if(!s_CubeUnsupportedLogged)
+            {
+                s_CubeUnsupportedLogged = true;
+                printf("VULKAN| cube texture (host format %u) not mirrored "
+                       "yet; stage samples white\n",
+                       static_cast<unsigned>(faceDesc.Format));
+            }
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
+                                              0, 0);
+            return;
+        }
+        const UINT faceSize = faceDesc.Width;
+        std::vector<BYTE> faces(
+            static_cast<std::size_t>(faceSize) * faceSize * 4 * 6);
+        bool facesOk = true;
+        for(DWORD face = 0; face < 6 && facesOk; ++face)
+        {
+            XTL::D3DLOCKED_RECT locked = {};
+            if(FAILED(pCube8->LockRect(
+                   static_cast<XTL::D3DCUBEMAP_FACES>(face), 0, &locked,
+                   NULL, D3DLOCK_READONLY)))
+            {
+                facesOk = false;
+                break;
+            }
+            const UINT rowBytes = faceSize * 4;
+            for(UINT y = 0; y < faceSize; ++y)
+            {
+                memcpy(faces.data() +
+                           (static_cast<std::size_t>(face) * faceSize + y) *
+                               rowBytes,
+                       static_cast<const BYTE*>(locked.pBits) +
+                           static_cast<std::size_t>(y) * locked.Pitch,
+                       rowBytes);
+            }
+            pCube8->UnlockRect(static_cast<XTL::D3DCUBEMAP_FACES>(face), 0);
+        }
+        if(!facesOk ||
+           !cxbx::d3d8::HostBackendSetCubeTexture(
+               Stage, pBaseTexture8, faces.data(), faceSize * 4, faceSize,
+               static_cast<unsigned>(faceDesc.Format)))
+        {
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
+                                              0, 0);
+        }
+        return;
+    }
     if(pBaseTexture8 == NULL ||
        pBaseTexture8->GetType() != XTL::D3DRTYPE_TEXTURE)
     {
-        // Cubes and volumes mirror in a later phase; unbound stages sample
-        // the backend's white dummy.
+        // Volumes mirror in a later phase; unbound stages sample the
+        // backend's white dummy.
         cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
         return;
     }
@@ -12708,6 +12795,14 @@ HRESULT WINAPI XTL::EmuIDirect3DCubeTexture8_LockRect(
     EmuVerifyResourceIsRegistered(pThis);
 
     IDirect3DCubeTexture8* pCubeTexture8 = pThis->EmuCubeTexture8;
+    if(pCubeTexture8 == NULL)
+    {
+        // The 5849 LockRect redirect sits on PixelJar's shared Lock2DSurface
+        // internal (the cube export is a bare jmp thunk); a non-cube caller
+        // that reaches it must fail gracefully rather than dereference a
+        // missing host cube.
+        return D3DERR_INVALIDCALL;
+    }
 
     HRESULT hRet = pCubeTexture8->LockRect(FaceType, Level, pLockedBox, pRect, Flags);
 
@@ -17499,14 +17594,23 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
             DrawData = s_QuadExpand;
             DrawStride = DrawStride;
         }
-        const unsigned int TexCoordOffset =
-            !transformed &&
-                    (g_EmuCurrentFvf & D3DFVF_TEX1) != 0
-                ? (DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u)
-                : 0xFFFFFFFFu;
+        unsigned int TexCoordOffset = 0xFFFFFFFFu;
+        unsigned int TexCoordSets = 0;
+        if(!transformed && (g_EmuCurrentFvf & D3DFVF_TEX1) != 0)
+        {
+            TexCoordOffset = DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u;
+            // A 3-float stage-0 set (cube-map directions) selects the
+            // renderer's vec3 layout; everything else uses the legacy
+            // single-vec2 mode. Xbox's FVF size encoding is nonstandard:
+            // TEXTUREFORMAT2=0 (default), 3=1, 4=2, 1=3 in the per-set bits.
+            if(((g_EmuCurrentFvf >> 16) & 3) == 1)
+            {
+                TexCoordSets = 3;
+            }
+        }
         cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
                                       DrawData, DrawStride, DiffuseOffset,
-                                      TexCoordOffset, 0);
+                                      TexCoordOffset, TexCoordSets);
         EmuD3DDrawPost();
         EmuSwapFS(); // XBox FS
         return;
