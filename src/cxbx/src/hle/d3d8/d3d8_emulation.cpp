@@ -7952,6 +7952,19 @@ XTL::X_D3DResource* WINAPI XTL::EmuIDirect3DDevice8_CreateTexture2(
         }
         return NULL;
     }
+    if(D3DResource == XTL::D3DRTYPE_VOLUMETEXTURE)
+    {
+        // 5849 inlines CreateVolumeTexture here the same way.
+        X_D3DVolumeTexture* pVolume = NULL;
+        if(SUCCEEDED(EmuIDirect3DDevice8_CreateVolumeTexture(
+               Width, Height, Depth, Levels, Usage, Format, D3DPOOL_MANAGED,
+               &pVolume)) &&
+           pVolume != NULL)
+        {
+            return pVolume;
+        }
+        return NULL;
+    }
 
     X_D3DTexture* pTexture;
 
@@ -8263,6 +8276,14 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_CreateVolumeTexture(
             Width, Height, Depth, Levels,
             0, // TODO: Xbox Allows a border to be drawn (maybe hack this in software ;[)
             PCFormat, D3DPOOL_MANAGED, &((*ppVolumeTexture)->EmuVolumeTexture8));
+
+        if(SUCCEEDED(hRet) && (*ppVolumeTexture)->EmuVolumeTexture8 != NULL)
+        {
+            // SetTexture resolves the host object through the base-texture
+            // member; without it a bound volume reads as an unbound stage.
+            (*ppVolumeTexture)->EmuBaseTexture8 =
+                (*ppVolumeTexture)->EmuVolumeTexture8;
+        }
 
         if(FAILED(hRet))
             printf("*Warning* CreateVolumeTexture FAILED\n");
@@ -9024,14 +9045,15 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
     {
         // P8 cube mirroring: commit any pending Morton-order face writes
         // into the host cube, then pull all six level-0 faces face-major
-        // into the backend's cube cache. Volumes mirror in a later phase.
+        // into the backend's cube cache (4-byte and DXT host formats; DXT
+        // faces stay block-compressed here and decode in the renderer).
+        // Volumes mirror in a later phase.
         auto* pCube8 = static_cast<XTL::IDirect3DCubeTexture8*>(pBaseTexture8);
         EmuCommitSwizzledTexture(pBaseTexture8);
         XTL::D3DSURFACE_DESC faceDesc = {};
         if(FAILED(pCube8->GetLevelDesc(0, &faceDesc)) ||
            faceDesc.Width == 0 || faceDesc.Height == 0 ||
-           faceDesc.Width != faceDesc.Height ||
-           (faceDesc.Format != 21 && faceDesc.Format != 22))
+           faceDesc.Width != faceDesc.Height)
         {
             static bool s_CubeUnsupportedLogged = false;
             if(!s_CubeUnsupportedLogged)
@@ -9046,8 +9068,32 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
             return;
         }
         const UINT faceSize = faceDesc.Width;
+        const UINT hostFormat = static_cast<UINT>(faceDesc.Format);
+        const bool dxtFace =
+            hostFormat == 0x31545844 || hostFormat == 0x32545844 ||
+            hostFormat == 0x33545844 || hostFormat == 0x34545844 ||
+            hostFormat == 0x35545844;
+        if(!dxtFace && hostFormat != 21 && hostFormat != 22)
+        {
+            static bool s_CubeFmtLogged = false;
+            if(!s_CubeFmtLogged)
+            {
+                s_CubeFmtLogged = true;
+                printf("VULKAN| cube texture (host format %u) not mirrored "
+                       "yet; stage samples white\n",
+                       static_cast<unsigned>(hostFormat));
+            }
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
+                                              0, 0);
+            return;
+        }
+        const UINT blockBytes =
+            !dxtFace ? 0 : (hostFormat == 0x31545844 ? 8u : 16u);
+        const UINT rowsPerFace = dxtFace ? faceSize / 4 : faceSize;
+        const UINT tightRowBytes =
+            dxtFace ? (faceSize / 4) * blockBytes : faceSize * 4;
         std::vector<BYTE> faces(
-            static_cast<std::size_t>(faceSize) * faceSize * 4 * 6);
+            static_cast<std::size_t>(tightRowBytes) * rowsPerFace * 6);
         bool facesOk = true;
         for(DWORD face = 0; face < 6 && facesOk; ++face)
         {
@@ -9059,22 +9105,84 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
                 facesOk = false;
                 break;
             }
-            const UINT rowBytes = faceSize * 4;
-            for(UINT y = 0; y < faceSize; ++y)
+            for(UINT y = 0; y < rowsPerFace; ++y)
             {
                 memcpy(faces.data() +
-                           (static_cast<std::size_t>(face) * faceSize + y) *
-                               rowBytes,
+                           (static_cast<std::size_t>(face) * rowsPerFace + y) *
+                               tightRowBytes,
                        static_cast<const BYTE*>(locked.pBits) +
                            static_cast<std::size_t>(y) * locked.Pitch,
-                       rowBytes);
+                       tightRowBytes);
             }
             pCube8->UnlockRect(static_cast<XTL::D3DCUBEMAP_FACES>(face), 0);
         }
         if(!facesOk ||
            !cxbx::d3d8::HostBackendSetCubeTexture(
-               Stage, pBaseTexture8, faces.data(), faceSize * 4, faceSize,
-               static_cast<unsigned>(faceDesc.Format)))
+               Stage, pBaseTexture8, faces.data(), tightRowBytes, faceSize,
+               hostFormat))
+        {
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
+                                              0, 0);
+        }
+        return;
+    }
+    if(pBaseTexture8 != NULL &&
+       pBaseTexture8->GetType() == XTL::D3DRTYPE_VOLUMETEXTURE)
+    {
+        // P8 volume mirroring: pull level-0 slices slice-major into the
+        // backend's 3D cache (4-byte host formats only).
+        auto* pVolume8 =
+            static_cast<XTL::IDirect3DVolumeTexture8*>(pBaseTexture8);
+        XTL::D3DVOLUME_DESC volumeDesc = {};
+        if(FAILED(pVolume8->GetLevelDesc(0, &volumeDesc)) ||
+           volumeDesc.Width == 0 || volumeDesc.Height == 0 ||
+           volumeDesc.Depth == 0 ||
+           (volumeDesc.Format != 21 && volumeDesc.Format != 22))
+        {
+            static bool s_VolumeUnsupportedLogged = false;
+            if(!s_VolumeUnsupportedLogged)
+            {
+                s_VolumeUnsupportedLogged = true;
+                printf("VULKAN| volume texture (host format %u) not mirrored "
+                       "yet; stage samples white\n",
+                       static_cast<unsigned>(volumeDesc.Format));
+            }
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
+                                              0, 0);
+            return;
+        }
+        std::vector<BYTE> slices(
+            static_cast<std::size_t>(volumeDesc.Width) * volumeDesc.Height *
+            4 * volumeDesc.Depth);
+        XTL::D3DLOCKED_BOX lockedBox = {};
+        if(FAILED(pVolume8->LockBox(0, &lockedBox, NULL,
+                                    D3DLOCK_READONLY)))
+        {
+            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
+                                              0, 0);
+            return;
+        }
+        const UINT rowBytes = volumeDesc.Width * 4;
+        for(UINT slice = 0; slice < volumeDesc.Depth; ++slice)
+        {
+            for(UINT y = 0; y < volumeDesc.Height; ++y)
+            {
+                memcpy(slices.data() +
+                           (static_cast<std::size_t>(slice) *
+                                volumeDesc.Height +
+                            y) *
+                               rowBytes,
+                       static_cast<const BYTE*>(lockedBox.pBits) +
+                           static_cast<std::size_t>(slice) * lockedBox.SlicePitch +
+                           static_cast<std::size_t>(y) * lockedBox.RowPitch,
+                       rowBytes);
+            }
+        }
+        pVolume8->UnlockBox(0);
+        if(!cxbx::d3d8::HostBackendSetVolumeTexture(
+               Stage, pBaseTexture8, slices.data(), rowBytes,
+               volumeDesc.Width, volumeDesc.Height, volumeDesc.Depth,
+               static_cast<unsigned>(volumeDesc.Format)))
         {
             cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
                                               0, 0);

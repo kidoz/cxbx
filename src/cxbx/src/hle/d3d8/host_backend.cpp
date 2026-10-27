@@ -716,6 +716,19 @@ bool HostBackendSetCubeTexture(unsigned int stage, void* key,
                                           hostFormat);
 }
 
+bool HostBackendSetVolumeTexture(unsigned int stage, void* key,
+                                 const void* pixels, unsigned int rowPitch,
+                                 unsigned int width, unsigned int height,
+                                 unsigned int depth, unsigned int hostFormat)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererSetVolumeTexture(stage, key, pixels, rowPitch,
+                                            width, height, depth, hostFormat);
+}
+
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,
                              unsigned int height, unsigned int pitch)
 {

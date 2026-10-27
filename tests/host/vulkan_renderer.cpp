@@ -306,9 +306,33 @@ bool Run(const char* scenario)
             return false;
         }
         // And back to the cube: the cached entry must survive the 2D bind.
-        return vk::RendererSetCubeTexture(0, &cubeKey, faces.data(),
-                                          kCubeSize * 4, kCubeSize, 21) &&
-               cubeQuad(40, 40, 0.0f, 0.0f, 1.0f) && Pixel(48, 48, Green);
+        if(!(vk::RendererSetCubeTexture(0, &cubeKey, faces.data(),
+                                        kCubeSize * 4, kCubeSize, 21) &&
+             cubeQuad(40, 40, 0.0f, 0.0f, 1.0f) && Pixel(48, 48, Green)))
+        {
+            return false;
+        }
+        // DXT1 cube: 4x4 faces = one solid block per face (color0 expands
+        // everywhere). +Z block decodes green, -Z yellow.
+        constexpr unsigned int kDxtSize = 4;
+        std::vector<std::uint8_t> dxtFaces(8 * 6, 0);
+        const auto dxtBlock = [](std::uint16_t rgb565,
+                                 std::uint8_t out[8]) {
+            // One 8-byte DXT1 block: color0, color1, four all-zero selector
+            // bytes -- every texel takes color0.
+            out[0] = static_cast<std::uint8_t>(rgb565 & 0xFF);
+            out[1] = static_cast<std::uint8_t>(rgb565 >> 8);
+            out[2] = out[3] = out[4] = out[5] = out[6] = out[7] = 0;
+        };
+        const auto green565 = 0x07E0; // 0 111111 00000 -> (0,255,0)
+        const auto yellow565 = 0xFFE0; // 11111 111111 00000 -> (255,255,0)
+        dxtBlock(green565, dxtFaces.data() + 4 * 8);
+        dxtBlock(yellow565, dxtFaces.data() + 5 * 8);
+        return vk::RendererSetCubeTexture(0, &cubeKey, dxtFaces.data(), 8,
+                                          kDxtSize, 0x31545844u /*'DXT1'*/) &&
+               cubeQuad(8, 72, 0.0f, 0.0f, 1.0f) &&
+               cubeQuad(40, 72, 0.0f, 0.0f, -1.0f) &&
+               Pixel(16, 80, Green) && Pixel(48, 80, 0xFFFF00u);
     }
     if(std::strcmp(scenario, "shadow") == 0)
     {
@@ -352,6 +376,60 @@ bool Run(const char* scenario)
         int texKey = 0;
         return vk::RendererSetTexture(0, &texKey, &Green, 4, 1, 1, 21) &&
                shadowQuad(8, 40, 0.7f) && Pixel(16, 48, Green);
+    }
+    if(std::strcmp(scenario, "volume") == 0)
+    {
+        // Volume-texture sampling: 4x4x4 slices of distinct colors,
+        // sampled by texcoord xyz (slice 0 red, slice 3 blue).
+        struct VolumeVertex
+        {
+            float x, y, z, rhw;
+            std::uint32_t color;
+            float u, v, w;
+        };
+        constexpr unsigned int kW = 4, kH = 4, kD = 4;
+        std::vector<std::uint32_t> slices(
+            static_cast<std::size_t>(kW) * kH * kD, Red);
+        for(auto& texel : slices)
+        {
+            texel = Red;
+        }
+        const auto fillSlice = [&](unsigned int slice, std::uint32_t color) {
+            const std::size_t begin =
+                static_cast<std::size_t>(slice) * kW * kH;
+            std::fill(slices.begin() + static_cast<std::ptrdiff_t>(begin),
+                      slices.begin() + static_cast<std::ptrdiff_t>(
+                                          begin + kW * kH),
+                      color);
+        };
+        fillSlice(3, Blue);
+        int volumeKey = 0;
+        const auto volumeQuad = [&](float x, float y, float u, float v,
+                                    float w) {
+            const VolumeVertex verts[6] = {
+                { x, y, 0.5f, 1, 0xFFFFFFFFu, u, v, w },
+                { x + 16, y, 0.5f, 1, 0xFFFFFFFFu, u, v, w },
+                { x, y + 16, 0.5f, 1, 0xFFFFFFFFu, u, v, w },
+                { x + 16, y, 0.5f, 1, 0xFFFFFFFFu, u, v, w },
+                { x + 16, y + 16, 0.5f, 1, 0xFFFFFFFFu, u, v, w },
+                { x, y + 16, 0.5f, 1, 0xFFFFFFFFu, u, v, w },
+            };
+            return vk::RendererDrawUP(4, 2, verts, sizeof(VolumeVertex),
+                                      offsetof(VolumeVertex, color),
+                                      offsetof(VolumeVertex, u), 3);
+        };
+        if(!vk::RendererSetVolumeTexture(0, &volumeKey, slices.data(),
+                                         kW * 4, kW, kH, kD, 21) ||
+           !volumeQuad(8, 8, 0.5f, 0.5f, 0.125f) ||  // slice 0 -> red
+           !volumeQuad(40, 8, 0.5f, 0.5f, 0.875f) || // slice 3 -> blue
+           !Pixel(16, 16, Red) || !Pixel(48, 16, Blue))
+        {
+            return false;
+        }
+        // A 2D rebind must clear the volume mode.
+        int texKey = 0;
+        return vk::RendererSetTexture(0, &texKey, &Green, 4, 1, 1, 21) &&
+               volumeQuad(8, 40, 0.5f, 0.5f, 0.125f) && Pixel(16, 48, Green);
     }
     if(std::strcmp(scenario, "sampling") == 0)
     {

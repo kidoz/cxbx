@@ -63,9 +63,12 @@ struct RendererTexture
     unsigned int height = 0;
     unsigned int hostFormat = 0;
     // 1 for plain 2D entries; 6 with cube=true for cube-map entries (view
-    // type CUBE, faces uploaded face-major).
+    // type CUBE, faces uploaded face-major); depth>1 with volume=true for
+    // 3D entries (view type 3D, slices uploaded slice-major).
     unsigned int layers = 1;
+    unsigned int depth = 1;
     bool cube = false;
+    bool volume = false;
     void* key = nullptr;
     unsigned long long lastUse = 0;
     bool uploaded = false;
@@ -219,9 +222,16 @@ struct RendererState
     VkImageView dummyCubeView = VK_NULL_HANDLE;
     VkImage dummyCubeImage = VK_NULL_HANDLE;
     VkDeviceMemory dummyCubeMemory = VK_NULL_HANDLE;
+    // White 1x1x1 3D dummy for unbound volume stages (binding 3).
+    VkImageView dummyVolumeView = VK_NULL_HANDLE;
+    VkImage dummyVolumeImage = VK_NULL_HANDLE;
+    VkDeviceMemory dummyVolumeMemory = VK_NULL_HANDLE;
     // Bit i set: stage i samples its cube view (binding 2) with the
     // direction texCoord[i].xyz instead of the 2D path.
     unsigned int stageCubeMask = 0;
+    // Bit i set: stage i samples its volume view (binding 3) with the
+    // texcoord's xyz.
+    unsigned int stageVolumeMask = 0;
     std::map<unsigned long long, VkSampler> samplers;
     VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -1726,7 +1736,7 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     pushRanges[1].offset = 0;
     pushRanges[1].size = 96;
 
-    VkDescriptorSetLayoutBinding bindings[3] = {};
+    VkDescriptorSetLayoutBinding bindings[4] = {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 4;
@@ -1742,10 +1752,15 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[2].descriptorCount = 4;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Volume stages likewise need 3D views on their own binding.
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 4;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layoutCreateInfo = {};
     layoutCreateInfo.sType =
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutCreateInfo.bindingCount = 3;
+    layoutCreateInfo.bindingCount = 4;
     layoutCreateInfo.pBindings = bindings;
     if(vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr,
                                    &g_R.descriptorLayout) != VK_SUCCESS)
@@ -1756,7 +1771,7 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
 
     VkDescriptorPoolSize poolSizes[2] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 8 * kMaxDescriptorSets;
+    poolSizes[0].descriptorCount = 12 * kMaxDescriptorSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     poolSizes[1].descriptorCount = kMaxDescriptorSets;
     VkDescriptorPoolCreateInfo poolCreateInfo = {};
@@ -2084,6 +2099,118 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
             printf("VULKAN| white cube dummy unavailable; unbound cube "
                    "stages will sample black\n");
         }
+
+        // Volume dummy: identical white upload on a 1x1x1 3D image so
+        // binding 3 always carries a 3D view.
+        VkImageCreateInfo volumeDummyInfo = {};
+        volumeDummyInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        volumeDummyInfo.imageType = VK_IMAGE_TYPE_3D;
+        volumeDummyInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+        volumeDummyInfo.extent = { 1, 1, 1 };
+        volumeDummyInfo.mipLevels = 1;
+        volumeDummyInfo.arrayLayers = 1;
+        volumeDummyInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        volumeDummyInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        volumeDummyInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                VK_IMAGE_USAGE_SAMPLED_BIT;
+        volumeDummyInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImage volumeDummyImage = VK_NULL_HANDLE;
+        VkDeviceMemory volumeDummyMemory = VK_NULL_HANDLE;
+        if(vkCreateImage(device, &volumeDummyInfo, nullptr,
+                         &volumeDummyImage) == VK_SUCCESS &&
+           EnsureTextureStaging(4))
+        {
+            VkMemoryRequirements volumeRequirements = {};
+            vkGetImageMemoryRequirements(device, volumeDummyImage,
+                                         &volumeRequirements);
+            if(AllocateDeviceMemory(&volumeDummyMemory,
+                                    volumeRequirements.size,
+                                    volumeRequirements.memoryTypeBits,
+                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+               vkBindImageMemory(device, volumeDummyImage, volumeDummyMemory,
+                                 0) == VK_SUCCESS)
+            {
+                memset(g_R.textureMapped, 0xFF, 4);
+                VkCommandBufferBeginInfo volumeBegin = {};
+                volumeBegin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                volumeBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                vkResetCommandBuffer(g_R.commandBuffer, 0);
+                vkBeginCommandBuffer(g_R.commandBuffer, &volumeBegin);
+                VkImageMemoryBarrier volumeToDst = {};
+                volumeToDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                volumeToDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                volumeToDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                volumeToDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                volumeToDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                volumeToDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                volumeToDst.image = volumeDummyImage;
+                volumeToDst.subresourceRange.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                volumeToDst.subresourceRange.levelCount = 1;
+                volumeToDst.subresourceRange.layerCount = 1;
+                vkCmdPipelineBarrier(g_R.commandBuffer,
+                                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                     nullptr, 0, nullptr, 1, &volumeToDst);
+                VkBufferImageCopy volumeRegion = {};
+                volumeRegion.imageSubresource.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                volumeRegion.imageSubresource.layerCount = 1;
+                volumeRegion.imageExtent = { 1, 1, 1 };
+                vkCmdCopyBufferToImage(g_R.commandBuffer,
+                                       g_R.textureStaging, volumeDummyImage,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       1, &volumeRegion);
+                VkImageMemoryBarrier volumeToShader = volumeToDst;
+                volumeToShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                volumeToShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                volumeToShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                volumeToShader.newLayout =
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                vkCmdPipelineBarrier(g_R.commandBuffer,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1,
+                                     &volumeToShader);
+                vkEndCommandBuffer(g_R.commandBuffer);
+                VkSubmitInfo volumeSubmit = {};
+                volumeSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                volumeSubmit.commandBufferCount = 1;
+                volumeSubmit.pCommandBuffers = &g_R.commandBuffer;
+                vkQueueSubmit(queue, 1, &volumeSubmit, VK_NULL_HANDLE);
+                vkQueueWaitIdle(queue);
+
+                VkImageViewCreateInfo volumeViewInfo = {};
+                volumeViewInfo.sType =
+                    VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                volumeViewInfo.image = volumeDummyImage;
+                volumeViewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+                volumeViewInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+                volumeViewInfo.subresourceRange.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                volumeViewInfo.subresourceRange.levelCount = 1;
+                volumeViewInfo.subresourceRange.layerCount = 1;
+                if(vkCreateImageView(device, &volumeViewInfo, nullptr,
+                                     &g_R.dummyVolumeView) == VK_SUCCESS)
+                {
+                    g_R.dummyVolumeImage = volumeDummyImage;
+                    g_R.dummyVolumeMemory = volumeDummyMemory;
+                }
+            }
+        }
+        if(g_R.dummyVolumeView == VK_NULL_HANDLE)
+        {
+            if(volumeDummyImage != VK_NULL_HANDLE)
+            {
+                vkDestroyImage(device, volumeDummyImage, nullptr);
+            }
+            if(volumeDummyMemory != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(device, volumeDummyMemory, nullptr);
+            }
+            printf("VULKAN| white volume dummy unavailable; unbound volume "
+                   "stages will sample black\n");
+        }
     }
 
     // Pipelines declare a D32 depth attachment unconditionally, so the main
@@ -2143,6 +2270,21 @@ void RendererShutdown()
     {
         vkFreeMemory(g_R.device, g_R.dummyCubeMemory, nullptr);
         g_R.dummyCubeMemory = VK_NULL_HANDLE;
+    }
+    if(g_R.dummyVolumeView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(g_R.device, g_R.dummyVolumeView, nullptr);
+        g_R.dummyVolumeView = VK_NULL_HANDLE;
+    }
+    if(g_R.dummyVolumeImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(g_R.device, g_R.dummyVolumeImage, nullptr);
+        g_R.dummyVolumeImage = VK_NULL_HANDLE;
+    }
+    if(g_R.dummyVolumeMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(g_R.device, g_R.dummyVolumeMemory, nullptr);
+        g_R.dummyVolumeMemory = VK_NULL_HANDLE;
     }
     if(g_R.textureMapped != nullptr)
     {
@@ -2583,8 +2725,9 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     ++g_R.descriptorSetCount;
     VkDescriptorImageInfo imageInfos[4] = {};
     VkDescriptorImageInfo cubeInfos[4] = {};
+    VkDescriptorImageInfo volumeInfos[4] = {};
     VkDescriptorBufferInfo bufferInfo = {};
-    VkWriteDescriptorSet writes[6] = {};
+    VkWriteDescriptorSet writes[7] = {};
     for(unsigned int stage = 0; stage < 4; ++stage)
     {
         RendererTexture* texture = g_R.stageTexture[stage];
@@ -2619,6 +2762,14 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
                 : g_R.dummyCubeView;
         cubeInfos[stage].imageLayout =
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        volumeInfos[stage].sampler = SamplerFor(stage);
+        volumeInfos[stage].imageView =
+            texture != nullptr && texture->volume
+                ? texture->view
+                : g_R.dummyVolumeView;
+        volumeInfos[stage].imageLayout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
     bufferInfo.buffer = g_R.combinerBuffer;
     bufferInfo.offset = 0;
@@ -2637,7 +2788,15 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     writes[5].descriptorCount = 4;
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[5].pImageInfo = cubeInfos;
-    vkUpdateDescriptorSets(g_R.device, 6, writes, 0, nullptr);
+    // And one for the four volume-sampler slots.
+    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[6].dstSet = set;
+    writes[6].dstBinding = 3;
+    writes[6].dstArrayElement = 0;
+    writes[6].descriptorCount = 4;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[6].pImageInfo = volumeInfos;
+    vkUpdateDescriptorSets(g_R.device, 7, writes, 0, nullptr);
     const uint32_t combinerDynamicOffset =
         static_cast<uint32_t>(g_R.combinerActiveSlot * kCombinerSlotSize);
     vkCmdBindDescriptorSets(g_R.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2666,7 +2825,8 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         }
     }
     stageConstants[19] = g_R.stageCubeMask | (shadowMask << 4) |
-                         ((g_R.shadowFunc & 7u) << 8);
+                         ((g_R.shadowFunc & 7u) << 8) |
+                         ((g_R.stageVolumeMask & 0xFu) << 11);
     // The vertex range [0,100] overlaps these bytes, so the call's
     // stageFlags must include the vertex stage as well.
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
@@ -2810,6 +2970,7 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     // Every 2D bind clears the stage's cube-sampling bit (cube binds set
     // it again in RendererSetCubeTexture) and any shadow-map view.
     g_R.stageCubeMask &= ~(1u << stage);
+    g_R.stageVolumeMask &= ~(1u << stage);
     g_R.stageDepthView[stage] = VK_NULL_HANDLE;
     // A null/unsupported ordinary texture must also unbind an earlier RT.
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
@@ -3070,9 +3231,9 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
 
 // Cube-map bind: six square faces uploaded face-major into one
 // cube-compatible 6-layer image; the stage samples it through binding 2
-// with the direction texCoord[stage].xyz (stageCubeMask bit). 4-byte host
-// formats only (the Xbox cube set is A8R8G8B8/X8R8G8B8; DXT cubes are a
-// documented gap).
+// with the direction texCoord[stage].xyz (stageCubeMask bit). Accepts the
+// 4-byte host formats and the DXT1/2/3/4/5 fourccs (block-compressed
+// faces decode to BGRA at bind time, exactly like the 2D path).
 bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
                             unsigned int pitch, unsigned int size,
                             unsigned int hostFormat)
@@ -3083,17 +3244,20 @@ bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
         return false;
     }
     g_R.stageCubeMask &= ~(1u << stage);
+    g_R.stageVolumeMask &= ~(1u << stage);
     g_R.stageDepthView[stage] = VK_NULL_HANDLE;
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
     g_R.stageOverrideKey[stage] = nullptr;
+    const bool dxt = hostFormat == 0x31545844 || hostFormat == 0x32545844 ||
+                     hostFormat == 0x33545844 || hostFormat == 0x34545844 ||
+                     hostFormat == 0x35545844;
     if(pixels == nullptr || size == 0 || size > 2048 ||
-       (hostFormat != 21 && hostFormat != 22))
+       (!dxt && hostFormat != 21 && hostFormat != 22))
     {
         g_R.stageTexture[stage] = nullptr;
         return false;
     }
-    VkFormat format = hostFormat == 21 ? VK_FORMAT_B8G8R8A8_UNORM
-                                       : VK_FORMAT_B8G8R8A8_UNORM;
+    VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
     const unsigned int bytesPerPixel = 4;
 
     RendererTexture* entry = nullptr;
@@ -3213,8 +3377,35 @@ bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
     }
 
     // Face-major upload through the texture staging ring: one layerCount=6
-    // copy (the buffer holds six contiguous face blocks).
+    // copy (the buffer holds six contiguous tight BGRA face blocks). DXT
+    // faces decode first (per face, at the caller's block pitch) into the
+    // same face-major layout.
     const unsigned int tightPitch = size * bytesPerPixel;
+    std::vector<std::uint32_t> decodedFaces;
+    const void* uploadPixels = pixels;
+    unsigned int uploadPitch = pitch;
+    if(dxt)
+    {
+        decodedFaces.resize(static_cast<std::size_t>(size) * size * 6);
+        for(unsigned int face = 0; face < 6; ++face)
+        {
+            std::vector<std::uint32_t> facePixels;
+            if(!DecodeDxtToBgra(
+                   hostFormat,
+                   static_cast<const char*>(pixels) +
+                       static_cast<std::size_t>(face) * (size / 4) * pitch,
+                   pitch, size, size, &facePixels))
+            {
+                g_R.stageTexture[stage] = nullptr;
+                return false;
+            }
+            memcpy(decodedFaces.data() +
+                       static_cast<std::size_t>(face) * size * size,
+                   facePixels.data(), facePixels.size() * 4);
+        }
+        uploadPixels = decodedFaces.data();
+        uploadPitch = tightPitch;
+    }
     const VkDeviceSize uploadBytes =
         static_cast<VkDeviceSize>(tightPitch) * size * 6;
     VkDeviceSize uploadOffset =
@@ -3243,8 +3434,9 @@ bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
             memcpy(uploadBase +
                        (static_cast<std::size_t>(face) * size + row) *
                            tightPitch,
-                   static_cast<const char*>(pixels) +
-                       (static_cast<std::size_t>(face) * size + row) * pitch,
+                   static_cast<const char*>(uploadPixels) +
+                       (static_cast<std::size_t>(face) * size + row) *
+                           uploadPitch,
                    tightPitch);
         }
     }
@@ -3309,6 +3501,244 @@ bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
     return true;
 }
 
+// Volume-texture bind: slices uploaded slice-major into one 3D image; the
+// stage samples it through binding 3 with the texcoord's xyz
+// (stageVolumeMask bit). 4-byte host formats only.
+bool RendererSetVolumeTexture(unsigned int stage, void* key,
+                              const void* pixels, unsigned int rowPitch,
+                              unsigned int width, unsigned int height,
+                              unsigned int depth, unsigned int hostFormat)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || stage >= 4 || key == nullptr)
+    {
+        return false;
+    }
+    g_R.stageCubeMask &= ~(1u << stage);
+    g_R.stageVolumeMask &= ~(1u << stage);
+    g_R.stageDepthView[stage] = VK_NULL_HANDLE;
+    g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+    g_R.stageOverrideKey[stage] = nullptr;
+    if(pixels == nullptr || width == 0 || height == 0 || depth == 0 ||
+       width > 512 || height > 512 || depth > 512 ||
+       (hostFormat != 21 && hostFormat != 22))
+    {
+        g_R.stageTexture[stage] = nullptr;
+        return false;
+    }
+
+    RendererTexture* entry = nullptr;
+    for(unsigned int i = 0; i < kMaxTextures; ++i)
+    {
+        if(g_R.textures[i].key == key)
+        {
+            entry = &g_R.textures[i];
+            break;
+        }
+    }
+    if(entry != nullptr &&
+       (entry->width != width || entry->height != height ||
+        entry->depth != depth || entry->hostFormat != hostFormat ||
+        !entry->volume))
+    {
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            return false;
+        }
+        DestroyTextureEntry(entry, false);
+        entry = nullptr;
+    }
+    if(entry == nullptr)
+    {
+        g_R.stageTexture[stage] = nullptr;
+        for(auto& candidate : g_R.textures)
+        {
+            bool bound = false;
+            for(const auto* binding : g_R.stageTexture)
+            {
+                bound = bound || binding == &candidate;
+            }
+            if(!bound && (entry == nullptr || candidate.lastUse < entry->lastUse))
+            {
+                entry = &candidate;
+            }
+        }
+        if(entry == nullptr)
+        {
+            return false;
+        }
+        if(entry->image != VK_NULL_HANDLE)
+        {
+            if(!SubmitFrame())
+            {
+                g_R.valid = false;
+                return false;
+            }
+            DestroyTextureEntry(entry);
+        }
+    }
+    if(entry->image == VK_NULL_HANDLE)
+    {
+        entry->key = key;
+        entry->width = width;
+        entry->height = height;
+        entry->depth = depth;
+        entry->hostFormat = hostFormat;
+        entry->volume = true;
+
+        VkImageCreateInfo imageInfo = {};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_3D;
+        imageInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+        imageInfo.extent = { width, height, depth };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if(vkCreateImage(g_R.device, &imageInfo, nullptr, &entry->image) !=
+           VK_SUCCESS)
+        {
+            DestroyTextureEntry(entry);
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        VkMemoryRequirements requirements = {};
+        vkGetImageMemoryRequirements(g_R.device, entry->image, &requirements);
+        if(!AllocateDeviceMemory(&entry->memory, requirements.size,
+                                 requirements.memoryTypeBits,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+           vkBindImageMemory(g_R.device, entry->image, entry->memory, 0) !=
+               VK_SUCCESS)
+        {
+            DestroyTextureEntry(entry);
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        VkImageViewCreateInfo viewInfo = {};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = entry->image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        viewInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if(vkCreateImageView(g_R.device, &viewInfo, nullptr, &entry->view) !=
+           VK_SUCCESS)
+        {
+            DestroyTextureEntry(entry);
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        {
+            char name[32];
+            snprintf(name, sizeof(name), "cxbx vol %p", key);
+            NameDebugObject(VK_OBJECT_TYPE_IMAGE,
+                            static_cast<std::uint64_t>(entry->image), name);
+        }
+        entry->lastUse = ++g_R.textureUseCounter;
+    }
+
+    // Slice-major upload through the texture staging ring: one full-extent
+    // copy (the buffer holds tight rowslice after tight rowslice).
+    const unsigned int tightPitch = width * 4;
+    const VkDeviceSize uploadBytes =
+        static_cast<VkDeviceSize>(tightPitch) * height * depth;
+    VkDeviceSize uploadOffset =
+        (g_R.textureCursor + 15) & ~static_cast<VkDeviceSize>(15);
+    if(uploadOffset + uploadBytes > g_R.textureStagingSize)
+    {
+        if(!SubmitFrame())
+        {
+            g_R.valid = false;
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+        uploadOffset = 0;
+        g_R.textureCursor = 0;
+        if(!EnsureTextureStaging(uploadBytes))
+        {
+            g_R.stageTexture[stage] = nullptr;
+            return false;
+        }
+    }
+    char* uploadBase = static_cast<char*>(g_R.textureMapped) + uploadOffset;
+    for(unsigned int slice = 0; slice < depth; ++slice)
+    {
+        for(unsigned int row = 0; row < height; ++row)
+        {
+            memcpy(uploadBase +
+                       (static_cast<std::size_t>(slice) * height + row) *
+                           tightPitch,
+                   static_cast<const char*>(pixels) +
+                       (static_cast<std::size_t>(slice) * height + row) *
+                           rowPitch,
+                   tightPitch);
+        }
+    }
+
+    if(!OpenFrame())
+    {
+        g_R.valid = false;
+        g_R.stageTexture[stage] = nullptr;
+        return false;
+    }
+    CloseRendering();
+    if(TextureTraceEnabled())
+    {
+        printf("VULKAN| volume upload key=0x%p %ux%ux%u host format %u at "
+               "staging offset %llu\n",
+               key, width, height, depth, hostFormat,
+               static_cast<unsigned long long>(uploadOffset));
+    }
+    VkImageMemoryBarrier toDst = {};
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.srcAccessMask = entry->uploaded ? VK_ACCESS_SHADER_READ_BIT : 0;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toDst.oldLayout = entry->uploaded ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                      : VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.image = entry->image;
+    toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toDst.subresourceRange.levelCount = 1;
+    toDst.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g_R.commandBuffer,
+                         entry->uploaded ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &toDst);
+    VkBufferImageCopy region = {};
+    region.bufferOffset = uploadOffset;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = { width, height, depth };
+    vkCmdCopyBufferToImage(g_R.commandBuffer, g_R.textureStaging, entry->image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    VkImageMemoryBarrier toShader = toDst;
+    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(g_R.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &toShader);
+    g_R.textureCursor = uploadOffset + uploadBytes;
+    entry->uploaded = true;
+    entry->lastUse = ++g_R.textureUseCounter;
+    g_R.stageTexture[stage] = entry;
+    g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+    g_R.stageOverrideKey[stage] = nullptr;
+    g_R.stageVolumeMask |= (1u << stage);
+    return true;
+}
+
 // Binds a registered render target as a stage texture (render-to-texture
 // sampling). Returns false when the key has no target; the caller then
 // falls back to the host-texture pull.
@@ -3327,6 +3757,7 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
             g_R.stageOverrideView[stage] = g_R.rtTargets[i].view;
             g_R.stageOverrideKey[stage] = key;
             g_R.stageCubeMask &= ~(1u << stage);
+            g_R.stageVolumeMask &= ~(1u << stage);
             g_R.stageDepthView[stage] = VK_NULL_HANDLE;
             return true;
         }
@@ -3436,6 +3867,7 @@ bool RendererSetDepthStageTexture(unsigned int stage, void* depthKey)
         g_R.stageOverrideKey[stage] = nullptr;
         g_R.stageDepthView[stage] = g_R.mainDepthView;
         g_R.stageCubeMask &= ~(1u << stage);
+        g_R.stageVolumeMask &= ~(1u << stage);
         return true;
     }
     for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
@@ -3448,6 +3880,7 @@ bool RendererSetDepthStageTexture(unsigned int stage, void* depthKey)
             g_R.stageOverrideKey[stage] = nullptr;
             g_R.stageDepthView[stage] = g_R.rtTargets[i].depthView;
             g_R.stageCubeMask &= ~(1u << stage);
+            g_R.stageVolumeMask &= ~(1u << stage);
             return true;
         }
     }

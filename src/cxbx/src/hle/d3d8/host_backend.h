@@ -235,6 +235,13 @@ bool HostBackendSetCubeTexture(unsigned int stage, void* key,
                                const void* pixels, unsigned int pitch,
                                unsigned int size, unsigned int hostFormat);
 
+// Binds a volume texture on the stage (slices slice-major at rowPitch).
+// False when the render path is inactive or the bind was refused.
+bool HostBackendSetVolumeTexture(unsigned int stage, void* key,
+                                 const void* pixels, unsigned int rowPitch,
+                                 unsigned int width, unsigned int height,
+                                 unsigned int depth, unsigned int hostFormat);
+
 // Releases everything the selected backend owns (the Vulkan presenter's
 // device, swapchain, and instance).
 void HostBackendShutdown();

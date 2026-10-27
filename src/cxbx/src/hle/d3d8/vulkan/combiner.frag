@@ -2,6 +2,7 @@
 
 layout(set = 0, binding = 0) uniform sampler2D textures[4];
 layout(set = 0, binding = 2) uniform samplerCube cubeTextures[4];
+layout(set = 0, binding = 3) uniform sampler3D volumeTextures[4];
 layout(set = 0, binding = 1, std140) uniform CombinerConfig
 {
     vec4 constants[8];
@@ -147,9 +148,10 @@ void main()
     // Stage i samples its own coordinate set with the D3D projective
     // divide (st / q, q in the set's w). Legacy single-vec2 layouts leave
     // the unused sets at (0,0,0,1), a neutral q of one. Cube stages
-    // (extra.w bits 0..3) sample the direction texCoord[i].xyz; shadow
-    // stages (bits 4..7, comparison in bits 8..10) sample the depth image
-    // and compare with the set's r after the same divide.
+    // (extra.w bits 0..3) sample the direction texCoord[i].xyz; volume
+    // stages (bits 11..14) sample texCoord[i].xyz; shadow stages
+    // (bits 4..7, comparison in bits 8..10) sample the depth image and
+    // compare with the set's r after the same divide.
     vec2 stageTexCoord[4];
     vec4 sampled[4];
     for(uint set = 0u; set < 4u; ++set)
@@ -166,6 +168,10 @@ void main()
             float lit = depthComparePasses(depth, reference,
                                            (pc.extra.w >> 8u) & 7u) ? 1.0 : 0.0;
             sampled[set] = vec4(lit);
+        }
+        else if((pc.extra.w & (2048u << set)) != 0u)
+        {
+            sampled[set] = texture(volumeTextures[set], texCoord[set].xyz);
         }
         else
         {

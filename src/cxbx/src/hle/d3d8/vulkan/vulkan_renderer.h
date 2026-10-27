@@ -109,12 +109,21 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
 
 // Binds a cube map on the stage: pixels hold six square faces face-major
 // (face order +X, -X, +Y, -Y, +Z, -Z; each face's rows at the given pitch);
-// size is the per-face edge. hostFormat 21/22 only. The stage samples the
-// cube through the direction texCoord[stage].xyz (2D sampling is bypassed
-// while the cube bind is active; the next RendererSetTexture rebinds 2D).
+// size is the per-face edge. hostFormat 21/22 or the DXT1/2/3/4/5 fourccs
+// (block-compressed faces decode at bind time). The stage samples the cube
+// through the direction texCoord[stage].xyz (2D sampling is bypassed while
+// the cube bind is active; the next RendererSetTexture rebinds 2D).
 bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
                             unsigned int pitch, unsigned int size,
                             unsigned int hostFormat);
+
+// Binds a volume texture on the stage: pixels hold slices slice-major
+// (each slice's rows at rowPitch). hostFormat 21/22 only. The stage samples
+// the volume through the texcoord's xyz.
+bool RendererSetVolumeTexture(unsigned int stage, void* key,
+                              const void* pixels, unsigned int rowPitch,
+                              unsigned int width, unsigned int height,
+                              unsigned int depth, unsigned int hostFormat);
 
 // Shadow-map bind: stage i samples the depth image registered under
 // depthKey by RendererSetRenderTarget and compares the depth texel with the
