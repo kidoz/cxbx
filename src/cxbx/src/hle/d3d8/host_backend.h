@@ -194,8 +194,15 @@ void HostBackendStateBlockDelete(unsigned int token);
 // render target as a stage texture (render-to-texture sampling; false when
 // the key has no target).
 void HostBackendSetRenderTarget(void* key, unsigned int width,
-                                unsigned int height);
+                                unsigned int height, void* depthKey);
 bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key);
+
+// Shadow-map sampling: binds the depth image registered under depthKey (the
+// host depth texture pointer passed to HostBackendSetRenderTarget) on the
+// stage, comparing with the texcoord r per the shadow function (d3d8
+// D3DCMPFUNC enumeration; false when no target registered the key).
+bool HostBackendSetDepthStageTexture(unsigned int stage, void* depthKey);
+void HostBackendSetShadowFunc(unsigned int func);
 
 // P6 resource lifetime: the host d3d8 texture/surface was released, so its
 // pointer can be recycled by a new resource at any time. The backend drops

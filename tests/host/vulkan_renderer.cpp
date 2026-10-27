@@ -120,9 +120,9 @@ bool Run(const char* scenario)
             return false;
         }
         int key = 0;
-        vk::RendererSetRenderTarget(&key, 64, 64);
+        vk::RendererSetRenderTarget(&key, 64, 64, nullptr);
         vk::RendererClear(1, Green, 1, 0);
-        vk::RendererSetRenderTarget(nullptr, 0, 0);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
         return Pixel(16, 16, Red) && Pixel(100, 100, Blue);
     }
     if(std::strcmp(scenario, "combiner") == 0)
@@ -310,6 +310,49 @@ bool Run(const char* scenario)
                                           kCubeSize * 4, kCubeSize, 21) &&
                cubeQuad(40, 40, 0.0f, 0.0f, 1.0f) && Pixel(48, 48, Green);
     }
+    if(std::strcmp(scenario, "shadow") == 0)
+    {
+        // Shadow-map sampling: the RT's depth image (cleared to 0.5) is
+        // bound by its depth key; LESSEQUAL compares depth <= r, so
+        // r=0.7 lights and r=0.3 stays dark. Single-vec4 texcoord mode
+        // (u, v, r, q).
+        int rtKey = 0;
+        int depthKey = 0;
+        vk::RendererSetRenderTarget(&rtKey, 64, 64, &depthKey);
+        vk::RendererClear(2, 0, 0.5f, 0); // D3DCLEAR_ZBUFFER
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
+        vk::RendererSetShadowFunc(4); // D3DCMP_LESSEQUAL
+        struct ShadowVertex
+        {
+            float x, y, z, rhw;
+            std::uint32_t color;
+            float u, v, r, q;
+        };
+        const auto shadowQuad = [&](float ox, float oy, float ref) {
+            const ShadowVertex verts[6] = {
+                { ox, oy, 0.5f, 1, 0xFFFFFFFFu, 0, 0, ref, 1 },
+                { ox + 16, oy, 0.5f, 1, 0xFFFFFFFFu, 1, 0, ref, 1 },
+                { ox, oy + 16, 0.5f, 1, 0xFFFFFFFFu, 0, 1, ref, 1 },
+                { ox + 16, oy, 0.5f, 1, 0xFFFFFFFFu, 1, 0, ref, 1 },
+                { ox + 16, oy + 16, 0.5f, 1, 0xFFFFFFFFu, 1, 1, ref, 1 },
+                { ox, oy + 16, 0.5f, 1, 0xFFFFFFFFu, 0, 1, ref, 1 },
+            };
+            return vk::RendererDrawUP(4, 2, verts, sizeof(ShadowVertex),
+                                      offsetof(ShadowVertex, color),
+                                      offsetof(ShadowVertex, u), 5);
+        };
+        if(!vk::RendererSetDepthStageTexture(0, &depthKey) ||
+           !shadowQuad(8, 8, 0.7f) ||   // 0.5 <= 0.7 -> lit
+           !shadowQuad(40, 8, 0.3f) ||  // 0.5 <= 0.3 -> dark
+           !Pixel(16, 16, 0xFFFFFFu) || !Pixel(48, 16, 0x000000u))
+        {
+            return false;
+        }
+        // An ordinary 2D bind must clear the shadow mode.
+        int texKey = 0;
+        return vk::RendererSetTexture(0, &texKey, &Green, 4, 1, 1, 21) &&
+               shadowQuad(8, 40, 0.7f) && Pixel(16, 48, Green);
+    }
     if(std::strcmp(scenario, "sampling") == 0)
     {
         // Reupload and resize a texture while earlier draws still reference
@@ -354,9 +397,9 @@ bool Run(const char* scenario)
         }
         vk::RendererSetTextureOp(1, 0, 1);
         int key = 0;
-        vk::RendererSetRenderTarget(&key, 64, 64);
+        vk::RendererSetRenderTarget(&key, 64, 64, nullptr);
         vk::RendererClear(1, Green, 1, 0);
-        vk::RendererSetRenderTarget(nullptr, 0, 0);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
         if(!vk::RendererSetStageRenderTargetTexture(0, &key) || !Draw(8, 8, 0xFFFFFFFFu))
         {
             return false;
@@ -437,9 +480,9 @@ bool Run(const char* scenario)
         // view referencing it are gone; sampling falls back to the
         // ordinary stage texture (the white dummy here).
         int rtKey = 0;
-        vk::RendererSetRenderTarget(&rtKey, 64, 64);
+        vk::RendererSetRenderTarget(&rtKey, 64, 64, nullptr);
         vk::RendererClear(1, Green, 1, 0);
-        vk::RendererSetRenderTarget(nullptr, 0, 0);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
         if(!vk::RendererSetStageRenderTargetTexture(0, &rtKey))
         {
             return false;
@@ -522,7 +565,7 @@ bool Run(const char* scenario)
         }
         vk::RendererSetTextureOp(0, 0, 2); // SELECTARG1 (texture)
         int targetKey = 0;
-        vk::RendererSetRenderTarget(&targetKey, 64, 64);
+        vk::RendererSetRenderTarget(&targetKey, 64, 64, nullptr);
         vk::RendererSetViewport(0, 0, 64, 64);
         vk::RendererClear(1, Red, 1, 0);
         vk::RendererSetRasterState(168, 0); // no guest color writes
@@ -571,7 +614,7 @@ bool Run(const char* scenario)
             return false;
         }
         // Ending the overlay does not leave a persistent compositor enabled.
-        vk::RendererSetRenderTarget(nullptr, 0, 0);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
         return vk::RendererClear(1, Blue, 1, 0) && Pixel(100, 100, Blue);
     }
     return false;

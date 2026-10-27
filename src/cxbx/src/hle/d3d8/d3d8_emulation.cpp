@@ -9137,11 +9137,12 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
                static_cast<unsigned>(description.Height));
     }
 
-    // Depth surfaces bound as textures (NV2A shadow-buffer sampling; Turok
-    // Evolution arms SetRenderState_ShadowFunc right before the bind) are
-    // not mirrored yet, and locking one through the host d3d8 stack faults
-    // inside the Vulkan ICD. Sample white and report once until the
-    // shadow-map path lands.
+    // Depth surfaces bound as textures are NV2A shadow-buffer sampling
+    // (Turok Evolution arms SetRenderState_ShadowFunc right before the
+    // bind): the depth content lives in the backend target's depth image,
+    // registered under this texture's pointer at SetRenderTarget time.
+    // Locking one through the host d3d8 stack faults inside the Vulkan
+    // ICD, so the depth never flows through a host texture.
     {
         const XTL::D3DFORMAT format = description.Format;
         const bool depthFormat =
@@ -9151,17 +9152,22 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
             format == XTL::D3DFMT_D16;
         if(depthFormat || (description.Usage & D3DUSAGE_DEPTHSTENCIL) != 0)
         {
-            static bool s_Reported = false;
-            if(!s_Reported)
+            if(!cxbx::d3d8::HostBackendSetDepthStageTexture(Stage,
+                                                            pBaseTexture8))
             {
-                s_Reported = true;
-                printf("VULKAN| depth texture (host format %u) bound on stage "
-                       "%lu not mirrored; stage samples white\n",
-                       static_cast<unsigned>(format),
-                       static_cast<unsigned long>(Stage));
+                static bool s_Reported = false;
+                if(!s_Reported)
+                {
+                    s_Reported = true;
+                    printf("VULKAN| depth texture 0x%.08lX bound on stage %lu "
+                           "has no registered depth target; stage samples "
+                           "white\n",
+                           reinterpret_cast<unsigned long>(pBaseTexture8),
+                           static_cast<unsigned long>(Stage));
+                }
+                cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0,
+                                                  0, 0, 0);
             }
-            cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0,
-                                              0);
             return;
         }
     }
@@ -13805,15 +13811,12 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_ShadowFunc(
     }
 #endif
 
-    // Xbox shadow-buffer compare function (NV2A hardware shadow mapping);
-    // no host D3D8 equivalent, so accept and ignore. Warn once, not per call
-    // -- titles set this every frame (Turok Evolution's render loop).
-    static bool WarnedOnce = false;
-    if(!WarnedOnce)
-    {
-        WarnedOnce = true;
-        EmuWarning("ShadowFunc not implemented (ignored; warning shown once)");
-    }
+    // Xbox shadow-buffer compare function (NV2A hardware shadow mapping).
+    // The native backend mirrors it: shadow-map stage binds compare the
+    // depth texel with the texcoord r under this function. Xbox's D3DCMP_*
+    // enumeration is 0x200..0x207; the backend takes the 1..8 form.
+    cxbx::d3d8::HostBackendSetShadowFunc(
+        Value >= 0x200 && Value <= 0x207 ? Value - 0x1FF : Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -17599,13 +17602,19 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         if(!transformed && (g_EmuCurrentFvf & D3DFVF_TEX1) != 0)
         {
             TexCoordOffset = DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u;
-            // A 3-float stage-0 set (cube-map directions) selects the
-            // renderer's vec3 layout; everything else uses the legacy
-            // single-vec2 mode. Xbox's FVF size encoding is nonstandard:
-            // TEXTUREFORMAT2=0 (default), 3=1, 4=2, 1=3 in the per-set bits.
-            if(((g_EmuCurrentFvf >> 16) & 3) == 1)
+            // Stage-0 set size selects the renderer's texcoord layout:
+            // Xbox's FVF size encoding is nonstandard (TEXTUREFORMAT2=0
+            // default, 3=1, 4=2, 1=3 in the per-set bits). 3-float sets
+            // (cube directions) take the vec3 mode; 4-float sets (shadow
+            // u/v/r/q) take the single-vec4 mode.
+            const DWORD stage0Size = (g_EmuCurrentFvf >> 16) & 3;
+            if(stage0Size == 1)
             {
                 TexCoordSets = 3;
+            }
+            else if(stage0Size == 2)
+            {
+                TexCoordSets = 5;
             }
         }
         cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
@@ -18349,19 +18358,33 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget(
             isBackBuffer = false;
         }
 
+        // Shadow-map identity: the depth key is the depth-stencil resource's
+        // host TEXTURE pointer (resolved through the level-surface link
+        // registry, which GetSurfaceLevel populates for every parent), so
+        // later depth-texture binds can find the target's depth image.
+        void* pDepthKey = nullptr;
+        if(pPCNewZStencil != NULL)
+        {
+            if(const EmuSwizzledSurfaceLink* pDepthLink =
+                   EmuFindSwizzledSurfaceLink(pPCNewZStencil))
+            {
+                pDepthKey = pDepthLink->pHostTexture;
+            }
+        }
+
         if(pRenderTarget == 0)
         {
-            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0);
+            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0, pDepthKey);
         }
         else if(isBackBuffer)
         {
-            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0);
+            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0, pDepthKey);
         }
         else if(GotRTDesc)
         {
             cxbx::d3d8::HostBackendSetRenderTarget(
                 pPCRenderTarget != NULL ? pPCRenderTarget : nullptr,
-                RTDesc.Width, RTDesc.Height);
+                RTDesc.Width, RTDesc.Height, pDepthKey);
         }
     }
 

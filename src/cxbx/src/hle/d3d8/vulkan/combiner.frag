@@ -126,13 +126,30 @@ void writeColor(vec4 result)
     outColor = clamp(result, 0.0, 1.0);
 }
 
+bool depthComparePasses(float depth, float reference, uint func)
+{
+    // d3d8 D3DCMPFUNC enumeration: 1 NEVER .. 8 ALWAYS.
+    switch(func)
+    {
+        case 1u: return false;
+        case 2u: return depth < reference;
+        case 3u: return depth == reference;
+        case 4u: return depth <= reference;
+        case 5u: return depth > reference;
+        case 6u: return depth != reference;
+        case 7u: return depth >= reference;
+        default: return true;
+    }
+}
+
 void main()
 {
     // Stage i samples its own coordinate set with the D3D projective
     // divide (st / q, q in the set's w). Legacy single-vec2 layouts leave
     // the unused sets at (0,0,0,1), a neutral q of one. Cube stages
-    // (extra.w bit i) sample the direction texCoord[i].xyz instead; the
-    // divide never applies to cube lookups.
+    // (extra.w bits 0..3) sample the direction texCoord[i].xyz; shadow
+    // stages (bits 4..7, comparison in bits 8..10) sample the depth image
+    // and compare with the set's r after the same divide.
     vec2 stageTexCoord[4];
     vec4 sampled[4];
     for(uint set = 0u; set < 4u; ++set)
@@ -140,9 +157,22 @@ void main()
         float q = texCoord[set].w;
         q = abs(q) < 1.0e-6 ? 1.0 : q;
         stageTexCoord[set] = texCoord[set].xy / q;
-        sampled[set] = ((pc.extra.w >> set) & 1u) != 0u
-            ? texture(cubeTextures[set], texCoord[set].xyz)
-            : texture(textures[set], stageTexCoord[set]);
+        if((pc.extra.w & (16u << set)) != 0u)
+        {
+            // NV2A shadow sampling: the unit's sampled value is the
+            // comparison of the depth texel with the reference r.
+            float depth = texture(textures[set], stageTexCoord[set]).r;
+            float reference = texCoord[set].z / q;
+            float lit = depthComparePasses(depth, reference,
+                                           (pc.extra.w >> 8u) & 7u) ? 1.0 : 0.0;
+            sampled[set] = vec4(lit);
+        }
+        else
+        {
+            sampled[set] = ((pc.extra.w >> set) & 1u) != 0u
+                ? texture(cubeTextures[set], texCoord[set].xyz)
+                : texture(textures[set], stageTexCoord[set]);
+        }
     }
     if(pc.extra.x == 0u)
     {

@@ -1,0 +1,15 @@
+# XDK-toolchain probe (see d3d_render_to_texture): pixel-exact verification
+# of NV2A shadow-map sampling. Renders into a 64x64 render pair, clears
+# depth to 0.5, binds the DEPTHSTENCIL texture with ShadowFunc=LESSEQUAL,
+# and verifies lit (r=0.7) and dark (r=0.3) quads through 4-float texcoords.
+# Pins the depth-key registration (SetRenderTarget) and the depth-stage bind
+# path; without them the depth texture samples white.
+#
+# Vulkan-only by design: host D3D8 cannot sample a depth-stencil texture
+# the Xbox way, so the backbuffer pixels are pinned to the native backend.
+tags = ["xdk"]
+
+[env]
+CXBX_KERNEL_SKIP_INIT = "1"
+CXBX_FS_SWAP = "1"
+CXBX_HOST_BACKEND = "vulkan"

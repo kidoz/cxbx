@@ -89,9 +89,11 @@ unsigned int RendererTargetHeight();
 
 // Switches the draw target: key == nullptr binds the main (present-source)
 // target; otherwise the key identifies (or lazily creates) a
-// render-to-texture target of the given size.
+// render-to-texture target of the given size. depthKey is the stable
+// identity of the attached depth-stencil resource (the host depth TEXTURE
+// pointer); shadow-map binds resolve targets by it (nullptr clears).
 void RendererSetRenderTarget(void* key, unsigned int width,
-                             unsigned int height);
+                             unsigned int height, void* depthKey);
 
 // Binds a registered render target as a stage texture (render-to-texture
 // sampling). Returns false when the key has no target.
@@ -113,6 +115,16 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
 bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
                             unsigned int pitch, unsigned int size,
                             unsigned int hostFormat);
+
+// Shadow-map bind: stage i samples the depth image registered under
+// depthKey by RendererSetRenderTarget and compares the depth texel with the
+// texcoord's r per the shadow function. False when no target registered
+// the key (the caller should fall back to the white dummy).
+bool RendererSetDepthStageTexture(unsigned int stage, void* depthKey);
+
+// D3DRS_SHADOWFUNC: the d3d8 D3DCMPFUNC enumeration (1..8) shadow-map
+// stages compare with.
+void RendererSetShadowFunc(unsigned int func);
 
 // d3d8 texture-stage state, one component at a time (mirrors the HLE's
 // deferred texture-state apply loop). TextureOp types: 0 = COLOROP,

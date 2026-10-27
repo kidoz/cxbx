@@ -148,6 +148,10 @@ struct RendererState
         VkImage depthImage = VK_NULL_HANDLE;
         VkDeviceMemory depthMemory = VK_NULL_HANDLE;
         VkImageView depthView = VK_NULL_HANDLE;
+        // Stable identity of the attached depth-stencil resource (the host
+        // depth TEXTURE pointer, resolved by the HLE's surface-link
+        // registry): shadow-map binds look the entry up by this key.
+        void* depthKey = nullptr;
         unsigned int width = 0;
         unsigned int height = 0;
     };
@@ -158,10 +162,17 @@ struct RendererState
     VkImage mainDepthImage = VK_NULL_HANDLE;
     VkDeviceMemory mainDepthMemory = VK_NULL_HANDLE;
     VkImageView mainDepthView = VK_NULL_HANDLE;
+    void* mainDepthKey = nullptr;
     VkImageView stageOverrideView[4] = {};
     // The render-target registry key behind each stage override view (state
     // blocks re-resolve the binding at apply time).
     void* stageOverrideKey[4] = {};
+    // Shadow-map sampling: stage i samples the depth image registered under
+    // this view instead of a color texture, comparing the depth texel with
+    // the texcoord's r (D3DRS_SHADOWFUNC in shadowFunc). Cleared by every
+    // ordinary RendererSetTexture / RT-override bind.
+    VkImageView stageDepthView[4] = {};
+    unsigned int shadowFunc = 4; // d3d8 D3DCMP_LESSEQUAL
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -366,15 +377,18 @@ bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
     // TEXTURE argument (those draws always supply real texcoords). Four-set
     // layouts carry vec4 sets (projective q in w) at locations 2..5; the
     // single-vec3 mode (3, cube-map directions) carries xyz and a neutral
-    // q of one; the unused components of legacy single-vec2 layouts
+    // q of one; the single-vec4 mode (5, shadow-map u/v/r/q) keeps r in z
+    // and q in w; the unused components of legacy single-vec2 layouts
     // default to (0,0,0,1), which divides by a neutral q of one.
+    const bool fourSet = texCoordSets == 4;
+    const bool oneVec4 = texCoordSets == 5;
     const VkFormat texcoordFormat =
-        texCoordSets == 4 ? VK_FORMAT_R32G32B32A32_SFLOAT
+        (fourSet || oneVec4) ? VK_FORMAT_R32G32B32A32_SFLOAT
         : texCoordSets == 3 ? VK_FORMAT_R32G32B32_SFLOAT
                             : VK_FORMAT_R32G32_SFLOAT;
     const unsigned int texcoordStride =
-        texCoordSets == 4 ? 16u : texCoordSets == 3 ? 12u : 8u;
-    const unsigned int texcoordCount = texCoordSets == 4 ? 4u : 1u;
+        (fourSet || oneVec4) ? 16u : texCoordSets == 3 ? 12u : 8u;
+    const unsigned int texcoordCount = fourSet ? 4u : 1u;
     for(unsigned int set = 0; set < texcoordCount; ++set)
     {
         attributes[attributeCount].location = 2 + set;
@@ -1011,7 +1025,8 @@ bool CreateDepthAttachment(unsigned int width, unsigned int height,
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                      VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if(vkCreateImage(g_R.device, &imageInfo, nullptr, outImage) != VK_SUCCESS)
     {
@@ -2575,11 +2590,15 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
         RendererTexture* texture = g_R.stageTexture[stage];
         imageInfos[stage].sampler = SamplerFor(stage);
         imageInfos[stage].imageView =
-            g_R.stageOverrideView[stage] != VK_NULL_HANDLE
+            g_R.stageDepthView[stage] != VK_NULL_HANDLE
+                ? g_R.stageDepthView[stage]
+            : g_R.stageOverrideView[stage] != VK_NULL_HANDLE
                 ? g_R.stageOverrideView[stage]
                 : (texture != nullptr ? texture->view : g_R.dummyView);
         imageInfos[stage].imageLayout =
-            g_R.stageOverrideView[stage] != VK_NULL_HANDLE
+            g_R.stageDepthView[stage] != VK_NULL_HANDLE
+                ? VK_IMAGE_LAYOUT_GENERAL
+            : g_R.stageOverrideView[stage] != VK_NULL_HANDLE
                 ? VK_IMAGE_LAYOUT_GENERAL
                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         writes[stage].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2635,8 +2654,19 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     stageConstants[16] = g_R.useCombiner ? 1u : 0u;
     stageConstants[17] = g_R.alphaTest ? g_R.alphaFunc : 8u;
     stageConstants[18] = g_R.alphaRef;
-    // extra.w: per-stage cube-sampling mask.
-    stageConstants[19] = g_R.stageCubeMask;
+    // extra.w packs the stage texture modes: bits 0..3 cube sampling,
+    // bits 4..7 shadow-map sampling, bits 8..10 the D3DRS_SHADOWFUNC
+    // comparison (d3d8 enumeration).
+    unsigned int shadowMask = 0;
+    for(unsigned int stage = 0; stage < 4; ++stage)
+    {
+        if(g_R.stageDepthView[stage] != VK_NULL_HANDLE)
+        {
+            shadowMask |= 1u << stage;
+        }
+    }
+    stageConstants[19] = g_R.stageCubeMask | (shadowMask << 4) |
+                         ((g_R.shadowFunc & 7u) << 8);
     // The vertex range [0,100] overlaps these bytes, so the call's
     // stageFlags must include the vertex stage as well.
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
@@ -2778,8 +2808,9 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
         return false;
     }
     // Every 2D bind clears the stage's cube-sampling bit (cube binds set
-    // it again in RendererSetCubeTexture).
+    // it again in RendererSetCubeTexture) and any shadow-map view.
     g_R.stageCubeMask &= ~(1u << stage);
+    g_R.stageDepthView[stage] = VK_NULL_HANDLE;
     // A null/unsupported ordinary texture must also unbind an earlier RT.
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
     g_R.stageOverrideKey[stage] = nullptr;
@@ -3052,6 +3083,7 @@ bool RendererSetCubeTexture(unsigned int stage, void* key, const void* pixels,
         return false;
     }
     g_R.stageCubeMask &= ~(1u << stage);
+    g_R.stageDepthView[stage] = VK_NULL_HANDLE;
     g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
     g_R.stageOverrideKey[stage] = nullptr;
     if(pixels == nullptr || size == 0 || size > 2048 ||
@@ -3295,13 +3327,15 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
             g_R.stageOverrideView[stage] = g_R.rtTargets[i].view;
             g_R.stageOverrideKey[stage] = key;
             g_R.stageCubeMask &= ~(1u << stage);
+            g_R.stageDepthView[stage] = VK_NULL_HANDLE;
             return true;
         }
     }
     return false;
 }
 
-void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
+void RendererSetRenderTarget(void* key, unsigned int width,
+                             unsigned int height, void* depthKey)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid)
@@ -3318,6 +3352,7 @@ void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
         g_R.viewport[1] = 0.0f;
         g_R.viewport[2] = static_cast<float>(g_R.width);
         g_R.viewport[3] = static_cast<float>(g_R.height);
+        g_R.mainDepthKey = depthKey;
         return;
     }
     for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
@@ -3367,6 +3402,7 @@ void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
             }
             CloseRendering();
             g_R.rtCurrent = static_cast<int>(i);
+            g_R.rtTargets[i].depthKey = depthKey;
             return;
         }
     }
@@ -3378,6 +3414,51 @@ void RendererSetRenderTarget(void* key, unsigned int width, unsigned int height)
     }
     CloseRendering();
     g_R.rtCurrent = static_cast<int>(g_R.rtTargetCount) - 1;
+    g_R.rtTargets[g_R.rtTargetCount - 1].depthKey = depthKey;
+}
+
+// Shadow-map bind: stage i samples the depth image registered under
+// depthKey (the host depth TEXTURE pointer the HLE resolved through its
+// surface-link registry) and compares the depth texel with the texcoord's
+// r per shadowFunc (D3DRS_SHADOWFUNC). Returns false when no target (or
+// the main target) registered that key; the caller falls back to white.
+bool RendererSetDepthStageTexture(unsigned int stage, void* depthKey)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || stage >= 4 || depthKey == nullptr)
+    {
+        return false;
+    }
+    if(g_R.mainDepthKey == depthKey && g_R.mainDepthView != VK_NULL_HANDLE)
+    {
+        g_R.stageTexture[stage] = nullptr;
+        g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+        g_R.stageOverrideKey[stage] = nullptr;
+        g_R.stageDepthView[stage] = g_R.mainDepthView;
+        g_R.stageCubeMask &= ~(1u << stage);
+        return true;
+    }
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        if(g_R.rtTargets[i].depthKey == depthKey &&
+           g_R.rtTargets[i].depthView != VK_NULL_HANDLE)
+        {
+            g_R.stageTexture[stage] = nullptr;
+            g_R.stageOverrideView[stage] = VK_NULL_HANDLE;
+            g_R.stageOverrideKey[stage] = nullptr;
+            g_R.stageDepthView[stage] = g_R.rtTargets[i].depthView;
+            g_R.stageCubeMask &= ~(1u << stage);
+            return true;
+        }
+    }
+    return false;
+}
+
+void RendererSetShadowFunc(unsigned int func)
+{
+    RendererLockScope rendererLock;
+    // The d3d8 comparison enumeration (1..8); the shader maps it.
+    g_R.shadowFunc = func;
 }
 
 void RendererSetTextureOp(unsigned int stage, unsigned int type,

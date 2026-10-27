@@ -560,11 +560,28 @@ void HostBackendSetViewport(float x, float y, float width, float height)
 }
 
 void HostBackendSetRenderTarget(void* key, unsigned int width,
-                                unsigned int height)
+                                unsigned int height, void* depthKey)
 {
     if(HostBackendRenders())
     {
-        vulkan::RendererSetRenderTarget(key, width, height);
+        vulkan::RendererSetRenderTarget(key, width, height, depthKey);
+    }
+}
+
+bool HostBackendSetDepthStageTexture(unsigned int stage, void* depthKey)
+{
+    if(!HostBackendRenders())
+    {
+        return false;
+    }
+    return vulkan::RendererSetDepthStageTexture(stage, depthKey);
+}
+
+void HostBackendSetShadowFunc(unsigned int func)
+{
+    if(HostBackendRenders())
+    {
+        vulkan::RendererSetShadowFunc(func);
     }
 }
 

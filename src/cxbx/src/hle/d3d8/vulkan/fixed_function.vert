@@ -21,6 +21,13 @@ void main()
     {
         texCoord = inTexCoord;
     }
+    else if(pc.texCoordSets == 5u)
+    {
+        // Single vec4 set (shadow-map u/v/r/q): broadcast set 0; sets 1..3
+        // have no bound attributes.
+        texCoord = vec4[4](inTexCoord[0], inTexCoord[0], inTexCoord[0],
+                           inTexCoord[0]);
+    }
     else if(pc.texCoordSets == 3u)
     {
         // Single vec3 set (cube-map directions): broadcast set 0 with a
