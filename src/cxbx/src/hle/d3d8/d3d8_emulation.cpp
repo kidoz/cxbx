@@ -721,6 +721,13 @@ static void EmuRunHostControlProbe()
     {
         return;
     }
+    // The probe draws through the HOST device by design (a host-d3d8
+    // liveness diagnostic); under the native backend its host draws never
+    // reach the present source, so it only measures the parked shadow.
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        return;
+    }
     attempted = true;
 
     DWORD beforePixel = 0;
@@ -2288,6 +2295,27 @@ static bool EmuReplayRecordedDraws(const EmuRecordedPushBuffer& recording)
 {
     if(recording.draws.empty())
     {
+        return true;
+    }
+
+    // Under the native backend the replay draws into the Vulkan target
+    // (the host shadow never reaches the present source); state blocks
+    // resolve through the backend mirror. The recorded vertices carry the
+    // CPU-fallback layout (EmuVshCpuVertex: diffuse at 20, texcoords at
+    // 28, four sets).
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        for(const EmuRecordedPushBufferDraw& draw : recording.draws)
+        {
+            if(draw.stateBlock != 0)
+            {
+                cxbx::d3d8::HostBackendStateBlockApply(draw.stateBlock);
+            }
+            cxbx::d3d8::HostBackendDrawUP(draw.primitiveType,
+                                          draw.primitiveCount,
+                                          draw.vertices.data(), draw.stride,
+                                          20, 28, 4);
+        }
         return true;
     }
 
@@ -17328,6 +17356,169 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
         {
             EmuVshLogCpuDraw("DrawVertices", PrimitiveType, VertexCount, true, "none");
             EmuD3DDrawPost();
+        }
+        EmuSwapFS(); // XBox FS
+        return;
+    }
+
+    if(cxbx::d3d8::HostBackendRenders())
+    {
+        // Non-indexed VB draws under the Vulkan render path: pull the
+        // stream-0 bytes (Register container first, host lock fallback) and
+        // hand the staging block to the backend (fixed-function XYZRHW FVF,
+        // mirroring DrawVerticesUP / DrawIndexedVertices). Without this
+        // branch the draw fell into the host QuadHack path and was lost --
+        // the host shadow's content never reaches the Vulkan present.
+        if((g_EmuCurrentFvf & D3DFVF_XYZRHW) == 0)
+        {
+            static LONG fvfWarned = 0;
+            if(InterlockedIncrement(&fvfWarned) <= 5)
+            {
+                EmuWarning("DrawVertices under the Vulkan render path "
+                           "requires XYZRHW (fvf=0x%.08lX)",
+                           g_EmuCurrentFvf);
+            }
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+        const XTL::VshCpuDeviceState::StreamBinding streamBinding =
+            XTL::VshCpuDeviceState::Stream(0);
+        if(streamBinding.resource == nullptr || streamBinding.stride == 0)
+        {
+            static LONG bindWarned = 0;
+            if(InterlockedIncrement(&bindWarned) <= 5)
+            {
+                EmuWarning("DrawVertices under the Vulkan render path "
+                           "requires a bound stream-0 vertex buffer");
+            }
+            EmuSwapFS(); // XBox FS
+            return;
+        }
+
+        const EmuRegisteredVertexBuffer* registration =
+            EmuFindRegisteredVertexBuffer(streamBinding.resource);
+        const BYTE* vertexBytes = nullptr;
+        UINT vertexByteSize = 0;
+        XTL::IDirect3DVertexBuffer8* lockedVertexBuffer = nullptr;
+        BYTE* lockedVertexData = nullptr;
+        if(registration != nullptr && registration->guestData != nullptr &&
+           EmuD3DIsReadableRange(registration->guestData,
+                                 registration->byteSize))
+        {
+            vertexBytes = registration->guestData;
+            vertexByteSize = registration->byteSize;
+        }
+        else
+        {
+            UINT lockSize = 0;
+            if(FAILED(EmuVshLockVertexBuffer(streamBinding.resource,
+                                             &lockedVertexData, &lockSize)))
+            {
+                EmuWarning("DrawVertices could not lock stream 0 under the "
+                           "Vulkan render path");
+                EmuSwapFS(); // XBox FS
+                return;
+            }
+            lockedVertexBuffer = streamBinding.resource->EmuVertexBuffer8;
+            vertexBytes = lockedVertexData;
+            vertexByteSize = lockSize;
+        }
+
+        bool ready = StartVertex <= vertexByteSize / streamBinding.stride &&
+                     static_cast<std::size_t>(StartVertex) +
+                             static_cast<std::size_t>(VertexCount) <=
+                         vertexByteSize / streamBinding.stride;
+        const BYTE* drawData = nullptr;
+        UINT drawVertexCount = VertexCount;
+        D3DPRIMITIVETYPE drawPrimitiveType = PCPrimitiveType;
+        UINT drawPrimitiveCount = PrimitiveCount;
+        if(ready && (DWORD)PrimitiveType == 8) // Quad list: expand to tris
+        {
+            if(VertexCount % 4 != 0 || VertexCount > EMU_IM_MAXVERTS)
+            {
+                ready = false;
+            }
+            else
+            {
+                static BYTE s_VBQuadExpand[EMU_IM_MAXVERTS * 3 / 2 * 64];
+                if(streamBinding.stride > 64)
+                {
+                    ready = false;
+                }
+                else
+                {
+                    const BYTE* source = vertexBytes +
+                        static_cast<std::size_t>(StartVertex) *
+                            streamBinding.stride;
+                    BYTE* dst = s_VBQuadExpand;
+                    static const UINT quadIndices[6] = { 0, 1, 2, 0, 2, 3 };
+                    for(UINT quad = 0; quad < VertexCount / 4; ++quad)
+                    {
+                        for(UINT k = 0; k < 6; ++k)
+                        {
+                            memcpy(dst,
+                                   source + static_cast<std::size_t>(
+                                                 quad * 4 + quadIndices[k]) *
+                                                 streamBinding.stride,
+                                   streamBinding.stride);
+                            dst += streamBinding.stride;
+                        }
+                    }
+                    drawData = s_VBQuadExpand;
+                    drawVertexCount = VertexCount / 4 * 6;
+                    drawPrimitiveType = D3DPT_TRIANGLELIST;
+                    drawPrimitiveCount = VertexCount / 2;
+                }
+            }
+        }
+        else if(ready)
+        {
+            drawData = vertexBytes +
+                       static_cast<std::size_t>(StartVertex) *
+                           streamBinding.stride;
+        }
+
+        if(ready)
+        {
+            const unsigned int DiffuseOffset =
+                (g_EmuCurrentFvf & D3DFVF_DIFFUSE) != 0 ? 16u : 0xFFFFFFFFu;
+            unsigned int TexCoordOffset = 0xFFFFFFFFu;
+            unsigned int TexCoordSets = 0;
+            if((g_EmuCurrentFvf & D3DFVF_TEX1) != 0)
+            {
+                TexCoordOffset = DiffuseOffset != 0xFFFFFFFFu ? 20u : 16u;
+                // Xbox FVF texcoord-size encoding: 3-float sets (cube
+                // directions) -> vec3 mode, 4-float sets (shadow u/v/r/q)
+                // -> single-vec4 mode.
+                const DWORD stage0Size = (g_EmuCurrentFvf >> 16) & 3;
+                if(stage0Size == 1)
+                {
+                    TexCoordSets = 3;
+                }
+                else if(stage0Size == 2)
+                {
+                    TexCoordSets = 5;
+                }
+            }
+            cxbx::d3d8::HostBackendDrawUP(
+                drawPrimitiveType, drawPrimitiveCount, drawData,
+                streamBinding.stride, DiffuseOffset, TexCoordOffset,
+                TexCoordSets);
+            EmuD3DDrawPost();
+        }
+        else
+        {
+            static LONG dropWarned = 0;
+            if(InterlockedIncrement(&dropWarned) <= 5)
+            {
+                EmuWarning("DrawVertices dropped under the Vulkan render "
+                           "path (unreadable vertex range)");
+            }
+        }
+
+        if(lockedVertexData != nullptr)
+        {
+            EmuVshUnlockVertexBuffer(lockedVertexBuffer);
         }
         EmuSwapFS(); // XBox FS
         return;
