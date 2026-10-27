@@ -9033,8 +9033,14 @@ static void EmuTraceBoundTextureAtDraw()
 // d3d8 texture, so the backend receives host bytes and host formats only.
 // Data is re-pulled on every real bind; redundant binds are suppressed by
 // the host-forward cache upstream.
+// Slice C: the renderer cache is keyed by the GUEST resource pointer
+// (pGuestKey), not the host texture pointer -- guest identity is stable for
+// the resource's lifetime, so a host pointer recycled by a new texture can
+// never alias a live cache entry, and state-block replays rebind the same
+// key the bind recorded.
 static void EmuVulkanStageTextureUpload(DWORD Stage,
-                                        XTL::IDirect3DBaseTexture8* pBaseTexture8)
+                                        XTL::IDirect3DBaseTexture8* pBaseTexture8,
+                                        void* pGuestKey)
 {
     if(!cxbx::d3d8::HostBackendRenders())
     {
@@ -9118,7 +9124,7 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
         }
         if(!facesOk ||
            !cxbx::d3d8::HostBackendSetCubeTexture(
-               Stage, pBaseTexture8, faces.data(), tightRowBytes, faceSize,
+               Stage, pGuestKey, faces.data(), tightRowBytes, faceSize,
                hostFormat))
         {
             cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0,
@@ -9180,7 +9186,7 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
         }
         pVolume8->UnlockBox(0);
         if(!cxbx::d3d8::HostBackendSetVolumeTexture(
-               Stage, pBaseTexture8, slices.data(), rowBytes,
+               Stage, pGuestKey, slices.data(), rowBytes,
                volumeDesc.Width, volumeDesc.Height, volumeDesc.Depth,
                static_cast<unsigned>(volumeDesc.Format)))
         {
@@ -9320,7 +9326,7 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
                    native->Height == description.Height)
                 {
                     cxbx::d3d8::HostBackendSetTexture(
-                        Stage, pBaseTexture8, native->Pixels.data(),
+                        Stage, pGuestKey, native->Pixels.data(),
                         native->Pitch, native->Width, native->Height,
                         native->HostFormat);
                     return;
@@ -9341,7 +9347,7 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
         cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
         return;
     }
-    cxbx::d3d8::HostBackendSetTexture(Stage, pBaseTexture8, locked.pBits,
+    cxbx::d3d8::HostBackendSetTexture(Stage, pGuestKey, locked.pBits,
                                       static_cast<unsigned>(locked.Pitch),
                                       description.Width, description.Height,
                                       static_cast<unsigned>(description.Format));
@@ -9454,7 +9460,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture(
         g_EmuBoundGuestTextures[Stage] = pTexture;
         g_EmuBoundGuestTextureDescriptors[Stage] =
             EmuCaptureRecordedTextureDescriptor(pTexture);
-        EmuVulkanStageTextureUpload(Stage, pBaseTexture8);
+        EmuVulkanStageTextureUpload(Stage, pBaseTexture8, pTexture);
     }
 
     static int traceEnabled = -1;
@@ -11862,14 +11868,13 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
             EmuDiscardLinearTexture(
                 reinterpret_cast<IDirect3DBaseTexture8*>(pResource8));
-            // Resource-lifetime parity: the host object is dying, so its
-            // pointer can be recycled by a new texture/surface at any time.
-            // The backend must drop cached uploads and registry entries
-            // keyed by that pointer (the same pointer identity SetTexture /
-            // SetRenderTarget forwarded).
+            // Resource-lifetime parity: the guest resource is dying, and
+            // the backend's texture cache is keyed by the guest resource
+            // pointer (slice C), so drop the entries under that key. The
+            // host pointer is NOT used -- it can already have been recycled.
             if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_TEXTURE)
             {
-                cxbx::d3d8::HostBackendReleaseTexture(pResource8);
+                cxbx::d3d8::HostBackendReleaseTexture(pThis);
                 // The host texture pointer dies here; drop its native
                 // container and any outstanding served lock with it.
                 EmuForgetTextureContainerState(
