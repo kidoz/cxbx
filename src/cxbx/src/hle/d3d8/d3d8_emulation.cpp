@@ -137,8 +137,12 @@ static DWORD g_dwOverlayH = 480;                        // Cached Overlay Height
 
 // Converted RGB copy of the latest UpdateOverlay frame (owned by the YUY2
 // conversion cache, do not Release); composited over the backbuffer at Swap
-// while the title keeps the overlay enabled.
+// while the title keeps the overlay enabled. Under the native flavor the
+// frame stays a CPU BGRA block (the shared YUY2 conversion cache) and the
+// backend composites it directly.
 static XTL::IDirect3DTexture8* g_pOverlayFrameTexture = NULL;
+static const BYTE* g_pOverlayFrameBgra = nullptr;
+static DWORD g_dwOverlayFrameW = 0, g_dwOverlayFrameH = 0;
 static std::atomic<std::uint32_t> g_OverlayFrameGeneration{ 0 };
 static LARGE_INTEGER g_NextOverlayUpdate = {};
 static LARGE_INTEGER g_NextSwapPresent = {};
@@ -9073,17 +9077,19 @@ static void EmuTraceBoundTextureAtDraw()
 // the resource's lifetime, so a host pointer recycled by a new texture can
 // never alias a live cache entry, and state-block replays rebind the same
 // key the bind recorded.
-// P8 YUY2: converts a movie frame straight into the backend upload under
-// the native flavor (no host texture, no host lock -- the d3d8 flavor keeps
-// the host-texture conversion in EmuConvertYuy2Texture). The frame hash
-// suppresses reconversion of unchanged frames.
-static bool EmuVulkanStageYuy2Upload(DWORD Stage, EmuYuy2TextureInfo* pInfo,
-                                     void* pGuestKey)
+// P8 YUY2: converts a movie frame into a shared hash-cached BGRA buffer
+// (no host texture, no host lock -- the d3d8 flavor keeps the host-texture
+// conversion in EmuConvertYuy2Texture). The frame hash suppresses
+// reconversion of unchanged frames. The buffer is shared by all consumers
+// (stage binds, the overlay compositor): each consumer copies out
+// synchronously, so no outstanding references survive the next conversion.
+static const BYTE* EmuVulkanConvertYuy2Bgra(EmuYuy2TextureInfo* pInfo,
+                                            DWORD* outW, DWORD* outH)
 {
     DWORD w = pInfo->Width & ~1u, h = pInfo->Height;
-    if(pInfo->pPixels == nullptr || w == 0 || h == 0 || pGuestKey == nullptr)
+    if(pInfo->pPixels == nullptr || w == 0 || h == 0)
     {
-        return false;
+        return nullptr;
     }
 
     DWORD hash = 2166136261u;
@@ -9096,23 +9102,46 @@ static bool EmuVulkanStageYuy2Upload(DWORD Stage, EmuYuy2TextureInfo* pInfo,
     static EmuYuy2TextureInfo* s_CacheSource = nullptr;
     static DWORD s_CacheHash = 0;
     static DWORD s_CacheW = 0, s_CacheH = 0;
-    const bool cached = s_CacheSource == pInfo && s_CacheHash == hash &&
-                        s_CacheW == w && s_CacheH == h;
-    if(!cached)
+    if(!(s_CacheSource == pInfo && s_CacheHash == hash &&
+         s_CacheW == w && s_CacheH == h))
     {
         s_Bgra.resize(static_cast<std::size_t>(w) * h * 4);
         if(!CxbxVideo::ConvertYuy2ToBgra(
                pInfo->pPixels, pInfo->Pitch, s_Bgra.data(), w * 4, w, h))
         {
-            return false;
+            return nullptr;
         }
         s_CacheSource = pInfo;
         s_CacheHash = hash;
         s_CacheW = w;
         s_CacheH = h;
     }
-    cxbx::d3d8::HostBackendSetTexture(Stage, pGuestKey, s_Bgra.data(),
-                                      w * 4, w, h, 21);
+    if(outW != nullptr)
+    {
+        *outW = w;
+    }
+    if(outH != nullptr)
+    {
+        *outH = h;
+    }
+    return s_Bgra.data();
+}
+
+static bool EmuVulkanStageYuy2Upload(DWORD Stage, EmuYuy2TextureInfo* pInfo,
+                                     void* pGuestKey)
+{
+    if(pGuestKey == nullptr)
+    {
+        return false;
+    }
+    DWORD w = 0, h = 0;
+    const BYTE* bgra = EmuVulkanConvertYuy2Bgra(pInfo, &w, &h);
+    if(bgra == nullptr)
+    {
+        return false;
+    }
+    cxbx::d3d8::HostBackendSetTexture(Stage, pGuestKey, bgra, w * 4, w, h,
+                                      21);
     return true;
 }
 
@@ -10172,35 +10201,29 @@ static void EmuComposeOverlay()
 {
     using namespace XTL;
 
-    if(g_pOverlayFrameTexture == NULL)
+    // The native renderer owns a separate backbuffer. The converted frame
+    // already lives in the shared CPU BGRA cache (no host texture).
+    if(cxbx::d3d8::HostBackendRenders())
     {
+        if(g_pOverlayFrameBgra == nullptr || g_dwOverlayFrameW == 0 ||
+           g_dwOverlayFrameH == 0)
+        {
+            return;
+        }
+        static bool warned = false;
+        if(!cxbx::d3d8::HostBackendComposeOverlay(
+               g_pOverlayFrameBgra, g_dwOverlayFrameW, g_dwOverlayFrameH,
+               g_dwOverlayFrameW * 4) &&
+           !warned)
+        {
+            warned = true;
+            EmuWarning("Vulkan movie overlay composition failed");
+        }
         return;
     }
 
-    // The native renderer owns a separate backbuffer. Drawing the movie quad
-    // directly on the D3D8 shadow would leave the Vulkan present source black.
-    if(cxbx::d3d8::HostBackendRenders())
+    if(g_pOverlayFrameTexture == NULL)
     {
-        D3DSURFACE_DESC description = {};
-        D3DLOCKED_RECT locked = {};
-        bool composed = false;
-        if(SUCCEEDED(g_pOverlayFrameTexture->GetLevelDesc(0, &description)) &&
-           SUCCEEDED(g_pOverlayFrameTexture->LockRect(0, &locked, nullptr, D3DLOCK_READONLY)))
-        {
-            if(locked.pBits != nullptr && locked.Pitch > 0)
-            {
-                composed = cxbx::d3d8::HostBackendComposeOverlay(
-                    locked.pBits, description.Width, description.Height,
-                    static_cast<unsigned int>(locked.Pitch));
-            }
-            g_pOverlayFrameTexture->UnlockRect(0);
-        }
-        static bool warned = false;
-        if(!composed && !warned)
-        {
-            EmuWarning("Vulkan movie overlay composition failed");
-            warned = true;
-        }
         return;
     }
 
@@ -10362,7 +10385,7 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_Swap(
 
     const HRESULT hRet = EmuPresentHostDevice(nullptr, nullptr, nullptr, nullptr, true);
 
-    if(g_pOverlayFrameTexture != NULL &&
+    if((g_pOverlayFrameTexture != NULL || g_pOverlayFrameBgra != nullptr) &&
        cxbx::trace::IsEnabled(cxbx::trace::Channel::Media))
     {
         cxbx::trace::RecordBinary(
@@ -13131,6 +13154,9 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_EnableOverlay(
     if(!Enable)
     {
         g_pOverlayFrameTexture = NULL;
+        g_pOverlayFrameBgra = nullptr;
+        g_dwOverlayFrameW = 0;
+        g_dwOverlayFrameH = 0;
         g_OverlayFrameGeneration.store(0, std::memory_order_relaxed);
         g_NextOverlayUpdate.QuadPart = 0;
         g_NextSwapPresent.QuadPart = 0;
@@ -13314,8 +13340,25 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_UpdateOverlay(
         // then pause at each audio packet boundary. Rate-match software-overlay
         // updates while the latest frame continues to scan out at 60 Hz.
         EmuPacePresent(g_NextOverlayUpdate, 1001, 30000);
-        g_pOverlayFrameTexture = EmuConvertYuy2Texture(pInfo);
-        if(g_pOverlayFrameTexture != NULL &&
+        if(cxbx::d3d8::HostBackendRenders())
+        {
+            // P8: the frame converts into the shared CPU cache; the backend
+            // composites it at Swap (no host texture involved).
+            g_pOverlayFrameTexture = NULL;
+            g_pOverlayFrameBgra = nullptr;
+            g_dwOverlayFrameW = 0;
+            g_dwOverlayFrameH = 0;
+            if(pInfo != NULL)
+            {
+                g_pOverlayFrameBgra = EmuVulkanConvertYuy2Bgra(
+                    pInfo, &g_dwOverlayFrameW, &g_dwOverlayFrameH);
+            }
+        }
+        else
+        {
+            g_pOverlayFrameTexture = EmuConvertYuy2Texture(pInfo);
+        }
+        if((g_pOverlayFrameTexture != NULL || g_pOverlayFrameBgra != nullptr) &&
            cxbx::trace::IsEnabled(cxbx::trace::Channel::Media))
         {
             const std::uint32_t frame =
@@ -15847,7 +15890,13 @@ static void EmuRestoreRecordedGuestTextures(const EmuRecordedPushBufferDraw& dra
         {
             if((reinterpret_cast<std::uintptr_t>(guestTexture) & 0x80000000u) != 0)
             {
-                hostTexture = EmuConvertYuy2Texture(EmuFindYuy2Texture(guestTexture));
+                // Under the native flavor the pull converts YUY2 straight
+                // into the upload by the guest key; only the d3d8 flavor
+                // needs the host texture here.
+                if(!cxbx::d3d8::HostBackendRenders())
+                {
+                    hostTexture = EmuConvertYuy2Texture(EmuFindYuy2Texture(guestTexture));
+                }
             }
             else if(EmuD3DIsReadableRange(guestTexture, sizeof(*guestTexture)))
             {
@@ -15876,6 +15925,14 @@ static void EmuRestoreRecordedGuestTextures(const EmuRecordedPushBufferDraw& dra
                     g_EmuBoundGuestTextures[stage] = guestTexture;
                     g_EmuBoundGuestTextureDescriptors[stage] =
                         draw.guestTextureDescriptors[stage];
+                    // Slice C: the recorded draw replays through the backend
+                    // under the native flavor; re-resolve its stage binding
+                    // by the recorded GUEST key (YUY2 included).
+                    if(cxbx::d3d8::HostBackendRenders())
+                    {
+                        EmuVulkanStageTextureUpload(stage, hostTexture,
+                                                    guestTexture);
+                    }
                     continue;
                 }
                 EmuVerifyResourceIsRegistered(guestTexture);
@@ -15886,11 +15943,25 @@ static void EmuRestoreRecordedGuestTextures(const EmuRecordedPushBufferDraw& dra
         EmuFlushHostTextureLocks(hostTexture);
         EmuRefreshLinearTexture(hostTexture);
         EmuConfigureLinearTextureCoordinates(stage, hostTexture);
-        g_pD3DDevice8->SetTexture(stage, hostTexture);
-        g_EmuBoundHostTextures[stage] = hostTexture;
-        g_EmuBoundGuestTextures[stage] = guestTexture;
-        g_EmuBoundGuestTextureDescriptors[stage] =
-            EmuCaptureRecordedTextureDescriptor(guestTexture);
+        if(cxbx::d3d8::HostBackendRenders())
+        {
+            // The host bind is dead state under the native flavor; the
+            // backend bind resolves by the guest key (YUY2 frames convert
+            // straight into the upload).
+            g_EmuBoundHostTextures[stage] = hostTexture;
+            g_EmuBoundGuestTextures[stage] = guestTexture;
+            g_EmuBoundGuestTextureDescriptors[stage] =
+                EmuCaptureRecordedTextureDescriptor(guestTexture);
+            EmuVulkanStageTextureUpload(stage, hostTexture, guestTexture);
+        }
+        else
+        {
+            g_pD3DDevice8->SetTexture(stage, hostTexture);
+            g_EmuBoundHostTextures[stage] = hostTexture;
+            g_EmuBoundGuestTextures[stage] = guestTexture;
+            g_EmuBoundGuestTextureDescriptors[stage] =
+                EmuCaptureRecordedTextureDescriptor(guestTexture);
+        }
     }
 }
 
