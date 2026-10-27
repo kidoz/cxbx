@@ -9073,6 +9073,49 @@ static void EmuTraceBoundTextureAtDraw()
 // the resource's lifetime, so a host pointer recycled by a new texture can
 // never alias a live cache entry, and state-block replays rebind the same
 // key the bind recorded.
+// P8 YUY2: converts a movie frame straight into the backend upload under
+// the native flavor (no host texture, no host lock -- the d3d8 flavor keeps
+// the host-texture conversion in EmuConvertYuy2Texture). The frame hash
+// suppresses reconversion of unchanged frames.
+static bool EmuVulkanStageYuy2Upload(DWORD Stage, EmuYuy2TextureInfo* pInfo,
+                                     void* pGuestKey)
+{
+    DWORD w = pInfo->Width & ~1u, h = pInfo->Height;
+    if(pInfo->pPixels == nullptr || w == 0 || h == 0 || pGuestKey == nullptr)
+    {
+        return false;
+    }
+
+    DWORD hash = 2166136261u;
+    for(DWORD offset = 0; offset < pInfo->DataSize; ++offset)
+    {
+        hash = (hash ^ pInfo->pPixels[offset]) * 16777619u;
+    }
+
+    static std::vector<BYTE> s_Bgra;
+    static EmuYuy2TextureInfo* s_CacheSource = nullptr;
+    static DWORD s_CacheHash = 0;
+    static DWORD s_CacheW = 0, s_CacheH = 0;
+    const bool cached = s_CacheSource == pInfo && s_CacheHash == hash &&
+                        s_CacheW == w && s_CacheH == h;
+    if(!cached)
+    {
+        s_Bgra.resize(static_cast<std::size_t>(w) * h * 4);
+        if(!CxbxVideo::ConvertYuy2ToBgra(
+               pInfo->pPixels, pInfo->Pitch, s_Bgra.data(), w * 4, w, h))
+        {
+            return false;
+        }
+        s_CacheSource = pInfo;
+        s_CacheHash = hash;
+        s_CacheW = w;
+        s_CacheH = h;
+    }
+    cxbx::d3d8::HostBackendSetTexture(Stage, pGuestKey, s_Bgra.data(),
+                                      w * 4, w, h, 21);
+    return true;
+}
+
 static void EmuVulkanStageTextureUpload(DWORD Stage,
                                         XTL::IDirect3DBaseTexture8* pBaseTexture8,
                                         void* pGuestKey)
@@ -9080,6 +9123,23 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
     if(!cxbx::d3d8::HostBackendRenders())
     {
         return;
+    }
+    // P8 YUY2: the guest key identifies the movie frame (fake high-bit
+    // handle or registered guest resource); convert straight into the
+    // backend upload without a host texture.
+    if(pGuestKey != nullptr)
+    {
+        if(EmuYuy2TextureInfo* pYuy2 =
+               EmuResolveYuy2Texture(reinterpret_cast<XTL::X_D3DResource*>(
+                   pGuestKey)))
+        {
+            if(!EmuVulkanStageYuy2Upload(Stage, pYuy2, pGuestKey))
+            {
+                cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0,
+                                                  0, 0, 0);
+            }
+            return;
+        }
     }
     if(pBaseTexture8 != NULL &&
        pBaseTexture8->GetType() == XTL::D3DRTYPE_CUBETEXTURE)
@@ -9413,12 +9473,16 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetTexture(
         EmuYuy2TextureInfo* pInfo = EmuResolveYuy2Texture(pTexture);
         if(pInfo != NULL)
         {
-            // Convert both Cxbx-created fake handles and registered guest YUY2
-            // resources to a real RGB host texture before sampling.
-            pBaseTexture8 = EmuConvertYuy2Texture(pInfo);
+            // The d3d8 flavour converts to a real RGB host texture before
+            // sampling; under the native flavour the bind pull converts
+            // straight into the backend upload (no host texture involved).
             g_dwOverlayW = pInfo->Width;
             g_dwOverlayH = pInfo->Height;
             bConvertedYuv = TRUE;
+            if(!cxbx::d3d8::HostBackendRenders())
+            {
+                pBaseTexture8 = EmuConvertYuy2Texture(pInfo);
+            }
         }
         else if((uint32)pTexture & 0x80000000)
         {
