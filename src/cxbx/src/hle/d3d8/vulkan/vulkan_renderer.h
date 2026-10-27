@@ -90,13 +90,18 @@ unsigned int RendererTargetHeight();
 // Switches the draw target: key == nullptr binds the main (present-source)
 // target; otherwise the key identifies (or lazily creates) a
 // render-to-texture target of the given size. depthKey is the stable
-// identity of the attached depth-stencil resource (the host depth TEXTURE
-// pointer); shadow-map binds resolve targets by it (nullptr clears).
+// identity of the attached depth-stencil resource and textureKey the stable
+// identity of the owning texture when the colour target is a texture level
+// (both GUEST texture pointers, resolved by the HLE's surface-link
+// registry): shadow-map and stage-override binds resolve targets by them
+// (nullptr clears).
 void RendererSetRenderTarget(void* key, unsigned int width,
-                             unsigned int height, void* depthKey);
+                             unsigned int height, void* depthKey,
+                             void* textureKey);
 
 // Binds a registered render target as a stage texture (render-to-texture
-// sampling). Returns false when the key has no target.
+// sampling): key is the OWNING TEXTURE's guest pointer (the entry's
+// textureKey). Returns false when no target is registered under it.
 bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key);
 
 // Binds (or unbinds, key == nullptr) the stage texture. pixels are the

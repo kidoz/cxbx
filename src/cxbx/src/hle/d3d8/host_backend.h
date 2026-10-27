@@ -194,7 +194,8 @@ void HostBackendStateBlockDelete(unsigned int token);
 // render target as a stage texture (render-to-texture sampling; false when
 // the key has no target).
 void HostBackendSetRenderTarget(void* key, unsigned int width,
-                                unsigned int height, void* depthKey);
+                                unsigned int height, void* depthKey,
+                                void* textureKey);
 bool HostBackendSetStageRenderTargetTexture(unsigned int stage, void* key);
 
 // Shadow-map sampling: binds the depth image registered under depthKey (the

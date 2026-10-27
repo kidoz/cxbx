@@ -3902,8 +3902,9 @@ static bool EmuCopyRectsFromTargetNative(
 
     std::vector<BYTE> pixels(static_cast<std::size_t>(SrcDesc.Width) *
                              SrcDesc.Height * 4);
+    // Slice C: the target registry is keyed by the guest surface pointer.
     bool readOk = cxbx::d3d8::HostBackendReadTargetPixels(
-        pSourceSurface->EmuSurface8, pixels.data(), rowBytes, SrcDesc.Width,
+        pSourceSurface, pixels.data(), rowBytes, SrcDesc.Width,
         SrcDesc.Height);
     if(!readOk && !cxbx::d3d8::HostBackendRenders())
     {
@@ -7739,18 +7740,22 @@ static void EmuConfigureLinearTextureCoordinates(
 // GetSurfaceLevel + Surface::LockRect, which bypasses the texture-lock
 // tracking above. Remember which host surfaces belong to a tracked swizzled
 // texture so the surface-lock path can mark the level dirty too.
+// Slice C: the link also records the GUEST texture pointer -- the stable
+// identity SetRenderTarget resolves for the backend's RT/shadow keys.
 struct EmuSwizzledSurfaceLink
 {
     XTL::IDirect3DSurface8* pHostSurface;
     XTL::IDirect3DBaseTexture8* pHostTexture;
     DWORD dwLevel;
+    void* pGuestTexture;
 };
 
 static std::vector<EmuSwizzledSurfaceLink> g_EmuSwizzledSurfaceLinks;
 
 static void EmuLinkSwizzledSurface(XTL::IDirect3DSurface8* pHostSurface,
                                    XTL::IDirect3DBaseTexture8* pHostTexture,
-                                   DWORD dwLevel)
+                                   DWORD dwLevel,
+                                   void* pGuestTexture = nullptr)
 {
     if(pHostSurface == nullptr || pHostTexture == nullptr)
         return;
@@ -7760,10 +7765,12 @@ static void EmuLinkSwizzledSurface(XTL::IDirect3DSurface8* pHostSurface,
         {
             link.pHostTexture = pHostTexture;
             link.dwLevel = dwLevel;
+            link.pGuestTexture = pGuestTexture;
             return;
         }
     }
-    g_EmuSwizzledSurfaceLinks.push_back({ pHostSurface, pHostTexture, dwLevel });
+    g_EmuSwizzledSurfaceLinks.push_back(
+        { pHostSurface, pHostTexture, dwLevel, pGuestTexture });
 }
 
 static const EmuSwizzledSurfaceLink* EmuFindSwizzledSurfaceLink(
@@ -9266,8 +9273,9 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
             format == XTL::D3DFMT_D16;
         if(depthFormat || (description.Usage & D3DUSAGE_DEPTHSTENCIL) != 0)
         {
+            // Slice C: the depth key is the GUEST depth texture pointer.
             if(!cxbx::d3d8::HostBackendSetDepthStageTexture(Stage,
-                                                            pBaseTexture8))
+                                                            pGuestKey))
             {
                 static bool s_Reported = false;
                 if(!s_Reported)
@@ -9288,21 +9296,12 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
 
     // P5: a texture whose level-0 surface is a registered render target
     // samples that target directly (the host d3d8 copy never sees the
-    // Vulkan-rendered content).
+    // Vulkan-rendered content). Slice C: the override resolves by the
+    // texture's own guest key -- no host GetSurfaceLevel query per bind.
+    if(pGuestKey != nullptr &&
+       cxbx::d3d8::HostBackendSetStageRenderTargetTexture(Stage, pGuestKey))
     {
-        XTL::IDirect3DSurface8* pLevel0 = NULL;
-        if(SUCCEEDED(pTexture8->GetSurfaceLevel(0, &pLevel0)) &&
-           pLevel0 != NULL)
-        {
-            const bool boundAsTarget =
-                cxbx::d3d8::HostBackendSetStageRenderTargetTexture(
-                    Stage, pLevel0);
-            pLevel0->Release();
-            if(boundAsTarget)
-            {
-                return;
-            }
-        }
+        return;
     }
     XTL::D3DLOCKED_RECT locked = {};
 
@@ -11882,7 +11881,9 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
             }
             else if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_SURFACE)
             {
-                cxbx::d3d8::HostBackendReleaseRenderTarget(pResource8);
+                // Slice C: the target registry is keyed by the guest
+                // surface pointer.
+                cxbx::d3d8::HostBackendReleaseRenderTarget(pThis);
                 // The host surface pointer dies here; drop its native
                 // container and any outstanding served lock with it.
                 {
@@ -12797,7 +12798,8 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel(
         const EmuSwizzledTextureInfo* pSwizzled = EmuFindSwizzledTexture(pTexture8);
         if(SUCCEEDED(hRet) && pSwizzled != nullptr)
         {
-            EmuLinkSwizzledSurface((*ppSurfaceLevel)->EmuSurface8, pTexture8, Level);
+            EmuLinkSwizzledSurface((*ppSurfaceLevel)->EmuSurface8, pTexture8,
+                                   Level, pThis);
 
             // Give the surface the same guest-visible header a native upload
             // path (guest D3DX) expects: the parent's format and the level's
@@ -12829,7 +12831,7 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_GetSurfaceLevel(
             // Plain texture: still linked, so level-surface locks invalidate
             // the texture capture instead of diverging from it.
             EmuLinkSwizzledSurface((*ppSurfaceLevel)->EmuSurface8, pTexture8,
-                                   Level);
+                                   Level, pThis);
         }
     }
 
@@ -18471,33 +18473,45 @@ HRESULT WINAPI XTL::EmuIDirect3DDevice8_SetRenderTarget(
             isBackBuffer = false;
         }
 
-        // Shadow-map identity: the depth key is the depth-stencil resource's
-        // host TEXTURE pointer (resolved through the level-surface link
-        // registry, which GetSurfaceLevel populates for every parent), so
-        // later depth-texture binds can find the target's depth image.
+        // Slice C: the backend keys targets on GUEST identity. The colour
+        // key is the guest surface pointer; the owning-texture key (for
+        // stage-override binds) and the depth key (for shadow binds) come
+        // from the level-surface link registry -- the link's GUEST texture
+        // pointer, stable for the resource's lifetime.
         void* pDepthKey = nullptr;
         if(pPCNewZStencil != NULL)
         {
             if(const EmuSwizzledSurfaceLink* pDepthLink =
                    EmuFindSwizzledSurfaceLink(pPCNewZStencil))
             {
-                pDepthKey = pDepthLink->pHostTexture;
+                pDepthKey = pDepthLink->pGuestTexture;
+            }
+        }
+        void* pTextureKey = nullptr;
+        if(pPCRenderTarget != NULL)
+        {
+            if(const EmuSwizzledSurfaceLink* pColourLink =
+                   EmuFindSwizzledSurfaceLink(pPCRenderTarget))
+            {
+                pTextureKey = pColourLink->pGuestTexture;
             }
         }
 
         if(pRenderTarget == 0)
         {
-            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0, pDepthKey);
+            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0, pDepthKey,
+                                                   nullptr);
         }
         else if(isBackBuffer)
         {
-            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0, pDepthKey);
+            cxbx::d3d8::HostBackendSetRenderTarget(nullptr, 0, 0, pDepthKey,
+                                                   nullptr);
         }
         else if(GotRTDesc)
         {
             cxbx::d3d8::HostBackendSetRenderTarget(
-                pPCRenderTarget != NULL ? pPCRenderTarget : nullptr,
-                RTDesc.Width, RTDesc.Height, pDepthKey);
+                pRenderTarget, RTDesc.Width, RTDesc.Height, pDepthKey,
+                pTextureKey);
         }
     }
 

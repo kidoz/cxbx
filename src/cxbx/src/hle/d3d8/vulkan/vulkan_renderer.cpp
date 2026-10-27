@@ -151,10 +151,16 @@ struct RendererState
         VkImage depthImage = VK_NULL_HANDLE;
         VkDeviceMemory depthMemory = VK_NULL_HANDLE;
         VkImageView depthView = VK_NULL_HANDLE;
-        // Stable identity of the attached depth-stencil resource (the host
-        // depth TEXTURE pointer, resolved by the HLE's surface-link
+        // Stable identity of the attached depth-stencil resource (the GUEST
+        // depth texture pointer, resolved by the HLE's surface-link
         // registry): shadow-map binds look the entry up by this key.
         void* depthKey = nullptr;
+        // Stable identity of the owning texture when the colour target is a
+        // texture level (the GUEST texture pointer, resolved the same way);
+        // stage-override binds (render-to-texture sampling) look the entry
+        // up by this key. Null for plain surfaces (nothing ever binds them
+        // as textures).
+        void* textureKey = nullptr;
         unsigned int width = 0;
         unsigned int height = 0;
     };
@@ -3749,9 +3755,11 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
     {
         return false;
     }
+    // Slice C: the override binds by the OWNING TEXTURE's guest pointer
+    // (what SetTexture hands the HLE), not the RT surface identity.
     for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
     {
-        if(g_R.rtTargets[i].key == key)
+        if(g_R.rtTargets[i].textureKey == key)
         {
             g_R.stageTexture[stage] = nullptr;
             g_R.stageOverrideView[stage] = g_R.rtTargets[i].view;
@@ -3766,7 +3774,8 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
 }
 
 void RendererSetRenderTarget(void* key, unsigned int width,
-                             unsigned int height, void* depthKey)
+                             unsigned int height, void* depthKey,
+                             void* textureKey)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid)
@@ -3834,6 +3843,7 @@ void RendererSetRenderTarget(void* key, unsigned int width,
             CloseRendering();
             g_R.rtCurrent = static_cast<int>(i);
             g_R.rtTargets[i].depthKey = depthKey;
+            g_R.rtTargets[i].textureKey = textureKey;
             return;
         }
     }
@@ -3846,6 +3856,7 @@ void RendererSetRenderTarget(void* key, unsigned int width,
     CloseRendering();
     g_R.rtCurrent = static_cast<int>(g_R.rtTargetCount) - 1;
     g_R.rtTargets[g_R.rtTargetCount - 1].depthKey = depthKey;
+    g_R.rtTargets[g_R.rtTargetCount - 1].textureKey = textureKey;
 }
 
 // Shadow-map bind: stage i samples the depth image registered under
@@ -4236,6 +4247,17 @@ void RendererReleaseTexture(void* key)
                 return;
             }
             DestroyTextureEntry(&entry);
+        }
+    }
+    // Slice C: a released texture also kills the render target its level-0
+    // surface backs (the RT entry keyed by the owning texture). Release the
+    // whole entry; the colour surface's own release is a no-op then.
+    for(unsigned int i = 0; i < g_R.rtTargetCount; ++i)
+    {
+        if(g_R.rtTargets[i].textureKey == key)
+        {
+            RendererReleaseRenderTarget(g_R.rtTargets[i].key);
+            return;
         }
     }
 }

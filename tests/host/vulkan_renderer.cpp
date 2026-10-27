@@ -120,9 +120,9 @@ bool Run(const char* scenario)
             return false;
         }
         int key = 0;
-        vk::RendererSetRenderTarget(&key, 64, 64, nullptr);
+        vk::RendererSetRenderTarget(&key, 64, 64, nullptr, &key);
         vk::RendererClear(1, Green, 1, 0);
-        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr, nullptr);
         return Pixel(16, 16, Red) && Pixel(100, 100, Blue);
     }
     if(std::strcmp(scenario, "combiner") == 0)
@@ -342,9 +342,9 @@ bool Run(const char* scenario)
         // (u, v, r, q).
         int rtKey = 0;
         int depthKey = 0;
-        vk::RendererSetRenderTarget(&rtKey, 64, 64, &depthKey);
+        vk::RendererSetRenderTarget(&rtKey, 64, 64, &depthKey, nullptr);
         vk::RendererClear(2, 0, 0.5f, 0); // D3DCLEAR_ZBUFFER
-        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr, nullptr);
         vk::RendererSetShadowFunc(4); // D3DCMP_LESSEQUAL
         struct ShadowVertex
         {
@@ -475,9 +475,9 @@ bool Run(const char* scenario)
         }
         vk::RendererSetTextureOp(1, 0, 1);
         int key = 0;
-        vk::RendererSetRenderTarget(&key, 64, 64, nullptr);
+        vk::RendererSetRenderTarget(&key, 64, 64, nullptr, &key);
         vk::RendererClear(1, Green, 1, 0);
-        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr, nullptr);
         if(!vk::RendererSetStageRenderTargetTexture(0, &key) || !Draw(8, 8, 0xFFFFFFFFu))
         {
             return false;
@@ -556,11 +556,12 @@ bool Run(const char* scenario)
         }
         // Render-target release: the registry entry and any stage override
         // view referencing it are gone; sampling falls back to the
-        // ordinary stage texture (the white dummy here).
+        // ordinary stage texture (the white dummy here). The RT is keyed by
+        // its owning texture (slice C), so the override resolves by that.
         int rtKey = 0;
-        vk::RendererSetRenderTarget(&rtKey, 64, 64, nullptr);
+        vk::RendererSetRenderTarget(&rtKey, 64, 64, nullptr, &rtKey);
         vk::RendererClear(1, Green, 1, 0);
-        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr, nullptr);
         if(!vk::RendererSetStageRenderTargetTexture(0, &rtKey))
         {
             return false;
@@ -643,7 +644,7 @@ bool Run(const char* scenario)
         }
         vk::RendererSetTextureOp(0, 0, 2); // SELECTARG1 (texture)
         int targetKey = 0;
-        vk::RendererSetRenderTarget(&targetKey, 64, 64, nullptr);
+        vk::RendererSetRenderTarget(&targetKey, 64, 64, nullptr, nullptr);
         vk::RendererSetViewport(0, 0, 64, 64);
         vk::RendererClear(1, Red, 1, 0);
         vk::RendererSetRasterState(168, 0); // no guest color writes
@@ -692,7 +693,7 @@ bool Run(const char* scenario)
             return false;
         }
         // Ending the overlay does not leave a persistent compositor enabled.
-        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr);
+        vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr, nullptr);
         return vk::RendererClear(1, Blue, 1, 0) && Pixel(100, 100, Blue);
     }
     return false;

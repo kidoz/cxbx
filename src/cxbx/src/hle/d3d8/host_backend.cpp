@@ -560,11 +560,13 @@ void HostBackendSetViewport(float x, float y, float width, float height)
 }
 
 void HostBackendSetRenderTarget(void* key, unsigned int width,
-                                unsigned int height, void* depthKey)
+                                unsigned int height, void* depthKey,
+                                void* textureKey)
 {
     if(HostBackendRenders())
     {
-        vulkan::RendererSetRenderTarget(key, width, height, depthKey);
+        vulkan::RendererSetRenderTarget(key, width, height, depthKey,
+                                        textureKey);
     }
 }
 
