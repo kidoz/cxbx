@@ -6939,6 +6939,31 @@ static void EmuDiscardLinearTexture(XTL::IDirect3DBaseTexture8* pHostTexture)
     }
 }
 
+// Guest-direct lock serving: returns the tracked live guest memory (level
+// 0) of a registered linear texture, with its pitch. On real hardware a
+// linear-texture LockRect returns this same UMA memory -- serving it keeps
+// the title's writes and the container's live refresh consistent without
+// touching the host texture.
+static const BYTE* EmuLinearTrackedGuestData(
+    XTL::IDirect3DBaseTexture8* pHostTexture, LONG* outPitch)
+{
+    for(const auto& entry : g_EmuLinearTextureRefreshes)
+    {
+        if(entry.pHostTexture == pHostTexture && entry.pGuestData != nullptr &&
+           EmuD3DIsReadableRange(
+               entry.pGuestData,
+               static_cast<std::size_t>(entry.dwPitch) * entry.dwHeight))
+        {
+            if(outPitch != nullptr)
+            {
+                *outPitch = static_cast<LONG>(entry.dwPitch);
+            }
+            return entry.pGuestData;
+        }
+    }
+    return nullptr;
+}
+
 static void EmuCopyLinearTexture(XTL::IDirect3DTexture8* pTexture,
                                  const BYTE* pGuestData, DWORD dwPitch,
                                  DWORD dwWidth, DWORD dwHeight, DWORD dwBPP)
@@ -7132,6 +7157,66 @@ static void EmuNativeTextureEnsureThreadsafe(
 {
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
     EmuNativeTextureEnsure(pHostTexture);
+}
+
+// Stage 2 pilot: creates (or re-fills) the container GUEST-DIRECT from the
+// Register conversion's validated source bytes -- the host texture is never
+// locked or written. Keyed by the host pointer with the guest resource
+// attached (binds and releases resolve by the guest identity).
+static void EmuNativeTextureEnsureGuestFilled(
+    XTL::IDirect3DBaseTexture8* pHostTexture, XTL::X_D3DResource* pGuestResource,
+    const void* pRows, UINT srcPitch, UINT width, UINT height,
+    UINT hostFormat, UINT bytesPerPixel)
+{
+    if(pHostTexture == nullptr || pGuestResource == nullptr || pRows == nullptr ||
+       width == 0 || height == 0 || hostFormat == 0 || bytesPerPixel == 0)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    EmuNativeTexture* entry = nullptr;
+    if(pGuestResource != nullptr)
+    {
+        for(auto& candidate : g_EmuNativeTextures)
+        {
+            if(candidate.pGuestResource == pGuestResource)
+            {
+                entry = &candidate;
+                break;
+            }
+        }
+    }
+    if(entry == nullptr)
+    {
+        if(EmuNativeTexture* byHost = EmuNativeTextureFind(pHostTexture))
+        {
+            if(byHost->pGuestResource != nullptr &&
+               byHost->pGuestResource != pGuestResource)
+            {
+                // The host pointer maps to a container owned by a different
+                // guest resource: never overwrite it.
+                return;
+            }
+        }
+        g_EmuNativeTextures.push_back({});
+        entry = &g_EmuNativeTextures.back();
+        entry->pHostTexture = pHostTexture;
+        entry->pGuestResource = pGuestResource;
+        entry->HostFormat = hostFormat;
+        entry->Width = width;
+        entry->Height = height;
+        entry->Pitch = width * bytesPerPixel;
+        entry->Pixels.resize(static_cast<std::size_t>(entry->Pitch) * height);
+    }
+    const UINT rowBytes = min(entry->Pitch, srcPitch);
+    for(UINT y = 0; y < entry->Height; ++y)
+    {
+        memcpy(entry->Pixels.data() +
+                   static_cast<std::size_t>(y) * entry->Pitch,
+               static_cast<const BYTE*>(pRows) +
+                   static_cast<std::size_t>(y) * srcPitch,
+               rowBytes);
+    }
 }
 
 // P8 C3-texture: served level-0 locks. The texture analogue of the surface
@@ -11662,21 +11747,36 @@ static HRESULT EmuResourceRegisterGuardedBody(
                     }
                 }
 
-                D3DLOCKED_RECT LockedRect;
+                D3DLOCKED_RECT LockedRect = {};
+
+                // Stage 2 pilot: linear textures fill their container
+                // guest-direct (sourceCopy already holds the validated guest
+                // bytes) and skip the host LockRect relay entirely -- the
+                // host texture stays an empty metadata shell under the
+                // native flavor, and level-0 locks serve the tracked guest
+                // memory. CXBX_NO_GUEST_DIRECT_REG=1 restores the relay.
+                const bool guestDirect =
+                    dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
+                    !bSwizzled && !bCompressed && X_Format != 0x24 &&
+                    cxbx::d3d8::HostBackendRenders() &&
+                    !EmuD3DEnvironmentEnabled("CXBX_NO_GUEST_DIRECT_REG");
 
                 // ******************************************************************
                 // * Copy over data (deswizzle if necessary)
                 // ******************************************************************
-                if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
-                    hRet = pResource->EmuSurface8->LockRect(&LockedRect, NULL, 0);
-                else
-                    hRet = pResource->EmuTexture8->LockRect(0, &LockedRect, NULL, 0);
-
-                if(FAILED(hRet))
+                if(!guestDirect)
                 {
-                    EmuWarning("Resource_Register: texture level 0 lock failed (0x%.08lX)",
-                               hRet);
-                    break;
+                    if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
+                        hRet = pResource->EmuSurface8->LockRect(&LockedRect, NULL, 0);
+                    else
+                        hRet = pResource->EmuTexture8->LockRect(0, &LockedRect, NULL, 0);
+
+                    if(FAILED(hRet))
+                    {
+                        EmuWarning("Resource_Register: texture level 0 lock failed (0x%.08lX)",
+                                   hRet);
+                        break;
+                    }
                 }
 
                 RECT iRect = { 0, 0, 0, 0 };
@@ -11735,20 +11835,35 @@ static HRESULT EmuResourceRegisterGuardedBody(
                 }
                 else
                 {
-                    BYTE* pDest = (BYTE*)LockedRect.pBits;
-                    const BYTE* pSrc = sourceCopy.data();
-
-                    if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwSourceWidth * dwBPP)
-                        memcpy(pDest, pSrc, dwSourceWidth * dwSourceHeight * dwBPP);
+                    // Stage 2 pilot: linear textures fill their container
+                    // guest-direct and skip the host LockRect relay -- the
+                    // host texture stays an empty metadata shell under the
+                    // native flavor (the bind pull serves the container, and
+                    // level-0 locks serve the tracked guest memory).
+                    if(guestDirect)
+                    {
+                        EmuNativeTextureEnsureGuestFilled(
+                            pResource->EmuTexture8, pThis, sourceCopy.data(),
+                            dwPitch, dwSourceWidth, dwSourceHeight,
+                            static_cast<UINT>(Format), dwBPP);
+                    }
                     else
                     {
-                        // TODO: Faster copy (maybe unnecessary)
-                        for(DWORD v = 0; v < dwSourceHeight; v++)
-                        {
-                            memcpy(pDest, pSrc, dwSourceWidth * dwBPP);
+                        BYTE* pDest = (BYTE*)LockedRect.pBits;
+                        const BYTE* pSrc = sourceCopy.data();
 
-                            pDest += LockedRect.Pitch;
-                            pSrc += dwPitch;
+                        if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwSourceWidth * dwBPP)
+                            memcpy(pDest, pSrc, dwSourceWidth * dwSourceHeight * dwBPP);
+                        else
+                        {
+                            // TODO: Faster copy (maybe unnecessary)
+                            for(DWORD v = 0; v < dwSourceHeight; v++)
+                            {
+                                memcpy(pDest, pSrc, dwSourceWidth * dwBPP);
+
+                                pDest += LockedRect.Pitch;
+                                pSrc += dwPitch;
+                            }
                         }
                     }
 
@@ -11769,11 +11884,13 @@ static HRESULT EmuResourceRegisterGuardedBody(
 
                 // Hash-named dump of the CONVERTED level 0 -- exactly what the host
                 // device will sample, after unswizzle/pitch adjustment.
+                // (Guest-direct fills skip it: the host texture was never
+                // locked, so there is nothing to dump from.)
                 static int s_TextureDumpEnabled = -1;
                 if(s_TextureDumpEnabled < 0)
                     s_TextureDumpEnabled =
                         EmuD3DEnvironmentEnabled("CXBX_D3D_TEXTURE_DUMP") ? 1 : 0;
-                if(s_TextureDumpEnabled == 1)
+                if(s_TextureDumpEnabled == 1 && !guestDirect)
                 {
                     static LONG s_TextureDumpsRemaining = 256;
                     if(s_TextureDumpsRemaining > 0)
@@ -11808,10 +11925,13 @@ static HRESULT EmuResourceRegisterGuardedBody(
                     }
                 }
 
-                if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
-                    pResource->EmuSurface8->UnlockRect();
-                else
-                    pResource->EmuTexture8->UnlockRect(0);
+                if(!guestDirect)
+                {
+                    if(dwCommonType == X_D3DCOMMON_TYPE_SURFACE)
+                        pResource->EmuSurface8->UnlockRect();
+                    else
+                        pResource->EmuTexture8->UnlockRect(0);
+                }
 
                 if(bCompressed && dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
                    !sourceCopy.empty())
@@ -12935,6 +13055,26 @@ HRESULT WINAPI XTL::EmuIDirect3DTexture8_LockRect(
 
     // Commit any pending Morton-order write before releasing its lock.
     EmuCommitSwizzledTexture(pTexture8);
+
+    // Stage 2 pilot: registered linear textures serve their level-0 locks
+    // from the tracked guest UMA memory (hardware-accurate: on Xbox the
+    // lock returns the same memory the title registered, and the bind's
+    // live refresh picks the writes up). Full locks only; sub-rects and
+    // deeper levels keep the host path. The kill switch matches Register's.
+    if(Level == 0 && pRect == NULL && pTexture8 != NULL &&
+       cxbx::d3d8::HostBackendRenders() &&
+       !EmuD3DEnvironmentEnabled("CXBX_NO_GUEST_DIRECT_REG"))
+    {
+        LONG guestPitch = 0;
+        if(const BYTE* pGuestBits =
+               EmuLinearTrackedGuestData(pTexture8, &guestPitch))
+        {
+            pLockedRect->pBits = const_cast<BYTE*>(pGuestBits);
+            pLockedRect->Pitch = guestPitch;
+            EmuSwapFS(); // XBox FS
+            return D3D_OK;
+        }
+    }
 
     // Remove old lock(s)
     pTexture8->UnlockRect(Level);
