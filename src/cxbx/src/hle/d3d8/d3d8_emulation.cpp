@@ -1005,6 +1005,9 @@ static EmuTiledSurfaceLock g_TiledSurfaceLocks[8] = {};
 struct EmuNativeSurface
 {
     XTL::IDirect3DSurface8* pHostSurface = nullptr;
+    // Slice C: the GUEST surface pointer when known -- releases resolve by
+    // it, so a recycled host pointer can never alias a live container.
+    XTL::X_D3DResource* pGuestResource = nullptr;
     std::vector<BYTE> Pixels; // linear rows, host-format byte layout
     UINT Pitch = 0;
     UINT Width = 0;
@@ -1196,22 +1199,22 @@ static bool EmuSurfaceSlotServedLocked(
     return false;
 }
 
-// Drops a container entry. A surface with an outstanding served lock keeps
-// its slot (the buffer is live guest-visible memory); the caller's divergence
+// Drops a container entry by GUEST surface pointer (slice C: releases
+// resolve by guest identity, so a recycled host pointer can never alias a
+// live container). A surface with an outstanding served lock keeps its
+// slot (the buffer is live guest-visible memory); the caller's divergence
 // concern is handled by re-seeding at the next full lock.
-static void EmuNativeSurfaceForget(XTL::IDirect3DSurface8* pHostSurface)
+static void EmuNativeSurfaceForget(XTL::X_D3DResource* pGuestSurface)
 {
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
-    if(EmuSurfaceSlotServedLocked(pHostSurface))
-    {
-        return;
-    }
     for(auto& slot : g_EmuNativeSurfaces)
     {
-        if(slot.Used && slot.pHostSurface == pHostSurface)
+        if(slot.Used && slot.pGuestResource == pGuestSurface &&
+           !EmuSurfaceSlotServedLocked(slot.pHostSurface))
         {
             slot.Used = false;
             slot.pHostSurface = nullptr;
+            slot.pGuestResource = nullptr;
             slot.Pixels.clear();
             slot.Pixels.shrink_to_fit();
             return;
@@ -1567,6 +1570,7 @@ static HRESULT EmuServeSurfaceContainerFromLock(
         }
         pNative->Used = true;
         pNative->pHostSurface = pSurface8;
+        pNative->pGuestResource = pResource;
         pNative->HostFormat = static_cast<UINT>(description.Format);
     }
     if(pNative->Width != description.Width ||
@@ -7595,6 +7599,10 @@ static void EmuRefreshTextureContainerFromLock(
 struct EmuNativeBuffer
 {
     void* pHostBuffer = nullptr;
+    // Slice C: the GUEST wrapper pointer when known -- releases resolve by
+    // it, so a recycled host buffer pointer can never alias a live
+    // container.
+    void* pGuestResource = nullptr;
     std::vector<BYTE> Bytes; // Size payload bytes plus the slop tail
     UINT Size = 0;
     bool Used = false;
@@ -7665,6 +7673,7 @@ static void EmuNativeBufferAdopt(void* pHostBuffer, const void* pData,
     }
     pSlot->Used = true;
     pSlot->pHostBuffer = pHostBuffer;
+    pSlot->pGuestResource = nullptr;
     pSlot->Size = size;
     pSlot->ClaimSeq = ++g_EmuNativeBufferSeq;
     pSlot->Bytes.assign(static_cast<const BYTE*>(pData),
@@ -7687,9 +7696,48 @@ static void EmuNativeBufferForget(void* pHostBuffer)
     {
         existing->Used = false;
         existing->pHostBuffer = nullptr;
+        existing->pGuestResource = nullptr;
         existing->Size = 0;
         existing->Bytes.clear();
         existing->Bytes.shrink_to_fit();
+    }
+}
+
+// Slice C: attaches the GUEST wrapper identity to a buffer container so
+// releases resolve by it (a recycled host pointer can never alias).
+static void EmuNativeBufferAttachGuest(void* pHostBuffer,
+                                       void* pGuestResource)
+{
+    if(pHostBuffer == nullptr || pGuestResource == nullptr)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    if(EmuNativeBuffer* existing = EmuNativeBufferFindLocked(pHostBuffer))
+    {
+        existing->pGuestResource = pGuestResource;
+    }
+}
+
+static void EmuNativeBufferForgetGuest(void* pGuestResource)
+{
+    if(pGuestResource == nullptr)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    for(auto& slot : g_EmuNativeBuffers)
+    {
+        if(slot.Used && slot.pGuestResource == pGuestResource)
+        {
+            slot.Used = false;
+            slot.pHostBuffer = nullptr;
+            slot.pGuestResource = nullptr;
+            slot.Size = 0;
+            slot.Bytes.clear();
+            slot.Bytes.shrink_to_fit();
+            return;
+        }
     }
 }
 
@@ -11189,6 +11237,10 @@ static HRESULT EmuResourceRegisterGuardedBody(
                     {
                         EmuNativeBufferAdopt(pResource->EmuVertexBuffer8,
                                              pData, dwSize);
+                        // Slice C: attach the guest wrapper identity so the
+                        // release drops the container by it.
+                        EmuNativeBufferAttachGuest(pResource->EmuVertexBuffer8,
+                                                   pResource);
                     }
 
                     pResource->EmuVertexBuffer8->Unlock();
@@ -11267,6 +11319,8 @@ static HRESULT EmuResourceRegisterGuardedBody(
                     {
                         EmuNativeBufferAdopt(pResource->EmuIndexBuffer8,
                                              pData, dwSize);
+                        EmuNativeBufferAttachGuest(pResource->EmuIndexBuffer8,
+                                                   pResource);
                     }
 
                     pResource->EmuIndexBuffer8->Unlock();
@@ -12027,14 +12081,16 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
             if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_VERTEXBUFFER)
             {
                 EmuDiscardRegisteredVertexBuffer(static_cast<X_D3DVertexBuffer*>(pThis));
-                // Resource-lifetime parity for the buffer container: the
-                // host buffer pointer dies here, so drop its native bytes
-                // before the address can be recycled by a new buffer.
+                // Resource-lifetime parity for the buffer container: drop it
+                // by the GUEST wrapper identity (slice C) and by the host
+                // pointer, so neither can be recycled into an alias.
+                EmuNativeBufferForgetGuest(pThis);
                 EmuNativeBufferForget(pResource8);
             }
             else if((pThis->Common & X_D3DCOMMON_TYPE_MASK) == X_D3DCOMMON_TYPE_INDEXBUFFER)
             {
                 EmuDiscardCreatedIndexBuffer(static_cast<X_D3DIndexBuffer*>(pThis));
+                EmuNativeBufferForgetGuest(pThis);
                 EmuNativeBufferForget(pResource8);
             }
             EmuDiscardSwizzledTexture(
@@ -12077,8 +12133,7 @@ ULONG WINAPI XTL::EmuIDirect3DResource8_Release(
                         }
                     }
                 }
-                EmuNativeSurfaceForget(
-                    reinterpret_cast<XTL::IDirect3DSurface8*>(pResource8));
+                EmuNativeSurfaceForget(pThis);
             }
             if(EmuForgetOwnedGuestResource(pThis))
             {
@@ -12628,7 +12683,7 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect(
            (Flags & EMU_D3DLOCK_TILED) == 0 &&
            (NewFlags & D3DLOCK_READONLY) == 0 && pRect != NULL)
         {
-            EmuNativeSurfaceForget(pThis->EmuSurface8);
+            EmuNativeSurfaceForget(pThis);
         }
 
         if(!(Flags & EMU_D3DLOCK_TILED) || FAILED(hRet))
