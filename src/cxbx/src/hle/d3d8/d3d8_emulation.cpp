@@ -7159,10 +7159,52 @@ static void EmuNativeTextureEnsureThreadsafe(
     EmuNativeTextureEnsure(pHostTexture);
 }
 
-// Stage 2 pilot: creates (or re-fills) the container GUEST-DIRECT from the
-// Register conversion's validated source bytes -- the host texture is never
-// locked or written. Keyed by the host pointer with the guest resource
-// attached (binds and releases resolve by the guest identity).
+// Stage 2: finds or creates the guest-keyed container (zero-filled plus
+// slop) at the given tight pitch. Returns null when the host pointer maps
+// to a container owned by a different guest resource. Callers hold the
+// mutex while filling.
+static EmuNativeTexture* EmuNativeTextureEnsureGuestContainer(
+    XTL::IDirect3DBaseTexture8* pHostTexture, XTL::X_D3DResource* pGuestResource,
+    UINT width, UINT height, UINT pitch, UINT hostFormat)
+{
+    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+    EmuNativeTexture* entry = nullptr;
+    for(auto& candidate : g_EmuNativeTextures)
+    {
+        if(candidate.pGuestResource == pGuestResource)
+        {
+            entry = &candidate;
+            break;
+        }
+    }
+    if(entry == nullptr)
+    {
+        if(EmuNativeTexture* byHost = EmuNativeTextureFind(pHostTexture))
+        {
+            if(byHost->pGuestResource != nullptr)
+            {
+                // The host pointer maps to a container owned by a different
+                // guest resource: never overwrite it.
+                return nullptr;
+            }
+        }
+        g_EmuNativeTextures.push_back({});
+        entry = &g_EmuNativeTextures.back();
+        entry->pHostTexture = pHostTexture;
+        entry->pGuestResource = pGuestResource;
+        entry->HostFormat = hostFormat;
+        entry->Width = width;
+        entry->Height = height;
+        entry->Pitch = pitch;
+        entry->Pixels.resize(static_cast<std::size_t>(pitch) * height);
+    }
+    return entry;
+}
+
+// Stage 2 pilot: fills the container GUEST-DIRECT from the Register
+// conversion's validated linear rows -- the host texture is never locked
+// or written. Keyed by the host pointer with the guest resource attached
+// (binds and releases resolve by the guest identity).
 static void EmuNativeTextureEnsureGuestFilled(
     XTL::IDirect3DBaseTexture8* pHostTexture, XTL::X_D3DResource* pGuestResource,
     const void* pRows, UINT srcPitch, UINT width, UINT height,
@@ -7173,40 +7215,12 @@ static void EmuNativeTextureEnsureGuestFilled(
     {
         return;
     }
-    std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
-    EmuNativeTexture* entry = nullptr;
-    if(pGuestResource != nullptr)
-    {
-        for(auto& candidate : g_EmuNativeTextures)
-        {
-            if(candidate.pGuestResource == pGuestResource)
-            {
-                entry = &candidate;
-                break;
-            }
-        }
-    }
+    EmuNativeTexture* entry = EmuNativeTextureEnsureGuestContainer(
+        pHostTexture, pGuestResource, width, height, width * bytesPerPixel,
+        hostFormat);
     if(entry == nullptr)
     {
-        if(EmuNativeTexture* byHost = EmuNativeTextureFind(pHostTexture))
-        {
-            if(byHost->pGuestResource != nullptr &&
-               byHost->pGuestResource != pGuestResource)
-            {
-                // The host pointer maps to a container owned by a different
-                // guest resource: never overwrite it.
-                return;
-            }
-        }
-        g_EmuNativeTextures.push_back({});
-        entry = &g_EmuNativeTextures.back();
-        entry->pHostTexture = pHostTexture;
-        entry->pGuestResource = pGuestResource;
-        entry->HostFormat = hostFormat;
-        entry->Width = width;
-        entry->Height = height;
-        entry->Pitch = width * bytesPerPixel;
-        entry->Pixels.resize(static_cast<std::size_t>(entry->Pitch) * height);
+        return;
     }
     const UINT rowBytes = min(entry->Pitch, srcPitch);
     for(UINT y = 0; y < entry->Height; ++y)
@@ -11749,7 +11763,7 @@ static HRESULT EmuResourceRegisterGuardedBody(
 
                 D3DLOCKED_RECT LockedRect = {};
 
-                // Stage 2 pilot: linear textures fill their container
+                // Stage 2: linear and swizzled textures fill their container
                 // guest-direct (sourceCopy already holds the validated guest
                 // bytes) and skip the host LockRect relay entirely -- the
                 // host texture stays an empty metadata shell under the
@@ -11757,7 +11771,7 @@ static HRESULT EmuResourceRegisterGuardedBody(
                 // memory. CXBX_NO_GUEST_DIRECT_REG=1 restores the relay.
                 const bool guestDirect =
                     dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
-                    !bSwizzled && !bCompressed && X_Format != 0x24 &&
+                    !bCompressed && X_Format != 0x24 &&
                     cxbx::d3d8::HostBackendRenders() &&
                     !EmuD3DEnvironmentEnabled("CXBX_NO_GUEST_DIRECT_REG");
 
@@ -11813,6 +11827,53 @@ static HRESULT EmuResourceRegisterGuardedBody(
                            dwRegisterBase, dwDataOffset, reinterpret_cast<DWORD>(pBase),
                            pPixelContainer->Format, pPixelContainer->Size, dwSourceSize);
                 }
+                else if(guestDirect)
+                {
+                    // Stage 2: the container is filled GUEST-DIRECT -- the
+                    // host texture stays an empty metadata shell under the
+                    // native flavor (the bind pull serves the container;
+                    // level-0 locks serve the tracked guest memory).
+                    XTL::IDirect3DBaseTexture8* pHostTex = pResource->EmuTexture8;
+                    const UINT tightPitch = dwSourceWidth * dwBPP;
+                    EmuNativeTexture* pNative = EmuNativeTextureEnsureGuestContainer(
+                        pHostTex, pThis, dwSourceWidth, dwSourceHeight,
+                        tightPitch, static_cast<UINT>(Format));
+                    if(pNative != nullptr)
+                    {
+                        if(bSwizzled)
+                        {
+                            XTL::EmuXGUnswizzleRect(
+                                sourceCopy.data(), dwSourceWidth, dwSourceHeight, dwDepth,
+                                pNative->Pixels.data(), pNative->Pitch, iRect, iPoint, dwBPP);
+                        }
+                        else
+                        {
+                            const UINT rowBytes = min(pNative->Pitch, dwPitch);
+                            for(DWORD v = 0; v < dwSourceHeight; ++v)
+                            {
+                                memcpy(pNative->Pixels.data() +
+                                           static_cast<std::size_t>(v) * pNative->Pitch,
+                                       sourceCopy.data() +
+                                           static_cast<std::size_t>(v) * dwPitch,
+                                       rowBytes);
+                            }
+                            // Linear textures keep a live guest backing the
+                            // title streams into per frame; track the source
+                            // so SetTexture re-uploads current pixels on bind.
+                            if(dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
+                               pResource->EmuTexture8 != NULL)
+                            {
+                                const BYTE* LiveSource = copiedSource
+                                                             ? reinterpret_cast<const BYTE*>(pBase)
+                                                             : reinterpret_cast<const BYTE*>(dwUnmaskedDataAddress);
+                                EmuTrackLinearTexture(pResource->EmuTexture8,
+                                                      LiveSource, dwPitch,
+                                                      dwSourceWidth,
+                                                      dwSourceHeight, dwBPP);
+                            }
+                        }
+                    }
+                }
                 else if(bSwizzled)
                 {
                     XTL::EmuXGUnswizzleRect(
@@ -11835,35 +11896,20 @@ static HRESULT EmuResourceRegisterGuardedBody(
                 }
                 else
                 {
-                    // Stage 2 pilot: linear textures fill their container
-                    // guest-direct and skip the host LockRect relay -- the
-                    // host texture stays an empty metadata shell under the
-                    // native flavor (the bind pull serves the container, and
-                    // level-0 locks serve the tracked guest memory).
-                    if(guestDirect)
-                    {
-                        EmuNativeTextureEnsureGuestFilled(
-                            pResource->EmuTexture8, pThis, sourceCopy.data(),
-                            dwPitch, dwSourceWidth, dwSourceHeight,
-                            static_cast<UINT>(Format), dwBPP);
-                    }
+                    BYTE* pDest = (BYTE*)LockedRect.pBits;
+                    const BYTE* pSrc = sourceCopy.data();
+
+                    if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwSourceWidth * dwBPP)
+                        memcpy(pDest, pSrc, dwSourceWidth * dwSourceHeight * dwBPP);
                     else
                     {
-                        BYTE* pDest = (BYTE*)LockedRect.pBits;
-                        const BYTE* pSrc = sourceCopy.data();
-
-                        if((DWORD)LockedRect.Pitch == dwPitch && dwPitch == dwSourceWidth * dwBPP)
-                            memcpy(pDest, pSrc, dwSourceWidth * dwSourceHeight * dwBPP);
-                        else
+                        // TODO: Faster copy (maybe unnecessary)
+                        for(DWORD v = 0; v < dwSourceHeight; v++)
                         {
-                            // TODO: Faster copy (maybe unnecessary)
-                            for(DWORD v = 0; v < dwSourceHeight; v++)
-                            {
-                                memcpy(pDest, pSrc, dwSourceWidth * dwBPP);
+                            memcpy(pDest, pSrc, dwSourceWidth * dwBPP);
 
-                                pDest += LockedRect.Pitch;
-                                pSrc += dwPitch;
-                            }
+                            pDest += LockedRect.Pitch;
+                            pSrc += dwPitch;
                         }
                     }
 
