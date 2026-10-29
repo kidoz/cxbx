@@ -90,15 +90,17 @@ void HostBackendClear(unsigned int flags, unsigned int color, float z,
 
 // Draws CPU vertices: position float4 (x, y, z, rhw) at offset 0, optional
 // D3DCOLOR diffuse at diffuseOffset (0xFFFFFFFF = none), optional float2
-// texcoord at texCoordOffset (0xFFFFFFFF = none). primitiveType uses the
-// host D3DPRIMITIVETYPE enumeration and primitiveCount follows
-// DrawPrimitiveUP semantics. Unsupported layouts are dropped with a
-// one-time warning.
+// texcoord at texCoordOffset (0xFFFFFFFF = none), and an optional per-vertex
+// o[FOG] float at fogOffset (0xFFFFFFFF = none: the draw cannot fog).
+// primitiveType uses the host D3DPRIMITIVETYPE enumeration and
+// primitiveCount follows DrawPrimitiveUP semantics. Unsupported layouts are
+// dropped with a one-time warning.
 void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
                        unsigned int diffuseOffset,
                        unsigned int texCoordOffset,
-                       unsigned int texCoordSets);
+                       unsigned int texCoordSets,
+                       unsigned int fogOffset);
 
 // Draws indexed CPU vertices: same vertex layout rules as
 // HostBackendDrawUP with vertexCount vertices in the block, indexCount
@@ -112,7 +114,8 @@ void HostBackendDrawIndexed(unsigned int primitiveType,
                             unsigned int stride, unsigned int diffuseOffset,
                             unsigned int texCoordOffset,
                             const void* indexData, unsigned int indexCount,
-                            int vertexOffset, unsigned int texCoordSets);
+                            int vertexOffset, unsigned int texCoordSets,
+                            unsigned int fogOffset);
 
 // Render target dimensions; false when the render path is not active.
 bool HostBackendTargetSize(unsigned int* width, unsigned int* height);
@@ -142,6 +145,26 @@ void HostBackendSetPixelShader(const std::uint32_t* def60);
 // Updates combiner constant register (0..7).
 void HostBackendSetPixelShaderConstant(unsigned int registerIndex,
                                        const float* value);
+
+// Updates a BUMPENVMAP(_LUM) stage's (1..3) bump-environment state consumed
+// by the register-combiner interpreter's bump-perturbed sampling: type 0..3
+// = BUMPENVMAT00/01/10/11, 4 = BUMPENVLSCALE, 5 = BUMPENVLOFFSET; value is
+// the float bit pattern (the SetTextureState_BumpEnv wrapper translates the
+// Xbox stage-state enum to these).
+void HostBackendSetBumpEnvState(unsigned int stage, unsigned int type,
+                                unsigned int value);
+
+// Updates the pixel-fog state re-asserted from the deferred render-state
+// array on every draw: enable = D3DRS_FOGENABLE, mode = the raw Xbox
+// D3DFOGMODE (NONE=0, EXP=1, EXP2=2, LINEAR=3), and the FOGSTART/FOGEND/
+// FOGDENSITY float bit patterns. Consumed by the interpreter's
+// post-combiner fog blend together with HostBackendSetFogColor.
+void HostBackendSetFogState(unsigned int enable, unsigned int mode,
+                            unsigned int startBits, unsigned int endBits,
+                            unsigned int densityBits);
+
+// Updates D3DRS_FOGCOLOR (rgb; the alpha byte is not part of the blend).
+void HostBackendSetFogColor(unsigned int color);
 
 // Forward the live viewport for pretransformed draws (surface pixels).
 void HostBackendSetViewport(float x, float y, float width, float height);

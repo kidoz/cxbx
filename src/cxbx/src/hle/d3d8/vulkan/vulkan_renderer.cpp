@@ -38,6 +38,7 @@ constexpr unsigned int kTriangleList = 4;
 constexpr unsigned int kTriangleStrip = 5;
 constexpr unsigned int kTriangleFan = 6;
 constexpr unsigned int kNoDiffuse = 0xFFFFFFFFu;
+constexpr unsigned int kNoFog = 0xFFFFFFFFu;
 constexpr unsigned int kNoTexCoord = 0xFFFFFFFFu;
 constexpr unsigned int kVertexStagingInitial = 256 * 1024;
 // uint16 indices: 512k indices per frame before the draw drops loudly.
@@ -46,7 +47,7 @@ constexpr unsigned int kMaxTextures = 48;
 constexpr unsigned int kMaxDescriptorSets = 512;
 constexpr unsigned int kCombinerSlotSize = 512;
 constexpr unsigned int kCombinerSlotCount = 16;
-using PipelineKey = std::array<unsigned int, 11>;
+using PipelineKey = std::array<unsigned int, 12>;
 
 // d3d8 texture-stage defaults (stage 0 MODULATEs, later stages disabled).
 constexpr unsigned int kDefaultColorOp = 4;    // D3DTOP_MODULATE
@@ -244,7 +245,9 @@ struct RendererState
     unsigned int descriptorSetCount = 0;
 
     // P4 register-combiner config, mirrored into a persistent UBO. The
-    // layout matches the CombinConfig block in shader_spirv.h (std140).
+    // layout matches the CombinConfig block in shader_spirv.h (std140):
+    // 104 def/runtime words plus the bump-environment tail filling the
+    // 512-byte slot exactly (meta3 + per-stage matrices/luminance).
     VkBuffer combinerBuffer = VK_NULL_HANDLE;
     VkDeviceMemory combinerMemory = VK_NULL_HANDLE;
     void* combinerMapped = nullptr;
@@ -253,7 +256,7 @@ struct RendererState
     bool combinerDirty = true;
     std::uint32_t pixelShaderDefs[64][60] = {}; // handle-table slot storage
     bool useCombiner = false;
-    std::uint32_t lastConfig[104] = {};
+    std::uint32_t lastConfig[128] = {};
 };
 
 RendererState g_R;
@@ -289,7 +292,7 @@ struct RendererStateSnapshot
     void* stageTextureKey[4] = {};
     void* stageRenderTargetKey[4] = {};
     bool useCombiner = false;
-    std::uint32_t lastConfig[104] = {};
+    std::uint32_t lastConfig[128] = {};
 };
 
 constexpr unsigned int kMaxStateBlocks = 16;
@@ -367,14 +370,14 @@ VkBlendFactor BlendFactor(unsigned int value)
 bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
                     unsigned int stride, bool hasDiffuse,
                     unsigned int diffuseOffset, unsigned int texCoordOffset,
-                    unsigned int texCoordSets)
+                    unsigned int texCoordSets, unsigned int fogOffset)
 {
     VkVertexInputBindingDescription binding = {};
     binding.binding = 0;
     binding.stride = stride;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attributes[6] = {};
+    VkVertexInputAttributeDescription attributes[7] = {};
     attributes[0].location = 0;
     attributes[0].binding = 0;
     attributes[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -415,6 +418,36 @@ bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
             set * texcoordStride;
         ++attributeCount;
     }
+    // Locations the shader declares must all exist in the vertex input
+    // state (VUID 07904): the unused texcoord sets pad with one-byte R8
+    // attributes at the stride's last offset. The format-fill rule gives
+    // the shader's vec4 reads the (x, 0, 0, 1) shape it expects, and the
+    // unused sets are never sampled.
+    for(unsigned int set = texcoordCount; set < 4u; ++set)
+    {
+        attributes[attributeCount].location = 2 + set;
+        attributes[attributeCount].binding = 0;
+        attributes[attributeCount].format = VK_FORMAT_R8_UNORM;
+        attributes[attributeCount].offset = stride - 1;
+        ++attributeCount;
+    }
+    // The CPU vertex execution's o[FOG] output rides a trailing float
+    // (EmuVshCpuVertex::fogValue); raw FVF draws have none and bind the
+    // same one-byte pad -- the vertex shader substitutes a no-fog 1.0
+    // through the fogBits push constant.
+    attributes[attributeCount].location = 6;
+    attributes[attributeCount].binding = 0;
+    if(fogOffset != kNoFog)
+    {
+        attributes[attributeCount].format = VK_FORMAT_R32_SFLOAT;
+        attributes[attributeCount].offset = fogOffset;
+    }
+    else
+    {
+        attributes[attributeCount].format = VK_FORMAT_R8_UNORM;
+        attributes[attributeCount].offset = 0;
+    }
+    ++attributeCount;
 
     VkPipelineVertexInputStateCreateInfo vertexInput = {};
     vertexInput.sType =
@@ -546,7 +579,7 @@ bool CreatePipeline(const PipelineKey& key, VkPrimitiveTopology topology,
 
 VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
                        unsigned int diffuseOffset, unsigned int texCoordOffset,
-                       unsigned int texCoordSets)
+                       unsigned int texCoordSets, unsigned int fogOffset)
 {
     VkPrimitiveTopology topology;
     switch(primitiveType)
@@ -573,14 +606,16 @@ VkPipeline PipelineFor(unsigned int primitiveType, unsigned int stride,
     const PipelineKey key = { static_cast<unsigned int>(topology), stride,
                               diffuseOffset, texCoordOffset, g_R.blendEnable ? 1u : 0u,
                               g_R.sourceBlend, g_R.destinationBlend, g_R.blendOp,
-                              g_R.colorWriteMask, g_R.cullMode, texCoordSets };
+                              g_R.colorWriteMask, g_R.cullMode, texCoordSets,
+                              fogOffset };
     auto found = g_R.pipelines.find(key);
     if(found != g_R.pipelines.end())
     {
         return found->second;
     }
     return CreatePipeline(key, topology, stride, diffuseOffset != kNoDiffuse,
-                          diffuseOffset, texCoordOffset, texCoordSets)
+                          diffuseOffset, texCoordOffset, texCoordSets,
+                          fogOffset)
                ? g_R.pipelines[key]
                : VK_NULL_HANDLE;
 }
@@ -1731,13 +1766,13 @@ bool RendererInitialize(void* deviceHandle, void* physicalDeviceHandle,
     // Push constants: vec4 viewport + uvec4 stageOp[4] (80 bytes), shared
     // by the vertex (viewport) and fragment (stage cascade) stages.
     VkPushConstantRange pushRanges[2] = {};
-    // The vertex SPIR-V declares the viewport plus the per-draw texcoord
-    // layout mode at 96 (one block, [0,100]). The fragment SPIR-V declares
-    // the full block over [0,96]. Two ranges, one per stage; the overlap in
-    // [0,96] is legal because the stages differ.
+    // The vertex SPIR-V declares the viewport, the per-draw texcoord layout
+    // mode at 96, and the fog-supplied flag at 100 (one block, [0,104)). The
+    // fragment SPIR-V declares the full block over [0,96]. Two ranges, one
+    // per stage; the overlap in [0,96] is legal because the stages differ.
     pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRanges[0].offset = 0;
-    pushRanges[0].size = 100;
+    pushRanges[0].size = 104;
     pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRanges[1].offset = 0;
     pushRanges[1].size = 96;
@@ -2568,6 +2603,7 @@ void RendererSetRasterState(unsigned int state, unsigned int value)
 static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
                             unsigned int diffuseOffset,
                             unsigned int texCoordOffset, unsigned int texCoordSets,
+                            unsigned int fogOffset,
                             const void* data, VkDeviceSize bytes,
                             VkDeviceSize* outOffset)
 {
@@ -2685,7 +2721,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     }
 
     VkPipeline pipeline = PipelineFor(primitiveType, stride, diffuseOffset,
-                                      texCoordOffset, texCoordSets);
+                                      texCoordOffset, texCoordSets, fogOffset);
     if(pipeline == VK_NULL_HANDLE)
     {
         return false;
@@ -2714,6 +2750,9 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     const std::uint32_t texCoordSetsPush = texCoordSets;
     vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT, 96, 4, &texCoordSetsPush);
+    const std::uint32_t fogBitsPush = fogOffset != kNoFog ? 1u : 0u;
+    vkCmdPushConstants(g_R.commandBuffer, g_R.pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT, 100, 4, &fogBitsPush);
 
     // Fresh descriptor set per draw (pool resets after each frame submit):
     // the four stage textures plus the combiner-config UBO slot.
@@ -2738,12 +2777,17 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
     {
         RendererTexture* texture = g_R.stageTexture[stage];
         imageInfos[stage].sampler = SamplerFor(stage);
+        // Cube and volume entries route to their own bindings through the
+        // stage masks; the 2D binding never samples them, so it keeps the
+        // 2D dummy (a CUBE/3D view here would mismatch the sampler2D type).
         imageInfos[stage].imageView =
             g_R.stageDepthView[stage] != VK_NULL_HANDLE
                 ? g_R.stageDepthView[stage]
             : g_R.stageOverrideView[stage] != VK_NULL_HANDLE
                 ? g_R.stageOverrideView[stage]
-                : (texture != nullptr ? texture->view : g_R.dummyView);
+                : (texture != nullptr && !texture->cube && !texture->volume
+                       ? texture->view
+                       : g_R.dummyView);
         imageInfos[stage].imageLayout =
             g_R.stageDepthView[stage] != VK_NULL_HANDLE
                 ? VK_IMAGE_LAYOUT_GENERAL
@@ -2847,7 +2891,7 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
                     unsigned int diffuseOffset, unsigned int texCoordOffset,
-                    unsigned int texCoordSets)
+                    unsigned int texCoordSets, unsigned int fogOffset)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid || data == nullptr || primitiveCount == 0 || stride == 0)
@@ -2879,7 +2923,7 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     }
     VkDeviceSize offset = 0;
     if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
-                        texCoordSets, data,
+                        texCoordSets, fogOffset, data,
                         static_cast<VkDeviceSize>(stride) * vertexCount,
                         &offset))
     {
@@ -2896,7 +2940,7 @@ bool RendererDrawIndexed(unsigned int primitiveType,
                          unsigned int diffuseOffset,
                          unsigned int texCoordOffset, const void* indexData,
                          unsigned int indexCount, int vertexOffset,
-                         unsigned int texCoordSets)
+                         unsigned int texCoordSets, unsigned int fogOffset)
 {
     RendererLockScope rendererLock;
     if(!g_R.valid || vertexData == nullptr || indexData == nullptr ||
@@ -2937,7 +2981,7 @@ bool RendererDrawIndexed(unsigned int primitiveType,
     // RecordDrawState may itself submit on vertex/constant-ring exhaustion.
     VkDeviceSize offset = 0;
     if(!RecordDrawState(primitiveType, stride, diffuseOffset, texCoordOffset,
-                        texCoordSets, vertexData,
+                        texCoordSets, fogOffset, vertexData,
                         static_cast<VkDeviceSize>(stride) * vertexCount,
                         &offset))
     {
@@ -3958,7 +4002,8 @@ void RendererSetSamplerState(unsigned int stage, unsigned int type,
 
 // UBO map (std140 offsets into the CombinConfig block):
 //   constants[8] vec4 @ 0, stageA[8] uvec4 @ 128, stageB[8] uvec4 @ 256,
-//   meta uvec4 @ 384.
+//   meta uvec4 @ 384, meta2 uvec4 @ 400, meta3 uvec4 @ 416,
+//   bumpMat[3] vec4 @ 432, bumpLum[2] vec4 @ 480 (512 bytes total).
 // Config words are host-written into 512-byte ring slots (coherent mapping)
 // and each draw binds its slot through a dynamic UBO offset, so every draw
 // samples the config that was active when it was recorded (a single shared
@@ -3975,9 +4020,11 @@ void RendererSetPixelShader(const std::uint32_t* def60)
         g_R.useCombiner = false;
         return;
     }
-    std::uint32_t config[104] = {};
-    // Runtime constants are device state, independent of the shader handle.
+    std::uint32_t config[128] = {};
+    // Runtime constants and the bump-environment state are device state,
+    // independent of the shader handle.
     memcpy(config, g_R.lastConfig, 32 * sizeof(std::uint32_t));
+    memcpy(&config[108], &g_R.lastConfig[108], 20 * sizeof(std::uint32_t));
     for(unsigned int i = 0; i < 8; ++i)
     {
         config[32 + i * 4 + 0] = def60[34 + i]; // stageA.x = PSRGBInputs
@@ -3995,7 +4042,13 @@ void RendererSetPixelShader(const std::uint32_t* def60)
     config[96 + 3] = def60[59]; // meta.w = FinalCombinerConstants
     config[100 + 0] = def60[43];
     config[100 + 1] = def60[44];
-    config[102] = g_R.lastConfig[102]; // runtime constant validity
+    config[104] = def60[54] & 0x00FFFFFFu;   // meta3.x = PSTextureModes
+    config[105] = (def60[56] >> 16) & 0xFFu; // meta3.y = PSInputTexture
+    // Fog start/end/density/state are device state like the bump-environment
+    // words below; the shaders read them from meta3.zw and bumpLum[1].zw.
+    config[106] = g_R.lastConfig[106]; // meta3.z = FOGSTART float bits
+    config[107] = g_R.lastConfig[107]; // meta3.w = FOGEND float bits
+    config[102] = g_R.lastConfig[102];       // runtime constant validity
 
     g_R.useCombiner = true;
     if(memcmp(g_R.lastConfig, config, sizeof(config)) == 0)
@@ -4026,6 +4079,76 @@ void RendererSetPixelShaderConstant(unsigned int registerIndex,
     }
     memcpy(&g_R.lastConfig[registerIndex * 4], updated, sizeof(updated));
     g_R.lastConfig[102] |= 1u << registerIndex;
+    g_R.combinerDirty = true;
+}
+
+// Bump-environment state for a BUMPENVMAP(_LUM) sampled stage (1..3; a bump
+// destination always follows its source). type 0..3 = BUMPENVMAT00/01/10/11,
+// 4 = BUMPENVLSCALE, 5 = BUMPENVLOFFSET; value is the float bit pattern.
+// Device state like the runtime constants: preserved across SetPixelShader
+// revisions and snapshotted per draw through the same combiner ring.
+void RendererSetBumpEnvState(unsigned int stage, unsigned int type,
+                             unsigned int value)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid || stage == 0 || stage >= 4 || type > 5)
+    {
+        return;
+    }
+    const unsigned int word = type <= 3
+                                  ? 108 + (stage - 1) * 4 + type
+                                  : 120 + (stage - 1) * 2 + (type - 4);
+    if(g_R.lastConfig[word] == value)
+    {
+        return; // identical to the active revision
+    }
+    g_R.lastConfig[word] = value;
+    g_R.combinerDirty = true;
+}
+
+// Pixel-fog state (D3DRS_FOGENABLE/FOGTABLEMODE/FOGSTART/FOGEND/FOGDENSITY,
+// Xbox render states 92..96, re-asserted per draw from the deferred array).
+// mode is the raw Xbox D3DFOGMODE (NONE=0, EXP=1, EXP2=2, LINEAR=3); the
+// float arguments arrive as their bit patterns. Packed with the fog color
+// into the spare config word the shaders read (bumpLum[1].w: bit 0 enable,
+// bits 1..3 mode, bits 8..31 the D3DCOLOR rgb shifted up one byte).
+void RendererSetFogState(unsigned int enable, unsigned int mode,
+                         unsigned int startBits, unsigned int endBits,
+                         unsigned int densityBits)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid)
+    {
+        return;
+    }
+    const unsigned int packed = (mode & 7u) << 1u | (enable != 0u ? 1u : 0u);
+    if(g_R.lastConfig[106] == startBits && g_R.lastConfig[107] == endBits &&
+       g_R.lastConfig[126] == densityBits &&
+       (g_R.lastConfig[127] & 0x000000FFu) == packed)
+    {
+        return; // identical to the active revision
+    }
+    g_R.lastConfig[106] = startBits;
+    g_R.lastConfig[107] = endBits;
+    g_R.lastConfig[126] = densityBits;
+    g_R.lastConfig[127] = (g_R.lastConfig[127] & 0xFFFFFF00u) | packed;
+    g_R.combinerDirty = true;
+}
+
+void RendererSetFogColor(unsigned int color)
+{
+    RendererLockScope rendererLock;
+    if(!g_R.valid)
+    {
+        return;
+    }
+    // rgb only (alpha is not part of the blend), lifted above the flag byte.
+    const unsigned int shifted = (color & 0x00FFFFFFu) << 8u;
+    if((g_R.lastConfig[127] & 0xFFFFFF00u) == shifted)
+    {
+        return; // identical to the active revision
+    }
+    g_R.lastConfig[127] = (g_R.lastConfig[127] & 0x000000FFu) | shifted;
     g_R.combinerDirty = true;
 }
 

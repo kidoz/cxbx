@@ -7,16 +7,22 @@ layout(push_constant) uniform Viewport
     // stage (legacy single-vec2 layouts); 4 keeps the program's per-stage
     // sets with their projective q.
     layout(offset = 96) uint texCoordSets;
+    // Bit 0: the draw supplies the o[FOG] fog coordinate at location 6;
+    // without it the varying falls back to 1.0 (no fog).
+    layout(offset = 100) uint fogBits;
 } pc;
 layout(location = 0) in vec4 inPosition;
 layout(location = 1) in vec4 inColor;
 layout(location = 2) in vec4 inTexCoord[4];
+layout(location = 6) in float inFog;
 layout(location = 0) out vec4 color;
 layout(location = 1) out vec4 texCoord[4];
+layout(location = 5) out float fogValue;
 
 void main()
 {
     color = inColor;
+    fogValue = (pc.fogBits & 1u) != 0u ? inFog : 1.0;
     if(pc.texCoordSets == 4u)
     {
         texCoord = inTexCoord;

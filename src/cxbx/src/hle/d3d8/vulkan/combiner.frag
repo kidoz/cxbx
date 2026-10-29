@@ -10,6 +10,9 @@ layout(set = 0, binding = 1, std140) uniform CombinerConfig
     uvec4 stageB[8]; // packed C0/C1, runtime register mappings
     uvec4 meta;     // count/flags, final ABCD/EFG, final mappings
     uvec4 meta2;    // final C0/C1, valid runtime constants
+    uvec4 meta3;    // PS texture modes, PSInputTexture source, fog start/end
+    vec4 bumpMat[3]; // stages 1..3: BUMPENVMAT (M00, M01, M10, M11)
+    vec4 bumpLum[2]; // stages 1..2 lum pairs, stage 3 pair, fog density/state
 } comb;
 layout(push_constant) uniform DrawState
 {
@@ -19,6 +22,7 @@ layout(push_constant) uniform DrawState
 } pc;
 layout(location = 0) in vec4 color;
 layout(location = 1) in vec4 texCoord[4];
+layout(location = 5) in float fogValue;
 layout(location = 0) out vec4 outColor;
 
 vec4 constantColor(uint packed, uint mapping)
@@ -143,6 +147,54 @@ bool depthComparePasses(float depth, float reference, uint func)
     }
 }
 
+// NV2A pixel fog runs after the combiner (the raster unit's fog blend):
+// D3DRS_FOGENABLE/FOGTABLEMODE/FOGSTART/FOGEND/FOGDENSITY/FOGCOLOR, mirrored
+// by the renderer into the spare config words. The Xbox D3DFOGMODE enum
+// orders NONE=0, EXP=1, EXP2=2, LINEAR=3. Per the XDK Fog sample contract:
+// mode NONE means the vertex program wrote the final fog factor to o[FOG]
+// (the hardware passes it through clamped); EXP/EXP2/LINEAR mean the program
+// wrote a view-space coordinate and this table lookup derives the factor
+// from FOGSTART/FOGEND/FOGDENSITY. Factor 1 leaves the shade, 0 is full fog.
+void applyFog(inout vec4 shade)
+{
+    uint fogWord = floatBitsToUint(comb.bumpLum[1].w);
+    if((fogWord & 1u) == 0u)
+    {
+        return;
+    }
+    float factor = clamp(fogValue, 0.0, 1.0);
+    // bumpLum declares float components but carries the raw float-bit
+    // patterns the host wrote; round-trip through the uint representation.
+    float density = uintBitsToFloat(floatBitsToUint(comb.bumpLum[1].z));
+    switch((fogWord >> 1u) & 7u)
+    {
+        case 1u: // EXP
+            factor = exp(-density * fogValue);
+            break;
+        case 2u: // EXP2
+        {
+            float d = density * fogValue;
+            factor = exp(-d * d);
+            break;
+        }
+        case 3u: // LINEAR
+        {
+            float start = uintBitsToFloat(comb.meta3.z);
+            float end = uintBitsToFloat(comb.meta3.w);
+            float span = end - start;
+            factor = clamp((end - fogValue) /
+                               (abs(span) < 1.0e-6 ? 1.0 : span), 0.0, 1.0);
+            break;
+        }
+        default: // NONE: the program wrote the factor directly.
+            break;
+    }
+    vec3 fogColor = vec3(float((fogWord >> 24u) & 255u),
+                         float((fogWord >> 16u) & 255u),
+                         float((fogWord >> 8u) & 255u)) / 255.0;
+    shade.rgb = mix(fogColor, shade.rgb, factor);
+}
+
 void main()
 {
     // Stage i samples its own coordinate set with the D3D projective
@@ -151,7 +203,14 @@ void main()
     // (extra.w bits 0..3) sample the direction texCoord[i].xyz; volume
     // stages (bits 11..14) sample texCoord[i].xyz; shadow stages
     // (bits 4..7, comparison in bits 8..10) sample the depth image and
-    // compare with the set's r after the same divide.
+    // compare with the set's r after the same divide. PS texture modes
+    // BUMPENVMAP (6) and BUMPENVMAP_LUM (7) perturb the divided 2D
+    // coordinate with an earlier stage's texel through this stage's bump
+    // matrix -- texbem's u' = u + M00*t.R + M10*t.G, v' = v + M01*t.R +
+    // M11*t.G, and _LUM scales the sample by t.B*lScale + lOffset. The
+    // source is t0 for stage 1 and the PSInputTexture-selected stage for
+    // stages 2/3; a source at or after the stage samples plain. Stages
+    // run in order, so a bump stage always sees its source's texel.
     vec2 stageTexCoord[4];
     vec4 sampled[4];
     for(uint set = 0u; set < 4u; ++set)
@@ -159,6 +218,16 @@ void main()
         float q = texCoord[set].w;
         q = abs(q) < 1.0e-6 ? 1.0 : q;
         stageTexCoord[set] = texCoord[set].xy / q;
+        uint mode = (comb.meta3.x >> (set * 5u)) & 31u;
+        bool bump = set > 0u && (mode == 6u || mode == 7u);
+        uint bumpSource = 0u;
+        if(bump)
+        {
+            bumpSource = set == 1u
+                             ? 0u
+                             : (comb.meta3.y >> ((set - 2u) * 4u)) & 3u;
+            bump = bumpSource < set;
+        }
         if((pc.extra.w & (16u << set)) != 0u)
         {
             // NV2A shadow sampling: the unit's sampled value is the
@@ -173,11 +242,29 @@ void main()
         {
             sampled[set] = texture(volumeTextures[set], texCoord[set].xyz);
         }
+        else if(((pc.extra.w >> set) & 1u) != 0u)
+        {
+            sampled[set] = texture(cubeTextures[set], texCoord[set].xyz);
+        }
+        else if(bump)
+        {
+            vec4 source = sampled[bumpSource];
+            vec4 matrix = comb.bumpMat[set - 1u];
+            vec2 perturbed = stageTexCoord[set] +
+                vec2(source.r * matrix.x + source.g * matrix.z,
+                     source.r * matrix.y + source.g * matrix.w);
+            sampled[set] = texture(textures[set], perturbed);
+            if(mode == 7u)
+            {
+                uint pair = set - 1u;
+                vec2 lum = (pair & 1u) == 0u ? comb.bumpLum[pair >> 1u].xy
+                                             : comb.bumpLum[pair >> 1u].zw;
+                sampled[set] *= vec4(source.b * lum.x + lum.y);
+            }
+        }
         else
         {
-            sampled[set] = ((pc.extra.w >> set) & 1u) != 0u
-                ? texture(cubeTextures[set], texCoord[set].xyz)
-                : texture(textures[set], stageTexCoord[set]);
+            sampled[set] = texture(textures[set], stageTexCoord[set]);
         }
     }
     if(pc.extra.x == 0u)
@@ -201,6 +288,7 @@ void main()
             }
             current = clamp(current, 0.0, 1.0);
         }
+        applyFog(current);
         writeColor(current);
         return;
     }
@@ -237,5 +325,6 @@ void main()
         result = vec4(a * b + (1.0 - a) * c + d,
                       operand(regs, (comb.meta.z >> 8u) & 255u, true).x);
     }
+    applyFog(result);
     writeColor(result);
 }

@@ -45,6 +45,8 @@ struct RecordedStateOp
         SamplerState,
         PixelShader,
         PixelShaderConstant,
+        BumpEnvState,
+        FogColor,
         Viewport,
         Texture,
     };
@@ -147,6 +149,12 @@ void ReplayRecordedOps(const std::vector<RecordedStateOp>& ops)
                 break;
             case RecordedStateOp::Kind::PixelShaderConstant:
                 vulkan::RendererSetPixelShaderConstant(op.a, op.constant);
+                break;
+            case RecordedStateOp::Kind::BumpEnvState:
+                vulkan::RendererSetBumpEnvState(op.a, op.b, op.c);
+                break;
+            case RecordedStateOp::Kind::FogColor:
+                vulkan::RendererSetFogColor(op.c);
                 break;
             case RecordedStateOp::Kind::Viewport:
                 vulkan::RendererSetViewport(op.viewport[0], op.viewport[1],
@@ -482,12 +490,14 @@ void HostBackendDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                        const void* data, unsigned int stride,
                        unsigned int diffuseOffset,
                        unsigned int texCoordOffset,
-                       unsigned int texCoordSets)
+                       unsigned int texCoordSets,
+                       unsigned int fogOffset)
 {
     if(HostBackendRenders())
     {
         vulkan::RendererDrawUP(primitiveType, primitiveCount, data, stride,
-                               diffuseOffset, texCoordOffset, texCoordSets);
+                               diffuseOffset, texCoordOffset, texCoordSets,
+                               fogOffset);
     }
 }
 
@@ -497,14 +507,15 @@ void HostBackendDrawIndexed(unsigned int primitiveType,
                             unsigned int stride, unsigned int diffuseOffset,
                             unsigned int texCoordOffset,
                             const void* indexData, unsigned int indexCount,
-                            int vertexOffset, unsigned int texCoordSets)
+                            int vertexOffset, unsigned int texCoordSets,
+                            unsigned int fogOffset)
 {
     if(HostBackendRenders())
     {
         vulkan::RendererDrawIndexed(primitiveType, primitiveCount, vertexData,
                                     vertexCount, stride, diffuseOffset,
                                     texCoordOffset, indexData, indexCount,
-                                    vertexOffset, texCoordSets);
+                                    vertexOffset, texCoordSets, fogOffset);
     }
 }
 
@@ -538,6 +549,39 @@ void HostBackendSetSamplerState(unsigned int stage, unsigned int type,
     {
         RecordStateOp(RecordedStateOp::Kind::SamplerState, stage, type, value);
         vulkan::RendererSetSamplerState(stage, type, value);
+    }
+}
+
+void HostBackendSetBumpEnvState(unsigned int stage, unsigned int type,
+                                unsigned int value)
+{
+    if(HostBackendRenders())
+    {
+        RecordStateOp(RecordedStateOp::Kind::BumpEnvState, stage, type, value);
+        vulkan::RendererSetBumpEnvState(stage, type, value);
+    }
+}
+
+void HostBackendSetFogState(unsigned int enable, unsigned int mode,
+                            unsigned int startBits, unsigned int endBits,
+                            unsigned int densityBits)
+{
+    if(HostBackendRenders())
+    {
+        // Device state re-asserted from the deferred array on every draw; no
+        // state-block op (capture/apply reaches the deferred array guest-side,
+        // and the next draw re-asserts whatever it holds).
+        vulkan::RendererSetFogState(enable, mode, startBits, endBits,
+                                    densityBits);
+    }
+}
+
+void HostBackendSetFogColor(unsigned int color)
+{
+    if(HostBackendRenders())
+    {
+        RecordStateOp(RecordedStateOp::Kind::FogColor, 0, 0, color);
+        vulkan::RendererSetFogColor(color);
     }
 }
 

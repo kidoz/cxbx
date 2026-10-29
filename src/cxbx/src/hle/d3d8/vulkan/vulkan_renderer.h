@@ -69,19 +69,20 @@ void RendererSetRasterState(unsigned int state, unsigned int value);
 bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
                     const void* data, unsigned int stride,
                     unsigned int diffuseOffset, unsigned int texCoordOffset,
-                    unsigned int texCoordSets);
+                    unsigned int texCoordSets, unsigned int fogOffset);
 
 // Draws indexed vertices from a caller-pulled staging block: vertexData
 // holds vertexCount vertices (same layout rules as RendererDrawUP),
 // indexData holds indexCount uint16 indices relative to vertex block start,
 // and vertexOffset (the SetIndices base vertex) is added to every index.
-// primitiveCount follows DrawIndexedPrimitive semantics.
+// primitiveCount follows DrawIndexedPrimitive semantics. fogOffset points at
+// the per-vertex o[FOG] float (0xFFFFFFFF = none: the draw cannot fog).
 bool RendererDrawIndexed(unsigned int primitiveType, unsigned int primitiveCount,
                          const void* vertexData, unsigned int vertexCount,
                          unsigned int stride, unsigned int diffuseOffset,
                          unsigned int texCoordOffset, const void* indexData,
                          unsigned int indexCount, int vertexOffset,
-                         unsigned int texCoordSets);
+                         unsigned int texCoordSets, unsigned int fogOffset);
 
 // Target dimensions for callers that stage readback shadows.
 unsigned int RendererTargetWidth();
@@ -158,6 +159,26 @@ void RendererSetPixelShader(const std::uint32_t* def60);
 // Updates combiner constant register (0..7) with four floats.
 void RendererSetPixelShaderConstant(unsigned int registerIndex,
                                     const float* value);
+
+// Updates a BUMPENVMAP(_LUM) stage's (1..3) bump-environment state: type
+// 0..3 = BUMPENVMAT00/01/10/11, 4 = BUMPENVLSCALE, 5 = BUMPENVLOFFSET;
+// value is the float bit pattern. Consumed by the interpreter's
+// bump-perturbed sampling when the active def's texture modes say so.
+void RendererSetBumpEnvState(unsigned int stage, unsigned int type,
+                             unsigned int value);
+
+// Updates the pixel-fog state (D3DRS_FOGENABLE/FOGTABLEMODE/FOGSTART/
+// FOGEND/FOGDENSITY, Xbox render states 92..96, re-asserted per draw from
+// the deferred array). mode is the raw Xbox D3DFOGMODE (NONE=0, EXP=1,
+// EXP2=2, LINEAR=3); the float arguments arrive as their bit patterns.
+// Consumed by the interpreter's post-combiner fog blend together with
+// RendererSetFogColor.
+void RendererSetFogState(unsigned int enable, unsigned int mode,
+                         unsigned int startBits, unsigned int endBits,
+                         unsigned int densityBits);
+
+// Updates D3DRS_FOGCOLOR (rgb; the alpha byte is not part of the blend).
+void RendererSetFogColor(unsigned int color);
 
 // Submits the pending batch, then copies the target draws currently land in
 // (the bound render target, else the main target) into dst (row pitch in

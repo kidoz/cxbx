@@ -2285,6 +2285,11 @@ static void EmuAppendRecordedDraw(EmuRecordedPushBuffer& recording,
     }
 }
 
+// Byte offset of EmuVshCpuVertex::fogValue (declared below the recorded-draw
+// replay that consumes it); pinned to the layout by the static_assert at the
+// definition.
+constexpr unsigned int kEmuVshCpuVertexFogOffset = 140;
+
 static void EmuRecordPushBufferDraw(XTL::D3DPRIMITIVETYPE primitiveType, UINT primitiveCount,
                                     const void* vertices, UINT stride)
 {
@@ -2322,7 +2327,8 @@ static bool EmuReplayRecordedDraws(const EmuRecordedPushBuffer& recording)
             cxbx::d3d8::HostBackendDrawUP(draw.primitiveType,
                                           draw.primitiveCount,
                                           draw.vertices.data(), draw.stride,
-                                          20, 28, 4);
+                                          20, 28, 4,
+                                          kEmuVshCpuVertexFogOffset);
         }
         return true;
     }
@@ -6634,22 +6640,36 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetTextureState_BumpEnv(
         g_pD3DDevice8->SetTextureStageState(Stage, hostType, Value);
 
         std::uint8_t matrixBit = 0;
+        unsigned int rendererType = 0;
         switch(xboxType)
         {
             case XboxBumpEnvMat00:
                 matrixBit = 0x01u;
+                rendererType = 0;
                 break;
             case XboxBumpEnvMat01:
                 matrixBit = 0x02u;
+                rendererType = 1;
                 break;
             case XboxBumpEnvMat10:
                 matrixBit = 0x04u;
+                rendererType = 2;
                 break;
             case XboxBumpEnvMat11:
                 matrixBit = 0x08u;
+                rendererType = 3;
+                break;
+            case XboxBumpEnvLScale:
+                rendererType = 4;
+                break;
+            case XboxBumpEnvLOffset:
+                rendererType = 5;
                 break;
         }
         g_EmuBumpEnvMatrixWrites[Stage] |= matrixBit;
+        // The combiner interpreter consumes the same state under the Vulkan
+        // flavor; the Xbox enum orders MAT11 before MAT10, hence the switch.
+        cxbx::d3d8::HostBackendSetBumpEnvState(Stage, rendererType, Value);
     }
     else
     {
@@ -10799,7 +10819,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                         cxbx::d3d8::HostBackendDrawUP(
                             D3DPT_TRIANGLELIST, n / 3, Tris,
                             sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/,
-                            20 /*u,v after diffuse*/, 0);
+                            20 /*u,v after diffuse*/, 0, 0xFFFFFFFFu);
                     }
                     else
                     {
@@ -10825,7 +10845,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_End()
                         cxbx::d3d8::HostBackendDrawUP(
                             PCPrim, PrimCount, g_EmuImVerts,
                             sizeof(EmuImVertex), 16 /*D3DCOLOR after rhw*/,
-                            20 /*u,v after diffuse*/, 0);
+                            20 /*u,v after diffuse*/, 0, 0xFFFFFFFFu);
                     }
                     else
                     {
@@ -13986,6 +14006,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_SetRenderState_FogColor(
 
 if(!cxbx::d3d8::HostBackendRenders())
         g_pD3DDevice8->SetRenderState(D3DRS_FOGCOLOR, Value);
+    else
+        cxbx::d3d8::HostBackendSetFogColor(Value);
 
     EmuSwapFS(); // XBox FS
 
@@ -15440,6 +15462,33 @@ static void EmuUpdateDeferredStates()
             if(!cxbx::d3d8::HostBackendRenders())
                 g_pD3DDevice8->SetRenderState(D3DRS_FOGTABLEMODE, XTL::EmuD3DDeferredRenderState[1]);
 
+        // The native backend consumes the deferred pixel-fog block (Xbox
+        // render states 92..96: FOGENABLE, FOGTABLEMODE, FOGSTART, FOGEND,
+        // FOGDENSITY) directly; words the title never wrote keep the
+        // D3D defaults. The Xbox D3DFOGMODE enum orders NONE=0, EXP=1,
+        // EXP2=2, LINEAR=3 and is forwarded raw.
+        if(cxbx::d3d8::HostBackendRenders())
+        {
+            static const DWORD kFogDefaults[5] = {
+                0,          // FOGENABLE = FALSE
+                0,          // FOGTABLEMODE = D3DFOG_NONE
+                0x00000000, // FOGSTART = 0.0f
+                0x3F800000, // FOGEND = 1.0f
+                0x3F800000, // FOGDENSITY = 1.0f
+            };
+            DWORD fogWords[5];
+            for(unsigned int fogWord = 0; fogWord < 5; ++fogWord)
+            {
+                fogWords[fogWord] =
+                    XTL::EmuD3DDeferredRenderState[fogWord] != X_D3DRS_UNK
+                        ? XTL::EmuD3DDeferredRenderState[fogWord]
+                        : kFogDefaults[fogWord];
+            }
+            cxbx::d3d8::HostBackendSetFogState(
+                fogWords[0], fogWords[1], fogWords[2], fogWords[3],
+                fogWords[4]);
+        }
+
         if(XTL::EmuD3DDeferredRenderState[6] != X_D3DRS_UNK)
         {
             ::DWORD dwConv = 0;
@@ -16555,12 +16604,19 @@ struct EmuVshCpuVertex
     float clipPosition[4];
     float diffuseComponents[4];
     float specularComponents[4];
+    // The program's o[FOG] output (raw float; specular alpha keeps the
+    // host-d3d8 packed copy). The Vulkan draw reads it at this offset.
+    float fogValue;
 };
 
 static constexpr DWORD EmuVshCpuVertexFvf =
     D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_PSIZE | D3DFVF_TEX4 |
     D3DFVF_TEXCOORDSIZE4(0) | D3DFVF_TEXCOORDSIZE4(1) |
     D3DFVF_TEXCOORDSIZE4(2) | D3DFVF_TEXCOORDSIZE4(3);
+
+static_assert(offsetof(EmuVshCpuVertex, fogValue) ==
+                  kEmuVshCpuVertexFogOffset,
+              "recorded draws replay with a baked-in fog offset");
 
 static HRESULT EmuVshGetViewport(XTL::D3DVIEWPORT8* viewport);
 
@@ -16629,6 +16685,8 @@ static EmuVshCpuVertex EmuVshInterpolateCpuVertex(const EmuVshCpuVertex& begin,
                     amount;
         }
     }
+    result.fogValue = begin.fogValue +
+                      (end.fogValue - begin.fogValue) * amount;
     return result;
 }
 
@@ -17268,11 +17326,12 @@ static HRESULT EmuVshDrawPrimitiveUp(XTL::D3DPRIMITIVETYPE primitiveType, UINT p
             {
                 // P2: CPU-transformed fallback vertices draw into the
                 // backend target (position at 0, diffuse at 20 in
-                // EmuVshCpuVertex); texture stages land with P3.
-                cxbx::d3d8::HostBackendDrawUP(primitiveType, primitiveCount,
-                                              drawVertices,
-                                              sizeof(EmuVshCpuVertex), 20,
-                                              28 /*texCoords[0]*/, 4);
+                // EmuVshCpuVertex); texture stages land with P3, the
+                // program's o[FOG] float with P5.
+                cxbx::d3d8::HostBackendDrawUP(
+                    primitiveType, primitiveCount, drawVertices,
+                    sizeof(EmuVshCpuVertex), 20, 28 /*texCoords[0]*/, 4,
+                    offsetof(EmuVshCpuVertex, fogValue));
                 result = D3D_OK;
             }
             else
@@ -17494,6 +17553,7 @@ static bool EmuVshTransformCpuVertices(const XTL::VshDiagnostics::VertexStreamVi
         std::copy(&colors[4], &colors[8], vertex.specularComponents);
         vertex.specularComponents[3] = XTL::VshDiagnostics::SelectRasterOutput(
             rasterOutputs.fog, rasterOutputs.fogWriteMask, 1.0f);
+        vertex.fogValue = vertex.specularComponents[3];
         const float pointSize = XTL::VshDiagnostics::SelectRasterOutput(
             rasterOutputs.pointSize, rasterOutputs.pointSizeWriteMask, defaultPointSize);
         vertex.pointSize = XTL::VshDiagnostics::ClampPointSize(
@@ -17962,7 +18022,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVertices(
             cxbx::d3d8::HostBackendDrawUP(
                 drawPrimitiveType, drawPrimitiveCount, drawData,
                 streamBinding.stride, DiffuseOffset, TexCoordOffset,
-                TexCoordSets);
+                TexCoordSets, 0xFFFFFFFFu);
             EmuD3DDrawPost();
         }
         else
@@ -18384,7 +18444,8 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawVerticesUP(
         }
         cxbx::d3d8::HostBackendDrawUP(PCPrimitiveType, DrawPrimitiveCount,
                                       DrawData, DrawStride, DiffuseOffset,
-                                      TexCoordOffset, TexCoordSets);
+                                      TexCoordOffset, TexCoordSets,
+                                      0xFFFFFFFFu);
         EmuD3DDrawPost();
         EmuSwapFS(); // XBox FS
         return;
@@ -18797,7 +18858,7 @@ VOID WINAPI XTL::EmuIDirect3DDevice8_DrawIndexedVertices(
                 drawPrimitiveType, drawPrimitiveCount, vertexBytes,
                 drawVertexCount, streamBinding.stride, DiffuseOffset,
                 TexCoordOffset, drawIndices, indexCount,
-                static_cast<int>(indexBinding.baseVertex), 0);
+                static_cast<int>(indexBinding.baseVertex), 0, 0xFFFFFFFFu);
             EmuD3DDrawPost();
         }
         else

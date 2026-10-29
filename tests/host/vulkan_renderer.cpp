@@ -46,7 +46,7 @@ bool Draw(float x, float y, std::uint32_t color, float z = 0.5f)
     const auto vertices = Quad(x, y, color, z);
     return vk::RendererDrawUP(4, 2, vertices.data(), sizeof(Vertex),
                               offsetof(Vertex, color), offsetof(Vertex, u),
-                              0);
+                              0, NoAttribute);
 }
 
 bool Pixel(unsigned int x, unsigned int y, std::uint32_t expected, bool checkAlpha = false,
@@ -93,7 +93,7 @@ bool Run(const char* scenario)
         }
         return vk::RendererDrawUP(4, static_cast<unsigned int>(vertices.size() / 3),
                                   vertices.data(), sizeof(Vertex), offsetof(Vertex, color),
-                                  NoAttribute, 0) &&
+                                  NoAttribute, 0, NoAttribute) &&
                Pixel(16, 16, Red) && Pixel(48, 16, Green);
     }
     if(std::strcmp(scenario, "index") == 0)
@@ -110,7 +110,7 @@ bool Run(const char* scenario)
         return Draw(8, 8, Red) &&
                vk::RendererDrawIndexed(4, static_cast<unsigned int>(indices.size() / 3),
                                        quad.data(), 6, sizeof(Vertex), offsetof(Vertex, color),
-                                       NoAttribute, indices.data(), static_cast<unsigned int>(indices.size()), 0, 0) &&
+                                       NoAttribute, indices.data(), static_cast<unsigned int>(indices.size()), 0, 0, NoAttribute) &&
                Pixel(16, 16, Red) && Pixel(48, 16, Green);
     }
     if(std::strcmp(scenario, "target") == 0)
@@ -244,6 +244,118 @@ bool Run(const char* scenario)
         vk::RendererSetPixelShaderConstant(0, zero);
         return Draw(200, 8, 0xFFFFFFFFu) && Pixel(208, 16, 0);
     }
+    if(std::strcmp(scenario, "bump") == 0)
+    {
+        // BUMPENVMAP displacement through the PS texture modes: a 1x1 bump
+        // source (du = dv = 1, B = 0) shifts a 2x1 stage sample by the
+        // stage's matrix; BUMPENVMAP_LUM then scales the sample by
+        // B*lScale + lOffset (texbem/texbeml). The check pixel sits at
+        // u = 0.28125, so M00 = 0.5 moves it from the red to the green
+        // texel under any address or filter mode.
+        int bumpKey = 0;
+        int sampleKey = 1;
+        const std::uint32_t bumpTexel = 0xFFFFFF00u; // R=255 G=255 B=0
+        const std::uint32_t sampleTexels[2] = { Red, Green };
+        if(!vk::RendererSetTexture(0, &bumpKey, &bumpTexel, 4, 1, 1, 21) ||
+           !vk::RendererSetTexture(1, &sampleKey, sampleTexels, 8, 2, 1, 21))
+        {
+            return false;
+        }
+        // r0.rgb = t1 (A = t1, B = ONE); both stages sample plain first.
+        std::array<std::uint32_t, 60> shader = {};
+        shader[53] = 1;
+        shader[34] = 0x09200000u;
+        shader[45] = 0x00000C00u;
+        shader[54] = 0x21u; // stage 0/1 = PROJECT2D
+        vk::RendererSetPixelShader(shader.data());
+        if(!Draw(8, 8, 0xFFFFFFFFu) || !Pixel(12, 16, Red))
+        {
+            return false;
+        }
+        // Stage 1 in BUMPENVMAP mode with MAT00 = 0.5: the matrices are
+        // device state and survive the new shader revision.
+        shader[54] = 0xC1u; // stage 1 = BUMPENVMAP
+        vk::RendererSetPixelShader(shader.data());
+        vk::RendererSetBumpEnvState(1, 0, 0x3F000000u); // MAT00 = 0.5f
+        if(!Draw(40, 8, 0xFFFFFFFFu) || !Pixel(44, 16, Green))
+        {
+            return false;
+        }
+        // BUMPENVMAP_LUM scales the sampled texel; the bump texel's B is
+        // zero, so the 0.5 offset halves the green channel.
+        shader[54] = 0xE1u; // stage 1 = BUMPENVMAP_LUM
+        vk::RendererSetPixelShader(shader.data());
+        vk::RendererSetBumpEnvState(1, 4, 0x3F800000u); // LSCALE = 1.0f
+        vk::RendererSetBumpEnvState(1, 5, 0x3F000000u); // LOFFSET = 0.5f
+        if(!Draw(72, 8, 0xFFFFFFFFu) || !Pixel(76, 16, 0x008000u, false, 1))
+        {
+            return false;
+        }
+        // Stage 2 bump with the PSInputTexture-selected source 0: the same
+        // displacement through stage 2's own matrix and texture.
+        if(!vk::RendererSetTexture(2, &sampleKey, sampleTexels, 8, 2, 1, 21))
+        {
+            return false;
+        }
+        shader[34] = 0x0A200000u; // r0.rgb = t2
+        shader[54] = 0x1821u;     // stage 2 = BUMPENVMAP
+        shader[56] = 0u;          // stage 2 source = t0
+        vk::RendererSetPixelShader(shader.data());
+        vk::RendererSetBumpEnvState(2, 0, 0x3F000000u);
+        if(!Draw(104, 8, 0xFFFFFFFFu) || !Pixel(108, 16, Green))
+        {
+            return false;
+        }
+        return true;
+    }
+    if(std::strcmp(scenario, "fog") == 0)
+    {
+        // Post-combiner fog blend: the per-vertex o[FOG] value rides a
+        // trailing float. Mode NONE passes the factor through clamped
+        // (1 = shade, 0 = fog color); LINEAR runs the table lookup over the
+        // view-space coordinate with the FOGSTART/FOGEND parameters.
+        struct FogVertex
+        {
+            float x, y, z, rhw;
+            std::uint32_t color;
+            float u, v;
+            float fog;
+        };
+        const auto fogQuad = [&](float ox, float oy, float fogValue) {
+            const FogVertex verts[6] = {
+                { ox, oy, 0.5f, 1, Red, 0, 0, fogValue },
+                { ox + 16, oy, 0.5f, 1, Red, 1, 0, fogValue },
+                { ox, oy + 16, 0.5f, 1, Red, 0, 1, fogValue },
+                { ox + 16, oy, 0.5f, 1, Red, 1, 0, fogValue },
+                { ox + 16, oy + 16, 0.5f, 1, Red, 1, 1, fogValue },
+                { ox, oy + 16, 0.5f, 1, Red, 0, 1, fogValue },
+            };
+            return vk::RendererDrawUP(4, 2, verts, sizeof(FogVertex),
+                                      offsetof(FogVertex, color),
+                                      offsetof(FogVertex, u), 0,
+                                      offsetof(FogVertex, fog));
+        };
+        const std::uint32_t green = 0xFF00FF00u; // fog color (0,255,0)
+        vk::RendererSetFogColor(green);
+        // Mode NONE: the shader-written factor blends directly.
+        vk::RendererSetFogState(1, 0, 0x3F800000u, 0x3F800000u, 0x3F800000u);
+        if(!fogQuad(8, 8, 1.0f) || !Pixel(16, 16, Red) ||
+           !fogQuad(40, 8, 0.0f) || !Pixel(48, 16, Green & 0xFFFFFFu) ||
+           !fogQuad(72, 8, 0.5f) || !Pixel(76, 16, 0x808000u, false, 1))
+        {
+            return false;
+        }
+        // Mode LINEAR: factor = (end - v) / (end - start); v = 0.25 over
+        // [0,1] gives 0.75 shade + 0.25 fog.
+        vk::RendererSetFogState(1, 3, 0u, 0x3F800000u, 0x3F800000u);
+        if(!fogQuad(104, 8, 0.25f) || !Pixel(108, 16, 0xBF4000u, false, 1))
+        {
+            return false;
+        }
+        // Disabling fog leaves the raw shade even with a fogged vertex.
+        vk::RendererSetFogState(0, 0, 0u, 0x3F800000u, 0x3F800000u);
+        return fogQuad(136, 8, 0.0f) && Pixel(140, 16, Red);
+    }
     if(std::strcmp(scenario, "cube") == 0)
     {
         // Cube-map mirroring: six solid faces uploaded face-major, sampled
@@ -287,7 +399,8 @@ bool Run(const char* scenario)
             };
             return vk::RendererDrawUP(4, 2, verts, sizeof(CubeVertex),
                                       offsetof(CubeVertex, color),
-                                      offsetof(CubeVertex, dirX), 3);
+                                      offsetof(CubeVertex, dirX), 3,
+                                      NoAttribute);
         };
         if(!vk::RendererSetCubeTexture(0, &cubeKey, faces.data(),
                                        kCubeSize * 4, kCubeSize, 21) ||
@@ -363,7 +476,8 @@ bool Run(const char* scenario)
             };
             return vk::RendererDrawUP(4, 2, verts, sizeof(ShadowVertex),
                                       offsetof(ShadowVertex, color),
-                                      offsetof(ShadowVertex, u), 5);
+                                      offsetof(ShadowVertex, u), 5,
+                                      NoAttribute);
         };
         if(!vk::RendererSetDepthStageTexture(0, &depthKey) ||
            !shadowQuad(8, 8, 0.7f) ||   // 0.5 <= 0.7 -> lit
@@ -416,7 +530,8 @@ bool Run(const char* scenario)
             };
             return vk::RendererDrawUP(4, 2, verts, sizeof(VolumeVertex),
                                       offsetof(VolumeVertex, color),
-                                      offsetof(VolumeVertex, u), 3);
+                                      offsetof(VolumeVertex, u), 3,
+                                      NoAttribute);
         };
         if(!vk::RendererSetVolumeTexture(0, &volumeKey, slices.data(),
                                          kW * 4, kW, kH, kD, 21) ||
