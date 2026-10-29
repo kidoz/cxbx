@@ -11771,7 +11771,7 @@ static HRESULT EmuResourceRegisterGuardedBody(
                 // memory. CXBX_NO_GUEST_DIRECT_REG=1 restores the relay.
                 const bool guestDirect =
                     dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
-                    !bCompressed && X_Format != 0x24 &&
+                    X_Format != 0x24 &&
                     cxbx::d3d8::HostBackendRenders() &&
                     !EmuD3DEnvironmentEnabled("CXBX_NO_GUEST_DIRECT_REG");
 
@@ -11834,7 +11834,12 @@ static HRESULT EmuResourceRegisterGuardedBody(
                     // native flavor (the bind pull serves the container;
                     // level-0 locks serve the tracked guest memory).
                     XTL::IDirect3DBaseTexture8* pHostTex = pResource->EmuTexture8;
-                    const UINT tightPitch = dwSourceWidth * dwBPP;
+                    const UINT tightPitch = bCompressed
+                        ? ((dwSourceWidth + 3) / 4) * dwCompressedBytesPerBlock
+                        : dwSourceWidth * dwBPP;
+                    const UINT blockRows = bCompressed
+                        ? (dwSourceHeight + 3) / 4
+                        : dwSourceHeight;
                     EmuNativeTexture* pNative = EmuNativeTextureEnsureGuestContainer(
                         pHostTex, pThis, dwSourceWidth, dwSourceHeight,
                         tightPitch, static_cast<UINT>(Format));
@@ -11845,6 +11850,19 @@ static HRESULT EmuResourceRegisterGuardedBody(
                             XTL::EmuXGUnswizzleRect(
                                 sourceCopy.data(), dwSourceWidth, dwSourceHeight, dwDepth,
                                 pNative->Pixels.data(), pNative->Pitch, iRect, iPoint, dwBPP);
+                        }
+                        else if(bCompressed)
+                        {
+                            const DWORD rowBytes =
+                                ((dwSourceWidth + 3) / 4) * dwCompressedBytesPerBlock;
+                            BYTE* dst = pNative->Pixels.data();
+                            const BYTE* src = sourceCopy.data();
+                            for(DWORD row = 0; row < blockRows; ++row)
+                            {
+                                memcpy(dst, src, rowBytes);
+                                dst += pNative->Pitch;
+                                src += rowBytes;
+                            }
                         }
                         else
                         {
@@ -11979,8 +11997,11 @@ static HRESULT EmuResourceRegisterGuardedBody(
                         pResource->EmuTexture8->UnlockRect(0);
                 }
 
+                // Compressed mip relay: under the native flavor the host
+                // texture is an empty shell and the renderer samples level
+                // 0 only, so the mips are skipped.
                 if(bCompressed && dwCommonType == X_D3DCOMMON_TYPE_TEXTURE &&
-                   !sourceCopy.empty())
+                   !sourceCopy.empty() && !guestDirect)
                 {
                     const DWORD hostLevelCount = pResource->EmuTexture8->GetLevelCount();
                     const DWORD copyLevelCount =
