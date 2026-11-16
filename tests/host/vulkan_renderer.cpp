@@ -811,6 +811,167 @@ bool Run(const char* scenario)
         vk::RendererSetRenderTarget(nullptr, 0, 0, nullptr, nullptr);
         return vk::RendererClear(1, Blue, 1, 0) && Pixel(100, 100, Blue);
     }
+    if(std::strcmp(scenario, "turok144") == 0)
+    {
+        // Temporary bring-up probe: the Turok Evolution frontend draw shape.
+        // EmuVshCpuVertex layout (144 bytes) with the draw's diffuse @20,
+        // texCoords[0] @28 (vec4), fogValue @140; translated one-combiner
+        // shader ("output = t0"); depth on (LEQUAL, write), texture unbound
+        // (samples the white dummy).
+        struct Vertex144
+        {
+            float x, y, z, rhw;
+            float pointSize;
+            std::uint32_t diffuse;
+            std::uint32_t specular;
+            float texCoords[4][4];
+            float clipPosition[4];
+            float diffuseComponents[4];
+            float specularComponents[4];
+            float fogValue;
+        };
+        std::uint32_t def60[60] = {};
+        def60[0] = 0x00000000;
+        def60[8] = 0x200C0300;
+        def60[9] = 0x00001180;
+        def60[34] = 0xC8200000;
+        def60[45] = 0x000000C0;
+        def60[53] = 0x00011101;
+        def60[54] = 0x00000001;
+        def60[57] = 0xFFFFFFFF;
+        def60[58] = 0xFFFFFFFF;
+        vk::RendererSetPixelShader(def60);
+        vk::RendererSetDepthState(0, 1);
+        vk::RendererSetDepthState(1, 1);
+        vk::RendererSetDepthState(2, 4);
+        vk::RendererSetRasterState(22, 2);
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+
+        auto make = [](float x, float y, float z, std::uint32_t diffuse,
+                       float rhw, bool flip)
+        {
+            Vertex144 vertex{};
+            vertex.x = flip ? (x < 40.0f ? x + 64.0f : x - 64.0f) : x;
+            vertex.y = y;
+            vertex.z = z;
+            vertex.rhw = rhw;
+            vertex.pointSize = 1.0f;
+            vertex.diffuse = diffuse;
+            vertex.specular = 0xFF000000u;
+            vertex.texCoords[0][0] = 0.25f;
+            vertex.texCoords[0][1] = 0.5f;
+            vertex.texCoords[0][2] = 0.0f;
+            vertex.texCoords[0][3] = 1.0f;
+            vertex.texCoords[1][3] = 1.0f;
+            vertex.texCoords[2][3] = 1.0f;
+            vertex.texCoords[3][3] = 1.0f;
+            vertex.clipPosition[3] = rhw != 0.0f ? 1.0f / rhw : 1.0f;
+            vertex.fogValue = 1.0f;
+            return vertex;
+        };
+        const std::array<Vertex144, 6> quad = {
+            make(8.0f, 8.0f, 0.9998686f, 0xFF795B3Fu, 0.0016238f, false),
+            make(72.0f, 8.0f, 0.9998686f, 0xFF795B3Fu, 0.0016238f, false),
+            make(8.0f, 72.0f, 0.9998686f, 0xFF795B3Fu, 0.0016238f, false),
+            make(72.0f, 8.0f, 0.9998686f, 0xFF795B3Fu, 0.0016238f, false),
+            make(72.0f, 72.0f, 0.9998686f, 0xFF795B3Fu, 0.0016238f, false),
+            make(8.0f, 72.0f, 0.9998686f, 0xFF795B3Fu, 0.0016238f, false)
+        };
+        const std::array<Vertex144, 6> quadFlipped = {
+            make(8.0f, 8.0f, 0.9998686f, 0xFF00FF00u, 0.0016238f, true),
+            make(72.0f, 8.0f, 0.9998686f, 0xFF00FF00u, 0.0016238f, true),
+            make(8.0f, 72.0f, 0.9998686f, 0xFF00FF00u, 0.0016238f, true),
+            make(72.0f, 8.0f, 0.9998686f, 0xFF00FF00u, 0.0016238f, true),
+            make(72.0f, 72.0f, 0.9998686f, 0xFF00FF00u, 0.0016238f, true),
+            make(8.0f, 72.0f, 0.9998686f, 0xFF00FF00u, 0.0016238f, true)
+        };
+
+        // Run every sub-probe regardless; report each.
+        bool allPassed = true;
+        auto check = [&](const char* label, bool drawn, unsigned x, unsigned y,
+                         std::uint32_t expected)
+        {
+            std::vector<std::uint32_t> pixels(Width * Height);
+            const bool read =
+                vk::RendererReadMainTarget(pixels.data(), Width * 4);
+            const std::uint32_t actual =
+                read ? pixels[y * Width + x] & 0xFFFFFFu : 0u;
+            const bool ok = drawn && read && actual == expected;
+            std::printf("PROBE %s: %s (got %06X want %06X)\n", label,
+                        ok ? "PASS" : "FAIL", actual, expected);
+            return ok;
+        };
+
+        std::printf("PROBE A1: 144/sets4/fog140, z=0.99987 rhw=0.0016\n");
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        allPassed &= check("A1", vk::RendererDrawUP(4, 2, quad.data(), 144,
+                                                    20, 28, 4, 140),
+                           40, 40, 0x795B3Fu);
+        std::printf("PROBE A1F: flipped winding\n");
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        allPassed &= check("A1F", vk::RendererDrawUP(4, 2, quadFlipped.data(),
+                                                     144, 20, 28, 4, 140),
+                           40, 40, 0x00FF00u);
+        std::printf("PROBE A2: same, z=0.5 rhw=1\n");
+        {
+            auto flat = quad;
+            for(auto& vertex : flat)
+            {
+                vertex.z = 0.5f;
+                vertex.rhw = 1.0f;
+                vertex.clipPosition[3] = 1.0f;
+            }
+            auto flatFlipped = quadFlipped;
+            for(auto& vertex : flatFlipped)
+            {
+                vertex.z = 0.5f;
+                vertex.rhw = 1.0f;
+                vertex.clipPosition[3] = 1.0f;
+            }
+            vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+            allPassed &= check("A2", vk::RendererDrawUP(4, 2, flat.data(), 144,
+                                                        20, 28, 4, 140),
+                               40, 40, 0x795B3Fu);
+            vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+            allPassed &= check("A2F", vk::RendererDrawUP(
+                                          4, 2, flatFlipped.data(), 144, 20,
+                                          28, 4, 140),
+                               40, 40, 0x00FF00u);
+        }
+        std::printf("PROBE A3: 144/sets0/fog140\n");
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        allPassed &= check("A3", vk::RendererDrawUP(4, 2, quad.data(), 144,
+                                                    20, 28, 0, 140),
+                           40, 40, 0x795B3Fu);
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        allPassed &= check("A3F", vk::RendererDrawUP(4, 2, quadFlipped.data(),
+                                                     144, 20, 28, 0, 140),
+                           40, 40, 0x00FF00u);
+        std::printf("PROBE A4: 144/sets4/nofog\n");
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        allPassed &= check("A4", vk::RendererDrawUP(4, 2, quad.data(), 144,
+                                                    20, 28, 4,
+                                                    0xFFFFFFFFu),
+                           40, 40, 0x795B3Fu);
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        allPassed &= check("A4F", vk::RendererDrawUP(4, 2, quadFlipped.data(),
+                                                     144, 20, 28, 4,
+                                                     0xFFFFFFFFu),
+                           40, 40, 0x00FF00u);
+        std::printf("PROBE A5: depth disabled\n");
+        vk::RendererSetDepthState(0, 0);
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        const bool drawnA5 =
+            vk::RendererDrawUP(4, 2, quad.data(), 144, 20, 28, 4, 140);
+        vk::RendererClear(7, 0xFF000000, 1.0f, 0);
+        const bool drawnA5F =
+            vk::RendererDrawUP(4, 2, quadFlipped.data(), 144, 20, 28, 4, 140);
+        vk::RendererSetDepthState(0, 1);
+        allPassed &= check("A5", drawnA5, 40, 40, 0x795B3Fu);
+        allPassed &= check("A5F", drawnA5F, 40, 40, 0x00FF00u);
+        std::printf("allPassed=%d\n", allPassed ? 1 : 0);
+        return allPassed;
+    }
     return false;
 }
 } // namespace

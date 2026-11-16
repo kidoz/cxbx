@@ -813,6 +813,24 @@ void FlushPendingClears()
     }
 }
 
+// Per-frame budget for the CXBX_VK_DRAW_TRACE bring-up trace (reset by
+// SubmitFrame; the traced draws are the first of each submitted frame).
+static unsigned int s_VkDrawTraceThisFrame = 0;
+
+// CXBX_VK_DRAW_TRACE=1 gates the bring-up traces (VKDRAW|/VKVTX|/VKCLEAR|/
+// VKOPEN|); cached at first use like the other opt-in switches.
+static bool VkDrawTraceEnabled()
+{
+    static int enabled = -1;
+    if(enabled < 0)
+    {
+        char value[8] = {};
+        GetEnvironmentVariableA("CXBX_VK_DRAW_TRACE", value, sizeof(value));
+        enabled = value[0] == '1' ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
 bool SubmitFrame()
 {
     if(!g_R.frameOpen)
@@ -820,6 +838,7 @@ bool SubmitFrame()
         return true;
     }
     CloseRendering();
+    s_VkDrawTraceThisFrame = 0;
     FlushPendingClears();
     // Publish attachment/clear writes for later submissions, including
     // readback and presentation copies that do not open a rendering instance.
@@ -845,6 +864,73 @@ bool SubmitFrame()
     {
         g_R.valid = false;
         return false;
+    }
+    // CXBX_VK_DRAW_TRACE=1: one-shot depth-buffer readback at frame 400
+    // (min/max over the depth attachment after the frame's draws).
+    if(VkDrawTraceEnabled())
+    {
+        static unsigned long long depthReadbackFrame = 0;
+        static unsigned int depthReadbackTarget = 0;
+        if(depthReadbackTarget == 0)
+        {
+            char value[16] = {};
+            depthReadbackTarget =
+                GetEnvironmentVariableA("CXBX_DEPTH_FRAME", value,
+                                        sizeof(value)) != 0
+                    ? static_cast<unsigned int>(strtoul(value, nullptr, 0))
+                    : 400u;
+            if(depthReadbackTarget == 0)
+            {
+                depthReadbackTarget = 400u;
+            }
+        }
+        ++depthReadbackFrame;
+        if(depthReadbackFrame == depthReadbackTarget &&
+           g_R.readbackMapped != nullptr && g_R.mainDepthImage != VK_NULL_HANDLE)
+        {
+            vkResetCommandBuffer(g_R.commandBuffer, 0);
+            VkCommandBufferBeginInfo beginInfo = {};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            if(vkBeginCommandBuffer(g_R.commandBuffer, &beginInfo) ==
+               VK_SUCCESS)
+            {
+                VkBufferImageCopy region = {};
+                region.imageSubresource.aspectMask =
+                    VK_IMAGE_ASPECT_DEPTH_BIT;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent = { g_R.width, g_R.height, 1 };
+                vkCmdCopyImageToBuffer(
+                    g_R.commandBuffer, g_R.mainDepthImage,
+                    VK_IMAGE_LAYOUT_GENERAL, g_R.readbackStaging, 1, &region);
+                vkEndCommandBuffer(g_R.commandBuffer);
+                VkSubmitInfo readbackSubmit = {};
+                readbackSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                readbackSubmit.commandBufferCount = 1;
+                readbackSubmit.pCommandBuffers = &g_R.commandBuffer;
+                vkQueueSubmit(g_R.queue, 1, &readbackSubmit, VK_NULL_HANDLE);
+                vkQueueWaitIdle(g_R.queue);
+                const auto* depths = static_cast<const float*>(
+                    g_R.readbackMapped);
+                const size_t depthCount =
+                    static_cast<size_t>(g_R.width) * g_R.height;
+                float minimum = 1.0f;
+                float maximum = 0.0f;
+                size_t exactFar = 0;
+                size_t belowFar = 0;
+                for(size_t index = 0; index < depthCount; ++index)
+                {
+                    const float value = depths[index];
+                    if(value < minimum) { minimum = value; }
+                    if(value > maximum) { maximum = value; }
+                    if(value == 1.0f) { ++exactFar; }
+                    else { ++belowFar; }
+                }
+                printf("VKDEPTH| min=%.6f max=%.6f far=%zu below=%zu\n",
+                       minimum, maximum, exactFar, belowFar);
+                fflush(stdout);
+            }
+        }
     }
     g_R.frameOpen = false;
     g_R.vertexCursor = 0;
@@ -2546,6 +2632,12 @@ bool RendererClear(unsigned int flags, unsigned int color, float z,
         g_R.pendingClearStencil = stencil;
         g_R.hasPendingClearZ = true;
     }
+    // CXBX_VK_DRAW_TRACE=1: every clear with its flags and depth value.
+    if(VkDrawTraceEnabled())
+    {
+        printf("VKCLEAR| flags=%u color=%08X z=%.6f stencil=%u\n", flags,
+               color, z, stencil);
+    }
     return true;
 }
 
@@ -2715,6 +2807,14 @@ static bool RecordDrawState(unsigned int primitiveType, unsigned int stride,
             g_R.hasPendingClearZ = false;
         }
         rendering.pDepthAttachment = &depthAttachment;
+        if(VkDrawTraceEnabled())
+        {
+            printf("VKOPEN| rendering open target=%ux%u colorLoad=%s "
+                   "depthLoad=%s clearZ=%.6f\n",
+                   targetWidth, targetHeight,
+                   g_R.hasPendingClear ? "CLEAR" : "LOAD",
+                   g_R.hasPendingClearZ ? "CLEAR" : "LOAD", g_R.pendingClearZ);
+        }
         BarrierAfterTargetWrite();
         vkCmdBeginRendering(g_R.commandBuffer, &rendering);
         g_R.renderingActive = true;
@@ -2929,6 +3029,56 @@ bool RendererDrawUP(unsigned int primitiveType, unsigned int primitiveCount,
     {
         return false;
     }
+    // CXBX_VK_DRAW_TRACE=1: first draws of every frame with the live raster
+    // state the pipeline was bound under (bring-up diagnostics; the CPU
+    // fallback's VSH| records carry the pre-backend side of the same draws).
+    if(VkDrawTraceEnabled() && s_VkDrawTraceThisFrame < 8)
+    {
+        ++s_VkDrawTraceThisFrame;
+        printf("VKDRAW| draw=%u prim=%u vcount=%u vp=%.1f,%.1f,%.1f,%.1f "
+               "z=%u/%u/%u cull=%u alpha=%u/%u/%u blend=%u/%u/%u cw=%u comb=%u "
+               "tex0=%p tss0=%u,%u,%u sets=%u fog=%u stride=%u diff=%u tc=%u "
+               "wrapU=%u wrapV=%u\n",
+               s_VkDrawTraceThisFrame - 1, primitiveType, vertexCount,
+               g_R.viewport[0], g_R.viewport[1], g_R.viewport[2],
+               g_R.viewport[3], g_R.depthEnable ? 1u : 0u,
+               g_R.depthWrite ? 1u : 0u, g_R.depthFunc, g_R.cullMode,
+               g_R.alphaTest ? 1u : 0u, g_R.alphaFunc, g_R.alphaRef,
+               g_R.blendEnable ? 1u : 0u, g_R.sourceBlend,
+               g_R.destinationBlend, g_R.colorWriteMask,
+               g_R.useCombiner ? 1u : 0u,
+               static_cast<void*>(g_R.stageTexture[0] != nullptr
+                                      ? g_R.stageTexture[0]->key
+                                      : nullptr),
+               g_R.stageOp[0], g_R.stageArg1[0], g_R.stageArg2[0],
+               texCoordSets, fogOffset, stride, diffuseOffset,
+               texCoordOffset, g_R.stageAddressU[0], g_R.stageAddressV[0]);
+        if(stride >= 144 && data != nullptr &&
+           (s_VkDrawTraceThisFrame == 1 || vertexCount <= 32))
+        {
+            // EmuVshCpuVertex: x/y/z/rhw @0, pointSize @16, diffuse @20,
+            // specular @24, texCoords[0] @28, fogValue @140.
+            const auto* vertices = static_cast<const std::uint8_t*>(data);
+            for(unsigned int vertex = 0; vertex < 3 && vertex < vertexCount;
+                ++vertex)
+            {
+                float x, y, z, w, u, v;
+                std::uint32_t diffuse, specular;
+                std::memcpy(&x, vertices + vertex * stride + 0, 4);
+                std::memcpy(&y, vertices + vertex * stride + 4, 4);
+                std::memcpy(&z, vertices + vertex * stride + 8, 4);
+                std::memcpy(&w, vertices + vertex * stride + 12, 4);
+                std::memcpy(&diffuse, vertices + vertex * stride + 20, 4);
+                std::memcpy(&specular, vertices + vertex * stride + 24, 4);
+                std::memcpy(&u, vertices + vertex * stride + 28, 4);
+                std::memcpy(&v, vertices + vertex * stride + 32, 4);
+                printf("VKVTX| v%u pos=%.2f,%.2f z=%.7f rhw=%.7f "
+                       "diff=%08X spec=%08X st0=%.4f,%.4f\n",
+                       vertex, x, y, z, w, diffuse, specular, u, v);
+            }
+        }
+        fflush(stdout);
+    }
     InsertDrawLabel();
     vkCmdDraw(g_R.commandBuffer, vertexCount, 1, 0, 0);
     return true;
@@ -3027,6 +3177,12 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
     g_R.stageOverrideKey[stage] = nullptr;
     if(key == nullptr || pixels == nullptr || width == 0 || height == 0)
     {
+        if(VkDrawTraceEnabled())
+        {
+            printf("VKTEX| UNBIND stage=%u key=%p pixels=%p %ux%u fmt=%u\n",
+                   stage, key, pixels, width, height, hostFormat);
+            fflush(stdout);
+        }
         g_R.stageTexture[stage] = nullptr;
         return true;
     }
@@ -3058,6 +3214,66 @@ bool RendererSetTexture(unsigned int stage, void* key, const void* pixels,
         uploadPitch = width * 4;
         format = VK_FORMAT_B8G8R8A8_UNORM;
         bytesPerPixel = 4;
+    }
+    // CXBX_VK_DRAW_TRACE=1: alpha coverage of the first uploaded textures —
+    // an alpha-test title discards every fragment of a zero-alpha upload.
+    if(VkDrawTraceEnabled() && uploadPixels != nullptr)
+    {
+        static unsigned int tracedTextures = 0;
+        if(tracedTextures < 4096)
+        {
+            ++tracedTextures;
+            unsigned int opaque = 0;
+            unsigned int transparent = 0;
+            unsigned int sampledCount = 0;
+            const auto* texels = static_cast<const std::uint8_t*>(uploadPixels);
+            const unsigned int texelStride =
+                bytesPerPixel == 4 ? 4u : bytesPerPixel;
+            for(unsigned int y = 0; y < height;
+                y += (std::max)(1u, height / 32u))
+            {
+                const auto* row =
+                    texels + static_cast<size_t>(y) * uploadPitch;
+                for(unsigned int x = 0; x < width;
+                    x += (std::max)(1u, width / 32u))
+                {
+                    const unsigned int alphaValue =
+                        bytesPerPixel == 4 ? row[static_cast<size_t>(x) * 4 + 3]
+                                           : 255u;
+                    if(alphaValue > 127u) { ++opaque; }
+                    else { ++transparent; }
+                    ++sampledCount;
+                }
+            }
+            unsigned long long rgbSum = 0;
+            unsigned int rgbMin = 255;
+            unsigned int rgbMax = 0;
+            const auto* statTexels =
+                static_cast<const std::uint8_t*>(uploadPixels);
+            for(unsigned int y = 0; y < height; y += (std::max)(1u, height / 32u))
+            {
+                const auto* row =
+                    statTexels + static_cast<std::size_t>(y) * uploadPitch;
+                for(unsigned int x = 0; x < width;
+                    x += (std::max)(1u, width / 32u))
+                {
+                    const unsigned int rgb = (row[static_cast<size_t>(x) * 4] |
+                                              row[static_cast<size_t>(x) * 4 + 1] |
+                                              row[static_cast<size_t>(x) * 4 + 2]);
+                    rgbSum += rgb;
+                    rgbMin = (std::min)(rgbMin, rgb);
+                    rgbMax = (std::max)(rgbMax, rgb);
+                }
+            }
+            printf("VKTEX| key=%p tex=%u %ux%u fmt=%u pitch=%u alpha>127:%u "
+                   "alpha<=127:%u rgbMin=%u rgbMax=%u rgbAvg=%u\n",
+                   key, tracedTextures, width, height, hostFormat, uploadPitch,
+                   opaque, transparent, rgbMin, rgbMax,
+                   sampledCount != 0 ? static_cast<unsigned>(
+                                           rgbSum / sampledCount)
+                                     : 0u);
+            fflush(stdout);
+        }
     }
     if(width > 4096 || height > 4096 ||
        static_cast<VkDeviceSize>(uploadPitch) * height > 16 * 1024 * 1024)
@@ -3811,6 +4027,11 @@ bool RendererSetStageRenderTargetTexture(unsigned int stage, void* key)
             g_R.stageCubeMask &= ~(1u << stage);
             g_R.stageVolumeMask &= ~(1u << stage);
             g_R.stageDepthView[stage] = VK_NULL_HANDLE;
+            if(VkDrawTraceEnabled())
+            {
+                printf("VKRTTEX| stage=%u bound target=%u\n", stage, i);
+                fflush(stdout);
+            }
             return true;
         }
     }
@@ -3825,6 +4046,12 @@ void RendererSetRenderTarget(void* key, unsigned int width,
     if(!g_R.valid)
     {
         return;
+    }
+    if(VkDrawTraceEnabled())
+    {
+        printf("VKRT| target=%p %ux%u textureKey=%p\n", key, width, height,
+               textureKey);
+        fflush(stdout);
     }
     FlushPendingClears();
     if(key == nullptr)
@@ -4049,6 +4276,35 @@ void RendererSetPixelShader(const std::uint32_t* def60)
     config[106] = g_R.lastConfig[106]; // meta3.z = FOGSTART float bits
     config[107] = g_R.lastConfig[107]; // meta3.w = FOGEND float bits
     config[102] = g_R.lastConfig[102];       // runtime constant validity
+    // CXBX_VK_PSH_DUMP=1: the first three mirrored combiner definitions.
+    {
+        static int pshDumpEnabled = -1;
+        if(pshDumpEnabled < 0)
+        {
+            char value[8] = {};
+            GetEnvironmentVariableA("CXBX_VK_PSH_DUMP", value, sizeof(value));
+            pshDumpEnabled = value[0] == '1' ? 1 : 0;
+        }
+        static unsigned int pshDumps = 0;
+        if(pshDumpEnabled == 1 && pshDumps < 3)
+        {
+            ++pshDumps;
+            for(unsigned int row = 0; row < 10; ++row)
+            {
+                printf("VKPSH| def=%u words[%2u..%2u] = "
+                       "%08X %08X %08X %08X %08X %08X\n",
+                       pshDumps, row * 6, row * 6 + 5, def60[row * 6 + 0],
+                       def60[row * 6 + 1], def60[row * 6 + 2],
+                       def60[row * 6 + 3], def60[row * 6 + 4],
+                       def60[row * 6 + 5]);
+            }
+            printf("VKPSH| def=%u count=%u finalABCD=%08X finalEFG=%08X "
+                   "texModes=%08X c0map=%08X c1map=%08X rtValid=%08X\n",
+                   pshDumps, def60[53] & 15u, def60[8], def60[9], def60[54],
+                   def60[57], def60[58], def60[43]);
+            fflush(stdout);
+        }
+    }
 
     g_R.useCombiner = true;
     if(memcmp(g_R.lastConfig, config, sizeof(config)) == 0)
