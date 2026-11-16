@@ -174,6 +174,8 @@ CXBXKRNL_API EmuShared::EmuShared()
 {
     m_XBController.Load("Software\\cxbx\\XBController");
     m_XBVideo.Load("Software\\cxbx\\XBVideo");
+    m_ContiguousWindowBase = 0;
+    m_ContiguousWindowSize = 0;
 }
 
 // ******************************************************************

@@ -325,31 +325,67 @@ static void* launch_generated(const char* szExePath, const char* xbe_path, const
         throw std::runtime_error("Could not create guest process (Win32 error " + std::to_string(GetLastError()) + ").");
     }
 
-    // Xbox RAM window for contiguous memory: 0x01000000..0x04000000 (48 MiB),
-    // above the XBE image (loads at 0x00010000) and below the 64 MiB boundary.
-    // Reserve as much of the free region at 0x01000000 as is contiguously free
-    // (it typically runs to ~0x02000000). Guest contiguous memory is committed
-    // from it, keeping those "physical" pointers below the 64 MiB Xbox RAM line.
-    MEMORY_BASIC_INFORMATION mbi;
-    memset(&mbi, 0, sizeof(mbi));
-    void* pReserved = NULL;
+    // Xbox RAM window for contiguous memory: below the 64 MiB line, above the
+    // XBE image (which loads at 0x00010000). Reserve the largest free span in
+    // 0x01000000..0x04000000 rather than assuming 0x01000000 is free: a title
+    // image can itself cover the low end of that range (Samurai Shodown V's
+    // .data section spans past 0x01000000). Guest contiguous memory is
+    // committed from the reserved span, keeping those "physical" pointers below
+    // the 64 MiB Xbox RAM line so the host pointer equals the Xbox physical
+    // address in the low 28 bits.
+    ULONG reserveBase = 0;
     ULONG reserveSize = 0;
-    if(VirtualQueryEx(pi.hProcess, (void*)(uintptr_t)0x01000000, &mbi, sizeof(mbi)) != 0 &&
-       mbi.State == MEM_FREE && (uintptr_t)mbi.BaseAddress == 0x01000000)
+    for(ULONG probe = 0x01000000; probe < 0x04000000;)
     {
-        reserveSize = (ULONG)mbi.RegionSize & ~0xFFFFul; // 64 KiB granularity
-        if(reserveSize > 0x03000000)
+        MEMORY_BASIC_INFORMATION mbi;
+        memset(&mbi, 0, sizeof(mbi));
+        if(VirtualQueryEx(pi.hProcess, (void*)(uintptr_t)probe, &mbi, sizeof(mbi)) == 0)
         {
-            reserveSize = 0x03000000; // cap at the 64 MiB line
+            break;
         }
-        if(reserveSize >= 0x00100000)
+
+        const ULONG base = (ULONG)(uintptr_t)mbi.BaseAddress;
+        const ULONG size = (ULONG)mbi.RegionSize;
+        if(size == 0)
         {
-            pReserved = VirtualAllocEx(pi.hProcess, (void*)(uintptr_t)0x01000000,
-                                       reserveSize, MEM_RESERVE, PAGE_READWRITE);
+            break;
         }
+
+        if(mbi.State == MEM_FREE)
+        {
+            ULONG start = base > 0x01000000 ? base : 0x01000000;
+            ULONG end = base + size;
+            if(end > 0x04000000)
+            {
+                end = 0x04000000;
+            }
+            start = (start + 0xFFFF) & ~0xFFFFul; // 64 KiB granularity
+            end &= ~0xFFFFul;
+            if(end > start && end - start > reserveSize && end - start >= 0x00100000)
+            {
+                void* pReserved = VirtualAllocEx(pi.hProcess, (void*)(uintptr_t)start,
+                                                 end - start, MEM_RESERVE, PAGE_READWRITE);
+                if(pReserved != NULL)
+                {
+                    reserveBase = start;
+                    reserveSize = end - start;
+                }
+            }
+        }
+
+        const ULONG next = base + size;
+        if(next <= probe)
+        {
+            break;
+        }
+        probe = next;
     }
-    printf("cxbx: child Xbox-RAM window 0x01000000 size 0x%lX (%s).\n",
-           reserveSize, pReserved ? "ok" : "failed");
+    printf("cxbx: child Xbox-RAM window 0x%08lX size 0x%lX (%s).\n",
+           reserveBase, reserveSize, reserveSize != 0 ? "ok" : "failed");
+    if(reserveSize != 0)
+    {
+        cxbx::platform::SetSharedContiguousWindow(reserveBase, reserveSize);
+    }
 
     // The generated exe is large-address-aware so the emulator can back parts
     // of the Xbox physical window with real memory (EmuInit's page-0 window).

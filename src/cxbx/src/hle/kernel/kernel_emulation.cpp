@@ -69,6 +69,7 @@ namespace NtDll
 #include "file_emulation.h"
 #include "core/trace.h"
 #include "core/xbox_memory.h"
+#include "shared_runtime_state.h"
 
 extern "C" uint32 __cdecl EmuDbgPrint(const char* Format, ...)
 {
@@ -3860,17 +3861,45 @@ static void EmuTrackContiguousMemoryAllocation(PVOID Address, ULONG Size)
 }
 
 // Allocate contiguous "physical" memory from the low Xbox-RAM window the launcher
-// reserved in this process (0x01000000..0x04000000). Keeping these below 64 MiB
-// makes the host pointer equal the Xbox physical address in its low 28 bits --
-// the invariant the NV2A DMA engine and nxdk pbkit assume when they program and
-// then poll pushbuffer/surface addresses. Bump-allocate and commit on demand;
-// return NULL (caller falls back to the heap) if the window is exhausted or was
-// never reserved (e.g. an oversized image).
-static const ULONG g_EmuXboxRamLimit = 0x04000000;
-static ULONG g_EmuXboxRamNext = 0x01000000;
+// reserved in this process (below 0x04000000). Keeping these below 64 MiB makes
+// the host pointer equal the Xbox physical address in its low 28 bits -- the
+// invariant the NV2A DMA engine and nxdk pbkit assume when they program and
+// then poll pushbuffer/surface addresses. The window is not fixed at
+// 0x01000000: a title image can itself cover that address (Samurai Shodown V's
+// .data section spans past it), so the launcher reserves the largest free span
+// in the range and publishes it through shared state. Bump-allocate and commit
+// on demand; return NULL (caller falls back to the heap) if the window is
+// exhausted or was never reserved (e.g. an oversized image).
+static const ULONG g_EmuXboxRamFallbackBase = 0x01000000;
+static const ULONG g_EmuXboxRamFallbackLimit = 0x04000000;
+static ULONG g_EmuXboxRamNext = 0;
+static ULONG g_EmuXboxRamLimit = 0;
+
+static void EmuResolveXboxRamWindow()
+{
+    if(g_EmuXboxRamLimit != 0)
+        return;
+
+    std::uint32_t Base = 0;
+    std::uint32_t Size = 0;
+    cxbx::platform::GetSharedContiguousWindow(Base, Size);
+
+    if(Base >= g_EmuXboxRamFallbackBase && Size >= 0x00100000 &&
+       Base + Size <= g_EmuXboxRamFallbackLimit)
+    {
+        g_EmuXboxRamNext = Base;
+        g_EmuXboxRamLimit = Base + Size;
+        return;
+    }
+
+    g_EmuXboxRamNext = g_EmuXboxRamFallbackBase;
+    g_EmuXboxRamLimit = g_EmuXboxRamFallbackLimit;
+}
 
 static void* EmuAllocateContiguousLow(ULONG Size, ULONG Alignment)
 {
+    EmuResolveXboxRamWindow();
+
     if(Alignment < 0x1000)
         Alignment = 0x1000;
 
@@ -3910,8 +3939,13 @@ static void* EmuAllocateContiguous(ULONG Size, ULONG Alignment)
 // VirtualAlloc reservations.
 static bool EmuIsLowXboxRam(PVOID Address)
 {
+    EmuResolveXboxRamWindow();
+
     const ULONG Value = (ULONG)Address;
-    return Value >= 0x01000000 && Value < g_EmuXboxRamLimit;
+    // The lower bound stays at the fixed 0x01000000 line: image memory can
+    // live between there and the reserved window (a title whose .data spans
+    // past 0x01000000), and such pointers must never reach VirtualFree.
+    return Value >= g_EmuXboxRamFallbackBase && Value < g_EmuXboxRamLimit;
 }
 
 // Allocate and register contiguous memory while the caller is already in host

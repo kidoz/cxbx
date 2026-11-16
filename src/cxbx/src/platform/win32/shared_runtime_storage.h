@@ -117,6 +117,24 @@ class EmuShared : public Mutex
         Unlock();
     }
 
+    // ******************************************************************
+    // * Contiguous Xbox-RAM window accessors
+    // ******************************************************************
+    CXBXKRNL_API void GetContiguousWindow(ULONG* base, ULONG* size)
+    {
+        Lock();
+        *base = m_ContiguousWindowBase;
+        *size = m_ContiguousWindowSize;
+        Unlock();
+    }
+    CXBXKRNL_API void SetContiguousWindow(ULONG base, ULONG size)
+    {
+        Lock();
+        m_ContiguousWindowBase = base;
+        m_ContiguousWindowSize = size;
+        Unlock();
+    }
+
   private:
     // ******************************************************************
     // * Shared configuration
@@ -124,6 +142,11 @@ class EmuShared : public Mutex
     XBController m_XBController;
     XBVideo m_XBVideo;
     char m_XbePath[260];
+    // Largest free span below the 64 MiB Xbox RAM line that the launcher
+    // reserved in the guest process; contiguous "physical" allocations are
+    // committed from it.
+    ULONG m_ContiguousWindowBase;
+    ULONG m_ContiguousWindowSize;
 };
 
 // ******************************************************************

@@ -26,4 +26,9 @@ void SetSharedXbePath(const char (&path)[kSharedXbePathCapacity])
     g_EmuShared->SetXbePath(path);
 }
 
+void SetSharedContiguousWindow(std::uint32_t base, std::uint32_t size)
+{
+    g_EmuShared->SetContiguousWindow(base, size);
+}
+
 } // namespace cxbx::platform

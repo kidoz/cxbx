@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace cxbx::platform
 {
@@ -16,5 +17,13 @@ void ShutdownSharedRuntime();
 void DisableSharedRuntimePersist();
 void GetSharedXbePath(char (&path)[kSharedXbePathCapacity]);
 void SetSharedXbePath(const char (&path)[kSharedXbePathCapacity]);
+
+// Largest free span below the 64 MiB Xbox RAM line that the launcher reserved
+// in the guest process. Contiguous "physical" guest memory is committed from
+// this window, which keeps host == Xbox physical in the low 28 address bits --
+// the invariant the NV2A DMA engine relies on when a title programs the
+// pushbuffer with masked-physical addresses.
+void GetSharedContiguousWindow(std::uint32_t& base, std::uint32_t& size);
+void SetSharedContiguousWindow(std::uint32_t base, std::uint32_t size);
 
 } // namespace cxbx::platform
