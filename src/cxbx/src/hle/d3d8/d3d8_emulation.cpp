@@ -7047,6 +7047,19 @@ static EmuNativeTexture* EmuNativeTextureFind(
 
 // Bind-time lookup: prefer the guest identity, fall back to the host
 // pointer for entries that never learned it.
+static bool EmuVkBindTraceEnabled()
+{
+    static int enabled = -1;
+    if(enabled < 0)
+    {
+        char value[8] = {};
+        enabled = GetEnvironmentVariableA("CXBX_VK_DRAW_TRACE", value,
+                                           sizeof(value)) != 0 &&
+                  value[0] == '1' ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
 static EmuNativeTexture* EmuNativeTextureFindForBind(
     XTL::IDirect3DBaseTexture8* pHostTexture, XTL::X_D3DResource* pGuestResource)
 {
@@ -7057,6 +7070,28 @@ static EmuNativeTexture* EmuNativeTextureFindForBind(
             if(entry.pGuestResource == pGuestResource)
             {
                 return &entry;
+            }
+        }
+        if(EmuVkBindTraceEnabled())
+        {
+            static unsigned missLogged = 0;
+            ++missLogged;
+            if(missLogged == 1 || missLogged % 500 == 0)
+            {
+                printf("VKBIND| pid=%u tid=%X guest scan miss #%u key=%p "
+                       "entries=%u host=%p registry=%p guests=",
+                       GetCurrentProcessId(), GetCurrentThreadId(),
+                       missLogged, pGuestResource,
+                       static_cast<unsigned>(g_EmuNativeTextures.size()),
+                       pHostTexture,
+                       static_cast<const void*>(&g_EmuNativeTextures));
+                for(std::size_t i = 0; i < g_EmuNativeTextures.size(); ++i)
+                {
+                    printf("%s%p", i ? "," : "",
+                           g_EmuNativeTextures[i].pGuestResource);
+                }
+                printf("\n");
+                fflush(stdout);
             }
         }
     }
@@ -7084,6 +7119,11 @@ static void EmuNativeTextureForgetGuest(XTL::X_D3DResource* pGuestResource)
     if(pGuestResource == nullptr)
     {
         return;
+    }
+    if(EmuVkBindTraceEnabled())
+    {
+        printf("VKFORGET| guest key=%p\n", pGuestResource);
+        fflush(stdout);
     }
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
     for(std::size_t i = 0; i < g_EmuNativeTextures.size(); ++i)
@@ -7155,7 +7195,8 @@ static EmuNativeTexture* EmuNativeTextureAdopt(
     return &g_EmuNativeTextures.back();
 }
 
-static void EmuNativeTextureForget(XTL::IDirect3DBaseTexture8* pHostTexture)
+static void EmuNativeTextureForget(XTL::IDirect3DBaseTexture8* pHostTexture,
+                                   const char* caller = "unknown")
 {
     // Self-locking: no caller may hold the registry mutex (std::mutex is not
     // recursive).
@@ -7164,6 +7205,11 @@ static void EmuNativeTextureForget(XTL::IDirect3DBaseTexture8* pHostTexture)
     {
         if(g_EmuNativeTextures[i].pHostTexture == pHostTexture)
         {
+            if(EmuVkBindTraceEnabled())
+            {
+                printf("VKFORGET| host %p (%s)\n", pHostTexture, caller);
+                fflush(stdout);
+            }
             g_EmuNativeTextures.erase(g_EmuNativeTextures.begin() + i);
             return;
         }
@@ -7189,6 +7235,7 @@ static EmuNativeTexture* EmuNativeTextureEnsureGuestContainer(
 {
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
     EmuNativeTexture* entry = nullptr;
+    const bool traceDecisions = EmuVkBindTraceEnabled();
     for(auto& candidate : g_EmuNativeTextures)
     {
         if(candidate.pGuestResource == pGuestResource)
@@ -7205,11 +7252,35 @@ static EmuNativeTexture* EmuNativeTextureEnsureGuestContainer(
             {
                 // The host pointer maps to a container owned by a different
                 // guest resource: never overwrite it.
+                if(traceDecisions)
+                {
+                    printf("VKENSURE| guest=%p host=%p REJECTED owned-by=%p "
+                           "size=%u\n", pGuestResource, pHostTexture,
+                           byHost->pGuestResource,
+                           static_cast<unsigned>(g_EmuNativeTextures.size()));
+                    fflush(stdout);
+                }
                 return nullptr;
+            }
+            if(traceDecisions)
+            {
+                printf("VKENSURE| guest=%p host=%p SEPARATE entry for owned "
+                       "host shell size=%u\n", pGuestResource, pHostTexture,
+                       static_cast<unsigned>(g_EmuNativeTextures.size()));
+                fflush(stdout);
             }
         }
         g_EmuNativeTextures.push_back({});
         entry = &g_EmuNativeTextures.back();
+        if(traceDecisions)
+        {
+            printf("VKENSURE| pid=%u guest=%p host=%p CREATED "
+                   "size=%u cap=%u\n", GetCurrentProcessId(),
+                   pGuestResource, pHostTexture,
+                   static_cast<unsigned>(g_EmuNativeTextures.size()),
+                   static_cast<unsigned>(g_EmuNativeTextures.capacity()));
+            fflush(stdout);
+        }
         entry->pHostTexture = pHostTexture;
         entry->pGuestResource = pGuestResource;
         entry->HostFormat = hostFormat;
@@ -7498,6 +7569,111 @@ static void EmuCommitTextureContainerLocks()
     }
 }
 
+// Guest-direct Register (Stage 2) fills only the native byte container and
+// leaves the host texture an empty metadata shell. An un-modeled write path
+// (level-surface locks, CopyRects into levels) drops the container so the
+// bind pull falls back to the host texture -- but with an unbaked shell that
+// pull samples black (Turok Evolution's frontend textures lock their level
+// surfaces right after Register, so the menu/3D background came out black).
+// Bake the captured bytes into the host shell before the drop: the fallback
+// then reads exactly what the container held.
+// SEH-carrying half: lock host level 0 and copy the snapshotted rows.
+// Separate from the caller so a C++ try (vector snapshot) and SEH __try
+// never coexist in one function.
+static void EmuBakeHostTextureRows(
+    XTL::IDirect3DTexture8* pTexture8, const BYTE* pixels, UINT pitch,
+    UINT rows)
+{
+    XTL::D3DLOCKED_RECT locked = {};
+    HRESULT hRet = D3DERR_INVALIDCALL;
+    __try
+    {
+        hRet = pTexture8->LockRect(0, &locked, NULL, 0);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hRet = D3DERR_INVALIDCALL;
+    }
+    if(FAILED(hRet) || locked.pBits == nullptr || locked.Pitch <= 0)
+    {
+        return;
+    }
+    const UINT rowBytes = min(pitch, static_cast<UINT>(locked.Pitch));
+    for(UINT y = 0; y < rows; ++y)
+    {
+        memcpy(static_cast<BYTE*>(locked.pBits) +
+                   static_cast<std::size_t>(y) * locked.Pitch,
+               pixels + static_cast<std::size_t>(y) * pitch, rowBytes);
+    }
+    __try
+    {
+        pTexture8->UnlockRect(0);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static void EmuBakeHostTextureFromContainer(
+    XTL::IDirect3DBaseTexture8* pHostTexture)
+{
+    if(pHostTexture == nullptr ||
+       pHostTexture->GetType() != XTL::D3DRTYPE_TEXTURE)
+    {
+        return;
+    }
+    std::vector<BYTE> pixels;
+    UINT containerPitch = 0;
+    UINT containerHeight = 0;
+    UINT containerFormat = 0;
+    try
+    {
+        std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
+        EmuNativeTexture* pNative = EmuNativeTextureFind(pHostTexture);
+        if(pNative == nullptr || pNative->Pixels.empty() ||
+           pNative->Pitch == 0)
+        {
+            return;
+        }
+        pixels = pNative->Pixels;
+        containerPitch = pNative->Pitch;
+        containerHeight = pNative->Height;
+        containerFormat = pNative->HostFormat;
+    }
+    catch(...)
+    {
+        return;
+    }
+
+    // Compressed containers hold block rows, not pixel rows.
+    UINT rows = containerHeight;
+    switch(containerFormat)
+    {
+        case 0x31545844: // DXT1
+        case 0x32545844: // DXT2
+        case 0x33545844: // DXT3
+        case 0x34545844: // DXT4
+        case 0x35545844: // DXT5
+            rows = (containerHeight + 3) / 4;
+            break;
+        default:
+            break;
+    }
+    const std::size_t availableRows = pixels.size() / containerPitch;
+    if(rows > availableRows)
+    {
+        rows = static_cast<UINT>(availableRows);
+    }
+    if(rows == 0)
+    {
+        return;
+    }
+
+    EmuBakeHostTextureRows(
+        static_cast<XTL::IDirect3DTexture8*>(pHostTexture), pixels.data(),
+        containerPitch, rows);
+}
+
 // Drops the texture container and any outstanding served lock when the host
 // texture dies or an un-modeled write path (level-surface locks, CopyRects
 // into levels) invalidates the captured bytes: the bind pull falls back to
@@ -7524,7 +7700,7 @@ static void EmuForgetTextureContainerState(
         }
     }
     // Takes the registry mutex itself.
-    EmuNativeTextureForget(pHostTexture);
+    EmuNativeTextureForget(pHostTexture, "un-modeled write / host death");
 }
 
 // Re-serves a granted writable full level-0 lock from the container. Called
@@ -7674,7 +7850,7 @@ static void EmuRefreshTextureContainerFromLock(
     }
     if(!EmuSpanReadable(pBits, static_cast<std::size_t>(pitch) * height))
     {
-        EmuNativeTextureForget(pHostTexture);
+        EmuNativeTextureForget(pHostTexture, "refresh span unreadable");
         return;
     }
     std::lock_guard<std::mutex> lock(EmuSurfaceContainerMutex());
@@ -8057,6 +8233,7 @@ static void EmuInvalidateTextureContainerForSurface(
     {
         return;
     }
+    EmuBakeHostTextureFromContainer(pLink->pHostTexture);
     EmuForgetTextureContainerState(pLink->pHostTexture);
 }
 
@@ -9664,6 +9841,15 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
                 if(native->Width == description.Width &&
                    native->Height == description.Height)
                 {
+                    if(EmuVkBindTraceEnabled())
+                    {
+                        printf("VKBIND| stage=%lu key=%p container served "
+                               "%ux%u pitch=%u fmt=%u\n",
+                               static_cast<unsigned long>(Stage), pGuestKey,
+                               native->Width, native->Height, native->Pitch,
+                               native->HostFormat);
+                        fflush(stdout);
+                    }
                     cxbx::d3d8::HostBackendSetTexture(
                         Stage, pGuestKey, native->Pixels.data(),
                         native->Pitch, native->Width, native->Height,
@@ -9672,19 +9858,49 @@ static void EmuVulkanStageTextureUpload(DWORD Stage,
                 }
                 // Geometry drift: the capture is stale beyond repair.
                 staleGeometry = true;
+                if(EmuVkBindTraceEnabled())
+                {
+                    printf("VKBIND| stage=%lu key=%p container stale "
+                           "%ux%u vs %ux%u\n",
+                           static_cast<unsigned long>(Stage), pGuestKey,
+                           native->Width, native->Height,
+                           description.Width, description.Height);
+                    fflush(stdout);
+                }
+            }
+            else if(EmuVkBindTraceEnabled())
+            {
+                printf("VKBIND| stage=%lu key=%p no container\n", Stage,
+                       pGuestKey);
+                fflush(stdout);
             }
         }
         if(staleGeometry)
         {
             // Takes the registry mutex itself.
-            EmuNativeTextureForget(pBaseTexture8);
+            EmuNativeTextureForget(pBaseTexture8, "bind stale geometry");
         }
     }
 
     if(FAILED(pTexture8->LockRect(0, &locked, NULL, D3DLOCK_READONLY)))
     {
+        if(EmuVkBindTraceEnabled())
+        {
+            printf("VKBIND| stage=%lu key=%p LockRect failed\n",
+                   static_cast<unsigned long>(Stage), pGuestKey);
+            fflush(stdout);
+        }
         cxbx::d3d8::HostBackendSetTexture(Stage, nullptr, nullptr, 0, 0, 0, 0);
         return;
+    }
+    if(EmuVkBindTraceEnabled())
+    {
+        printf("VKBIND| stage=%lu key=%p host pull %ux%u pitch=%u fmt=%u\n",
+               static_cast<unsigned long>(Stage), pGuestKey,
+               description.Width, description.Height,
+               static_cast<unsigned>(locked.Pitch),
+               static_cast<unsigned>(description.Format));
+        fflush(stdout);
     }
     cxbx::d3d8::HostBackendSetTexture(Stage, pGuestKey, locked.pBits,
                                       static_cast<unsigned>(locked.Pitch),
@@ -11865,6 +12081,20 @@ static HRESULT EmuResourceRegisterGuardedBody(
                         tightPitch, static_cast<UINT>(Format));
                     if(pNative != nullptr)
                     {
+                        if(EmuVkBindTraceEnabled())
+                        {
+                            printf("VKFILL| key=%p %s fill %ux%u pitch=%u "
+                                   "fmt=%u blocks=%lu registry=%p size=%zu\n",
+                                   pThis,
+                                   bSwizzled ? "swizzled" :
+                                   bCompressed ? "compressed" : "linear",
+                                   dwSourceWidth, dwSourceHeight,
+                                   pNative->Pitch, static_cast<unsigned>(Format),
+                                   static_cast<unsigned long>(blockRows),
+                                   static_cast<const void*>(&g_EmuNativeTextures),
+                                   g_EmuNativeTextures.size());
+                            fflush(stdout);
+                        }
                         if(bSwizzled)
                         {
                             XTL::EmuXGUnswizzleRect(
@@ -12912,6 +13142,21 @@ HRESULT WINAPI XTL::EmuIDirect3DSurface8_LockRect(
 
                 // Remove old lock(s)
                 pSurface8->UnlockRect();
+
+                // A writable full level-0 surface lock drops the container
+                // below (the host lock becomes authoritative), but a
+                // guest-direct Register left the host shell empty. Bake the
+                // captured bytes in before taking the lock -- the guest lock
+                // owns the resource while held, so the texture cannot be
+                // locked here afterwards.
+                if(pLink != nullptr && pLink->dwLevel == 0 && pRect == NULL &&
+                   (NewFlags & D3DLOCK_READONLY) == 0 &&
+                   cxbx::d3d8::HostBackendRenders() &&
+                   EmuFindTextureContainerLockByHost(pLink->pHostTexture) ==
+                       nullptr)
+                {
+                    EmuBakeHostTextureFromContainer(pLink->pHostTexture);
+                }
 
                 hRet = pSurface8->LockRect(pLockedRect, pRect, NewFlags);
 
