@@ -219,7 +219,7 @@ in the guest image, and route it to a host `Emu*` wrapper. The workflow:
    `FAIL` per image.
 
 2. **Add the OOVPA definition + registration entry** to the appropriate
-   version-specific `.inl` file (e.g. `src/cxbx/src/win32/CxbxKrnl/D3D8.1.0.4627.inl`),
+   version-specific `.inl` file (e.g. `src/cxbx/src/hle/dispatch/D3D8.1.0.4627.inl`),
    routed to an existing or new `Emu*` wrapper in `d3d8_emulation.cpp` /
    `include/.../d3d8_emulation.h`.
 
@@ -260,6 +260,7 @@ src/cxbx/                    Emulator launcher, core, and HLE runtime
 src/open-xdk/src/            Bundled open-xdk support libraries
 src/xiso/                    xiso disc-image host tool
 tests/                       Test assets and XBE probes
+third_party/                 Vendored host-side dependencies (dxvk, volk, Vulkan headers)
 tools/oovpa/                 OOVPA signature generator
 tools/xtest/                 Conformance-suite runner
 ```
