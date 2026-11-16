@@ -690,14 +690,13 @@ class OfflinePixelReplay:
         cls, instruction: tuple[int, ...] | list[int], source: str
     ) -> tuple[int, int, tuple[int, ...], bool]:
         if source == "c":
-            register = (
-                cls.vp_field(instruction, "c_register_high") << 2
-            ) | cls.vp_field(instruction, "c_register_low")
+            register = (cls.vp_field(instruction, "c_register_high") << 2) | cls.vp_field(
+                instruction, "c_register_low"
+            )
         else:
             register = cls.vp_field(instruction, f"{source}_register")
         swizzle = tuple(
-            cls.vp_field(instruction, f"{source}_swizzle_{component}")
-            for component in "xyzw"
+            cls.vp_field(instruction, f"{source}_swizzle_{component}") for component in "xyzw"
         )
         return (
             cls.vp_field(instruction, f"{source}_mux"),
@@ -735,9 +734,7 @@ class OfflinePixelReplay:
             if mac not in VP_SUPPORTED_MAC_OPS or ilu not in VP_SUPPORTED_ILU_OPS:
                 return None
             for source_name in self.vp_used_sources(mac, ilu):
-                mux, _register, _swizzle, _negate = self.vp_source(
-                    instruction, source_name
-                )
+                mux, _register, _swizzle, _negate = self.vp_source(instruction, source_name)
                 if mux not in (1, 2, 3):
                     return None
                 if mux == 2:
@@ -765,8 +762,7 @@ class OfflinePixelReplay:
             count = (vertex_format >> 4) & 0xF
             stride = (vertex_format >> 8) & 0xFF
             if stride == 0 or not (
-                (value_type == 2 and count in (1, 2, 3, 4))
-                or (value_type == 0 and count == 4)
+                (value_type == 2 and count in (1, 2, 3, 4)) or (value_type == 0 and count == 4)
             ):
                 return "vertex_program_input_format"
         return None
@@ -812,14 +808,11 @@ class OfflinePixelReplay:
         fog = [0.0, 0.0, 0.0, 0.0]
         point_size = [0.0, 0.0, 0.0, 0.0]
         constants = [
-            struct.unpack("<f", struct.pack("<I", word))[0]
-            for word in state.transform_constants
+            struct.unpack("<f", struct.pack("<I", word))[0] for word in state.transform_constants
         ]
         address_register = 0
 
-        def read_source(
-            instruction: list[int], source_name: str
-        ) -> list[float] | None:
+        def read_source(instruction: list[int], source_name: str) -> list[float] | None:
             mux, register, swizzle, negate = cls.vp_source(instruction, source_name)
             if mux == 1:
                 value = registers[min(register, 12)]
@@ -858,9 +851,7 @@ class OfflinePixelReplay:
             instruction = state.vertex_program[pc * 4 : pc * 4 + 4]
             mac = cls.vp_field(instruction, "mac")
             ilu = cls.vp_field(instruction, "ilu")
-            sources = {
-                name: read_source(instruction, name) for name in ("a", "b", "c")
-            }
+            sources = {name: read_source(instruction, name) for name in ("a", "b", "c")}
             if any(sources[name] is None for name in cls.vp_used_sources(mac, ilu)):
                 return None
             a = sources["a"] or [0.0] * 4
@@ -894,9 +885,7 @@ class OfflinePixelReplay:
                 if mac_mask:
                     write_masked(registers[output_register], mac_result, mac_mask)
                 if output_mask and output_mux == 0:
-                    destination = output_destination(
-                        cls.vp_field(instruction, "output_address")
-                    )
+                    destination = output_destination(cls.vp_field(instruction, "output_address"))
                     if destination is None:
                         return None
                     write_masked(destination, mac_result, output_mask)
@@ -921,9 +910,7 @@ class OfflinePixelReplay:
                 if ilu_mask:
                     write_masked(registers[ilu_register], ilu_result, ilu_mask)
                 if output_mask and output_mux == 1:
-                    destination = output_destination(
-                        cls.vp_field(instruction, "output_address")
-                    )
+                    destination = output_destination(cls.vp_field(instruction, "output_address"))
                     if destination is None:
                         return None
                     write_masked(destination, ilu_result, output_mask)
@@ -956,8 +943,14 @@ class OfflinePixelReplay:
             texture_v /= texture_q
             texture_inverse_w = texture_q * inverse_w
         return OfflineVertex(
-            position[0], position[1], position[2], position[3], color,
-            texture_u, texture_v, texture_inverse_w
+            position[0],
+            position[1],
+            position[2],
+            position[3],
+            color,
+            texture_u,
+            texture_v,
+            texture_inverse_w,
         )
 
     def read_vertex(

@@ -43,8 +43,13 @@ IMAGE_REL_I386_REL32 = 0x0014
 
 
 class Function:
-    def __init__(self, name: str, data: bytes, reloc_offsets: list[int],
-                 rel32_calls: list[tuple[int, str]] | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        data: bytes,
+        reloc_offsets: list[int],
+        rel32_calls: list[tuple[int, str]] | None = None,
+    ) -> None:
         self.name = name
         self.data = data
         self.reloc_offsets = reloc_offsets  # start offset of each relocated dword
@@ -90,7 +95,7 @@ def _iter_object_members(lib: bytes) -> Iterator[bytes]:
         name = lib[off : off + 16].rstrip()
         payload, nxt = _member_at(lib, off)
         if name not in (b"/", b"//") and len(payload) > 20:
-            machine, = struct.unpack("<H", payload[0:2])
+            (machine,) = struct.unpack("<H", payload[0:2])
             if machine == 0x014C:  # i386 object
                 yield payload
         off = nxt
@@ -123,7 +128,7 @@ def extract_function(lib: bytes, symbols: dict[str, int], sym: str) -> Function:
 
 
 def _extract_from_member(member: bytes, sym: str) -> Function | None:
-    _n_sections, = struct.unpack("<H", member[2:4])
+    (_n_sections,) = struct.unpack("<H", member[2:4])
     ptr_symtab, n_symbols = struct.unpack("<II", member[8:16])
     strtab = member[ptr_symtab + 18 * n_symbols :]
 
@@ -175,8 +180,9 @@ def _extract_from_member(member: bytes, sym: str) -> Function | None:
 # --------------------------------------------------------------------------- #
 
 
-def pick_pairs(fn: Function, want: int, max_offset: int,
-               allow_fewer: bool = False) -> list[tuple[int, int]]:
+def pick_pairs(
+    fn: Function, want: int, max_offset: int, allow_fewer: bool = False
+) -> list[tuple[int, int]]:
     """Evenly spread `want` (offset, value) pairs over the function, skipping
     relocated dwords. Offset 0 is always included (anchors the scan).
     `allow_fewer` permits tiny mostly-relocated functions (thin call stubs)
@@ -211,8 +217,12 @@ def pick_pairs(fn: Function, want: int, max_offset: int,
     return [(o, fn.data[o]) for o in picked]
 
 
-def render(name: str, pairs: list[tuple[int, int]], save_index: str = "-1",
-           xref_pairs: list[tuple[int, str]] | None = None) -> str:
+def render(
+    name: str,
+    pairs: list[tuple[int, int]],
+    save_index: str = "-1",
+    xref_pairs: list[tuple[int, str]] | None = None,
+) -> str:
     """Emit an OOVPA initializer. `xref_pairs` (offset, XREF enum name) come
     first per the matcher's convention (pairs [0..XRefCount) are XRefs);
     `save_index` is an XREF enum name for save-signatures, "-1" otherwise."""
@@ -220,12 +230,18 @@ def render(name: str, pairs: list[tuple[int, int]], save_index: str = "-1",
     count = len(xref_pairs) + len(pairs)
     max_off = max([o for o, _ in pairs] + [o for o, _ in xref_pairs])
     if pairs[-1][0] != max_off:
-        sys.exit(f"{name}: last byte pair must hold the max offset "
-                 f"(matcher uses Sovp[count-1].Offset as the scan bound)")
+        sys.exit(
+            f"{name}: last byte pair must hold the max offset "
+            f"(matcher uses Sovp[count-1].Offset as the scan bound)"
+        )
     large = max_off > 0xFF
     kind = "LOOVPA" if large else "SOOVPA"
-    lines = [f"{kind}<{count}> {name} =", "{",
-             f"    {int(large)}, {count}, {save_index}, {len(xref_pairs)},", "    {"]
+    lines = [
+        f"{kind}<{count}> {name} =",
+        "{",
+        f"    {int(large)}, {count}, {save_index}, {len(xref_pairs)},",
+        "    {",
+    ]
     rows = [f"        {{ 0x{o:02X}, {v} }}" for o, v in xref_pairs]
     rows += [f"        {{ 0x{o:02X}, 0x{v:02X} }}" for o, v in pairs]
     return "\n".join(lines) + "\n" + ",\n".join(rows) + "\n    }\n};\n"
@@ -246,8 +262,8 @@ def flat_image(path: Path) -> bytes:
     if data[e_lfanew : e_lfanew + 4] != b"PE\0\0":
         return data
     coff = e_lfanew + 4
-    n_sections, = struct.unpack("<H", data[coff + 2 : coff + 4])
-    opt_size, = struct.unpack("<H", data[coff + 16 : coff + 18])
+    (n_sections,) = struct.unpack("<H", data[coff + 2 : coff + 4])
+    (opt_size,) = struct.unpack("<H", data[coff + 16 : coff + 18])
     (size_of_image,) = struct.unpack("<I", data[coff + 20 + 56 : coff + 20 + 60])
     img = bytearray(size_of_image)
     sh0 = coff + 20 + opt_size
@@ -285,8 +301,9 @@ def find_matches(img: bytes, pairs: list[tuple[int, int]], limit: int = 64) -> l
     return out
 
 
-def count_xref_matches(img: bytes, pairs: list[tuple[int, int]],
-                       xref_off: int, internal_addr: int) -> int:
+def count_xref_matches(
+    img: bytes, pairs: list[tuple[int, int]], xref_off: int, internal_addr: int
+) -> int:
     """Simulate the engine's XRef matching: among all byte-pair matches, count
     those whose rel32 operand at xref_off resolves to internal_addr."""
     n = 0
@@ -316,19 +333,19 @@ def _xbe_vaddr_image(path: Path) -> tuple[bytes, int]:
     d = path.read_bytes()
     if d[:4] != b"XBEH":
         sys.exit(f"{path.name}: not an XBE")
-    base, = struct.unpack_from("<I", d, 0x104)
-    size, = struct.unpack_from("<I", d, 0x10C)
-    nsec, = struct.unpack_from("<I", d, 0x11C)
-    psec, = struct.unpack_from("<I", d, 0x120)
+    (base,) = struct.unpack_from("<I", d, 0x104)
+    (size,) = struct.unpack_from("<I", d, 0x10C)
+    (nsec,) = struct.unpack_from("<I", d, 0x11C)
+    (psec,) = struct.unpack_from("<I", d, 0x120)
     img = bytearray(size)
     off = psec - base
     for i in range(nsec):
-        h = d[off + 0x38 * i: off + 0x38 * (i + 1)]
+        h = d[off + 0x38 * i : off + 0x38 * (i + 1)]
         vaddr, _vsize, raw, rawsize = struct.unpack_from("<IIII", h, 4)
         n = min(rawsize, len(d) - raw)
         s = vaddr - base
         if 0 <= s < len(img) and n > 0:
-            img[s:s + min(n, len(img) - s)] = d[raw:raw + min(n, len(img) - s)]
+            img[s : s + min(n, len(img) - s)] = d[raw : raw + min(n, len(img) - s)]
     return bytes(img), base
 
 
@@ -365,14 +382,14 @@ def _disasm_banned(data: bytes, base: int, image_size: int) -> set[int]:
     except ImportError:
         banned: set[int] = set()
         for i in range(len(data) - 3):
-            v = int.from_bytes(data[i:i + 4], "little")
+            v = int.from_bytes(data[i : i + 4], "little")
             if base <= v < base + image_size or v >= 0x80000000:
                 banned.update(range(i, i + 4))
         return banned
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     md.detail = True
     banned = set()
-    for ins in md.disasm(bytes(data), 0):        # start addr 0 -> address == offset
+    for ins in md.disasm(bytes(data), 0):  # start addr 0 -> address == offset
         branch = bool({CS_GRP_JUMP, CS_GRP_CALL} & set(ins.groups))
         for op in ins.operands:
             if op.type == CS_OP_IMM:
@@ -385,7 +402,7 @@ def _disasm_banned(data: bytes, base: int, image_size: int) -> set[int]:
                 continue
             if not addr_like:
                 continue
-            idx = bytes(ins.bytes).find(val.to_bytes(4, "little"), 1)   # skip opcode byte
+            idx = bytes(ins.bytes).find(val.to_bytes(4, "little"), 1)  # skip opcode byte
             if idx >= 0:
                 banned.update(range(ins.address + idx, ins.address + idx + 4))
     return banned
@@ -405,21 +422,24 @@ def from_image_mode(args: argparse.Namespace) -> int:
     pairs = pick_pairs(fn, args.pairs, min(args.max_offset, len(data) - 1))
 
     n_src = count_matches(image, pairs)
-    corpus = [(Path(p), flat_image(Path(p)))
-              for g in args.verify for p in glob.glob(g, recursive=True)]
+    corpus = [
+        (Path(p), flat_image(Path(p))) for g in args.verify for p in glob.glob(g, recursive=True)
+    ]
     # Label by the containing game folder -- every file is "default.xbe".
     collisions = [(p.parent.name or p.name, count_matches(img, pairs)) for p, img in corpus]
 
     ok = n_src == 1 and all(c <= 1 for _, c in collisions)
-    print(f"{'OK  ' if ok else 'WARN'} {args.name}: from {src.name} @ 0x{va:08X} "
-          f"({len(data)} bytes, {len(banned) // 4}+ address operand(s) skipped); "
-          f"{n_src} match in source"
-          + (("; corpus: " + ", ".join(f"{nm}={c}" for nm, c in collisions)) if collisions else ""))
+    print(
+        f"{'OK  ' if ok else 'WARN'} {args.name}: from {src.name} @ 0x{va:08X} "
+        f"({len(data)} bytes, {len(banned) // 4}+ address operand(s) skipped); "
+        f"{n_src} match in source"
+        + (("; corpus: " + ", ".join(f"{nm}={c}" for nm, c in collisions)) if collisions else "")
+    )
     if n_src != 1:
         print(f"// !! {n_src} matches in the source -- raise --pairs / --max-offset for uniqueness")
-    snippet = (f"// image-derived from {src.name} @ 0x{va:08X} "
-               f"({len(data)} bytes)\n"
-               + render(args.name, pairs, save_index=args.save_index))
+    snippet = f"// image-derived from {src.name} @ 0x{va:08X} ({len(data)} bytes)\n" + render(
+        args.name, pairs, save_index=args.save_index
+    )
     if args.out:
         Path(args.out).write_text(snippet)
         print(f"wrote {args.out}")
@@ -441,41 +461,62 @@ _Chain = tuple[list[str], dict[Path, int], dict[Path, int], list[str]]
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Generate Cxbx OOVPA signatures from an XDK .lib, or from a "
-                    "shipped title image when the lib body differs (--from-image).")
+        "shipped title image when the lib body differs (--from-image)."
+    )
     ap.add_argument("--lib", help="XDK static library (e.g. d3d8.lib); omit with --from-image")
-    ap.add_argument("--from-image", metavar="XBE",
-                    help="derive the signature from a title's own bytes at --va "
-                         "(for LTCG / differing-body functions no lib can match)")
+    ap.add_argument(
+        "--from-image",
+        metavar="XBE",
+        help="derive the signature from a title's own bytes at --va "
+        "(for LTCG / differing-body functions no lib can match)",
+    )
     ap.add_argument("--va", help="with --from-image: the function's virtual address (0x-hex)")
     ap.add_argument("--name", help="with --from-image: the OOVPA variable name to emit")
-    ap.add_argument("--save-index", default="-1", metavar="XREF_ENUM",
-                    help="with --from-image: emit the OOVPA with this XRef save "
-                         "slot (e.g. XREF_D3D_MakeSpaceInt) so the signature "
-                         "records the matched address for XRef consumers")
     ap.add_argument(
-        "--func", action="append", default=[], metavar="SYMBOL=SIGNAME",
+        "--save-index",
+        default="-1",
+        metavar="XREF_ENUM",
+        help="with --from-image: emit the OOVPA with this XRef save "
+        "slot (e.g. XREF_D3D_MakeSpaceInt) so the signature "
+        "records the matched address for XRef consumers",
+    )
+    ap.add_argument(
+        "--func",
+        action="append",
+        default=[],
+        metavar="SYMBOL=SIGNAME",
         help="decorated symbol and the OOVPA variable name to emit (repeatable)",
     )
     ap.add_argument(
-        "--xref-func", action="append", default=[],
+        "--xref-func",
+        action="append",
+        default=[],
         metavar="SYMBOL=WRAPSIG:INTSIG:XREF_ENUM",
         help="thin-wrapper symbol whose body is byte-identical to its siblings: "
-             "auto-discovers the internal function it calls (single REL32), "
-             "emits an XRef-save signature for the internal (INTSIG, saved to "
-             "XREF_ENUM) plus an XRef-consuming signature for the wrapper "
-             "(WRAPSIG, first pair = rel32 operand vs XREF_ENUM) (repeatable)",
+        "auto-discovers the internal function it calls (single REL32), "
+        "emits an XRef-save signature for the internal (INTSIG, saved to "
+        "XREF_ENUM) plus an XRef-consuming signature for the wrapper "
+        "(WRAPSIG, first pair = rel32 operand vs XREF_ENUM) (repeatable)",
     )
     ap.add_argument(
-        "--verify-one", action="append", default=[],
+        "--verify-one",
+        action="append",
+        default=[],
         help="binary that MUST contain the function exactly once (repeatable)",
     )
     ap.add_argument(
-        "--verify", action="append", default=[],
+        "--verify",
+        action="append",
+        default=[],
         help="glob of binaries that must match at most once (repeatable)",
     )
     ap.add_argument("--pairs", type=int, default=8, help="pairs per signature (default 8)")
-    ap.add_argument("--max-offset", type=lambda v: int(v, 0), default=0xFF,
-                    help="highest offset considered (default 0xFF -> SOOVPA)")
+    ap.add_argument(
+        "--max-offset",
+        type=lambda v: int(v, 0),
+        default=0xFF,
+        help="highest offset considered (default 0xFF -> SOOVPA)",
+    )
     ap.add_argument("--out", help="write the .inl snippet here (default stdout)")
     args = ap.parse_args()
 
@@ -518,19 +559,28 @@ def main() -> int:
                 ok = False
                 failed = True
         if ok:
-            print(f"OK   {signame}: {sym} ({len(fn.data)} bytes, "
-                  f"{len(fn.reloc_offsets)} relocs, unique in "
-                  f"{len(must_imgs) + len(may_imgs)} images)")
-            snippets.append(f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n"
-                            + render(signame, pairs))
+            print(
+                f"OK   {signame}: {sym} ({len(fn.data)} bytes, "
+                f"{len(fn.reloc_offsets)} relocs, unique in "
+                f"{len(must_imgs) + len(may_imgs)} images)"
+            )
+            snippets.append(
+                f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n" + render(signame, pairs)
+            )
 
     def sig_with_suffix(signame: str, suffix: str) -> str:
-        return (signame.replace("_1_0_", f"{suffix}_1_0_")
-                if "_1_0_" in signame else signame + suffix)
+        return (
+            signame.replace("_1_0_", f"{suffix}_1_0_") if "_1_0_" in signame else signame + suffix
+        )
 
-    def resolve_chain(sym: str, signame: str, enum_name: str,
-                      target_match: str | None, depth: int,
-                      quiet: bool = False) -> _Chain | None:
+    def resolve_chain(
+        sym: str,
+        signame: str,
+        enum_name: str,
+        target_match: str | None,
+        depth: int,
+        quiet: bool = False,
+    ) -> _Chain | None:
         """Build the XRef chain for `sym` bottom-up. Returns
         (snippets, addr_by_must_image, addr_by_may_image, enum_names) or None
         on failure. A level that is byte-unique ends the chain; a colliding
@@ -552,12 +602,15 @@ def main() -> int:
             if result is not None:
                 return result
         if not quiet:
-            print(f"FAIL {signame}: no archive copy of {sym} "
-                  f"({len(copies)} tried) verified against the images")
+            print(
+                f"FAIL {signame}: no archive copy of {sym} "
+                f"({len(copies)} tried) verified against the images"
+            )
         return None
 
-    def _resolve_chain_copy(fn: Function, signame: str, enum_name: str,
-                            target_match: str | None, depth: int) -> _Chain | None:
+    def _resolve_chain_copy(
+        fn: Function, signame: str, enum_name: str, target_match: str | None, depth: int
+    ) -> _Chain | None:
         sym = fn.name
         pairs = pick_pairs(fn, args.pairs, args.max_offset)
 
@@ -567,17 +620,22 @@ def main() -> int:
         # CDirectSoundBuffer 3D setters, 5-6 twins each).
         must_hits = {p: find_matches(img, pairs, limit=16) for p, img in must_imgs}
         may_hits = {p: find_matches(img, pairs, limit=16) for p, img in may_imgs}
-        byte_unique = (all(len(h) == 1 for h in must_hits.values())
-                       and all(len(h) <= 1 for h in may_hits.values()))
+        byte_unique = all(len(h) == 1 for h in must_hits.values()) and all(
+            len(h) <= 1 for h in may_hits.values()
+        )
 
         if byte_unique:
-            snip = (f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n"
-                    f"// XRef-save signature (chain leaf, byte-unique).\n"
-                    + render(signame, pairs, save_index=enum_name))
-            return ([snip],
-                    {p: h[0] for p, h in must_hits.items()},
-                    {p: h[0] for p, h in may_hits.items() if h},
-                    [enum_name])
+            snip = (
+                f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes)\n"
+                f"// XRef-save signature (chain leaf, byte-unique).\n"
+                + render(signame, pairs, save_index=enum_name)
+            )
+            return (
+                [snip],
+                {p: h[0] for p, h in must_hits.items()},
+                {p: h[0] for p, h in may_hits.items() if h},
+                [enum_name],
+            )
 
         # Not byte-unique: discriminate by a callee, tail call first.
         calls = list(reversed(fn.rel32_calls))
@@ -587,8 +645,14 @@ def main() -> int:
             return None
 
         for xref_off, callee_sym in calls:
-            child = resolve_chain(callee_sym, sig_with_suffix(signame, "T"),
-                                  enum_name + "_T", None, depth + 1, quiet=True)
+            child = resolve_chain(
+                callee_sym,
+                sig_with_suffix(signame, "T"),
+                enum_name + "_T",
+                None,
+                depth + 1,
+                quiet=True,
+            )
             if child is None:
                 continue
             child_snips, child_must, child_may, child_enums = child
@@ -596,9 +660,18 @@ def main() -> int:
             must_addr = {}
             ok = True
             for p, img in must_imgs:
-                cands = [b for b in must_hits[p]
-                         if (int.from_bytes(img[b + xref_off : b + xref_off + 4], "little")
-                             + b + xref_off + 4) & 0xFFFFFFFF == child_must[p]]
+                cands = [
+                    b
+                    for b in must_hits[p]
+                    if (
+                        int.from_bytes(img[b + xref_off : b + xref_off + 4], "little")
+                        + b
+                        + xref_off
+                        + 4
+                    )
+                    & 0xFFFFFFFF
+                    == child_must[p]
+                ]
                 if len(cands) != 1:
                     ok = False
                     break
@@ -609,9 +682,18 @@ def main() -> int:
             for p, img in may_imgs:
                 if p not in child_may:
                     continue
-                cands = [b for b in may_hits[p]
-                         if (int.from_bytes(img[b + xref_off : b + xref_off + 4], "little")
-                             + b + xref_off + 4) & 0xFFFFFFFF == child_may[p]]
+                cands = [
+                    b
+                    for b in may_hits[p]
+                    if (
+                        int.from_bytes(img[b + xref_off : b + xref_off + 4], "little")
+                        + b
+                        + xref_off
+                        + 4
+                    )
+                    & 0xFFFFFFFF
+                    == child_may[p]
+                ]
                 if len(cands) > 1:
                     ok = False
                     break
@@ -620,13 +702,15 @@ def main() -> int:
             if not ok:
                 continue
 
-            snip = (f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes; "
-                    f"call@0x{xref_off:02X} {callee_sym} -> {enum_name}_T)\n"
-                    f"// XRef chain level: saved to {enum_name}, discriminated by callee.\n"
-                    + render(signame, pairs, save_index=enum_name,
-                             xref_pairs=[(xref_off, enum_name + "_T")]))
-            return ([*child_snips, snip], must_addr, may_addr,
-                    [*child_enums, enum_name])
+            snip = (
+                f"// {sym} ({Path(args.lib).name}, {len(fn.data)} bytes; "
+                f"call@0x{xref_off:02X} {callee_sym} -> {enum_name}_T)\n"
+                f"// XRef chain level: saved to {enum_name}, discriminated by callee.\n"
+                + render(
+                    signame, pairs, save_index=enum_name, xref_pairs=[(xref_off, enum_name + "_T")]
+                )
+            )
+            return ([*child_snips, snip], must_addr, may_addr, [*child_enums, enum_name])
 
         return None
 
@@ -635,8 +719,9 @@ def main() -> int:
         sym, _, rest = spec.partition("=")
         parts = rest.split(":")
         if len(parts) not in (3, 4):
-            sys.exit("--xref-func needs SYMBOL=WRAPSIG:INTSIG:XREF_ENUM[:TARGETMATCH], "
-                     f"got: {spec}")
+            sys.exit(
+                f"--xref-func needs SYMBOL=WRAPSIG:INTSIG:XREF_ENUM[:TARGETMATCH], got: {spec}"
+            )
         wrapsig, intsig, xref_enum = parts[:3]
         target_match = parts[3] if len(parts) == 4 else None
 
@@ -645,9 +730,11 @@ def main() -> int:
         if target_match is not None:
             calls = [c for c in calls if target_match in c[1]]
         if len(calls) != 1:
-            sys.exit(f"{sym}: need exactly 1 discriminating REL32 call"
-                     f"{f' matching {target_match!r}' if target_match else ''}, found "
-                     f"{len(calls)}: {calls or wrapper.rel32_calls}")
+            sys.exit(
+                f"{sym}: need exactly 1 discriminating REL32 call"
+                f"{f' matching {target_match!r}' if target_match else ''}, found "
+                f"{len(calls)}: {calls or wrapper.rel32_calls}"
+            )
         xref_off, internal_sym = calls[0]
 
         chain = resolve_chain(internal_sym, intsig, xref_enum, None, 1)
@@ -673,14 +760,17 @@ def main() -> int:
                     failed = True
         if ok:
             depth_note = f" (chain depth {len(chain_enums)})" if len(chain_enums) > 1 else ""
-            print(f"OK   {wrapsig}: {sym} ({len(wrapper.data)} bytes) "
-                  f"-> call@0x{xref_off:02X} {internal_sym} [{xref_enum}]{depth_note}")
+            print(
+                f"OK   {wrapsig}: {sym} ({len(wrapper.data)} bytes) "
+                f"-> call@0x{xref_off:02X} {internal_sym} [{xref_enum}]{depth_note}"
+            )
             all_chain_enums.extend(chain_enums)
             snippets.extend(chain_snips)
             snippets.append(
                 f"// {sym} ({Path(args.lib).name}, {len(wrapper.data)} bytes; "
                 f"call@0x{xref_off:02X} -> {xref_enum})\n"
-                + render(wrapsig, wrap_pairs, xref_pairs=[(xref_off, xref_enum)]))
+                + render(wrapsig, wrap_pairs, xref_pairs=[(xref_off, xref_enum)])
+            )
 
     if all_chain_enums:
         print("\nREQUIRED XREF ENUM ENTRIES (add to hle_database.h + .cpp array):")

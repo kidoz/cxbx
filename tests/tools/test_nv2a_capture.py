@@ -776,9 +776,7 @@ class Nv2aCaptureTests(unittest.TestCase):
 
         state.vertex_program[1] &= ~(0xF << 21)
         state.vertex_program[1] |= 6 << 21
-        self.assertEqual(
-            backend.vertex_program_unsupported_reason(state), "vertex_program_shape"
-        )
+        self.assertEqual(backend.vertex_program_unsupported_reason(state), "vertex_program_shape")
 
     def test_accepts_diffuse_and_final_passthrough_combiners(self) -> None:
         state = nv2a_capture.PgraphReplayState()

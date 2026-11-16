@@ -32,10 +32,8 @@ class CaptureResultTests(unittest.TestCase):
         self.assertFalse(failure["saved"])
         shots = [
             failure,
-            {"saved": True, "path": "flat.png", "sampled_colors": 2,
-             "nonblack_fraction": 0.9},
-            {"saved": True, "path": "scene.png", "sampled_colors": 80,
-             "nonblack_fraction": 0.2},
+            {"saved": True, "path": "flat.png", "sampled_colors": 2, "nonblack_fraction": 0.9},
+            {"saved": True, "path": "scene.png", "sampled_colors": 80, "nonblack_fraction": 0.2},
         ]
         best = run_title.select_representative_shot(shots)
         assert best is not None
@@ -52,14 +50,16 @@ class CaptureResultTests(unittest.TestCase):
 
 class LogSummaryTests(unittest.TestCase):
     def test_structured_graphics_summary(self) -> None:
-        text = "\n".join([
-            "NVDRAW| frame=3 draw=0 clear op=0x0 count=0",
-            "NVDRAW| frame=3 draw=4 inline op=0x5 count=3",
-            "NVCRC| frame=3 addr=0x01588000 w=640 h=480 crc=0x89ABCDEF",
-            "Emu: NV2A overlay received visible pixels (first=1)",
-            "*Warning* sample",
-            "EXC| sample",
-        ])
+        text = "\n".join(
+            [
+                "NVDRAW| frame=3 draw=0 clear op=0x0 count=0",
+                "NVDRAW| frame=3 draw=4 inline op=0x5 count=3",
+                "NVCRC| frame=3 addr=0x01588000 w=640 h=480 crc=0x89ABCDEF",
+                "Emu: NV2A overlay received visible pixels (first=1)",
+                "*Warning* sample",
+                "EXC| sample",
+            ]
+        )
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "run.log"
             log.write_text(text, encoding="utf-8")

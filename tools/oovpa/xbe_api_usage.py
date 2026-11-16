@@ -41,7 +41,7 @@ BRANCH = ("call", "jmp")
 
 
 class Xbe:
-    base: int            # struct.unpack_from yields Any; pin the header scalars
+    base: int  # struct.unpack_from yields Any; pin the header scalars
     kernel_thunk: int
 
     def __init__(self, path: Path) -> None:
@@ -49,23 +49,23 @@ class Xbe:
         if d[:4] != b"XBEH":
             sys.exit(f"{path.name}: not an XBE")
         self.path = path
-        self.base, = struct.unpack_from("<I", d, 0x104)
-        size, = struct.unpack_from("<I", d, 0x10C)
-        nsec, = struct.unpack_from("<I", d, 0x11C)
-        psec, = struct.unpack_from("<I", d, 0x120)
-        self.kernel_thunk, = struct.unpack_from("<I", d, 0x158)
+        (self.base,) = struct.unpack_from("<I", d, 0x104)
+        (size,) = struct.unpack_from("<I", d, 0x10C)
+        (nsec,) = struct.unpack_from("<I", d, 0x11C)
+        (psec,) = struct.unpack_from("<I", d, 0x120)
+        (self.kernel_thunk,) = struct.unpack_from("<I", d, 0x158)
 
         img = bytearray(size)
         self.sections: dict[str, tuple[int, int]] = {}
         off = psec - self.base
         for i in range(nsec):
-            h = d[off + 0x38 * i: off + 0x38 * (i + 1)]
+            h = d[off + 0x38 * i : off + 0x38 * (i + 1)]
             vaddr, vsize, raw, rawsize = struct.unpack_from("<IIII", h, 4)
-            pname, = struct.unpack_from("<I", h, 0x14)
+            (pname,) = struct.unpack_from("<I", h, 0x14)
             end = d.find(b"\0", pname - self.base)
-            name = d[pname - self.base:end].decode("ascii", "replace")
+            name = d[pname - self.base : end].decode("ascii", "replace")
             n = min(rawsize, len(d) - raw)
-            img[vaddr - self.base: vaddr - self.base + n] = d[raw: raw + n]
+            img[vaddr - self.base : vaddr - self.base + n] = d[raw : raw + n]
             self.sections[name] = (vaddr, vaddr + vsize)
         self.data = bytes(img)
 
@@ -76,8 +76,9 @@ class Xbe:
         return va - self.base
 
 
-def scan_calls(xbe: Xbe, target: tuple[int, int],
-               exclude: tuple[int, int]) -> list[tuple[int, int, str]]:
+def scan_calls(
+    xbe: Xbe, target: tuple[int, int], exclude: tuple[int, int]
+) -> list[tuple[int, int, str]]:
     """Every (caller_va, target_va) where code outside `exclude` branches into
     `target`. Linear disassembly of an entire image mis-decodes some data, so a hit
     is only trusted when the target lands on a plausible function start -- i.e. the
@@ -89,8 +90,8 @@ def scan_calls(xbe: Xbe, target: tuple[int, int],
 
     for name, (s_lo, s_hi) in xbe.sections.items():
         if s_lo >= ex_lo and s_hi <= ex_hi:
-            continue                       # inside the library itself: not a caller
-        blob = xbe.data[xbe.off(s_lo):xbe.off(s_hi)]
+            continue  # inside the library itself: not a caller
+        blob = xbe.data[xbe.off(s_lo) : xbe.off(s_hi)]
         for ins in MD.disasm(blob, s_lo):
             if ins.mnemonic not in BRANCH:
                 continue
@@ -113,12 +114,19 @@ def scan_calls(xbe: Xbe, target: tuple[int, int],
 def main() -> int:
     ap = argparse.ArgumentParser(description="Which library APIs does a title call?")
     ap.add_argument("xbe")
-    ap.add_argument("--section", action="append", default=[],
-                    help="library code section (default: every RWX/R-X library section)")
-    ap.add_argument("--located", help="file of 0x-addresses already covered by an "
-                                      "OOVPA table; reports the uncovered gap")
-    ap.add_argument("--kernel", action="store_true",
-                    help="also dump the kernel import ordinals the title links")
+    ap.add_argument(
+        "--section",
+        action="append",
+        default=[],
+        help="library code section (default: every RWX/R-X library section)",
+    )
+    ap.add_argument(
+        "--located",
+        help="file of 0x-addresses already covered by an OOVPA table; reports the uncovered gap",
+    )
+    ap.add_argument(
+        "--kernel", action="store_true", help="also dump the kernel import ordinals the title links"
+    )
     args = ap.parse_args()
 
     xbe = Xbe(Path(args.xbe))
@@ -145,8 +153,9 @@ def main() -> int:
         callers_by_sec = Counter(s for _c, _t, s in hits)
 
         print(f"\n=== section {sec}  0x{lo:08X}..0x{hi:08X}")
-        print(f"    {len(targets)} distinct entry points called from outside, "
-              f"{len(hits)} call sites")
+        print(
+            f"    {len(targets)} distinct entry points called from outside, {len(hits)} call sites"
+        )
         print(f"    callers: {dict(callers_by_sec)}")
 
         if located:

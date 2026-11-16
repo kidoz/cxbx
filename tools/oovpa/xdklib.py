@@ -108,7 +108,7 @@ def discover(rescan: bool = False) -> dict[str, Path]:
             got = {v: Path(p) for v, p in cached.items()}
             if got and all(p.is_dir() for p in got.values()):
                 return got
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
     found: dict[str, Path] = {}
     for root in DEFAULT_ROOTS:
@@ -136,8 +136,7 @@ def pick_version(versions: dict[str, Path], want: str) -> tuple[str, Path]:
     pref = [v for v in versions if v.startswith(want)]
     if len(pref) == 1:
         return pref[0], versions[pref[0]]
-    sys.exit(f"unknown --version {want!r}; have: "
-             + " ".join(sorted(versions, key=_version_key)))
+    sys.exit(f"unknown --version {want!r}; have: " + " ".join(sorted(versions, key=_version_key)))
 
 
 def lib_path(libdir: Path, name: str) -> Path:
@@ -165,7 +164,7 @@ def safe_extract(lib: bytes, symbols: dict[str, int], sym: str) -> Function | No
     try:
         member, _ = _member_at(lib, off)
         return _extract_from_member(member, sym)
-    except (struct.error, IndexError, ValueError):
+    except struct.error, IndexError, ValueError:
         return None
 
 
@@ -218,8 +217,9 @@ def exact_matches(img: bytes, fn: Function, limit: int = 8) -> list[int]:
     return out
 
 
-def _score(img: bytes, base: int, fn: Function,
-           runs: list[tuple[int, int]], total: int) -> tuple[int, float]:
+def _score(
+    img: bytes, base: int, fn: Function, runs: list[tuple[int, int]], total: int
+) -> tuple[int, float]:
     """(first unmasked divergence offset, matched fraction of unmasked bytes)
     for the body laid at image offset `base`. Divergence == len(data) means a
     full match. Runs past the divergence still count toward the fraction, so a
@@ -312,8 +312,9 @@ def cmd_libs(args: argparse.Namespace) -> int:
     return 0
 
 
-def _iter_libs(versions: dict[str, Path], only_version: str | None,
-               only_lib: str | None) -> Iterator[tuple[str, Path]]:
+def _iter_libs(
+    versions: dict[str, Path], only_version: str | None, only_lib: str | None
+) -> Iterator[tuple[str, Path]]:
     labels = sorted(versions, key=_version_key)
     if only_version:
         labels = [pick_version(versions, only_version)[0]]
@@ -343,7 +344,7 @@ def cmd_find(args: argparse.Namespace) -> int:
         try:
             lib = f.read_bytes()
             symbols = _first_linker_member(lib)
-        except (OSError, SystemExit):
+        except OSError, SystemExit:
             continue
         for sym in symbols:
             if not match(sym):
@@ -376,12 +377,13 @@ def cmd_body(args: argparse.Namespace) -> int:
     banned: set[int] = set()
     for r in fn.reloc_offsets:
         banned.update(range(r, r + 4))
-    print(f"{args.sym}  [{v} {f.name}]  {len(fn.data)} bytes, "
-          f"{len(fn.reloc_offsets)} relocs, masked-hash {masked_hash(fn)}")
+    print(
+        f"{args.sym}  [{v} {f.name}]  {len(fn.data)} bytes, "
+        f"{len(fn.reloc_offsets)} relocs, masked-hash {masked_hash(fn)}"
+    )
     for off in range(0, len(fn.data), 16):
         row = fn.data[off : off + 16]
-        hexs = " ".join("??" if off + i in banned else f"{b:02X}"
-                        for i, b in enumerate(row))
+        hexs = " ".join("??" if off + i in banned else f"{b:02X}" for i, b in enumerate(row))
         print(f"  +0x{off:04X}  {hexs}")
     for off, target in fn.rel32_calls:
         print(f"  rel32 @ +0x{off:04X} -> {target}")
@@ -409,9 +411,11 @@ def cmd_diff(args: argparse.Namespace) -> int:
             sys.exit(f"{args.sym}: not found in {f.name} ({v})")
         fns.append((v, fn))
     (va, fa), (vb, fb) = fns[0], fns[1]
-    print(f"{args.sym}: {va}={len(fa.data)}B/{len(fa.reloc_offsets)}r "
-          f"h={masked_hash(fa)}  {vb}={len(fb.data)}B/{len(fb.reloc_offsets)}r "
-          f"h={masked_hash(fb)}")
+    print(
+        f"{args.sym}: {va}={len(fa.data)}B/{len(fa.reloc_offsets)}r "
+        f"h={masked_hash(fa)}  {vb}={len(fb.data)}B/{len(fb.reloc_offsets)}r "
+        f"h={masked_hash(fb)}"
+    )
     banned: set[int] = set()
     for fn in (fa, fb):
         for r in fn.reloc_offsets:
@@ -442,8 +446,10 @@ def cmd_match(args: argparse.Namespace) -> int:
     if fn is None:
         sys.exit(f"{args.sym}: not a code symbol in {f.name} ({v})")
     img, base = load_image(Path(args.image))
-    print(f"{args.sym}  [{v} {f.name}]  {len(fn.data)} bytes vs "
-          f"{Path(args.image).name} ({len(img)} bytes, base 0x{base:08X})")
+    print(
+        f"{args.sym}  [{v} {f.name}]  {len(fn.data)} bytes vs "
+        f"{Path(args.image).name} ({len(img)} bytes, base 0x{base:08X})"
+    )
 
     hits = exact_matches(img, fn)
     for h in hits:
@@ -457,13 +463,23 @@ def cmd_match(args: argparse.Namespace) -> int:
         return 1
     for off, diverge, frac in ranked:
         state = "full" if diverge >= len(fn.data) else f"diverges at +0x{diverge:X}"
-        print(f"  CAND   0x{base + off:08X}  prefix {state}, "
-              f"{frac * 100:.0f}% of unmasked bytes match")
+        print(
+            f"  CAND   0x{base + off:08X}  prefix {state}, "
+            f"{frac * 100:.0f}% of unmasked bytes match"
+        )
     return 0 if hits else 1
 
 
-_SKIP_PREFIXES = ("__imp_", "__IMPORT_DESCRIPTOR", "__NULL_", "??_C", "??_7",
-                  "??_R", "__real@", "__xmm@")
+_SKIP_PREFIXES = (
+    "__imp_",
+    "__IMPORT_DESCRIPTOR",
+    "__NULL_",
+    "??_C",
+    "??_7",
+    "??_R",
+    "__real@",
+    "__xmm@",
+)
 
 
 def cmd_map(args: argparse.Namespace) -> int:
@@ -523,8 +539,7 @@ def cmd_map(args: argparse.Namespace) -> int:
             got = (base + off + rel_off + 4 + rel) & 0xFFFFFFFF
             if got != tgt:
                 bad += 1
-                marks.append(f"call@+0x{rel_off:X}->{callee} encodes 0x{got:08X} "
-                             f"not 0x{tgt:08X}")
+                marks.append(f"call@+0x{rel_off:X}->{callee} encodes 0x{got:08X} not 0x{tgt:08X}")
         verdicts[syms[0]] = "; ".join(marks)
 
     out_lines = []
@@ -538,19 +553,25 @@ def cmd_map(args: argparse.Namespace) -> int:
     else:
         print(text)
 
-    print(f"\n{f.name} ({v}) vs {Path(args.image).name}: "
-          f"{len(mapped)} unique, {len(ambiguous)} ambiguous, {missing} absent "
-          f"of {len(bodies)} distinct bodies "
-          f"({skipped_small} under {args.min_size}B and {skipped_data} data/alias skipped)")
+    print(
+        f"\n{f.name} ({v}) vs {Path(args.image).name}: "
+        f"{len(mapped)} unique, {len(ambiguous)} ambiguous, {missing} absent "
+        f"of {len(bodies)} distinct bodies "
+        f"({skipped_small} under {args.min_size}B and {skipped_data} data/alias skipped)"
+    )
     if checked:
-        print(f"call-graph cross-check: {checked - bad}/{checked} rel32 edges consistent"
-              + ("  (!! = suspect match)" if bad else ""))
+        print(
+            f"call-graph cross-check: {checked - bad}/{checked} rel32 edges consistent"
+            + ("  (!! = suspect match)" if bad else "")
+        )
     if ambiguous and args.verbose:
         print("\nambiguous:")
         for fn, syms, hits in ambiguous:
             where = " ".join(f"0x{base + h:08X}" for h in hits)
-            print(f"  {' / '.join(syms[:3])}{' ...' if len(syms) > 3 else ''} "
-                  f"({len(fn.data)}B) at {where}")
+            print(
+                f"  {' / '.join(syms[:3])}{' ...' if len(syms) > 3 else ''} "
+                f"({len(fn.data)}B) at {where}"
+            )
     return 0
 
 
@@ -592,8 +613,9 @@ def self_test() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--rescan", action="store_true",
-                    help="rediscover XDK roots (ignore the cached index)")
+    ap.add_argument(
+        "--rescan", action="store_true", help="rediscover XDK roots (ignore the cached index)"
+    )
     ap.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd")
 
@@ -606,8 +628,11 @@ def main() -> int:
     sp.add_argument("pattern", help="substring (case-insensitive) or re:<regex>")
     sp.add_argument("--lib", help="restrict to one library (e.g. d3d8)")
     sp.add_argument("--version", help="restrict to one XDK version")
-    sp.add_argument("--bodies", action="store_true",
-                    help="extract each body: size + masked hash (identity groups)")
+    sp.add_argument(
+        "--bodies",
+        action="store_true",
+        help="extract each body: size + masked hash (identity groups)",
+    )
 
     sp = sub.add_parser("body", help="hexdump one function body")
     sp.add_argument("--version", required=True)
@@ -625,15 +650,17 @@ def main() -> int:
     sp.add_argument("--lib", required=True)
     sp.add_argument("--sym", required=True)
     sp.add_argument("--image", required=True)
-    sp.add_argument("--fuzzy", action="store_true",
-                    help="also rank prefix matches + first divergence offset")
+    sp.add_argument(
+        "--fuzzy", action="store_true", help="also rank prefix matches + first divergence offset"
+    )
 
     sp = sub.add_parser("map", help="match every code symbol against an image")
     sp.add_argument("--version", required=True)
     sp.add_argument("--lib", required=True)
     sp.add_argument("--image", required=True)
-    sp.add_argument("--min-size", type=int, default=24,
-                    help="skip bodies smaller than this (default 24)")
+    sp.add_argument(
+        "--min-size", type=int, default=24, help="skip bodies smaller than this (default 24)"
+    )
     sp.add_argument("--filter", help="only symbols containing this substring")
     sp.add_argument("--out", help="write the NAME/VA map here")
     sp.add_argument("--verbose", action="store_true", help="also list ambiguous bodies")
@@ -645,8 +672,13 @@ def main() -> int:
         ap.print_help()
         return 2
     return {
-        "versions": cmd_versions, "libs": cmd_libs, "find": cmd_find,
-        "body": cmd_body, "diff": cmd_diff, "match": cmd_match, "map": cmd_map,
+        "versions": cmd_versions,
+        "libs": cmd_libs,
+        "find": cmd_find,
+        "body": cmd_body,
+        "diff": cmd_diff,
+        "match": cmd_match,
+        "map": cmd_map,
     }[args.cmd](args)
 
 

@@ -33,8 +33,9 @@ def find_base(f: BinaryIO) -> int:
     sys.exit("xiso_extract: no XDVDFS volume descriptor found (not an Xbox ISO?)")
 
 
-def walk_dir(f: BinaryIO, base: int, dir_sector: int, dir_size: int,
-             prefix: str = "") -> list[tuple[str, int, int]]:
+def walk_dir(
+    f: BinaryIO, base: int, dir_sector: int, dir_size: int, prefix: str = ""
+) -> list[tuple[str, int, int]]:
     """Left/right binary-tree of directory entries; returns [(path, sector, size)]
     for files (directories are recursed into)."""
     f.seek(base + dir_sector * SECTOR)
@@ -52,12 +53,12 @@ def walk_dir(f: BinaryIO, base: int, dir_sector: int, dir_size: int,
         nlen = data[off * 4 + 13]
         if left == 0xFFFF and right == 0xFFFF:
             continue
-        name = data[off * 4 + 14: off * 4 + 14 + nlen].decode("ascii", "replace")
+        name = data[off * 4 + 14 : off * 4 + 14 + nlen].decode("ascii", "replace")
         if left:
             stack.append(left)
         if right:
             stack.append(right)
-        if attr & 0x10:                       # directory
+        if attr & 0x10:  # directory
             if size:
                 entries += walk_dir(f, base, sector, size, prefix + name + "/")
         else:
@@ -86,14 +87,22 @@ def extract_one(f: BinaryIO, base: int, sector: int, size: int, out: Path) -> No
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="xiso_extract",
-                                 description="List or extract files from an Xbox ISO.")
+    ap = argparse.ArgumentParser(
+        prog="xiso_extract", description="List or extract files from an Xbox ISO."
+    )
     ap.add_argument("iso", help="Xbox ISO (XDVDFS) image")
-    ap.add_argument("dest", nargs="?", default=None,
-                    help="output directory (default: <iso-stem>/ next to the iso)")
+    ap.add_argument(
+        "dest",
+        nargs="?",
+        default=None,
+        help="output directory (default: <iso-stem>/ next to the iso)",
+    )
     ap.add_argument("--list", action="store_true", help="list contents, don't extract")
-    ap.add_argument("--file", metavar="NAME",
-                    help="extract only entries whose path ends with NAME (e.g. default.xbe)")
+    ap.add_argument(
+        "--file",
+        metavar="NAME",
+        help="extract only entries whose path ends with NAME (e.g. default.xbe)",
+    )
     ap.add_argument("-o", "--out", help="output path/dir for --file (default: dest or cwd)")
     args = ap.parse_args(argv)
 
@@ -118,8 +127,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sys.exit(f"xiso_extract: no entry matching {args.file!r}")
             outbase = Path(args.out) if args.out else (Path(args.dest) if args.dest else Path("."))
             for name, sector, size in matched:
-                out = outbase / Path(name).name if len(matched) == 1 and outbase.suffix == "" \
+                out = (
+                    outbase / Path(name).name
+                    if len(matched) == 1 and outbase.suffix == ""
                     else (outbase if outbase.suffix else outbase / name)
+                )
                 extract_one(f, base, sector, size, out)
                 print(f"  extracted {name} ({size:,} bytes) -> {out}")
             return 0

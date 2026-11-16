@@ -48,10 +48,8 @@ GUEST_IMAGE = "default.exe"
 PROFILES = {
     "raw": {},
     "default": {"CXBX_FS_SWAP": "1", "CXBX_SURVIVE_BUGCHECK": "1"},
-    "nv2a": {"CXBX_FS_SWAP": "1", "CXBX_SURVIVE_BUGCHECK": "1",
-              "CXBX_NV2A_RASTER": "1"},
-    "trace": {"CXBX_FS_SWAP": "1", "CXBX_SURVIVE_BUGCHECK": "1",
-              "CXBX_EXC_TRACE": "1"},
+    "nv2a": {"CXBX_FS_SWAP": "1", "CXBX_SURVIVE_BUGCHECK": "1", "CXBX_NV2A_RASTER": "1"},
+    "trace": {"CXBX_FS_SWAP": "1", "CXBX_SURVIVE_BUGCHECK": "1", "CXBX_EXC_TRACE": "1"},
 }
 
 # Bring-up environments keyed by XBE title id (8 hex digits, lowercase).
@@ -67,17 +65,21 @@ TITLE_PROFILES: dict[str, dict[str, str]] = {
     # binds SZ-format textures whose data lands linearly in emulated VRAM (the
     # PFB-tiling swizzle step real hardware performs on CPU uploads is not
     # modeled), so the sampler must not deswizzle.
-    "534e0004": {"CXBX_HLE_SKIP": "XONLINES",
-                 "CXBX_SURVIVE_THREAD_FAULT": "1",
-                 "CXBX_NVNET_IRQ": "1",
-                 "CXBX_NV2A_TEXTURE_LINEAR": "1"},
+    "534e0004": {
+        "CXBX_HLE_SKIP": "XONLINES",
+        "CXBX_SURVIVE_THREAD_FAULT": "1",
+        "CXBX_NVNET_IRQ": "1",
+        "CXBX_NV2A_TEXTURE_LINEAR": "1",
+    },
     # King of Fighters 2002 (SN-006): same SNK engine and 5849 XDK as SN-004,
     # so it inherits the same boot gates and the linear read for its
     # SZ-format CPU texture uploads.
-    "534e0006": {"CXBX_HLE_SKIP": "XONLINES",
-                 "CXBX_SURVIVE_THREAD_FAULT": "1",
-                 "CXBX_NVNET_IRQ": "1",
-                 "CXBX_NV2A_TEXTURE_LINEAR": "1"},
+    "534e0006": {
+        "CXBX_HLE_SKIP": "XONLINES",
+        "CXBX_SURVIVE_THREAD_FAULT": "1",
+        "CXBX_NVNET_IRQ": "1",
+        "CXBX_NV2A_TEXTURE_LINEAR": "1",
+    },
 }
 # Backbuffer/scanout dumps the emulator writes to %TEMP% (ground truth for
 # "what did it render", unlike PrintWindow which can come back black).
@@ -111,15 +113,20 @@ def resolve_xbe(repo: Path, target: str) -> Path:
     p = Path(target)
     if p.suffix.lower() == ".xbe" and p.is_file():
         return p.resolve()
-    for cand in (p, p / "default.xbe",
-                 repo / "other" / "games" / target,
-                 repo / "other" / "games" / target / "default.xbe"):
+    for cand in (
+        p,
+        p / "default.xbe",
+        repo / "other" / "games" / target,
+        repo / "other" / "games" / target / "default.xbe",
+    ):
         if cand.is_file():
             return cand.resolve()
         if cand.is_dir() and (cand / "default.xbe").is_file():
             return (cand / "default.xbe").resolve()
-    die(f"could not resolve a default.xbe from {target!r} "
-        "(pass an .xbe, a folder, or a name under other/games/)")
+    die(
+        f"could not resolve a default.xbe from {target!r} "
+        "(pass an .xbe, a folder, or a name under other/games/)"
+    )
 
 
 def slugify(name: str) -> str:
@@ -163,10 +170,11 @@ def read_xbe_info(path: Path) -> dict[str, Any]:
         name_off = va_to_header_file(name_addr)
         if name_off is not None:
             end = data.find(b"\0", name_off, min(header_size, len(data)))
-            name = data[name_off:end if end >= 0 else min(header_size, len(data))].decode("latin1")
+            name = data[name_off : end if end >= 0 else min(header_size, len(data))].decode(
+                "latin1"
+            )
         sections.append({"name": name, "vaddr": vaddr, "vsize": vsize})
-    return {"base": base, "image_size": image_size, "title_id": title_id,
-            "sections": sections}
+    return {"base": base, "image_size": image_size, "title_id": title_id, "sections": sections}
 
 
 def write_symbol_sidecar(outdir: Path, xbe: Path, logpath: Path, repo: Path) -> Path:
@@ -178,8 +186,10 @@ def write_symbol_sidecar(outdir: Path, xbe: Path, logpath: Path, repo: Path) -> 
     """
     info = read_xbe_info(xbe)
     lines: list[str] = [f"# CXBX symbol sidecar for {xbe}"]
-    lines.append(f"title_id {info['title_id']:#010x} base {info['base']:#x} "
-                 f"image_size {info['image_size']:#x}")
+    lines.append(
+        f"title_id {info['title_id']:#010x} base {info['base']:#x} "
+        f"image_size {info['image_size']:#x}"
+    )
     for s in info["sections"]:
         lines.append(f"section {s['name']:10s} {s['vaddr']:#010x}..{s['vaddr'] + s['vsize']:#010x}")
 
@@ -193,8 +203,11 @@ def write_symbol_sidecar(outdir: Path, xbe: Path, logpath: Path, repo: Path) -> 
             if m:
                 library = m.group(1)
                 continue
-            m = re.match(r"HLE\| (patch|miss) entry=(\d+) addr=0x([0-9A-Fa-f]+)"
-                         r"(?: redirect=0x([0-9A-Fa-f]+))?", line)
+            m = re.match(
+                r"HLE\| (patch|miss) entry=(\d+) addr=0x([0-9A-Fa-f]+)"
+                r"(?: redirect=0x([0-9A-Fa-f]+))?",
+                line,
+            )
             if m:
                 patches += 1
                 kind, entry, addr, redirect = m.groups()
@@ -210,8 +223,9 @@ def write_symbol_sidecar(outdir: Path, xbe: Path, logpath: Path, repo: Path) -> 
     symbols = 0
     if oracle.is_file():
         try:
-            out = subprocess.run([str(oracle), str(xbe)], capture_output=True,
-                                 text=True, timeout=120, check=True).stdout
+            out = subprocess.run(
+                [str(oracle), str(xbe)], capture_output=True, text=True, timeout=120, check=True
+            ).stdout
             for line in out.splitlines():
                 m = re.match(r"(\S+) = (0x[0-9A-Fa-f]+)", line)
                 if m:
@@ -259,32 +273,34 @@ def child_guest_pid(parent_pid: int, guest_image: str = GUEST_IMAGE) -> int | No
     alone -- so a concurrent unrelated Cxbx session is never touched). The
     launcher names the temp exe after the XBE stem (default.xbe -> default.exe,
     evoxdash.xbe -> evoxdash.exe)."""
-    ps = (f"(Get-CimInstance Win32_Process -Filter \"ParentProcessId={parent_pid}\" "
-          f"| Where-Object {{ $_.Name -eq '{guest_image}' }} "
-          f"| Select-Object -First 1 -ExpandProperty ProcessId)")
+    ps = (
+        f'(Get-CimInstance Win32_Process -Filter "ParentProcessId={parent_pid}" '
+        f"| Where-Object {{ $_.Name -eq '{guest_image}' }} "
+        f"| Select-Object -First 1 -ExpandProperty ProcessId)"
+    )
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                           capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.SubprocessError):
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=15
+        )
+    except OSError, subprocess.SubprocessError:
         return None
     out = r.stdout.strip()
     return int(out) if out.isdigit() else None
 
 
 def pid_alive(pid: int) -> bool:
-    r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                       capture_output=True, text=True)
+    r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True)
     return str(pid) in r.stdout
 
 
 def kill_tree(launcher_pid: int, guest_pid: int | None) -> None:
     """Kill only our own processes, by PID. /T takes the launcher's child tree
     (the guest); the explicit guest kill is a belt-and-suspenders backup."""
-    subprocess.run(["taskkill", "/PID", str(launcher_pid), "/T", "/F"],
-                   capture_output=True, text=True)
+    subprocess.run(
+        ["taskkill", "/PID", str(launcher_pid), "/T", "/F"], capture_output=True, text=True
+    )
     if guest_pid:
-        subprocess.run(["taskkill", "/PID", str(guest_pid), "/F"],
-                       capture_output=True, text=True)
+        subprocess.run(["taskkill", "/PID", str(guest_pid), "/F"], capture_output=True, text=True)
     deadline = time.time() + 4.0
     while time.time() < deadline:
         if not (pid_alive(launcher_pid) or (guest_pid and pid_alive(guest_pid))):
@@ -297,8 +313,7 @@ def parse_capture_result(raw: str) -> dict[str, Any]:
     if match is None:
         return {"saved": False, "status": raw or "capture-failed"}
     values = match.groupdict()
-    bbox = (None if values["bbox"] == "none"
-            else [int(v) for v in values["bbox"].split(",")])
+    bbox = None if values["bbox"] == "none" else [int(v) for v in values["bbox"].split(",")]
     result: dict[str, Any] = {
         "saved": True,
         "status": "saved",
@@ -313,10 +328,8 @@ def parse_capture_result(raw: str) -> dict[str, Any]:
         "nonblack_bbox": bbox,
     }
     if values["screen_x"] is not None:
-        result["client_screen_origin"] = [
-            int(values["screen_x"]), int(values["screen_y"])]
-        result["window_screen_origin"] = [
-            int(values["window_x"]), int(values["window_y"])]
+        result["client_screen_origin"] = [int(values["screen_x"]), int(values["screen_y"])]
+        result["window_screen_origin"] = [int(values["window_x"]), int(values["window_y"])]
     return result
 
 
@@ -326,18 +339,23 @@ def capture_window(helper: Path, guest_pid: int | None, out_png: Path) -> dict[s
     try:
         r = subprocess.run(
             [sys.executable, str(helper), "--target-pid", str(guest_pid), "--out", str(out_png)],
-            capture_output=True, text=True, timeout=30,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
         raw = (r.stdout.strip().splitlines() or ["capture-failed"])[-1]
         return parse_capture_result(raw)
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return {"saved": False, "status": "capture-failed"}
 
 
 def capture_is_visible(capture: dict[str, Any], minimum_colors: int) -> bool:
-    return bool(capture.get("saved", False) and
-                capture.get("sampled_colors", 0) >= minimum_colors and
-                capture.get("nonblack_fraction", 0.0) >= 0.01)
+    return bool(
+        capture.get("saved", False)
+        and capture.get("sampled_colors", 0) >= minimum_colors
+        and capture.get("nonblack_fraction", 0.0) >= 0.01
+    )
 
 
 def nv2a_capture_complete(path: Path | None) -> bool:
@@ -347,7 +365,7 @@ def nv2a_capture_complete(path: Path | None) -> bool:
         with path.open("rb") as stream:
             stream.seek(-28, os.SEEK_END)
             return struct.unpack("<II", stream.read(8)) == (6, 20)
-    except (OSError, struct.error):
+    except OSError, struct.error:
         return False
 
 
@@ -355,10 +373,13 @@ def select_representative_shot(shots: list[dict[str, Any]]) -> dict[str, Any] | 
     saved = [shot for shot in shots if shot.get("saved", False)]
     if not saved:
         return None
-    return max(saved, key=lambda shot: (
-        shot.get("sampled_colors", 0),
-        shot.get("nonblack_fraction", 0.0),
-    ))
+    return max(
+        saved,
+        key=lambda shot: (
+            shot.get("sampled_colors", 0),
+            shot.get("nonblack_fraction", 0.0),
+        ),
+    )
 
 
 def collect_dumps(dest: Path) -> int:
@@ -414,49 +435,78 @@ def summarize_log(logpath: Path) -> dict[str, Any]:
             if "NV2A overlay received visible pixels" in line:
                 summary["overlay_visible"] = True
             if (match := NVCRC_RE.search(line)) is not None:
-                summary["nv2a_crc"].append({
-                    "frame": int(match.group(1)),
-                    "address": f"0x{int(match.group(2), 16):08X}",
-                    "width": int(match.group(3)),
-                    "height": int(match.group(4)),
-                    "crc32": f"0x{int(match.group(5), 16):08X}",
-                })
+                summary["nv2a_crc"].append(
+                    {
+                        "frame": int(match.group(1)),
+                        "address": f"0x{int(match.group(2), 16):08X}",
+                        "width": int(match.group(3)),
+                        "height": int(match.group(4)),
+                        "crc32": f"0x{int(match.group(5), 16):08X}",
+                    }
+                )
             if (match := NVDRAW_RE.search(line)) is not None:
                 frame = match.group(1)
                 draw_count = int(match.group(2)) + 1
                 summary["nv2a_draws_per_frame"][frame] = max(
-                    summary["nv2a_draws_per_frame"].get(frame, 0), draw_count)
+                    summary["nv2a_draws_per_frame"].get(frame, 0), draw_count
+                )
     return summary
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="run_title", description="Boot an Xbox title in Cxbx and collect artifacts.")
-    ap.add_argument("target",
-                    help="an .xbe, a folder holding default.xbe, or a name under other/games/")
+        prog="run_title", description="Boot an Xbox title in Cxbx and collect artifacts."
+    )
+    ap.add_argument(
+        "target", help="an .xbe, a folder holding default.xbe, or a name under other/games/"
+    )
     ap.add_argument("--seconds", type=float, default=30, help="run duration (default 30)")
-    ap.add_argument("--shots", type=int, default=3,
-                    help="window screenshots, evenly spread (0=none)")
-    ap.add_argument("--until-visible", action="store_true",
-                    help="stop after a captured client frame has meaningful color variation")
-    ap.add_argument("--visible-colors", type=int, default=32, metavar="N",
-                    help="sampled client colors required by --until-visible (default 32)")
+    ap.add_argument(
+        "--shots", type=int, default=3, help="window screenshots, evenly spread (0=none)"
+    )
+    ap.add_argument(
+        "--until-visible",
+        action="store_true",
+        help="stop after a captured client frame has meaningful color variation",
+    )
+    ap.add_argument(
+        "--visible-colors",
+        type=int,
+        default=32,
+        metavar="N",
+        help="sampled client colors required by --until-visible (default 32)",
+    )
     ap.add_argument("--profile", choices=sorted(PROFILES), default="default", help="env recipe")
-    ap.add_argument("--no-title-profile", action="store_true",
-                    help="skip the automatic per-title env layer (TITLE_PROFILES)")
-    ap.add_argument("--no-symbols", action="store_true",
-                    help="skip writing the symbols.txt sidecar after the run")
-    ap.add_argument("--env", action="append", default=[], metavar="K=V",
-                    help="extra env var (repeatable)")
-    ap.add_argument("--dump-frames", action="store_true",
-                    help="enable the emulator's backbuffer BMP dumps and collect them "
-                         "(ground truth)")
-    ap.add_argument("--capture-pushbuffer", type=int, default=None, metavar="FRAME",
-                    help="capture PFIFO commands/resources through FRAME to a replay bundle")
+    ap.add_argument(
+        "--no-title-profile",
+        action="store_true",
+        help="skip the automatic per-title env layer (TITLE_PROFILES)",
+    )
+    ap.add_argument(
+        "--no-symbols",
+        action="store_true",
+        help="skip writing the symbols.txt sidecar after the run",
+    )
+    ap.add_argument(
+        "--env", action="append", default=[], metavar="K=V", help="extra env var (repeatable)"
+    )
+    ap.add_argument(
+        "--dump-frames",
+        action="store_true",
+        help="enable the emulator's backbuffer BMP dumps and collect them (ground truth)",
+    )
+    ap.add_argument(
+        "--capture-pushbuffer",
+        type=int,
+        default=None,
+        metavar="FRAME",
+        help="capture PFIFO commands/resources through FRAME to a replay bundle",
+    )
     ap.add_argument("--out", default=None, help="base output dir (default: tools/run)")
     ap.add_argument("--exe", default=None, help="cxbx.exe path (default: from tools/config.toml)")
-    ap.add_argument("--keep-temp", action="store_true",
-                    help="don't pre-clean %%TEMP%%\\default.exe")
+    ap.add_argument(
+        "--keep-temp", action="store_true", help="don't pre-clean %%TEMP%%\\default.exe"
+    )
     args = ap.parse_args(argv)
 
     repo = tool_config.repo_root()
@@ -525,8 +575,10 @@ def main(argv: list[str] | None = None) -> int:
     cmd = [str(exe), "--run", str(xbe), "--log", str(logpath)]
     print(f"run_title: {xbe.parent.name}")
     print(f"  exe      : {exe}")
-    print(f"  profile  : {args.profile}  {PROFILES[args.profile] or '(none)'}"
-          + ("  +dump-frames" if args.dump_frames else ""))
+    print(
+        f"  profile  : {args.profile}  {PROFILES[args.profile] or '(none)'}"
+        + ("  +dump-frames" if args.dump_frames else "")
+    )
     if title_profile is not None:
         print(f"  title env: {title_profile}  (title id {title_key}; --no-title-profile disables)")
     print(f"  out dir  : {outdir}")
@@ -538,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  launcher pid {p.pid}; locating guest child...")
 
     guest: int | None = None
-    for _ in range(20):                       # guest spawns after XBE->exe convert (~1-2s)
+    for _ in range(20):  # guest spawns after XBE->exe convert (~1-2s)
         if p.poll() is not None:
             break
         guest = child_guest_pid(p.pid, guest_image)
@@ -565,7 +617,9 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(remaining)
         if p.poll() is not None:
             exited_early = True
-            print(f"  [{time.time()-started:4.0f}s] guest exited on its own (code {p.returncode}).")
+            print(
+                f"  [{time.time() - started:4.0f}s] guest exited on its own (code {p.returncode})."
+            )
             break
         if i < len(shot_times):
             png = shots_dir / f"shot{i + 1:03d}-t{int(when):03d}s.png"
@@ -575,17 +629,19 @@ def main(argv: list[str] | None = None) -> int:
             shots.append(capture)
             shots_taken += capture.get("saved", False)
             if capture.get("saved", False):
-                detail = (f"{capture['source']} nonblack={capture['nonblack_fraction']:.3f} "
-                          f"colors={capture['sampled_colors']}")
+                detail = (
+                    f"{capture['source']} nonblack={capture['nonblack_fraction']:.3f} "
+                    f"colors={capture['sampled_colors']}"
+                )
             else:
                 detail = capture["status"]
-            print(f"  [{time.time()-started:4.0f}s] shot -> {png.name}  ({detail})")
+            print(f"  [{time.time() - started:4.0f}s] shot -> {png.name}  ({detail})")
             if args.until_visible and capture_is_visible(capture, args.visible_colors):
                 if capture_path is not None and not nv2a_capture_complete(capture_path):
-                    print(f"  [{time.time()-started:4.0f}s] visible frame; waiting for capture.")
+                    print(f"  [{time.time() - started:4.0f}s] visible frame; waiting for capture.")
                     continue
                 stopped_on_visible = True
-                print(f"  [{time.time()-started:4.0f}s] visible-frame threshold reached.")
+                print(f"  [{time.time() - started:4.0f}s] visible-frame threshold reached.")
                 break
 
     alive = time.time() - started
@@ -612,14 +668,16 @@ def main(argv: list[str] | None = None) -> int:
         if capture_summary["complete"]:
             try:
                 replay = nv2a_capture.analyze_capture(capture_path)
-                capture_summary.update({
-                    "replay": replay["replay"],
-                    "push_runs": replay["push_runs"],
-                    "push_words": replay["push_words"],
-                    "methods": replay["methods"],
-                    "memory_bytes": replay["memory_bytes"],
-                    "output_crc32": replay["output_crc32"],
-                })
+                capture_summary.update(
+                    {
+                        "replay": replay["replay"],
+                        "push_runs": replay["push_runs"],
+                        "push_words": replay["push_words"],
+                        "methods": replay["methods"],
+                        "memory_bytes": replay["memory_bytes"],
+                        "output_crc32": replay["output_crc32"],
+                    }
+                )
             except (OSError, nv2a_capture.CaptureError) as error:
                 capture_summary["replay"] = "fail"
                 capture_summary["replay_error"] = str(error)
@@ -656,27 +714,30 @@ def main(argv: list[str] | None = None) -> int:
         "pushbuffer_capture": capture_summary,
     }
     summary_path = outdir / "summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n",
-                            encoding="utf-8")
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print("\nrun_title: done")
     print(f"  outcome  : {outcome}")
     print(f"  log      : {logpath}  ({log_summary['lines']} lines)")
     print(f"  summary  : {summary_path}")
     if representative:
-        print(f"  best shot: {representative['path']}  "
-              f"colors={representative['sampled_colors']} "
-              f"nonblack={representative['nonblack_fraction']:.3f}")
+        print(
+            f"  best shot: {representative['path']}  "
+            f"colors={representative['sampled_colors']} "
+            f"nonblack={representative['nonblack_fraction']:.3f}"
+        )
     if capture_summary is not None:
         status = "incomplete"
         if capture_summary["complete"]:
             status = f"complete, replay-{capture_summary.get('replay', 'not-run')}"
         print(f"  capture  : {capture_path}  ({status}, {capture_summary['bytes']} bytes)")
         if capture_summary["complete"]:
-            print(f"             replay: python tools/nv2a_capture.py \"{capture_path}\"")
+            print(f'             replay: python tools/nv2a_capture.py "{capture_path}"')
     if log_summary["exception_lines"] or log_summary["fatal_lines"]:
-        print(f"  faults   : {log_summary['exception_lines']} exception line(s), "
-              f"{log_summary['fatal_lines']} fatal/terminate marker(s)")
-        print(f"             triage: cxbxdbg locate \"{xbe}\" --log \"{logpath}\"")
+        print(
+            f"  faults   : {log_summary['exception_lines']} exception line(s), "
+            f"{log_summary['fatal_lines']} fatal/terminate marker(s)"
+        )
+        print(f'             triage: cxbxdbg locate "{xbe}" --log "{logpath}"')
     print(f"  shots    : {shots_taken}/{len(shot_times)} saved in {shots_dir}")
     if args.dump_frames:
         print(f"  frames   : {n_frames} backbuffer BMP(s) in {frames_dir}")

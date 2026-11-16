@@ -47,6 +47,9 @@ mypy_path = "tools:tools/xtest:tools/oovpa:tools/nv2a"
 exclude = [
     "tools/xtest/out",
     "tools/xtest/__pycache__",
+    # Local title-run scratch space (git-ignored): exploratory scripts, not
+    # developer tooling.
+    "tools/run/",
 ]
 
 # capstone ships neither stubs nor py.typed. The disassembler is optional at

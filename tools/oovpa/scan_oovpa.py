@@ -73,7 +73,7 @@ def parse_signatures(paths: list[Path]) -> dict[str, Signature]:
             name = m.group(2)
             body = m.group(3)
             # Header fields come before the inner pair brace-block.
-            inner = body[body.find("{"):]
+            inner = body[body.find("{") :]
             head = body[: body.find("{")]
             fields = [f.strip() for f in head.split(",") if f.strip()]
             if len(fields) < 4:
@@ -116,13 +116,11 @@ def parse_table(paths: list[Path], table: str) -> list[tuple[str, str, bool]]:
         if not m:
             continue
         body = m.group(1)
-        matches = list(re.finditer(
-            r"\(\s*OOVPA\s*\*\s*\)\s*&\s*(\w+)\s*,\s*([\w:]+)", m.group(1)
-        ))
+        matches = list(re.finditer(r"\(\s*OOVPA\s*\*\s*\)\s*&\s*(\w+)\s*,\s*([\w:]+)", m.group(1)))
         out: list[tuple[str, str, bool]] = []
         for index, em in enumerate(matches):
             end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-            patch_all = "OOVPA_FLAG_PATCH_ALL" in body[em.start():end]
+            patch_all = "OOVPA_FLAG_PATCH_ALL" in body[em.start() : end]
             out.append((em.group(1), em.group(2), patch_all))
         return out
     sys.exit(f"table not found in the given .inl files: {table}")
@@ -134,19 +132,19 @@ def xbe_image(path: Path) -> tuple[bytes, int]:
     if d[:4] != b"XBEH":
         # Not an XBE: scan the file bytes as-is.
         return d, 0
-    base, = struct.unpack_from("<I", d, 0x104)
-    size_of_image, = struct.unpack_from("<I", d, 0x10C)
-    nsec, = struct.unpack_from("<I", d, 0x11C)
-    psec, = struct.unpack_from("<I", d, 0x120)
+    (base,) = struct.unpack_from("<I", d, 0x104)
+    (size_of_image,) = struct.unpack_from("<I", d, 0x10C)
+    (nsec,) = struct.unpack_from("<I", d, 0x11C)
+    (psec,) = struct.unpack_from("<I", d, 0x120)
     img = bytearray(size_of_image)
     off = psec - base
     for i in range(nsec):
-        h = d[off + 0x38 * i: off + 0x38 * (i + 1)]
+        h = d[off + 0x38 * i : off + 0x38 * (i + 1)]
         vaddr, _vsize, raw, rawsize = struct.unpack_from("<IIII", h, 4)
         n = min(rawsize, len(d) - raw)
         start = vaddr - base
         if 0 <= start < len(img):
-            img[start: start + n] = d[raw: raw + n]
+            img[start : start + n] = d[raw : raw + n]
     return bytes(img), base
 
 
@@ -170,19 +168,24 @@ def find_matches(img: bytes, pairs: list[tuple[int, int]], limit: int = 8) -> li
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Report which OOVPAs of a table resolve in an image"
-    )
+    ap = argparse.ArgumentParser(description="Report which OOVPAs of a table resolve in an image")
     ap.add_argument("--table", required=True, help="OOVPATable array name, e.g. D3D8_1_0_5849")
-    ap.add_argument("--inl", action="append", required=True,
-                    help="glob of .inl sources holding the signatures/table (repeatable)")
-    ap.add_argument("--image", action="append", required=True,
-                    help="XBE (or raw binary) to scan (repeatable)")
+    ap.add_argument(
+        "--inl",
+        action="append",
+        required=True,
+        help="glob of .inl sources holding the signatures/table (repeatable)",
+    )
+    ap.add_argument(
+        "--image", action="append", required=True, help="XBE (or raw binary) to scan (repeatable)"
+    )
     ap.add_argument("--quiet", action="store_true", help="only print the summary")
-    ap.add_argument("--located-out",
-                    help="write the addresses of OK matches (one 0x-address plus "
-                         "the emu function per line) for xbe_api_usage.py "
-                         "--located; requires exactly one --image")
+    ap.add_argument(
+        "--located-out",
+        help="write the addresses of OK matches (one 0x-address plus "
+        "the emu function per line) for xbe_api_usage.py "
+        "--located; requires exactly one --image",
+    )
     args = ap.parse_args()
     if args.located_out and len(args.image) != 1:
         sys.exit("--located-out requires exactly one --image")
@@ -193,8 +196,10 @@ def main() -> int:
 
     sigs = parse_signatures(inls)
     entries = parse_table(inls, args.table)
-    print(f"{args.table}: {len(entries)} entries; parsed {len(sigs)} signatures "
-          f"from {len(inls)} .inl files\n")
+    print(
+        f"{args.table}: {len(entries)} entries; parsed {len(sigs)} signatures "
+        f"from {len(inls)} .inl files\n"
+    )
 
     for ipath in args.image:
         p = Path(ipath)
@@ -211,15 +216,13 @@ def main() -> int:
             if len(hits) == 1 or (patch_all and hits):
                 ok += 1
                 status = "ALL" if len(hits) > 1 else "OK"
-                rows.append((status, signame, emufn,
-                             [f"0x{base + hit:08X}" for hit in hits]))
+                rows.append((status, signame, emufn, [f"0x{base + hit:08X}" for hit in hits]))
             elif not hits:
                 miss += 1
                 rows.append(("MISS", signame, emufn, []))
             else:
                 multi += 1
-                rows.append(("MULTI", signame, emufn,
-                             [f"0x{base + h:08X}" for h in hits[:4]]))
+                rows.append(("MULTI", signame, emufn, [f"0x{base + h:08X}" for h in hits[:4]]))
 
         total = len(entries)
         print(f"=== {p.name}  ({total} entries)")
@@ -232,22 +235,25 @@ def main() -> int:
 
         if args.located_out:
             located_count = sum(
-                len(addresses)
-                for st, _sig, _emufn, addresses in rows if st in ("OK", "ALL")
+                len(addresses) for st, _sig, _emufn, addresses in rows if st in ("OK", "ALL")
             )
-            Path(args.located_out).write_text("".join(
-                f"{address}  {emufn}\n"
-                for st, _sig, emufn, addresses in rows if st in ("OK", "ALL")
-                for address in addresses
-            ))
-            print(f"    -> wrote {located_count} located address(es) to "
-                  f"{args.located_out}\n")
+            Path(args.located_out).write_text(
+                "".join(
+                    f"{address}  {emufn}\n"
+                    for st, _sig, emufn, addresses in rows
+                    if st in ("OK", "ALL")
+                    for address in addresses
+                )
+            )
+            print(f"    -> wrote {located_count} located address(es) to {args.located_out}\n")
 
         # Machine-readable miss list: the functions an LTCG table must supply.
         misses = [s for st, s, _, _ in rows if st in ("MISS", "MULTI")]
         if misses and not args.quiet:
-            print(f"    -> {len(misses)} signature(s) need an LTCG-specific "
-                  f"replacement for {p.name}\n")
+            print(
+                f"    -> {len(misses)} signature(s) need an LTCG-specific "
+                f"replacement for {p.name}\n"
+            )
     return 0
 
 

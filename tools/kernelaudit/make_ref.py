@@ -18,7 +18,7 @@ def main() -> int:
     try:
         cfg = load_config(required=True)
         nxdk_dir = config_path_value(cfg, "paths", "nxdk_dir", required=True)
-        if nxdk_dir is None:                  # unreachable: required=True already raised
+        if nxdk_dir is None:  # unreachable: required=True already raised
             raise KeyError("paths.nxdk_dir")
         source_def = config_path_value(
             cfg,

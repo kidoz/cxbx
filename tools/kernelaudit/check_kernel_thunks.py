@@ -18,13 +18,14 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 THUNK = os.path.join(ROOT, "src", "cxbx", "src", "hle", "dispatch", "kernel_thunk.cpp")
-REF   = os.path.join(os.path.dirname(__file__), "xboxkrnl_ordinals.csv")
+REF = os.path.join(os.path.dirname(__file__), "xboxkrnl_ordinals.csv")
 
 # Ordinals whose wired Emu symbol legitimately does not name-match the export
 # (intentional Cxbx aliases / shared implementations). Each needs a reason.
 ALLOWLIST: dict[int, str] = {
     # ordinal: "reason"
 }
+
 
 def derive_name(expr: str) -> str | None:
     """Emu symbol expression -> export name, or None if unimplemented (PANIC/stub)."""
@@ -39,17 +40,20 @@ def derive_name(expr: str) -> str | None:
         s = s[:-6]
     return s
 
+
 def load_thunks() -> dict[int, str]:
     text = open(THUNK, encoding="utf-8", errors="replace").read()
-    tbl = text[text.index("KernelThunkTable[367]"):]
+    tbl = text[text.index("KernelThunkTable[367]") :]
     out: dict[int, str] = {}
     for m in re.finditer(r"\(uint32\)\s*(.+?),\s*//\s*0x[0-9A-Fa-f]+\s*\((\d+)\)", tbl):
         out[int(m.group(2))] = m.group(1).strip()
     return out
 
+
 def matches(wired: str, expected: str) -> bool:
     a, b = wired.lower(), expected.lower()
     return a == b or b in a or a in b
+
 
 def main() -> int:
     thunks = load_thunks()
@@ -71,8 +75,10 @@ def main() -> int:
             mismatches.append((o, name, expr))
 
     total = len(ref)
-    print(f"kernel-thunk audit: {total} exports, {total-unimplemented-len(mismatches)} matched, "
-          f"{unimplemented} unimplemented (PANIC), {len(mismatches)} MISMATCH")
+    print(
+        f"kernel-thunk audit: {total} exports, {total - unimplemented - len(mismatches)} matched, "
+        f"{unimplemented} unimplemented (PANIC), {len(mismatches)} MISMATCH"
+    )
     if mismatches:
         print("\nORDINAL MISMATCHES (thunk table disagrees with the Xbox ABI):")
         for o, name, expr in mismatches:
@@ -82,6 +88,7 @@ def main() -> int:
         return 1
     print("OK: every ABI export ordinal is wired to the matching Emu function (or a stub).")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

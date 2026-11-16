@@ -61,7 +61,7 @@ def parse_hle_database(repo_root: Path) -> list[dict[str, Any]]:
 def parse_project_dependencies(project: Path) -> set[str]:
     try:
         root = ET.parse(project).getroot()
-    except (OSError, ET.ParseError):
+    except OSError, ET.ParseError:
         return set()
 
     dependencies: set[str] = set()
