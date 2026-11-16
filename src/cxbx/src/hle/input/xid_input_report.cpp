@@ -79,7 +79,7 @@ void SeedNeutralReportsLocked()
 
 void DetectInjectionMode()
 {
-    char sequenceText[4096] = {};
+    char sequenceText[16384] = {};
     const DWORD sequenceLength = GetEnvironmentVariableA(
         "CXBX_INPUT_STATE_SEQUENCE", sequenceText, sizeof(sequenceText));
     if(sequenceLength != 0 && sequenceLength < sizeof(sequenceText) &&

@@ -51,7 +51,7 @@ struct GamepadState
     std::int16_t rightThumbY;
 };
 
-constexpr std::size_t MaxInjectedGamepadFrames = 64;
+constexpr std::size_t MaxInjectedGamepadFrames = 256;
 
 bool ParseInjectedGamepadState(std::string_view text, GamepadState& state);
 
