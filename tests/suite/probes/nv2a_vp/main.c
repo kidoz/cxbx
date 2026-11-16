@@ -6,18 +6,20 @@
 // matrix in constant memory, switches the transform unit to PROGRAM mode, and
 // submits *object-space* vertices. A conforming target must run the microcode
 // per vertex on the CPU -- dp4 the object position against the matrix rows into
-// clip-space oPos and pass the diffuse through oD0 -- then hand the result to
-// the Phase 1 back-end (perspective divide + viewport + Gouraud).
+// oPos and pass the diffuse through oD0 -- then hand the result to the Phase 1
+// back-end (Gouraud fill).
 //
 // The program (assembled offline, see tools note) is:
-//     dp4 oPos.x, v0, c0        ; clip.x = obj . row0
+//     dp4 oPos.x, v0, c0        ; oPos.x = obj . row0
 //     dp4 oPos.y, v0, c1
 //     dp4 oPos.z, v0, c2
 //     dp4 oPos.w, v0, c3
 //     mov oD0,    v3            ; diffuse passthrough (FINAL)
-// with the matrix c0..c3 = scale(0.5,0.5,1) so object (x,y) maps to ndc (x/2,
-// y/2). Without VP execution the object coords would land somewhere else, so
-// the near-vertex/centroid samples prove the microcode actually ran.
+// with the viewport folded into the matrix rows, as the XDK D3D8 driver and
+// nxdk's pbkit both do: the NV2A consumes programmable output as screen-space
+// pixels, so object (x,y) maps straight to the 640x480 screen. Without VP
+// execution the object coords would land somewhere else, so the
+// near-vertex/centroid samples prove the microcode actually ran.
 //
 // SCOPE: vertex-program execution (dp4/mov, constants, R12/oPos alias). No
 // z-buffer / texturing. Requires the target's raster path (CXBX_NV2A_RASTER=1).
@@ -115,24 +117,28 @@ int main(void)
     vb[2] = (Vertex){ -1.0f, -1.0f, 0.0f, 1.0f, BLUE };
     uint32_t vbAddr = (uint32_t)(uintptr_t)vb;
 
-    // Transform matrix rows (DP4 row vectors): scale x,y by 0.5, keep z, w=1.
+    // Transform matrix rows (DP4 row vectors) with the viewport folded in,
+    // exactly as the XDK D3D8 driver's generated programs and nxdk's pbkit
+    // samples do: the NV2A consumes vertex-program output as screen-space
+    // pixels and does not apply the viewport registers to it. x in [-1,1] ->
+    // [160,480], y in [-1,1] -> [360,120] (y flipped), z kept, w=1.
     const float MATRIX[16] = {
-        0.5f,
+        160.0f,
         0.0f,
         0.0f,
-        0.0f, // c0 -> clip.x = 0.5*obj.x
+        320.0f, // c0 -> screen.x = 160*obj.x + 320
         0.0f,
-        0.5f,
+        -120.0f,
         0.0f,
-        0.0f, // c1 -> clip.y = 0.5*obj.y
+        240.0f, // c1 -> screen.y = -120*obj.y + 240
         0.0f,
         0.0f,
         1.0f,
-        0.0f, // c2 -> clip.z = obj.z
+        0.0f, // c2 -> screen.z = obj.z
         0.0f,
         0.0f,
         0.0f,
-        1.0f, // c3 -> clip.w = obj.w (=1)
+        1.0f, // c3 -> w = obj.w (=1)
     };
 
     // Upload the vertex program.
@@ -152,9 +158,9 @@ int main(void)
                  NV097_SET_TRANSFORM_EXECUTION_MODE_MODE_PROGRAM);
     pb_end(p);
 
-    // Same viewport as nv2a_transform: ndc [-1,1] -> 640x480, y flipped.
-    const float vp_sx = 320.0f, vp_sy = -240.0f, vp_ox = 320.0f, vp_oy = 240.0f;
-
+    // The viewport registers are deliberately left untouched: programmable
+    // output is already screen space on the NV2A (see the folded matrix
+    // above), so a target that transformed it again would miss every sample.
     for(int rep = 0; rep < 4; rep++)
     {
         p = pb_begin();
@@ -162,15 +168,6 @@ int main(void)
         p = pb_push1(p, NV097_SET_SURFACE_CLIP_VERTICAL, ((uint32_t)FBH << 16));
         p = pb_push1(p, NV097_SET_SURFACE_PITCH, pb_back_buffer_pitch() & 0xFFFF);
         p = pb_push1(p, NV097_SET_SURFACE_COLOR_OFFSET, (uint32_t)(uintptr_t)bb);
-
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 0, f2u(vp_ox));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 4, f2u(vp_oy));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 8, f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_OFFSET + 12, f2u(0.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 0, f2u(vp_sx));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 4, f2u(vp_sy));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 8, f2u(1.0f));
-        p = pb_push1(p, NV097_SET_VIEWPORT_SCALE + 12, f2u(1.0f));
 
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_OFFSET + ATTR_POSITION * 4, vbAddr);
         p = pb_push1(p, NV097_SET_VERTEX_DATA_ARRAY_FORMAT + ATTR_POSITION * 4,

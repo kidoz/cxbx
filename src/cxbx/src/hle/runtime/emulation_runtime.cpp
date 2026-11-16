@@ -7545,32 +7545,28 @@ struct EmuNv2aRasterVertex
 
 static EmuNv2aRasterVertex
 EmuNv2aBuildVertexProgramRasterVertex(
-    const EmuNv2aVertexProgramExecutionResult& VertexProgram,
-    const cxbx::nv2a::PgraphTransformState& TransformState)
+    const EmuNv2aVertexProgramExecutionResult& VertexProgram)
 {
     EmuNv2aRasterVertex Result{};
-    // The program writes homogeneous clip-space oPos; the raster completes
-    // the transform exactly like the fixed-function path (divide, viewport
-    // scale, viewport offset -- the uniform pre-refactor projection the
-    // nv2a_vp probe pins). Program output that is already screen-space
-    // (w == 0, e.g. SS5's text layer) keeps the degenerate-w guard below.
+    // Vertex-program output is screen space: Kelvin folds the viewport
+    // transform into the program's own composite-matrix constants (the XDK
+    // D3D8 driver's generated programs do exactly this, and nxdk's pbkit
+    // samples upload a viewport matrix as constants without ever touching the
+    // viewport registers). The NV2A viewport scale/offset registers apply to
+    // the fixed-function path only; xemu's hardware-faithful epilogue
+    // likewise rescales oPos by the surface size and never reads them. Do not
+    // transform programmable output again -- doing so pushed every draw
+    // thousands of pixels off-surface.
     const float W = VertexProgram.Position[3];
-    const float InvW =
-        W > 1e-6f || W < -1e-6f ? 1.0f / W : 1.0f;
-    Result.Position[0] =
-        VertexProgram.Position[0] * InvW * TransformState.viewportScale[0] +
-        TransformState.viewportOffset[0];
-    Result.Position[1] =
-        VertexProgram.Position[1] * InvW * TransformState.viewportScale[1] +
-        TransformState.viewportOffset[1];
+    const bool DegenerateW = !(W > 1e-6f || W < -1e-6f);
+    Result.Position[0] = VertexProgram.Position[0];
+    Result.Position[1] = VertexProgram.Position[1];
     Result.Position[2] = VertexProgram.Position[2];
     Result.HomogeneousPosition = VertexProgram.Position;
-    Result.InverseW = InvW;
-    // A pass-through program that never writes oPos.w leaves it at zero, which
-    // the rasterizer's homogeneous-w guard rejects -- dropping the primitive
-    // and rendering nothing (Samurai Shodown V's screen-space text layer
-    // submits position as 4 floats with w = 0). InverseW above already treats
-    // that as "no perspective correction"; keep the position consistent.
+    Result.InverseW = DegenerateW ? 1.0f : 1.0f / W;
+    // The rasterizer's homogeneous-w guard rejects primitives at or behind
+    // the camera plane; a degenerate w (2D overlays submit rhw = 0) becomes a
+    // neutral w so the primitive still rasterizes.
     Result.Position[3] =
         cxbx::nv2a::NeutralizeDegenerateScreenSpaceW(W);
     Result.DiffuseColor = VertexProgram.DiffuseColor;
@@ -9684,8 +9680,7 @@ static void EmuNv2aTransformVertexRange(const EmuNv2aTransformChunk* Ctx)
                 fflush(stdout);
             }
             Vertex =
-                EmuNv2aBuildVertexProgramRasterVertex(
-                    VertexProgram, TransformState);
+                EmuNv2aBuildVertexProgramRasterVertex(VertexProgram);
         }
         else
         {
