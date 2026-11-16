@@ -14816,34 +14816,57 @@ static bool EmuThreadSampleCapture(DWORD Tid, EmuThreadSample* Out)
         {
             ULONG Found[48];
             ULONG FoundCount = 0;
-            ULONG* Scan = (ULONG*)Context.Esp;
-            ULONG* ScanEnd = Scan + 0x2000; // 32 KB above ESP
+            // Walk committed pages only: a guest stack's reservation extends
+            // past its committed pages, and scanning into the uncommitted tail
+            // faults. The fault would be survivable, but the emulator's
+            // vectored handler claims host faults before this frame's __except
+            // and exits the sampler thread.
+            ULONG Scan = Context.Esp & ~0xFFFu;
+            const ULONG ScanEnd = Context.Esp + 0x2000; // 32 KB above ESP
             while(Scan < ScanEnd)
             {
-                const ULONG Value = *Scan++;
-                if(!EmuThreadSampleGuestCodeAddress(Value) ||
-                   Value < g_pXbeHeader->dwBaseAddr + 5)
-                    continue;
-                if(*(UCHAR*)(Value - 5) != 0xE8)
-                    continue;
-                const ULONG CallTarget =
-                    Value + (ULONG) * (const LONG*)(Value - 4);
-                if(!EmuThreadSampleGuestCodeAddress(CallTarget))
-                    continue;
-
-                bool Duplicate = false;
-                for(ULONG i = 0; i < FoundCount; ++i)
+                MEMORY_BASIC_INFORMATION Info;
+                if(VirtualQuery((LPCVOID)(uintptr_t)Scan, &Info, sizeof(Info)) !=
+                       sizeof(Info) ||
+                   Info.State != MEM_COMMIT ||
+                   (Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
                 {
-                    if(Found[i] == Value)
-                    {
-                        Duplicate = true;
-                        break;
-                    }
+                    break;
                 }
-                if(Duplicate)
-                    continue;
-                if(FoundCount < sizeof(Found) / sizeof(Found[0]))
-                    Found[FoundCount++] = Value;
+                ULONG ChunkEnd = (ULONG)(uintptr_t)Info.BaseAddress +
+                                 (ULONG)Info.RegionSize;
+                if(ChunkEnd > ScanEnd)
+                    ChunkEnd = ScanEnd;
+                if(ChunkEnd <= Scan)
+                    break;
+                while(Scan + sizeof(ULONG) <= ChunkEnd)
+                {
+                    const ULONG Value = *(const ULONG*)(uintptr_t)Scan;
+                    Scan += sizeof(ULONG);
+                    if(!EmuThreadSampleGuestCodeAddress(Value) ||
+                       Value < g_pXbeHeader->dwBaseAddr + 5)
+                        continue;
+                    if(*(UCHAR*)(Value - 5) != 0xE8)
+                        continue;
+                    const ULONG CallTarget =
+                        Value + (ULONG) * (const LONG*)(Value - 4);
+                    if(!EmuThreadSampleGuestCodeAddress(CallTarget))
+                        continue;
+
+                    bool Duplicate = false;
+                    for(ULONG i = 0; i < FoundCount; ++i)
+                    {
+                        if(Found[i] == Value)
+                        {
+                            Duplicate = true;
+                            break;
+                        }
+                    }
+                    if(Duplicate)
+                        continue;
+                    if(FoundCount < sizeof(Found) / sizeof(Found[0]))
+                        Found[FoundCount++] = Value;
+                }
             }
 
             const ULONG Keep = FoundCount > 16 ? FoundCount - 16 : 0;
