@@ -10,6 +10,7 @@
 #include <nk/platform/window_inspector.h>
 #include <nk/platform/windows_interop.h>
 #include <nk/style/theme.h>
+#include <nk/widgets/about_dialog.h>
 #include <nk/widgets/button.h>
 #include <nk/widgets/check_box.h>
 #include <nk/widgets/combo_box.h>
@@ -18,7 +19,9 @@
 #include <nk/widgets/label.h>
 #include <nk/widgets/log_view.h>
 #include <nk/widgets/menu_bar.h>
+#include <nk/widgets/status_bar.h>
 #include <nk/widgets/text_field.h>
+#include <nk_version.h>
 #include <windows.h>
 #include <shellapi.h>
 
@@ -30,6 +33,7 @@
 #include <future>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace cxbx::frontend
 {
@@ -73,6 +77,20 @@ std::string utf8(const std::string& text)
 std::string ansi(const std::string& text)
 {
     return transcode(text, CP_UTF8, CP_ACP);
+}
+
+// Opens a UTF-8 URL or path with the shell association; NodalKit hands over
+// UTF-8 text while ShellExecuteW expects UTF-16.
+void open_external(const std::string& target)
+{
+    const int count = MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, nullptr, 0);
+    if(!count)
+    {
+        return;
+    }
+    std::wstring wide(count, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, wide.data(), count);
+    ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 class container : public nk::Widget
@@ -124,11 +142,11 @@ class launcher_ui
                                          { dispatch(std::string(action)); });
         auto buttons = box(nk::Orientation::Horizontal);
         buttons->set_margin(nk::Insets::symmetric(0, 12));
-        auto open = nk::Button::create("Open XBE...");
+        open_ = nk::Button::create("Open XBE...");
         start_ = nk::Button::create("Start  (F5)");
-        buttons->append_child(open);
+        buttons->append_child(open_);
         buttons->append_child(start_);
-        (void)open->on_clicked().connect([this]
+        (void)open_->on_clicked().connect([this]
                                          { dispatch("open"); });
         (void)start_->on_clicked().connect([this]
                                            { dispatch("start"); });
@@ -140,10 +158,6 @@ class launcher_ui
         logo_ = std::make_shared<logo_view>();
         logo_->set_margin(nk::Insets::symmetric(0, 12));
         root->append_child(logo_);
-        status_ = nk::Label::create("Ready");
-        status_->set_margin(nk::Insets::symmetric(0, 12));
-        status_->set_wrapping(true);
-        root->append_child(status_);
         log_ = nk::LogView::create();
         log_->add_style_class("cxbx-log");
         log_->set_margin(nk::Insets::uniform(12));
@@ -156,6 +170,13 @@ class launcher_ui
         log_->set_vertical_size_policy(nk::SizePolicy::Expanding);
         log_->set_horizontal_size_policy(nk::SizePolicy::Expanding);
         root->append_child(log_);
+        // The status bar closes the window: transient messages in the main
+        // segment, the persistent launcher state right-aligned in the
+        // trailing slot.
+        status_ = nk::StatusBar::create();
+        status_->set_segments({ "Ready" });
+        status_->set_margin(nk::Insets::symmetric(0, 12));
+        root->append_child(status_);
         window_.set_child(root);
         auto keyboard = std::make_shared<nk::KeyboardController>();
         (void)keyboard->on_key_pressed().connect([this](int key, int)
@@ -169,7 +190,7 @@ class launcher_ui
         (void)window_.on_close_requested().connect([this]
                                                    { app_.quit(); });
         window_.present();
-        open->grab_focus();
+        open_->grab_focus();
         const auto hwnd = nk::window_hwnd(window_);
         auto icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
         SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
@@ -233,12 +254,19 @@ class launcher_ui
     nk::Window window_;
     launcher_session session_;
     std::shared_ptr<nk::MenuBar> menu_;
-    std::shared_ptr<nk::Button> start_;
-    std::shared_ptr<nk::Label> metadata_, status_;
+    std::shared_ptr<nk::Button> open_, start_;
+    std::shared_ptr<nk::Label> metadata_;
+    std::shared_ptr<nk::StatusBar> status_;
     std::shared_ptr<nk::ImageView> logo_;
     std::shared_ptr<nk::LogView> log_;
     std::weak_ptr<nk::Theme> styled_theme_;
     std::shared_ptr<nk::Dialog> dialog_;
+    // Dialogs created while another one is up, presented oldest-first when
+    // the current one closes (bounded; see show_dialog).
+    std::vector<std::pair<std::shared_ptr<nk::Dialog>, std::function<void(response)>>> pending_dialogs_;
+    // Owner of the About window while it is presented; dialog_ tracks its
+    // toolkit-owned dialog through a non-owning alias.
+    std::shared_ptr<nk::AboutDialog> about_;
     std::shared_ptr<controller_settings> controller_;
     std::shared_ptr<nk::Label> capture_status_;
     std::chrono::steady_clock::time_point capture_deadline_{};
@@ -274,8 +302,10 @@ class launcher_ui
         auto pixels = session_.logo();
         logo_->update_pixel_buffer(pixels.data(), 100, 17);
         logo_->set_visible(session_.loaded());
+        open_->set_sensitive(available);
         start_->set_sensitive(document);
         window_.set_title(session_.loaded() ? "CXBX - " + utf8(session_.path()) + (session_.dirty() ? " *" : "") : "CXBX");
+        sync_status();
         auto action = [](const char* label, const char* id, bool enabled = true)
         {
             auto result = item::action(label, id);
@@ -307,13 +337,31 @@ class launcher_ui
     void message(const std::string& text)
     {
         log_->append_line(text);
-        status_->set_text(text);
+        status_->set_segment(0, text);
+    }
+
+    // Right-aligned status-bar slot: the persistent launcher state behind
+    // the transient messages.
+    void sync_status()
+    {
+        status_->set_trailing(busy_ ? "Working..." : session_.running() ? "Guest running"
+                                                                       : "");
     }
 
     void show_dialog(std::shared_ptr<nk::Dialog> dialog, std::function<void(response)> callback = {})
     {
         if(dialog_)
         {
+            // A dialog is already up: queue this one instead of dropping it,
+            // so an error raised while a dialog is presented still surfaces
+            // when the current one closes. Bounded to keep a pathological
+            // error loop from growing without limit.
+            if(pending_dialogs_.size() >= 4)
+            {
+                message("Too many pending dialogs; dropping the oldest.");
+                pending_dialogs_.erase(pending_dialogs_.begin());
+            }
+            pending_dialogs_.emplace_back(std::move(dialog), std::move(callback));
             return;
         }
         dialog_ = std::move(dialog);
@@ -325,8 +373,20 @@ class launcher_ui
                 if(callback) {
                     try { callback(result); } catch(const std::exception& error) { report_error(error.what()); }
                 }
+                present_pending_dialog();
             }, "launcher-dialog-response"); });
         dialog_->present(window_);
+    }
+
+    void present_pending_dialog()
+    {
+        if(dialog_ || pending_dialogs_.empty())
+        {
+            return;
+        }
+        auto [dialog, callback] = std::move(pending_dialogs_.front());
+        pending_dialogs_.erase(pending_dialogs_.begin());
+        show_dialog(std::move(dialog), std::move(callback));
     }
 
     void report_error(const std::string& text)
@@ -368,6 +428,10 @@ class launcher_ui
     void choose(bool saving, const std::string& title, const std::string& extension,
                 std::function<void(std::string)> callback, std::string suggestion = {})
     {
+        if(file_pending_)
+        {
+            return;
+        }
         file_pending_ = true;
         // NodalKit owns this callback until the async dialog completes; the
         // analyzer cannot follow the std::function capture into that API.
@@ -391,13 +455,24 @@ class launcher_ui
                 report_error("The file dialog could not be opened.");
             }
         };
-        if(saving)
+        // A synchronous throw (path transcoding, toolkit refusal) must not
+        // leave file_pending_ latched: dispatch and window close would veto
+        // everything from then on.
+        try
         {
-            app_.save_file_dialog_async({ .title = title, .suggested_filename = utf8(suggestion), .filters = { extension } }, std::move(done));
+            if(saving)
+            {
+                app_.save_file_dialog_async({ .title = title, .suggested_filename = utf8(suggestion), .filters = { extension } }, std::move(done));
+            }
+            else
+            {
+                app_.open_file_dialog_async(title, { extension }, std::move(done));
+            }
         }
-        else
+        catch(const std::exception& error)
         {
-            app_.open_file_dialog_async(title, { extension }, std::move(done));
+            file_pending_ = false;
+            report_error(error.what());
         }
     }
 
@@ -527,13 +602,30 @@ class launcher_ui
             }
             else if(action == "home")
             {
-                ShellExecuteW(nullptr, L"open", L"https://github.com/kidoz/cxbx", nullptr, nullptr, SW_SHOWNORMAL);
+                open_external("https://github.com/kidoz/cxbx");
             }
             else if(action == "about")
             {
-                auto dialog = nk::Dialog::create("About CXBX", "Xbox emulator\nLauncher powered by NodalKit 0.2.0\nCXBX: GPL-2.0-or-later | NodalKit: MIT");
-                dialog->add_button("Close", response::Close);
-                show_dialog(dialog);
+                nk::AboutInfo info;
+                info.application_name = "CXBX";
+                info.version = CXBX_VERSION " (NodalKit " NK_VERSION ")";
+                info.comments = "Original Xbox emulator";
+                info.website = "https://github.com/kidoz/cxbx";
+                info.license = "GPL-2.0-or-later (CXBX), MIT (NodalKit)";
+                auto about = nk::AboutDialog::create(info);
+                (void)about->on_link_activated().connect([](std::string_view url)
+                                                         { open_external(std::string(url)); });
+                (void)about->dialog().on_response().connect([this](response)
+                                                            {
+                    (void)app_.event_loop().post([this] {
+                        dialog_.reset();
+                        about_.reset();
+                        present_pending_dialog(); }, "launcher-about-close"); });
+                about_ = std::move(about);
+                // The shared dialog gate (dispatch, request_exit, smoke) must
+                // track the toolkit-owned dialog; the alias never deletes.
+                dialog_ = std::shared_ptr<nk::Dialog>(&about_->dialog(), [](nk::Dialog*) {});
+                about_->present(window_);
             }
             else if(session_.running())
             {

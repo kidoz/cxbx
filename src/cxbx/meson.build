@@ -466,7 +466,8 @@ cxbx_frontend_nodalkit = static_library(
   'src/frontend/nodalkit/launcher_ui.cpp',
   dependencies : nodalkit_dep,
   override_options : ['cpp_std=c++23'],
-  cpp_args : ['-DWIN32_LEAN_AND_MEAN', '-DNOMINMAX'],
+  cpp_args : ['-DWIN32_LEAN_AND_MEAN', '-DNOMINMAX',
+              '-DCXBX_VERSION="@0@"'.format(meson.project_version())],
 )
 cxbx_frontend_nodalkit_dep = declare_dependency(
   link_whole : cxbx_frontend_nodalkit,
