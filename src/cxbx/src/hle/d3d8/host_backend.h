@@ -66,6 +66,12 @@ bool HostBackendPresents();
 bool HostBackendPresentFrame(const void* pixels, unsigned int width,
                              unsigned int height, unsigned int pitch);
 
+// Presents a caller-supplied frame even while the renderer is valid. Used by
+// raw-NV2A titles whose frames come from the guest scanout rather than HLE
+// D3D8 draws; without it the swapchain shows the empty render target.
+bool HostBackendPresentExternalFrame(const void* pixels, unsigned int width,
+                                     unsigned int height, unsigned int pitch);
+
 // P2 fixed-function rendering: when HostBackendRenders() is true, the HLE
 // routes full-surface clears and pretransformed CPU-vertex draws into the
 // backend's own color target (presented through the P1 present hook), and

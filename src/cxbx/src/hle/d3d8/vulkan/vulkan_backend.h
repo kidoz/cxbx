@@ -34,6 +34,12 @@ bool Initialize(const void* nativeWindow, bool validationLayers,
 bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
                   unsigned int pitch);
 
+// Presents a caller-supplied frame even while the renderer is valid: a raw
+// NV2A/pbkit title never submits HLE D3D8 draws, so the render target holds
+// nothing and the guest scanout snapshot must be the present source.
+bool PresentExternalFrame(const void* pixels, unsigned int width,
+                          unsigned int height, unsigned int pitch);
+
 // Whether the presenter is still operational. A hard failure inside
 // PresentFrame latches this off, permanently handing the window back to the
 // d3d8 presenter for the rest of the session.

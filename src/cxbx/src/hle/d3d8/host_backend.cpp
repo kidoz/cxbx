@@ -789,6 +789,19 @@ bool HostBackendPresentFrame(const void* pixels, unsigned int width,
     return presented;
 }
 
+bool HostBackendPresentExternalFrame(const void* pixels, unsigned int width,
+                                     unsigned int height, unsigned int pitch)
+{
+    if(!HostBackendPresents())
+    {
+        return false;
+    }
+    const bool presented =
+        vulkan::PresentExternalFrame(pixels, width, height, pitch);
+    g_PresenterReady = vulkan::PresenterValid();
+    return presented;
+}
+
 void HostBackendShutdown()
 {
     if(g_PresenterReady)

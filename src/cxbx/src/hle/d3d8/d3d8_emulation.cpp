@@ -771,6 +771,20 @@ static void EmuCapturePresentMirror();
 static void EmuBlitPresentMirror();
 extern "C" void EmuNv2aBlitResolvedFrame();
 
+// Raw-NV2A present hook for emulation_runtime.cpp. A title that never drives
+// the HLE D3D8 device still produces guest scanout frames, and a Vulkan
+// presenter that owns the window surface must show them or the window stays
+// black behind its swapchain. Returns false when no host presenter is active,
+// leaving the GDI overlay path in charge.
+extern "C" bool EmuHostBackendPresentRawFrame(const void* pixels,
+                                              unsigned int width,
+                                              unsigned int height,
+                                              unsigned int pitch)
+{
+    return cxbx::d3d8::HostBackendPresentExternalFrame(pixels, width, height,
+                                                       pitch);
+}
+
 static HRESULT EmuPresentHostDevice(const RECT* sourceRect, const RECT* destinationRect,
                                     HWND destinationWindow, const RGNDATA* dirtyRegion,
                                     bool runControlProbe)

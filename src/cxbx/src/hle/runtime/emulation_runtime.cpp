@@ -2942,6 +2942,9 @@ static EmuNv2aAaColorSurface g_EmuNv2aAaColorSurface = {};
 // The live overlay must read an owned snapshot from the last flip. Guest front
 // buffers are recycled and can become active render targets again immediately.
 static std::atomic<ULONG> g_EmuNv2aPresentedFrameAddress{ 0 };
+// Incremented for every stored snapshot, so the window path can skip repeated
+// presents of an unchanged frame.
+static std::atomic<ULONG> g_EmuNv2aPresentedFrameSerial{ 0 };
 static SRWLOCK g_EmuNv2aPresentedFrameLock = SRWLOCK_INIT;
 static ULONG* g_EmuNv2aPresentedFramePixels = NULL;
 static size_t g_EmuNv2aPresentedFrameCapacity = 0;
@@ -5976,12 +5979,29 @@ extern "C" void EmuHostBlitToWindow(const void* Pixels, unsigned Width, unsigned
     }
 }
 
+// Defined in d3d8_emulation.cpp: presents one raw frame through the selected
+// host backend (the Vulkan swapchain when it owns the window). False when no
+// host presenter is active, in which case the GDI overlay below still works.
+extern "C" bool EmuHostBackendPresentRawFrame(const void* Pixels,
+                                              unsigned int Width,
+                                              unsigned int Height,
+                                              unsigned int Pitch);
+
 extern "C" void EmuNv2aBlitResolvedFrame()
 {
     const ULONG Address =
         g_EmuNv2aPresentedFrameAddress.load(std::memory_order_acquire);
+    const ULONG Serial =
+        g_EmuNv2aPresentedFrameSerial.load(std::memory_order_acquire);
+    static ULONG LastPresentedSerial = (ULONG)-1;
     static ULONG BlitLogCount = 0;
     if(Address == 0 || XTL::g_hEmuWindow == NULL)
+    {
+        return;
+    }
+    // The pump calls this every ~16 ms; an unchanged snapshot needs no new
+    // present (the swapchain keeps showing the last frame).
+    if(Serial == LastPresentedSerial)
     {
         return;
     }
@@ -5990,8 +6010,29 @@ extern "C" void EmuNv2aBlitResolvedFrame()
     const ULONG* Pixels = g_EmuNv2aPresentedFramePixels;
     const ULONG Width = g_EmuNv2aPresentedFrameWidth;
     const ULONG Height = g_EmuNv2aPresentedFrameHeight;
+    if(Pixels != NULL && Width != 0 && Height != 0 &&
+       EmuHostBackendPresentRawFrame(Pixels, Width, Height, Width * 4))
+    {
+        // A Vulkan presenter owns the window surface, so its swapchain covers
+        // any GDI child overlay. Raw-NV2A titles (no HLE D3D8 draws) never
+        // feed that renderer, which left the window black; present the guest
+        // scanout snapshot through it instead.
+        static ULONG PresentLogCount = 0;
+        if(PresentLogCount < 4)
+        {
+            printf("Emu (0x%lX): NV2A scanout presented via the host backend "
+                   "addr=0x%.08lX size=%lux%lu.\n",
+                   GetCurrentThreadId(), Address, Width, Height);
+            fflush(stdout);
+            ++PresentLogCount;
+        }
+        LastPresentedSerial = Serial;
+        ReleaseSRWLockShared(&g_EmuNv2aPresentedFrameLock);
+        return;
+    }
     if(Pixels != NULL && Width != 0 && Height != 0)
     {
+        LastPresentedSerial = Serial;
         if(BlitLogCount < 4)
         {
             printf("Emu (0x%lX): NV2A window blit snapshot addr=0x%.08lX "
@@ -6618,6 +6659,7 @@ static void EmuNv2aDumpScanout(ULONG PhysicalAddress)
         g_EmuNv2aPresentedFrameHeight = Height;
         g_EmuNv2aPresentedFrameAddress.store(
             PhysicalAddress, std::memory_order_release);
+        g_EmuNv2aPresentedFrameSerial.fetch_add(1, std::memory_order_release);
         ReleaseSRWLockExclusive(&g_EmuNv2aPresentedFrameLock);
     }
 

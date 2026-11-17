@@ -616,8 +616,9 @@ bool Initialize(const void* nativeWindow, bool validationLayers,
     return true;
 }
 
-bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
-                  unsigned int pitch)
+static bool PresentFrameInternal(const void* pixels, unsigned int width,
+                                 unsigned int height, unsigned int pitch,
+                                 bool forceExternalFrame)
 {
     if(!g_Presenter.valid)
     {
@@ -626,8 +627,9 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
 
     // P2 render path: the renderer owns the frame content; the caller's
     // pixels (a d3d8 backbuffer read) are ignored and the render target is
-    // the present source.
-    const bool renderPath = RendererValid();
+    // the present source. A raw-NV2A title never feeds that renderer, so its
+    // scanout snapshot is presented as an external frame instead.
+    const bool renderPath = !forceExternalFrame && RendererValid();
     if(!renderPath && (pixels == nullptr || width == 0 || height == 0 ||
                        pitch == 0))
     {
@@ -862,6 +864,18 @@ bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
                height);
     }
     return true;
+}
+
+bool PresentFrame(const void* pixels, unsigned int width, unsigned int height,
+                  unsigned int pitch)
+{
+    return PresentFrameInternal(pixels, width, height, pitch, false);
+}
+
+bool PresentExternalFrame(const void* pixels, unsigned int width,
+                          unsigned int height, unsigned int pitch)
+{
+    return PresentFrameInternal(pixels, width, height, pitch, true);
 }
 
 bool PresenterValid()
