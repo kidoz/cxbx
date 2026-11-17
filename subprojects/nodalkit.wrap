@@ -1,9 +1,10 @@
 [wrap-git]
-# NodalKit 0.2.0 (MIT), updated 2026-10-18 for the status-bar, about-dialog,
-# text-editing, input, and accessibility work. Bump the revision to move the
-# launcher to a newer NodalKit.
+# NodalKit 0.5.0 (MIT), updated 2026-11-17. 0.5.0 keeps the widget tree,
+# layout, theming, diagnostics, and accessibility work and adds an
+# experimental D3D12 Windows renderer. Bump the revision to move the launcher
+# to a newer NodalKit.
 url = https://github.com/kidoz/nodalkit.git
-revision = 870ffc4965d50e560de8b56575bfbddd6e0c586e
+revision = f120b1c37d839474034555f16bfd7e64056320ea
 depth = 1
 # Only the library is consumed; the diff drops upstream's examples, tests,
 # and tools subdirectories so a production build never downloads Catch2 or
